@@ -20,7 +20,7 @@ C++ Source -> Clang AST -> Rust Source (unsafe) -> rustc -> Binary
 - RapidJSON no-STL strict baseline (`condense`/`pretty`) passes in real-world ignored harness tests.
 - RapidJSON strict CMake build with `RAPIDJSON_BUILD_TESTS=OFF`:
   - configure passes,
-  - partial build: 7 of 15 example targets compile standalone (capitalize, condense, filterkey, filterkeydom, jsonx, pretty, prettyauto); 5 pass in CMake sequential build order; first CMake failure: messagereader (174 rustc errors, E0425/E0599).
+  - partial build: 8 of 15 example targets compile standalone (capitalize, condense, filterkey, filterkeydom, jsonx, messagereader, pretty, prettyauto); 6 pass in CMake sequential build order; first CMake failure: parsebyparts (E0425).
 - RapidJSON with `RAPIDJSON_BUILD_TESTS=ON` is not yet supported in strict mode (configure fails during CXX feature detection / gtest `target_compile_features`).
 - Authoritative status and blocker ledger live in `TODO.md` (not `docs/transpiler-status.md`).
 

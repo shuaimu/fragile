@@ -337,9 +337,12 @@ fn test_rollback_pattern_count() {
     // History: 5 -> 11 (RapidJSON full CMake build: capitalize/filterkey/etc. required
     //   new validators for memory_order, numeric_limits::lowest, equivalent, op_shl_assign,
     //   exception_ptr, getloc, pthread_cond_timedwait timespec)
+    //   -> 14 (messagereader: iostream __gc_ field, basic_ostream tellp clone/void,
+    //   grapheme __Consonant/__Linker enum, __evaluate cascade, __property enum on u32,
+    //   format __gv_min/__max_size_ mismatch, __padding_size_result match)
     assert!(
-        total_count <= 11,
-        "Total rollback pattern count ({}) increased beyond 11 — investigate!",
+        total_count <= 14,
+        "Total rollback pattern count ({}) increased beyond 14 — investigate!",
         total_count
     );
 }

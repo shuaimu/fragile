@@ -2001,6 +2001,8 @@ impl AstCodeGen {
             ty if ty.starts_with("*mut ") || ty.starts_with("*const ") => {
                 "std::ptr::null_mut()".to_string()
             }
+            // c_void doesn't implement Default — use zeroed memory
+            ty if ty.contains("c_void") => "unsafe { std::mem::zeroed() }".to_string(),
             _ => "Default::default()".to_string(),
         }
     }
@@ -2606,6 +2608,9 @@ impl AstCodeGen {
             "CheckWithinHalfULP(", // rapidjson internal strtod helper (not in scope)
             ".AppendDecimal64(", // rapidjson BigInteger method (rolled back)
             "StrtodBigInteger(", // rapidjson internal strtod fallback (not in scope)
+            "__get_property(", // grapheme cluster property lookup (rolled back due to __gv_upper_bound)
+            "__throw_format_error(", // STL format error throwing helper
+            "__throw_invalid_type_format_error(", // STL format type error helper
         ];
         UNMAPPED_FUNCTIONS.iter().any(|p| generated.contains(p))
     }
@@ -2744,6 +2749,23 @@ impl AstCodeGen {
             "Self::new_1(self)",
             // Unresolved namespace-prefixed rapidjson type (should be ParseResult without prefix)
             "rapidjson_ParseResult",
+            // Unresolved template type parameter in struct field (sentry.__os_)
+            "basic_ostream__CharT___Traits",
+            // iostream sentry assigned from self (wrong type: sentry = &mut basic_istream)
+            "__sen: sentry = self",
+            // Unresolved global variable upper_bound (STL algorithm internal)
+            "__gv_upper_bound",
+            // Unresolved format output buffer iterator types
+            "std_back_insert_iterator_std___format___output_buffer_char",
+            "std_back_insert_iterator_std___format___output_buffer_wchar_t",
+            // Unresolved format arg type array
+            "array_std___format___arg_t__sizeof_____Args_",
+            // Move out of static item (format error constant)
+            "__gv___consume_result_error",
+            // Transmute between different-sized format types (u8 vs __arg_t)
+            "transmute::<u8, std___format___arg_t>",
+            // Format alignment match with enum/struct type mismatches
+            "__padding_size_result {",
         ];
         if BAD_SYNTAX_PATTERNS.iter().any(|p| generated.contains(p)) {
             return true;
@@ -3238,6 +3260,21 @@ impl AstCodeGen {
             || generated.contains("exception_ptr::new_1(")
             // basic_ios missing getloc method
             || generated.contains("self.getloc()")
+            // basic_istream/basic_ostream methods accessing nonexistent __gc_ field
+            || generated.contains("self.__gc_")
+            // __max_output_size methods using __gv_min (i64/u64 mismatch)
+            || (generated.contains("__gv_min") && generated.contains("__max_size_"))
+            // __padding_size_result / format alignment enum match mismatches
+            || (generated.contains("__padding_size_result") && generated.contains("match __align"))
+            // basic_ostream tellp: clone-as-bool + return value in -> () body
+            || (generated.contains("(self).clone()") && generated.contains("-> ()"))
+            // Unqualified grapheme/indic enum variant used as value (not type::variant)
+            || (generated.contains("== __Consonant") || generated.contains("== __Linker"))
+            // Grapheme cluster __evaluate methods referencing rolled-back sub-methods
+            || (generated.contains("self.__evaluate_none(") || generated.contains("self.__evaluate_GB"))
+            // Grapheme cluster enum variant access on u32 type alias
+            || (generated.contains("__property::__Extended_Pictographic") && generated.contains("__active_rule_"))
+            || (generated.contains("__property::__Regional_Indicator") && generated.contains("__active_rule_"))
         // (__set __gv___s now in has_bad_syntax)
         // (c_void patterns and bool/int mixing now handled by structural checks above)
     }
@@ -3335,6 +3372,43 @@ impl AstCodeGen {
         self.writeln("");
         // Import Write trait for writeln!/write! macros with std::io::stdout()/stderr()
         self.writeln("use std::io::Write;");
+        // Display wrapper for *const i8 (C string) in writeln!/write! macros.
+        // Raw pointers don't implement Display, so we wrap them for safe formatting.
+        self.writeln("pub struct FragileCStrDisplay(pub *const i8);");
+        self.writeln("impl std::fmt::Display for FragileCStrDisplay {");
+        self.indent += 1;
+        self.writeln("fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {");
+        self.indent += 1;
+        self.writeln("if self.0.is_null() { return write!(f, \"(null)\"); }");
+        self.writeln("let cstr = unsafe { std::ffi::CStr::from_ptr(self.0) };");
+        self.writeln("write!(f, \"{}\", cstr.to_str().unwrap_or(\"\"))");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        // Opaque field type that implements Display/Default/Copy/Clone.
+        // Used for iterator value_type pair fields where the actual type (e.g., std::string)
+        // maps to c_void, which doesn't implement these traits.
+        self.writeln("#[repr(C)] #[derive(Copy, Clone, Default)]");
+        self.writeln("pub struct FragileOpaqueField;");
+        self.writeln("impl std::fmt::Display for FragileOpaqueField {");
+        self.indent += 1;
+        self.writeln("fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, \"\") }");
+        self.indent -= 1;
+        self.writeln("}");
+        // Substring helper for *const i8 (C string) — mirrors C++ std::string::substr
+        self.writeln("#[allow(dead_code)]");
+        self.writeln("fn fragile_cstr_substr(p: *const i8, pos: u64, len: u64) -> std::string::String {");
+        self.indent += 1;
+        self.writeln("if p.is_null() { return std::string::String::new(); }");
+        self.writeln("let cstr = unsafe { std::ffi::CStr::from_ptr(p) };");
+        self.writeln("let s = cstr.to_str().unwrap_or(\"\");");
+        self.writeln("let start = pos as usize;");
+        self.writeln("if start >= s.len() { return std::string::String::new(); }");
+        self.writeln("let end = std::cmp::min(start + len as usize, s.len());");
+        self.writeln("s[start..end].to_string()");
+        self.indent -= 1;
+        self.writeln("}");
         self.writeln("pub trait FragileOptionIsNull {");
         self.indent += 1;
         self.writeln("fn is_null(&self) -> bool;");
@@ -4503,31 +4577,10 @@ impl AstCodeGen {
                     "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: THandler) -> ParseResult {",
                 );
                 self.indent += 1;
+                // Read input bytes: try stdin (works for FileReadStream-backed and
+                // pipe-based inputs). For in-memory streams like StringStream the
+                // caller must pipe data to stdin; this is a degraded fallback.
                 self.writeln("let mut __fragile_input_bytes: Vec<u8> = Vec::new();");
-                self.writeln("if std::any::type_name::<TInput>().contains(\"FileReadStream\") {");
-                self.indent += 1;
-                self.writeln("unsafe {");
-                self.indent += 1;
-                self.writeln(
-                    "let mut __fragile_stream = std::ptr::read((&_is as *const TInput) as *const FileReadStream);",
-                );
-                self.writeln("loop {");
-                self.indent += 1;
-                self.writeln("let __fragile_ch = __fragile_stream.Peek();");
-                self.writeln("if __fragile_ch == 0 {");
-                self.indent += 1;
-                self.writeln("break;");
-                self.indent -= 1;
-                self.writeln("}");
-                self.writeln("__fragile_input_bytes.push(__fragile_ch as u8);");
-                self.writeln("__fragile_stream.Take();");
-                self.indent -= 1;
-                self.writeln("}");
-                self.indent -= 1;
-                self.writeln("}");
-                self.indent -= 1;
-                self.writeln("} else {");
-                self.indent += 1;
                 self.writeln("let mut __fragile_stdin = std::io::stdin();");
                 self.writeln(
                     "if std::io::Read::read_to_end(&mut __fragile_stdin, &mut __fragile_input_bytes).is_err() {",
@@ -4536,8 +4589,6 @@ impl AstCodeGen {
                 self.writeln(
                     "return ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0);",
                 );
-                self.indent -= 1;
-                self.writeln("}");
                 self.indent -= 1;
                 self.writeln("}");
                 self.writeln(
@@ -4973,6 +5024,85 @@ impl AstCodeGen {
                         self.writeln("pub fn size(&self) -> usize { 0 }");
                     }
                 }
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+            }
+
+            // STL map stubs: new_0, swap, begin, end, insert for opaque map placeholders.
+            // These stubs let user code like `MessageMap messages; messages.swap(...)` compile.
+            // rust_name patterns: "map_string__string", "std_map_int__int", "map_int__int"
+            // cpp_name may be "map<string, string>" (from used_types) or "map::string::::string" (from referenced_but_undefined)
+            let is_map_type = (rust_name.starts_with("map_")
+                || rust_name.starts_with("std_map_")
+                || rust_name.contains("_map_"))
+                && !rust_name.contains("iterator")
+                && !rust_name.contains("__map")
+                && !rust_name.contains("__tree")
+                && !rust_name.contains("unordered");
+            if is_map_type {
+                self.writeln(&format!("impl {} {{", rust_name));
+                self.indent += 1;
+                self.writeln("pub fn new_0() -> Self { Default::default() }");
+                self.writeln("pub fn swap(&mut self, _other: &mut Self) {");
+                self.indent += 1;
+                self.writeln("std::mem::swap(self, _other);");
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+            }
+
+            // STL iterator stubs: op_arrow, op_ne, op_inc, op_deref for opaque iterator placeholders.
+            // These stubs let user code like `for (auto it = m.begin(); it != m.end(); ++it)` compile.
+            let is_iterator_type = rust_name.contains("_iterator")
+                && !rust_name.starts_with("__")
+                && (cpp_name.contains("iterator") || rust_name.contains("iterator"));
+            if is_iterator_type {
+                // Determine the pair type (for map iterators: pair<const Key, Value>)
+                // Use a generic opaque pair as the default
+                let pair_type = format!("{}_value_type", rust_name.trim_end_matches("_iterator").trim_end_matches("_const"));
+                self.writeln(&format!(
+                    "/// Opaque pair type for {} dereference",
+                    rust_name
+                ));
+                // Use FragileOpaqueField instead of c_void so fields can be used in
+                // writeln!("{}", ...) macros. c_void doesn't implement Display/Default.
+                self.writeln(&format!(
+                    "#[repr(C)] pub struct {} {{ pub first: FragileOpaqueField, pub second: FragileOpaqueField }}",
+                    pair_type
+                ));
+                self.writeln(&format!(
+                    "impl Default for {} {{ fn default() -> Self {{ Self {{ first: FragileOpaqueField, second: FragileOpaqueField }} }} }}",
+                    pair_type
+                ));
+                self.writeln(&format!("impl {} {{", rust_name));
+                self.indent += 1;
+                self.writeln(&format!(
+                    "pub fn op_arrow(&self) -> *const {} {{ std::ptr::null() }}",
+                    pair_type
+                ));
+                self.writeln("pub fn op_ne(&self, _other: Self) -> bool { false }");
+                self.writeln("pub fn op_inc(&mut self) {}");
+                self.writeln(&format!(
+                    "pub fn op_deref(&self) -> {} {{ Default::default() }}",
+                    pair_type
+                ));
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+                self.generated_structs.insert(pair_type);
+            }
+
+            // BaseReaderHandler type alias: RapidJSON's BaseReaderHandler<Encoding, Handler>
+            // is a CRTP base class that provides default handler methods. As an opaque placeholder,
+            // just make it a zero-sized struct that implements Default.
+            if rust_name.contains("BaseReaderHandler") {
+                // Already generated as opaque struct above — just add new_0
+                self.writeln(&format!("impl {} {{", rust_name));
+                self.indent += 1;
+                self.writeln("pub fn new_0() -> Self { Default::default() }");
                 self.indent -= 1;
                 self.writeln("}");
                 self.writeln("");
@@ -8078,6 +8208,84 @@ impl AstCodeGen {
     /// Post-process generated method: replace field-as-method calls with field access.
     /// When a libtooling body calls self.field(args) but field is a known struct field,
     /// replace with field access (e.g., self.__ptr_(null) → self.__ptr_)
+    /// Rewrite `(*ptr).substr(pos, len)` to `fragile_cstr_substr(ptr, pos, len)`.
+    /// C++ `string(ptr).substr(...)` constructs a temporary std::string, but the
+    /// transpiler loses the constructor and generates a dereference-then-method call.
+    fn fix_cstr_substr_calls(output: &mut String, start: usize) {
+        // Pattern: `(*IDENT).substr(ARGS)`
+        // We search in the generated output region for this pattern
+        let region = output[start..].to_string();
+        let mut result = region.clone();
+        // Find all occurrences of .substr( preceded by (*ident)
+        let mut search_from = 0;
+        loop {
+            if let Some(substr_pos) = result[search_from..].find(").substr(") {
+                let abs_pos = search_from + substr_pos;
+                // Look backwards from the ')' to find matching '(*'
+                // The pattern is (*IDENT).substr(...)
+                if abs_pos >= 2 {
+                    // Find the opening '(*'
+                    let before = &result[..abs_pos];
+                    if let Some(open_paren) = before.rfind("(*") {
+                        let ident = result[(open_paren + 2)..abs_pos].trim();
+                        // Verify it's a simple identifier (no spaces, balanced parens)
+                        if !ident.is_empty()
+                            && ident
+                                .chars()
+                                .all(|c| c.is_alphanumeric() || c == '_')
+                        {
+                            // Find the closing ')' of .substr(...)
+                            let args_start = abs_pos + ").substr(".len();
+                            if let Some(args_end) =
+                                Self::find_matching_paren(&result, args_start - 1)
+                            {
+                                let args = &result[args_start..args_end];
+                                let replacement = format!(
+                                    "fragile_cstr_substr({}, {})",
+                                    ident, args
+                                );
+                                let full_old =
+                                    &result[open_paren..=args_end].to_string();
+                                result = result.replacen(full_old, &replacement, 1);
+                                search_from = open_paren + replacement.len();
+                                continue;
+                            }
+                        }
+                    }
+                }
+                search_from = abs_pos + 1;
+            } else {
+                break;
+            }
+        }
+        if result != region {
+            output.truncate(start);
+            output.push_str(&result);
+        }
+    }
+
+    /// Find the position of the closing parenthesis matching the one at `open_pos`.
+    fn find_matching_paren(s: &str, open_pos: usize) -> Option<usize> {
+        let bytes = s.as_bytes();
+        if open_pos >= bytes.len() || bytes[open_pos] != b'(' {
+            return None;
+        }
+        let mut depth = 1;
+        for i in (open_pos + 1)..bytes.len() {
+            match bytes[i] {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
     fn fix_field_as_method_calls(
         &mut self,
         rust_name: &str,
@@ -15397,31 +15605,10 @@ impl AstCodeGen {
                     "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: THandler) -> ParseResult {",
                 );
                 self.indent += 1;
+                // Read input bytes: try stdin (works for FileReadStream-backed and
+                // pipe-based inputs). For in-memory streams like StringStream the
+                // caller must pipe data to stdin; this is a degraded fallback.
                 self.writeln("let mut __fragile_input_bytes: Vec<u8> = Vec::new();");
-                self.writeln("if std::any::type_name::<TInput>().contains(\"FileReadStream\") {");
-                self.indent += 1;
-                self.writeln("unsafe {");
-                self.indent += 1;
-                self.writeln(
-                    "let mut __fragile_stream = std::ptr::read((&_is as *const TInput) as *const FileReadStream);",
-                );
-                self.writeln("loop {");
-                self.indent += 1;
-                self.writeln("let __fragile_ch = __fragile_stream.Peek();");
-                self.writeln("if __fragile_ch == 0 {");
-                self.indent += 1;
-                self.writeln("break;");
-                self.indent -= 1;
-                self.writeln("}");
-                self.writeln("__fragile_input_bytes.push(__fragile_ch as u8);");
-                self.writeln("__fragile_stream.Take();");
-                self.indent -= 1;
-                self.writeln("}");
-                self.indent -= 1;
-                self.writeln("}");
-                self.indent -= 1;
-                self.writeln("} else {");
-                self.indent += 1;
                 self.writeln("let mut __fragile_stdin = std::io::stdin();");
                 self.writeln(
                     "if std::io::Read::read_to_end(&mut __fragile_stdin, &mut __fragile_input_bytes).is_err() {",
@@ -15430,8 +15617,6 @@ impl AstCodeGen {
                 self.writeln(
                     "return ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0);",
                 );
-                self.indent -= 1;
-                self.writeln("}");
                 self.indent -= 1;
                 self.writeln("}");
                 self.writeln(
@@ -19290,6 +19475,10 @@ impl AstCodeGen {
         self.writeln("pub type _T1 = std::ffi::c_void;");
         self.writeln("pub type _T2 = std::ffi::c_void;");
         self.writeln("pub type ctype_type_parameter_0_0 = std::ffi::c_void;");
+        // iostream template parameter placeholder (used in sentry struct)
+        self.writeln("pub type basic_ostream__CharT___Traits = std::ffi::c_void;");
+        // format template array type placeholder
+        self.writeln("pub type array_std___format___arg_t__sizeof_____Args_ = std::ffi::c_void;");
         self.writeln("");
 
         // Template instantiation placeholders (for libstdc++ basic_string template)
@@ -24020,6 +24209,11 @@ impl AstCodeGen {
             self.writeln("");
         }
 
+        // Post-process: rewrite (*ptr).substr(pos, len) to fragile_cstr_substr(ptr, pos, len)
+        // This handles C++ `string(json).substr(o, 10)` which transpiles incorrectly as
+        // `(*json).substr(o, 10u64)` — the temporary string construction is lost.
+        Self::fix_cstr_substr_calls(&mut self.output, output_start);
+
         // Validate generated function and rollback if invalid
         let generated = &self.output[output_start..];
         let preserve_user_hash_fn = name.starts_with("XXH") || name.starts_with("XSUM_");
@@ -24425,11 +24619,13 @@ impl AstCodeGen {
                         return true;
                     }
                 }
-                // Check for c_void fields (c_void doesn't implement Default)
+                // Check for c_void fields (c_void doesn't implement Default).
+                // Bare "std::ffi::c_void" fields are replaced with [u8; 1] during emission,
+                // so they no longer prevent Default derives.
                 let type_str = ty.to_rust_type_str();
-                if type_str == "std::ffi::c_void"
-                    || type_str.ends_with("c_void")
-                    || c_void_type_aliases.iter().any(|alias| type_str == *alias)
+                if type_str != "std::ffi::c_void"
+                    && (type_str.ends_with("c_void")
+                        || c_void_type_aliases.iter().any(|alias| type_str == *alias))
                 {
                     return true;
                 }
@@ -24455,15 +24651,21 @@ impl AstCodeGen {
         let kind = if is_class { "class" } else { "struct" };
         self.writeln(&format!("/// C++ {} `{}`", kind, name));
         self.writeln("#[repr(C)]");
-        // Check if any field contains c_void or types that don't impl Clone
+        // Check if any field contains c_void or types that don't impl Clone.
+        // Note: bare "std::ffi::c_void" fields are replaced with [u8; 1] during emission,
+        // so they no longer prevent Copy/Clone/Default derives. Only check for c_void
+        // in pointer types, type aliases, or non-clone types that remain as-is.
         let has_c_void_field = children.iter().any(|child| {
             if let ClangNodeKind::FieldDecl { ty, is_static, .. } = &child.kind {
                 if *is_static {
                     return false;
                 }
                 let type_str = ty.to_rust_type_str();
-                type_str == "std::ffi::c_void"
-                    || type_str.ends_with("c_void")
+                // Bare c_void fields are replaced with [u8; 1], so skip them
+                if type_str == "std::ffi::c_void" {
+                    return false;
+                }
+                type_str.ends_with("c_void")
                     || c_void_type_aliases.iter().any(|alias| type_str == *alias)
                     || non_clone_types.iter().any(|t| type_str == *t)
             } else {
@@ -24472,6 +24674,8 @@ impl AstCodeGen {
         });
 
         // Derive Copy only when all non-static fields are trivially copyable.
+        let defined_structs_snapshot = self.defined_structs.clone();
+        let generated_structs_snapshot = self.generated_structs.clone();
         let is_named_copy_union = |ty: &CppType| {
             let Some(class_name) = Self::extract_class_name_from_type(ty) else {
                 return false;
@@ -24489,23 +24693,54 @@ impl AstCodeGen {
                         return false;
                     }
                     let type_str = ty.to_rust_type_str();
-                    if type_str == "std::ffi::c_void"
-                        || type_str.ends_with("c_void")
+                    // Bare c_void fields are replaced with [u8; 1] during emission,
+                    // so they are Copy-compatible. Only flag non-bare c_void types.
+                    if type_str == "std::ffi::c_void" {
+                        return false; // Will be replaced with [u8; 1]
+                    }
+                    if type_str.ends_with("c_void")
                         || c_void_type_aliases.iter().any(|alias| type_str == *alias)
                         || non_clone_types.iter().any(|t| type_str == *t)
                     {
                         return true;
                     }
-                    !(is_copy_like_cpp_type(ty) || is_named_copy_union(ty))
+                    if is_copy_like_cpp_type(ty) || is_named_copy_union(ty) {
+                        return false;
+                    }
+                    // Named field types that aren't yet defined or generated will
+                    // get opaque stubs (with Copy) or are type aliases to stubs.
+                    if let CppType::Named(_) = ty {
+                        let field_type_name = ty.to_rust_type_str();
+                        if !defined_structs_snapshot.contains(&field_type_name)
+                            && !generated_structs_snapshot.contains(&field_type_name)
+                        {
+                            return false; // Will be a stub/alias/enum — all get Copy
+                        }
+                    }
+                    true
                 }
                 // Base subobjects participate in Copy-eligibility just like normal fields.
+                // Named types that will get opaque stubs (with Copy impl) are considered Copy-like.
                 ClangNodeKind::CXXBaseSpecifier {
                     base_type,
                     is_virtual,
                     ..
                 } => {
-                    !is_virtual
-                        && !(is_copy_like_cpp_type(base_type) || is_named_copy_union(base_type))
+                    if *is_virtual {
+                        return true; // Virtual bases are non-copy
+                    }
+                    if is_copy_like_cpp_type(base_type) || is_named_copy_union(base_type) {
+                        return false; // Known Copy types
+                    }
+                    // Named types that aren't yet defined will get opaque stubs
+                    // with Copy impls, so they're Copy-compatible.
+                    let base_name = base_type.to_rust_type_str();
+                    if !defined_structs_snapshot.contains(&base_name)
+                        && !generated_structs_snapshot.contains(&base_name)
+                    {
+                        return false; // Will be an opaque stub with Copy
+                    }
+                    true // Known defined struct without Copy
                 }
                 _ => false,
             }
@@ -24601,6 +24836,16 @@ impl AstCodeGen {
                 self.writeln(&format!("{}{}: {},", vis, field_name, base_name));
                 base_fields.push((field_name, base_type.clone()));
                 base_idx += 1;
+                // Track base class type for opaque stub generation if not yet defined
+                if !self.generated_structs.contains(&base_name)
+                    && !self.generated_aliases.contains(&base_name)
+                    && !self.defined_structs.contains(&base_name)
+                    && !base_name.starts_with("std::ffi::")
+                    && !base_name.starts_with("*")
+                    && Self::is_valid_rust_item_identifier(&base_name)
+                {
+                    self.referenced_but_undefined_structs.insert(base_name.clone());
+                }
             }
         }
 
@@ -24663,9 +24908,15 @@ impl AstCodeGen {
                     ty.clone()
                 };
                 let vis = access_to_visibility(*access);
-                let emitted_type = Self::normalize_known_union_helper_field_type(
+                let mut emitted_type = Self::normalize_known_union_helper_field_type(
                     effective_ty.to_rust_type_str_for_field(),
                 );
+                // Replace bare c_void field types with [u8; 1] — c_void doesn't implement
+                // Default/Copy/Clone which prevents struct derives. This happens when
+                // std::string or other unresolved STL types map to c_void as placeholder.
+                if emitted_type == "std::ffi::c_void" {
+                    emitted_type = "[u8; 1]".to_string();
+                }
                 self.writeln(&format!("{}{}: {},", vis, sanitized_name, emitted_type));
                 fields.push((sanitized_name, effective_ty));
             } else if let ClangNodeKind::RecordDecl {
@@ -26539,6 +26790,10 @@ impl AstCodeGen {
             || rust_type.contains("_parameter_")
             // Skip arrays with template-dependent size expressions
             || rust_type.contains("sizeof___(")
+            // Skip bitfield struct globals: the struct uses _bitfield_0 storage but
+            // C++ initializers reference original field names (e.g., __fields { __type_: true })
+            // which don't exist in the generated Rust struct
+            || (rust_type == "__fields" && base_name.starts_with("__fields_"))
         {
             return;
         }
@@ -31610,7 +31865,22 @@ impl AstCodeGen {
             } else {
                 // Non-literal - use {} placeholder
                 format_parts.push("{}".to_string());
-                expr_args.push(self.expr_to_string(arg));
+                let expr_str = self.expr_to_string(arg);
+                // Wrap *const i8 (char pointer) args in FragileCStrDisplay for Display
+                let is_char_ptr = Self::get_expr_type(arg).is_some_and(|ty| {
+                    matches!(
+                        ty,
+                        CppType::Pointer {
+                            ref pointee,
+                            ..
+                        } if matches!(pointee.as_ref(), CppType::Char { signed: true })
+                    )
+                });
+                if is_char_ptr {
+                    expr_args.push(format!("FragileCStrDisplay({})", expr_str));
+                } else {
+                    expr_args.push(expr_str);
+                }
             }
         }
 
@@ -32718,6 +32988,21 @@ impl AstCodeGen {
                         } else {
                             "Default::default()".to_string()
                         };
+                        // Fix Default::default() for c_void fields — c_void doesn't impl Default.
+                        // This happens when std::string fields get mapped to c_void as a placeholder.
+                        let init_val = if init_val == "Default::default()" {
+                            let field_is_cvoid = self.current_class.as_ref()
+                                .and_then(|c| self.class_fields.get(c))
+                                .and_then(|fields| fields.iter().find(|(n, _)| n == name))
+                                .map_or(false, |(_, ty)| ty.to_rust_type_str().contains("c_void"));
+                            if field_is_cvoid {
+                                "unsafe { std::mem::zeroed() }".to_string()
+                            } else {
+                                init_val
+                            }
+                        } else {
+                            init_val
+                        };
                         initializers.push((name.clone(), init_val));
                     } else if let ClangNodeKind::Unknown(s) = &node.children[i].kind {
                         // Check for TypeRef:ClassName pattern indicating base class initializer
@@ -33774,6 +34059,18 @@ impl AstCodeGen {
                             let init_expr = final_init[3..].trim();
                             // Pointer differences lower to `isize` via `.offset_from(...)`.
                             // Cast declaration initializers to the declared unsigned width.
+                            if init_expr.contains(".offset_from(")
+                                && !init_expr.contains(&format!(" as {}", final_type))
+                            {
+                                final_init = format!(" = ({}) as {}", init_expr, final_type);
+                            }
+                        }
+                        // Also cast offset_from result for signed int types (i8/i16/i32/i64/i128)
+                        // since offset_from returns isize, not i64 etc.
+                        if matches!(final_type.as_str(), "i8" | "i16" | "i32" | "i64" | "i128")
+                            && final_init.starts_with(" = ")
+                        {
+                            let init_expr = final_init[3..].trim();
                             if init_expr.contains(".offset_from(")
                                 && !init_expr.contains(&format!(" as {}", final_type))
                             {
@@ -53141,8 +53438,6 @@ mod tests {
             reader_impl.contains(
                 "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: THandler) -> ParseResult {",
             ) && reader_impl
-                .contains("std::any::type_name::<TInput>().contains(\"FileReadStream\")")
-                && reader_impl
                     .contains("std::io::Read::read_to_end(&mut __fragile_stdin, &mut __fragile_input_bytes).is_err()")
                 && reader_impl.contains(
                     "fragile_rapidjson_render_to_stdout_for_handler::<THandler>(&__fragile_input).is_ok()",
@@ -53152,6 +53447,12 @@ mod tests {
                     "ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0)",
                 ),
             "GenericReader placeholder should expose runtime Parse surface fallback, got:\n{}",
+            code
+        );
+        // Verify FileReadStream branch is NOT present (simplified to stdin-only)
+        assert!(
+            !reader_impl.contains("FileReadStream"),
+            "GenericReader placeholder should NOT reference FileReadStream (stdin-only fallback), got:\n{}",
             code
         );
         assert!(
@@ -53203,8 +53504,6 @@ mod tests {
             reader_impl.contains(
                 "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: THandler) -> ParseResult {",
             ) && reader_impl
-                .contains("std::any::type_name::<TInput>().contains(\"FileReadStream\")")
-                && reader_impl
                     .contains("std::io::Read::read_to_end(&mut __fragile_stdin, &mut __fragile_input_bytes).is_err()")
                 && reader_impl.contains(
                     "fragile_rapidjson_render_to_stdout_for_handler::<THandler>(&__fragile_input).is_ok()",
@@ -53214,6 +53513,12 @@ mod tests {
                     "ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0)",
                 ),
             "GenericReader template impl should expose runtime parse fallback surface, got:\n{}",
+            code
+        );
+        // Verify FileReadStream branch is NOT present (simplified to stdin-only)
+        assert!(
+            !reader_impl.contains("FileReadStream"),
+            "GenericReader template impl should NOT reference FileReadStream (stdin-only fallback), got:\n{}",
             code
         );
         assert!(
