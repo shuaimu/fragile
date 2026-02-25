@@ -529,7 +529,8 @@ impl CppType {
                     // codecvt types
                     "std::codecvt_base::result" | "codecvt_base::result" => "i32".to_string(),
                     // libc++ internal string types
-                    "__self_view" | "string" | "std::string" => "std::ffi::c_void".to_string(),
+                    "__self_view" => "std::ffi::c_void".to_string(),
+                    "string" | "std::string" => "std_string".to_string(),
                     "__storage_pointer" => "*mut std::ffi::c_void".to_string(),
                     // Allocator-related types that appear in container implementations
                     "__alloc_traits_difference_type" => "isize".to_string(),

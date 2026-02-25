@@ -17,7 +17,7 @@ Success criteria:
 
 ## Current status snapshot
 - Configure with tests disabled: passes.
-- Full build with tests disabled (`-k` keep-going): 13 of 15 example targets compile and link (capitalize, condense, filterkey, filterkeydom, jsonx, messagereader, parsebyparts, pretty, prettyauto, schemavalidator, simpledom, simplereader, simplewriter). Known failing: `serialize` (user-type constructors taking `const std::string&` lowered to `c_void`), `tutorial` (methods on raw GenericValue pointers, missing type aliases).
+- Full build with tests disabled (`-k` keep-going): 13 of 15 example targets compile and link (capitalize, condense, filterkey, filterkeydom, jsonx, messagereader, parsebyparts, pretty, prettyauto, schemavalidator, simpledom, simplereader, simplewriter). Known failing: `serialize` (user-type constructors taking `const std::string&` — `std_string` type now resolves but `std::vector<UserType>` stubs still missing), `tutorial` (methods on raw GenericValue pointers, missing type aliases).
 - `condense`/`pretty` produce expected JSON output in both CMake build and fragilec-driver no-STL baselines, matching native baseline.
 
 ## Known blocker classes (from current logs)
@@ -174,6 +174,31 @@ Use this as the authoritative clear order after Phase 0 guardrails. Update each 
     - [x] 3.5.e) Verify full build with `-k`: 13/15 targets compile and link. Done 2026-02-25. Evidence: reran ignored `test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_first_failure`; 13 targets built; serialize and tutorial known failing.
 - [x] Run `bin/condense` and `bin/pretty` against sample JSON; require non-empty and expected output shape. Done 2026-02-25. Evidence: CMake full build test runs both binaries with sample JSON input; condense output matches expected compact form, pretty output matches expected indented structure. Fixed FileReadStream stdin-consumption bug (runtime Parse fallback now extracts data from FileReadStream buffer instead of re-reading stdin).
 - [x] Compare outputs to native baseline and store manifest/logs under `/tmp/fragile_real_world_rapidjson_*`. Done 2026-02-25. Evidence: CMake full build test compiles native baseline with system g++, runs condense/pretty, asserts fragilec output matches native output; runtime_comparison_manifest.txt confirms `native_condense_matches=true`, `native_pretty_matches=true`.
+
+### Known failing targets (2/15)
+
+#### `serialize` — user-type constructors with `std::string` params + missing `std::vector<UserType>` stubs
+
+Root cause: `std::string` is now mapped to `std_string` (a real type with allocation, clone, c_str, etc.) instead of `c_void`. User-defined types with `const std::string&` constructor parameters (`Person`, `Education`, `Dependent`, `Employee`) now resolve correctly. However, remaining errors relate to missing `std::vector<UserType>` stubs (the transpiler only generates vector stubs for known element types, not user-defined ones) and incomplete string iterator support (`__wrap_iter_const_char`).
+
+Needed fix: generalize `std::vector<T>` stub generation for arbitrary element types T, or transpile libcxx vector template bodies directly.
+
+Key files: `crates/fragile-clang/src/ast_codegen.rs` (vector stub generation), `crates/fragile-clang/src/types.rs` (`convert_type`).
+
+#### `tutorial` — methods on raw pointers + missing type aliases (34 errors)
+
+Root cause 1 — raw pointer method dispatch: `GenericDocument::operator[]` returns `*mut GenericValue_UTF8_` (a raw pointer). Downstream code calls methods like `.IsString()`, `.GetBool()`, `.GetInt()` on the return value, but Rust does not auto-deref raw pointers for method calls. The transpiler emits `value_ptr.IsString()` which fails — needs `(*value_ptr).IsString()` or an auto-deref wrapper.
+
+Root cause 2 — missing type aliases: the transpiler doesn't resolve `rapidjson_GenericValue_rapidjson_UTF8_` as an alias for `GenericValue_UTF8_`. Several namespace-qualified template instantiation names don't match the generated type names.
+
+Root cause 3 — iterator field vs method confusion: `MemberIterator::name` and `MemberIterator::value` are accessed as fields but may be generated as methods, or vice versa. Also `PushBack` argument count mismatches (1 arg emitted, 2+ expected).
+
+Needed fixes:
+- Auto-deref insertion for method calls on raw pointer return types (codegen change in `ast_codegen.rs` MemberExpr/CallExpr handlers).
+- Namespace-qualified type alias resolution for template instantiations (type normalization in `types.rs`).
+- Iterator member access pattern correction (field-vs-method resolution in codegen).
+
+Key files: `crates/fragile-clang/src/ast_codegen.rs` (MemberExpr handler, CallExpr handler), `crates/fragile-clang/src/types.rs` (type alias resolution).
 
 ## Phase 4 [P1]: Hardening for real drop-in behavior
 - [ ] Make CMake compiler-ID/feature checks robust enough for default RapidJSON configure path (without requiring tests-off workaround).

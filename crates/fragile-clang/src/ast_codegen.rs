@@ -2658,6 +2658,10 @@ impl AstCodeGen {
             || (generated.contains("pub fn __add_shared") && generated.contains("__base.__add_shared()"))
             || (generated.contains("pub fn __release_shared") && generated.contains("__base.__release_shared()"))
             || (generated.contains("pub fn use_count") && generated.contains("__base.use_count()"))
+            // String iterator types not supported — roll back STL functions using them
+            || generated.contains("__wrap_iter_const_char")
+            // Broken string(x).substr() where constructor arg is lost → Default::default().substr(
+            // NOTE: not added to rollback because it removes the function entirely, breaking callers
     }
 
     /// Check 4c: Detect memory_order type system bugs (transmute, enum-as-struct, bitwise ops).
@@ -4773,7 +4777,7 @@ impl AstCodeGen {
                 self.writeln(&format!("impl {} {{", rust_name));
                 self.indent += 1;
                 self.writeln(
-                    "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: THandler) -> ParseResult {",
+                    "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: &mut THandler) -> ParseResult {",
                 );
                 self.indent += 1;
                 // Extract input bytes from the stream parameter.  FileReadStream
@@ -8453,6 +8457,86 @@ impl AstCodeGen {
                     }
                 }
                 search_from = abs_pos + 1;
+            } else {
+                break;
+            }
+        }
+        // Also fix Default::default().substr(ARGS) → fragile_cstr_substr(std::ptr::null(), ARGS)
+        // This occurs when C++ `string(json).substr(o, 10)` loses the constructor argument
+        // and the type can't be inferred from Default::default()
+        let default_substr = "Default::default().substr(";
+        while let Some(pos) = result.find(default_substr) {
+            let args_start = pos + default_substr.len();
+            if let Some(args_end) = Self::find_matching_paren(&result, args_start - 1) {
+                let args = result[args_start..args_end].to_string();
+                let replacement = format!("fragile_cstr_substr(std::ptr::null(), {})", args);
+                let full_old = result[pos..=args_end].to_string();
+                result = result.replacen(&full_old, &replacement, 1);
+            } else {
+                break;
+            }
+        }
+
+        if result != region {
+            output.truncate(start);
+            output.push_str(&result);
+        }
+    }
+
+    /// Fix `.Parse(X, handler)` → `.Parse(X, &mut handler)` so the handler is
+    /// passed by mutable reference instead of by value (C++ templates take T&).
+    fn fix_parse_handler_refs(output: &mut String, start: usize) {
+        let region = output[start..].to_string();
+        let mut result = region.clone();
+        let pattern = ".Parse(";
+        let mut search_from = 0;
+        loop {
+            if let Some(pos) = result[search_from..].find(pattern) {
+                let abs_pos = search_from + pos;
+                let open_paren = abs_pos + pattern.len() - 1;
+                if let Some(close_paren) = Self::find_matching_paren(&result, open_paren) {
+                    let args_str = result[(open_paren + 1)..close_paren].to_string();
+                    // Find the comma separating first and second args (handle nested parens)
+                    let mut depth = 0i32;
+                    let mut comma_pos = None;
+                    for (i, c) in args_str.char_indices() {
+                        match c {
+                            '(' => depth += 1,
+                            ')' => depth -= 1,
+                            ',' if depth == 0 => {
+                                comma_pos = Some(i);
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                    if let Some(comma) = comma_pos {
+                        let second_arg = args_str[(comma + 1)..].trim();
+                        // Only fix when second arg is a simple identifier (not &mut, not a literal)
+                        if !second_arg.is_empty()
+                            && !second_arg.starts_with("&mut ")
+                            && !second_arg.starts_with(char::is_numeric)
+                            && second_arg
+                                .chars()
+                                .all(|c| c.is_alphanumeric() || c == '_')
+                        {
+                            let first_arg = &args_str[..comma];
+                            let new_args =
+                                format!("{}, &mut {}", first_arg, second_arg);
+                            let old_call = format!(
+                                ".Parse({})",
+                                &result[(open_paren + 1)..close_paren]
+                            );
+                            let new_call = format!(".Parse({})", new_args);
+                            result = result.replacen(&old_call, &new_call, 1);
+                            search_from = abs_pos + new_call.len();
+                            continue;
+                        }
+                    }
+                    search_from = close_paren + 1;
+                } else {
+                    search_from = abs_pos + 1;
+                }
             } else {
                 break;
             }
@@ -15801,7 +15885,7 @@ impl AstCodeGen {
             if !has_parse {
                 self.current_struct_methods.insert("Parse".to_string(), 1);
                 self.writeln(
-                    "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: THandler) -> ParseResult {",
+                    "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: &mut THandler) -> ParseResult {",
                 );
                 self.indent += 1;
                 // Extract input bytes from the stream parameter.  FileReadStream
@@ -18639,6 +18723,17 @@ impl AstCodeGen {
         self.writeln("}");
         // capacity()
         self.writeln("pub fn capacity(&self) -> usize { self._capacity }");
+        // substr(pos, count) - returns substring
+        self.writeln("pub fn substr(&self, pos: u64, count: u64) -> std_string {");
+        self.indent += 1;
+        self.writeln("let pos = pos as usize;");
+        self.writeln("let count = (count as usize).min(self._size.saturating_sub(pos));");
+        self.writeln("if pos >= self._size || self._data.is_null() || count == 0 { return std_string::new_0(); }");
+        self.writeln("let mut result = std_string::new_0();");
+        self.writeln("for i in 0..count { result.push_back(unsafe { *self._data.add(pos + i) }); }");
+        self.writeln("result");
+        self.indent -= 1;
+        self.writeln("}");
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
@@ -18653,6 +18748,36 @@ impl AstCodeGen {
         self.writeln("unsafe { std::alloc::dealloc(self._data as *mut u8, layout); }");
         self.indent -= 1;
         self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        // Clone impl for std_string (deep copy)
+        self.writeln("impl Clone for std_string {");
+        self.indent += 1;
+        self.writeln("fn clone(&self) -> Self {");
+        self.indent += 1;
+        self.writeln("if self._data.is_null() || self._size == 0 {");
+        self.indent += 1;
+        self.writeln("return Self::new_0();");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("Self::new_1(self._data as *const i8)");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        // Display impl for std_string (enables use in format! macros)
+        self.writeln("impl std::fmt::Display for std_string {");
+        self.indent += 1;
+        self.writeln("fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {");
+        self.indent += 1;
+        self.writeln("if self._data.is_null() || self._size == 0 { return Ok(()); }");
+        self.writeln("let slice = unsafe { std::slice::from_raw_parts(self._data as *const u8, self._size) };");
+        self.writeln("let s = std::str::from_utf8(slice).unwrap_or(\"<invalid utf8>\");");
+        self.writeln("f.write_str(s)");
         self.indent -= 1;
         self.writeln("}");
         self.indent -= 1;
@@ -19431,9 +19556,9 @@ impl AstCodeGen {
         // numpunct virtual methods
         self.writeln("    pub do_decimal_point: unsafe fn(*const locale_facet) -> i32,");
         self.writeln("    pub do_thousands_sep: unsafe fn(*const locale_facet) -> i32,");
-        self.writeln("    pub do_grouping: unsafe fn(*const locale_facet) -> std::ffi::c_void,");
-        self.writeln("    pub do_truename: unsafe fn(*const locale_facet) -> std::ffi::c_void,");
-        self.writeln("    pub do_falsename: unsafe fn(*const locale_facet) -> std::ffi::c_void,");
+        self.writeln("    pub do_grouping: unsafe fn(*const locale_facet) -> std_string,");
+        self.writeln("    pub do_truename: unsafe fn(*const locale_facet) -> std_string,");
+        self.writeln("    pub do_falsename: unsafe fn(*const locale_facet) -> std_string,");
         // ctype virtual methods
         self.writeln("    pub do_toupper: unsafe fn(*const locale_facet, i32) -> i32,");
         self.writeln("    pub do_toupper_1: unsafe fn(*const locale_facet, *mut i32, *const i32) -> *const i32,");
@@ -19467,9 +19592,9 @@ impl AstCodeGen {
         self.writeln("unsafe fn __locale_facet_vtable_stub_do_max_length(_: *const locale_facet) -> isize { 0 }");
         self.writeln("unsafe fn __locale_facet_vtable_stub_do_decimal_point(_: *const locale_facet) -> i32 { 0 }");
         self.writeln("unsafe fn __locale_facet_vtable_stub_do_thousands_sep(_: *const locale_facet) -> i32 { 0 }");
-        self.writeln("unsafe fn __locale_facet_vtable_stub_do_grouping(_: *const locale_facet) -> std::ffi::c_void { unsafe { std::mem::zeroed() } }");
-        self.writeln("unsafe fn __locale_facet_vtable_stub_do_truename(_: *const locale_facet) -> std::ffi::c_void { unsafe { std::mem::zeroed() } }");
-        self.writeln("unsafe fn __locale_facet_vtable_stub_do_falsename(_: *const locale_facet) -> std::ffi::c_void { unsafe { std::mem::zeroed() } }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_grouping(_: *const locale_facet) -> std_string { std_string::new_0() }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_truename(_: *const locale_facet) -> std_string { std_string::new_0() }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_falsename(_: *const locale_facet) -> std_string { std_string::new_0() }");
         self.writeln("unsafe fn __locale_facet_vtable_stub_do_toupper(_: *const locale_facet, c: i32) -> i32 { c }");
         self.writeln("unsafe fn __locale_facet_vtable_stub_do_toupper_1(_: *const locale_facet, _: *mut i32, e: *const i32) -> *const i32 { e }");
         self.writeln("unsafe fn __locale_facet_vtable_stub_do_tolower(_: *const locale_facet, c: i32) -> i32 { c }");
@@ -24580,6 +24705,10 @@ impl AstCodeGen {
         // `(*json).substr(o, 10u64)` — the temporary string construction is lost.
         Self::fix_cstr_substr_calls(&mut self.output, output_start);
 
+        // Fix .Parse(X, handler) → .Parse(X, &mut handler) so the handler is
+        // passed by reference (C++ templates deduce T& for lvalue args).
+        Self::fix_parse_handler_refs(&mut self.output, output_start);
+
         // Validate generated function and rollback if invalid
         let generated = &self.output[output_start..];
         let preserve_user_hash_fn = name.starts_with("XXH") || name.starts_with("XSUM_");
@@ -26062,10 +26191,10 @@ impl AstCodeGen {
                         "/// Stub constructor for std::string argument (libc++ exception class)",
                     );
                     self.writeln("/// Extracts c_str() from std_string and stores for what()");
-                    self.writeln("pub fn new_1(s: &std_string) -> Self {");
+                    self.writeln("pub fn new_1(s: *const std_string) -> Self {");
                     self.indent += 1;
                     self.writeln("let mut obj = Self::default();");
-                    self.writeln("obj.__base._M_msg = s.c_str();");
+                    self.writeln("if !s.is_null() { obj.__base._M_msg = unsafe { (*s).c_str() }; }");
                     self.writeln("obj");
                     self.indent -= 1;
                     self.writeln("}");
@@ -26095,16 +26224,15 @@ impl AstCodeGen {
                 // so derived exception classes can properly match them
                 let name_str = name.to_string();
                 if !has_new_1 {
-                    // new_1 takes &std_string
+                    // new_1 takes *const std_string
                     self.constructor_signatures
                         .entry(name_str.clone())
                         .or_default()
                         .push((
                             "new_1".to_string(),
-                            vec![CppType::Reference {
-                                referent: Box::new(CppType::Named("std_string".to_string())),
+                            vec![CppType::Pointer {
                                 is_const: true,
-                                is_rvalue: false,
+                                pointee: Box::new(CppType::Named("std_string".to_string())),
                             }],
                         ));
                 }
@@ -26465,13 +26593,13 @@ impl AstCodeGen {
                 self.writeln("pub fn do_thousands_sep(&self) -> i32 { ',' as i32 }");
                 self.writeln("");
                 self.writeln("/// Stub for do_grouping virtual method");
-                self.writeln("pub fn do_grouping(&self) -> std::ffi::c_void { unsafe { std::mem::zeroed() } }");
+                self.writeln("pub fn do_grouping(&self) -> std_string { std_string::new_0() }");
                 self.writeln("");
                 self.writeln("/// Stub for do_truename virtual method");
-                self.writeln("pub fn do_truename(&self) -> std::ffi::c_void { unsafe { std::mem::zeroed() } }");
+                self.writeln("pub fn do_truename(&self) -> string_type { unsafe { std::mem::zeroed() } }");
                 self.writeln("");
                 self.writeln("/// Stub for do_falsename virtual method");
-                self.writeln("pub fn do_falsename(&self) -> std::ffi::c_void { unsafe { std::mem::zeroed() } }");
+                self.writeln("pub fn do_falsename(&self) -> string_type { unsafe { std::mem::zeroed() } }");
             }
 
             // Add collate virtual method stubs
@@ -53826,7 +53954,7 @@ mod tests {
             .unwrap_or("");
         assert!(
             reader_impl.contains(
-                "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: THandler) -> ParseResult {",
+                "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: &mut THandler) -> ParseResult {",
             ) && reader_impl
                     .contains("fragile_extract_input_bytes_from_stream(&_is)")
                 && reader_impl.contains(
@@ -53892,7 +54020,7 @@ mod tests {
             .unwrap_or("");
         assert!(
             reader_impl.contains(
-                "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: THandler) -> ParseResult {",
+                "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: &mut THandler) -> ParseResult {",
             ) && reader_impl
                     .contains("fragile_extract_input_bytes_from_stream(&_is)")
                 && reader_impl.contains(

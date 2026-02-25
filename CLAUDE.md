@@ -21,7 +21,7 @@ C++ Source -> Clang AST -> Rust Source (unsafe) -> rustc -> Binary
 - RapidJSON strict CMake build with `RAPIDJSON_BUILD_TESTS=OFF`:
   - configure passes,
   - full build with `-k`: 13 of 15 example targets compile, link, and pass regression checks (capitalize, condense, filterkey, filterkeydom, jsonx, messagereader, parsebyparts, pretty, prettyauto, schemavalidator, simpledom, simplereader, simplewriter).
-  - known failing: `serialize` (user-type constructors taking `const std::string&` lowered to `c_void`), `tutorial` (methods on raw GenericValue pointers, missing type aliases).
+  - known failing: `serialize` (missing `std::vector<UserType>` stubs for user-defined element types), `tutorial` (methods on raw GenericValue pointers, missing type aliases).
   - runtime validation: `bin/condense` and `bin/pretty` produce correct JSON output matching native baseline.
 - RapidJSON with `RAPIDJSON_BUILD_TESTS=ON` is not yet supported in strict mode (configure fails during CXX feature detection / gtest `target_compile_features`).
 - Authoritative status and blocker ledger live in `TODO.md` (not `docs/transpiler-status.md`).
