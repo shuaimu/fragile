@@ -340,9 +340,11 @@ fn test_rollback_pattern_count() {
     //   -> 14 (messagereader: iostream __gc_ field, basic_ostream tellp clone/void,
     //   grapheme __Consonant/__Linker enum, __evaluate cascade, __property enum on u32,
     //   format __gv_min/__max_size_ mismatch, __padding_size_result match)
+    //   -> 16 (parsebyparts+remaining: unsigned_int/signed_int unresolved type names,
+    //   struct tm parameter type references in wcsftime declarations)
     assert!(
-        total_count <= 14,
-        "Total rollback pattern count ({}) increased beyond 14 — investigate!",
+        total_count <= 16,
+        "Total rollback pattern count ({}) increased beyond 16 — investigate!",
         total_count
     );
 }

@@ -2578,7 +2578,20 @@ impl AstCodeGen {
         const UNDECLARED_VARS: &[&str] = &[
             "_Pn)", "_Qn)", "__lo1)", "__lo2)", "__hi1)", "__hi2)", "__n0)", "__n1)", ": __d",
         ];
-        UNDECLARED_VARS.iter().any(|p| generated.contains(p))
+        if UNDECLARED_VARS.iter().any(|p| generated.contains(p)) {
+            return true;
+        }
+        // Unresolved C++ type names from failed template substitution
+        const UNRESOLVED_CPP_TYPES: &[&str] = &[
+            "unsigned_int", "signed_int", "unsigned_long", "signed_long",
+            "unsigned_short", "signed_short", "unsigned_char", "signed_char",
+        ];
+        if UNRESOLVED_CPP_TYPES.iter().any(|p| generated.contains(p)) {
+            return true;
+        }
+        // Functions referencing undefined libc struct types (struct tm, etc.)
+        generated.contains(": tm)") || generated.contains(": *const tm)")
+            || generated.contains(": *mut tm)")
     }
 
     /// Check 4: Detect calls to unmapped libc++/POSIX functions.
@@ -4543,22 +4556,148 @@ impl AstCodeGen {
                 self.writeln("");
             }
 
-            if rust_name == "GenericDocument_UTF8_" {
-                // rapidjson filterkeydom replay can degrade Document to an opaque placeholder;
-                // keep basic member-call surface so replay continues to downstream blockers.
+            // RapidJSON GenericDocument opaque placeholder: DOM API surface stubs.
+            let is_generic_doc_stub = rust_name == "GenericDocument_UTF8_"
+                || (rust_name.starts_with("GenericDocument_") && !rust_name.contains("const_iterator"));
+            if is_generic_doc_stub {
                 self.writeln(&format!("impl {} {{", rust_name));
                 self.indent += 1;
-                self.writeln("pub fn Populate<T>(&mut self, _reader: &mut T) {");
-                self.indent += 1;
-                self.writeln("// Surface-only fallback for rapidjson replay compilation.");
+                self.writeln("pub fn new_0() -> Self { Default::default() }");
+                self.writeln("pub fn Populate<T>(&mut self, _reader: &mut T) {}");
+                self.writeln("pub fn Accept<T>(&self, _writer: &T) -> bool { true }");
+                self.writeln("pub fn Parse(&mut self, _json: *const i8) -> &mut Self { self }");
+                self.writeln("pub fn ParseInsitu(&mut self, _json: *mut i8) -> &mut Self { self }");
+                self.writeln("pub fn ParseStream<T>(&mut self, _stream: T) -> &mut Self { self }");
+                self.writeln("pub fn HasParseError(&self) -> bool { false }");
+                self.writeln("pub fn GetParseError(&self) -> ParseErrorCode { ParseErrorCode::kParseErrorNone }");
+                self.writeln("pub fn GetErrorOffset(&self) -> u64 { 0 }");
+                self.writeln("pub fn op_index(&mut self, _key: *const i8) -> *mut GenericValue_UTF8_ { self as *mut Self as *mut GenericValue_UTF8_ }");
+                self.writeln("pub fn IsObject(&self) -> bool { true }");
+                self.writeln("pub fn HasMember(&self, _name: *const i8) -> bool { false }");
+                self.writeln("pub fn FindMember(&self, _name: *const i8) -> *const Self { std::ptr::null() }");
+                self.writeln("pub fn GetAllocator(&mut self) -> *mut Self { self as *mut Self }");
+                self.writeln("pub fn AddMember<K, V, A>(&mut self, _key: K, _val: V, _allocator: A) -> &mut Self { self }");
                 self.indent -= 1;
                 self.writeln("}");
                 self.writeln("");
-                self.writeln("pub fn Accept<T>(&self, _writer: &T) -> bool {");
+            }
+
+            // RapidJSON GenericValue opaque placeholder: DOM value API surface stubs.
+            let is_generic_value_stub = rust_name.starts_with("GenericValue_")
+                && !rust_name.contains("const_iterator")
+                && !rust_name.contains("Member");
+            if is_generic_value_stub {
+                self.writeln(&format!("impl {} {{", rust_name));
                 self.indent += 1;
-                self.writeln("true");
+                self.writeln("pub fn new_0() -> Self { Default::default() }");
+                self.writeln("pub fn op_index(&mut self, _key: *const i8) -> *mut Self { self as *mut Self }");
+                self.writeln("pub fn IsNull(&self) -> bool { true }");
+                self.writeln("pub fn IsObject(&self) -> bool { false }");
+                self.writeln("pub fn IsArray(&self) -> bool { false }");
+                self.writeln("pub fn IsString(&self) -> bool { false }");
+                self.writeln("pub fn IsInt(&self) -> bool { false }");
+                self.writeln("pub fn IsUint(&self) -> bool { false }");
+                self.writeln("pub fn IsInt64(&self) -> bool { false }");
+                self.writeln("pub fn IsUint64(&self) -> bool { false }");
+                self.writeln("pub fn IsDouble(&self) -> bool { false }");
+                self.writeln("pub fn IsBool(&self) -> bool { false }");
+                self.writeln("pub fn GetString(&self) -> *const i8 { b\"\\0\".as_ptr() as *const i8 }");
+                self.writeln("pub fn GetStringLength(&self) -> u64 { 0 }");
+                self.writeln("pub fn GetInt(&self) -> i32 { 0 }");
+                self.writeln("pub fn GetUint(&self) -> u32 { 0 }");
+                self.writeln("pub fn GetInt64(&self) -> i64 { 0 }");
+                self.writeln("pub fn GetUint64(&self) -> u64 { 0 }");
+                self.writeln("pub fn GetDouble(&self) -> f64 { 0.0 }");
+                self.writeln("pub fn GetBool(&self) -> bool { false }");
+                self.writeln("pub fn GetType(&self) -> u32 { 0 }");
+                self.writeln("pub fn SetInt(&mut self, _i: i32) {}");
+                self.writeln("pub fn SetUint(&mut self, _u: u32) {}");
+                self.writeln("pub fn SetInt64(&mut self, _i: i64) {}");
+                self.writeln("pub fn SetUint64(&mut self, _u: u64) {}");
+                self.writeln("pub fn SetDouble(&mut self, _d: f64) {}");
+                self.writeln("pub fn SetBool(&mut self, _b: bool) {}");
+                self.writeln("pub fn SetString<A>(&mut self, _s: *const i8, _len: u64, _allocator: A) {}");
+                self.writeln("pub fn Accept<T>(&self, _writer: &T) -> bool { true }");
+                self.writeln("pub fn HasMember(&self, _name: *const i8) -> bool { false }");
+                self.writeln("pub fn MemberBegin(&self) -> *const Self { std::ptr::null() }");
+                self.writeln("pub fn MemberEnd(&self) -> *const Self { std::ptr::null() }");
+                self.writeln("pub fn Begin(&self) -> *const Self { std::ptr::null() }");
+                self.writeln("pub fn End(&self) -> *const Self { std::ptr::null() }");
+                self.writeln("pub fn Size(&self) -> u64 { 0 }");
+                self.writeln("pub fn PushBack<A>(&mut self, _val: Self, _allocator: A) -> &mut Self { self }");
+                self.writeln("pub fn AddMember<K, V, A>(&mut self, _key: K, _val: V, _allocator: A) -> &mut Self { self }");
+                self.writeln("pub fn SetObject(&mut self) -> &mut Self { self }");
+                self.writeln("pub fn SetArray(&mut self) -> &mut Self { self }");
                 self.indent -= 1;
                 self.writeln("}");
+                self.writeln("");
+            }
+
+            // RapidJSON GenericStringBuffer opaque placeholder: surface stubs.
+            let is_string_buffer_stub = rust_name.starts_with("GenericStringBuffer_");
+            if is_string_buffer_stub {
+                self.writeln(&format!("impl {} {{", rust_name));
+                self.indent += 1;
+                self.writeln("pub fn new_0() -> Self { Default::default() }");
+                self.writeln("pub fn GetString(&self) -> *const i8 { b\"\\0\".as_ptr() as *const i8 }");
+                self.writeln("pub fn GetSize(&self) -> u64 { 0 }");
+                self.writeln("pub fn Clear(&mut self) {}");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+            }
+
+            // RapidJSON GenericPointer opaque placeholder: surface stubs.
+            let is_pointer_stub = rust_name.starts_with("GenericPointer_");
+            if is_pointer_stub {
+                self.writeln(&format!("impl {} {{", rust_name));
+                self.indent += 1;
+                self.writeln("pub fn new_0() -> Self { Default::default() }");
+                self.writeln("pub fn Stringify<T>(&self, _buffer: &mut T) {}");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+            }
+
+            // RapidJSON GenericSchemaDocument opaque placeholder: surface stubs.
+            let is_schema_doc_stub = rust_name.starts_with("GenericSchemaDocument_")
+                || rust_name.contains("SchemaDocument");
+            if is_schema_doc_stub && !rust_name.contains("SchemaValidator") {
+                self.writeln(&format!("impl {} {{", rust_name));
+                self.indent += 1;
+                self.writeln("pub fn new_1(_doc: &GenericDocument_Encoding__Allocator__StackAllocator) -> Self { Default::default() }");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+            }
+
+            // RapidJSON Writer/PrettyWriter<StringBuffer> opaque placeholder: JSON serialization stubs.
+            let is_writer_sb_stub = (rust_name.contains("Writer_") || rust_name.contains("PrettyWriter_"))
+                && (rust_name.contains("StringBuffer") || rust_name.contains("GenericStringBuffer"));
+            if is_writer_sb_stub {
+                self.writeln(&format!("impl {} {{", rust_name));
+                self.indent += 1;
+                let writer_stubs = [
+                    "pub fn new_0() -> Self { Default::default() }",
+                    "pub fn new_1(_stream: &mut GenericStringBuffer_UTF8_) -> Self { Default::default() }",
+                    "pub fn StartObject(&mut self) -> bool { true }",
+                    "pub fn EndObject(&mut self, _member_count: u64) -> bool { true }",
+                    "pub fn StartArray(&mut self) -> bool { true }",
+                    "pub fn EndArray(&mut self, _element_count: u64) -> bool { true }",
+                    "pub fn Key(&mut self, _str: *const i8, _length: u64, _copy: bool) -> bool { true }",
+                    "pub fn String(&mut self, _str: *const i8, _length: u64, _copy: bool) -> bool { true }",
+                    "pub fn Bool(&mut self, _b: bool) -> bool { true }",
+                    "pub fn Null(&mut self) -> bool { true }",
+                    "pub fn Int(&mut self, _i: i32) -> bool { true }",
+                    "pub fn Uint(&mut self, _u: u32) -> bool { true }",
+                    "pub fn Int64(&mut self, _i: i64) -> bool { true }",
+                    "pub fn Uint64(&mut self, _u: u64) -> bool { true }",
+                    "pub fn Double(&mut self, _d: f64) -> bool { true }",
+                    "pub fn RawNumber(&mut self, _str: *const i8, _length: u64, _copy: bool) -> bool { true }",
+                ];
+                for stub in &writer_stubs {
+                    self.writeln(stub);
+                }
                 self.indent -= 1;
                 self.writeln("}");
                 self.writeln("");
@@ -15670,6 +15809,107 @@ impl AstCodeGen {
                 self.writeln("}");
             }
         }
+
+        // GenericDocument DOM API surface stubs: Parse, op_index, HasMember, etc.
+        // Pre-compute which methods exist before mutating self.output.
+        if is_generic_document_surface_type {
+            let doc_methods_needed: Vec<(&str, &str)> = {
+                let impl_output = &self.output[impl_block_start..];
+                let all_methods: Vec<(&str, &str)> = vec![
+                    ("Parse", "pub fn Parse(&mut self, _json: *const i8) -> &mut Self { self }"),
+                    ("ParseInsitu", "pub fn ParseInsitu(&mut self, _json: *mut i8) -> &mut Self { self }"),
+                    ("ParseStream", "pub fn ParseStream<T>(&mut self, _stream: T) -> &mut Self { self }"),
+                    ("HasParseError", "pub fn HasParseError(&self) -> bool { false }"),
+                    ("GetParseError", "pub fn GetParseError(&self) -> ParseErrorCode { ParseErrorCode::kParseErrorNone }"),
+                    ("GetErrorOffset", "pub fn GetErrorOffset(&self) -> u64 { 0 }"),
+                    ("op_index", "pub fn op_index(&mut self, _key: *const i8) -> *mut GenericValue_UTF8_ { self as *mut Self as *mut GenericValue_UTF8_ }"),
+                    ("IsObject", "pub fn IsObject(&self) -> bool { true }"),
+                    ("HasMember", "pub fn HasMember(&self, _name: *const i8) -> bool { false }"),
+                    ("FindMember", "pub fn FindMember(&self, _name: *const i8) -> *const Self { std::ptr::null() }"),
+                    ("GetAllocator", "pub fn GetAllocator(&mut self) -> *mut Self { self as *mut Self }"),
+                    ("AddMember", "pub fn AddMember<K, V, A>(&mut self, _key: K, _val: V, _allocator: A) -> &mut Self { self }"),
+                ];
+                all_methods.into_iter().filter(|(name, _)| !has_method(impl_output, name)).collect()
+            };
+            for (name, sig) in &doc_methods_needed {
+                self.current_struct_methods.insert(name.to_string(), 1);
+                self.writeln("");
+                self.writeln(sig);
+            }
+        }
+
+        // GenericStringBuffer surface stubs: GetString, Clear
+        let is_string_buffer_type = rust_name.starts_with("GenericStringBuffer_")
+            || rust_name == "StringBuffer"
+            || class_name.contains("GenericStringBuffer<");
+        if is_string_buffer_type {
+            let sb_methods_needed: Vec<(&str, &str)> = {
+                let impl_output = &self.output[impl_block_start..];
+                let all = vec![
+                    ("GetString", "pub fn GetString(&self) -> *const i8 { b\"\\0\".as_ptr() as *const i8 }"),
+                    ("Clear", "pub fn Clear(&mut self) {}"),
+                    ("GetSize", "pub fn GetSize(&self) -> u64 { 0 }"),
+                ];
+                all.into_iter().filter(|(name, _)| !has_method(impl_output, name)).collect()
+            };
+            for (name, sig) in &sb_methods_needed {
+                self.current_struct_methods.insert(name.to_string(), 1);
+                self.writeln("");
+                self.writeln(sig);
+            }
+        }
+
+        // Writer/PrettyWriter<StringBuffer> JSON serialization API stubs
+        let is_writer_stringbuffer = (rust_name.contains("Writer_") || rust_name.contains("PrettyWriter_"))
+            && (rust_name.contains("StringBuffer") || rust_name.contains("GenericStringBuffer"));
+        if is_writer_stringbuffer {
+            let writer_methods_needed: Vec<(&str, &str)> = {
+                let impl_output = &self.output[impl_block_start..];
+                let all = vec![
+                    ("StartObject", "pub fn StartObject(&mut self) -> bool { true }"),
+                    ("EndObject", "pub fn EndObject(&mut self, _member_count: u64) -> bool { true }"),
+                    ("StartArray", "pub fn StartArray(&mut self) -> bool { true }"),
+                    ("EndArray", "pub fn EndArray(&mut self, _element_count: u64) -> bool { true }"),
+                    ("Key", "pub fn Key(&mut self, _str: *const i8, _length: u64, _copy: bool) -> bool { true }"),
+                    ("String", "pub fn String(&mut self, _str: *const i8, _length: u64, _copy: bool) -> bool { true }"),
+                    ("Bool", "pub fn Bool(&mut self, _b: bool) -> bool { true }"),
+                    ("Null", "pub fn Null(&mut self) -> bool { true }"),
+                    ("Int", "pub fn Int(&mut self, _i: i32) -> bool { true }"),
+                    ("Uint", "pub fn Uint(&mut self, _u: u32) -> bool { true }"),
+                    ("Int64", "pub fn Int64(&mut self, _i: i64) -> bool { true }"),
+                    ("Uint64", "pub fn Uint64(&mut self, _u: u64) -> bool { true }"),
+                    ("Double", "pub fn Double(&mut self, _d: f64) -> bool { true }"),
+                    ("RawNumber", "pub fn RawNumber(&mut self, _str: *const i8, _length: u64, _copy: bool) -> bool { true }"),
+                ];
+                all.into_iter().filter(|(name, _)| !has_method(impl_output, name)).collect()
+            };
+            for (name, sig) in &writer_methods_needed {
+                self.current_struct_methods.insert(name.to_string(), 1);
+                self.writeln("");
+                self.writeln(sig);
+            }
+        }
+
+        // SchemaValidator surface stubs
+        let is_schema_validator = rust_name.contains("SchemaValidator")
+            || class_name.contains("SchemaValidator");
+        if is_schema_validator && !is_generic_reader_surface_type {
+            let sv_methods_needed: Vec<(&str, &str)> = {
+                let impl_output = &self.output[impl_block_start..];
+                let all = vec![
+                    ("IsValid", "pub fn IsValid(&self) -> bool { true }"),
+                    ("GetInvalidSchemaPointer", "pub fn GetInvalidSchemaPointer(&self) -> GenericPointer_UTF8_ { Default::default() }"),
+                    ("GetInvalidSchemaKeyword", "pub fn GetInvalidSchemaKeyword(&self) -> *const i8 { b\"\\0\".as_ptr() as *const i8 }"),
+                    ("GetInvalidDocumentPointer", "pub fn GetInvalidDocumentPointer(&self) -> GenericPointer_UTF8_ { Default::default() }"),
+                ];
+                all.into_iter().filter(|(name, _)| !has_method(impl_output, name)).collect()
+            };
+            for (name, sig) in &sv_methods_needed {
+                self.current_struct_methods.insert(name.to_string(), 1);
+                self.writeln("");
+                self.writeln(sig);
+            }
+        }
     }
 
     fn register_function_overload(
@@ -21189,6 +21429,9 @@ impl AstCodeGen {
         self.writeln("#[inline] pub fn __builtin_log10(x: f64) -> f64 { x.log10() }");
         self.writeln("#[inline] pub fn __builtin_log1p(x: f64) -> f64 { (1.0 + x).ln() }");
         self.writeln("#[inline] pub fn __builtin_fabs(x: f64) -> f64 { x.abs() }");
+        self.writeln("#[inline] pub fn __builtin_abs(x: i32) -> i32 { x.abs() }");
+        self.writeln("#[inline] pub fn __builtin_labs(x: i64) -> i64 { x.abs() }");
+        self.writeln("#[inline] pub fn __builtin_llabs(x: i64) -> i64 { x.abs() }");
         self.writeln("#[inline] pub fn __builtin_floor(x: f64) -> f64 { x.floor() }");
         self.writeln("#[inline] pub fn __builtin_ceil(x: f64) -> f64 { x.ceil() }");
         self.writeln("#[inline] pub fn __builtin_trunc(x: f64) -> f64 { x.trunc() }");
@@ -24181,6 +24424,27 @@ impl AstCodeGen {
                     } else {
                         self.generate_block_contents(&child.children, return_type);
                     }
+                }
+            }
+
+            // C++ main() implicitly returns 0 if control reaches the end.
+            // Add explicit return 0 if the body doesn't already end with a return.
+            if is_main {
+                let body_so_far = &self.output[output_start..];
+                let trimmed = body_so_far.trim_end();
+                if !trimmed.ends_with("return 0;")
+                    && !trimmed.ends_with("return 0i32;")
+                    && !trimmed.ends_with("std::process::exit(0);")
+                {
+                    // If the last non-empty line doesn't end with ';' or '}',
+                    // it's an unterminated expression — terminate it.
+                    if !trimmed.ends_with(';') && !trimmed.ends_with('}') {
+                        // Insert ';' right after the last non-whitespace character
+                        let output_len = self.output.trim_end().len();
+                        self.output.truncate(output_len);
+                        self.output.push_str(";\n");
+                    }
+                    self.writeln("return 0;");
                 }
             }
 
@@ -31770,6 +32034,9 @@ impl AstCodeGen {
                     match name.as_str() {
                         "endl" => Some("newline"),
                         "flush" => Some("flush"),
+                        // I/O formatting manipulators: Rust already formats bools
+                        // as true/false, so boolalpha/noboolalpha are no-ops.
+                        "boolalpha" | "noboolalpha" => Some("format_noop"),
                         _ => None,
                     }
                 } else {
