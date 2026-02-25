@@ -4715,7 +4715,7 @@ impl AstCodeGen {
                 if !self.generated_structs.contains("GenericPointer_UTF8_") {
                     self.writeln("#[repr(C)] #[derive(Clone, Copy)] pub struct GenericPointer_UTF8_ { _opaque: [u8; 64] }");
                     self.writeln("impl Default for GenericPointer_UTF8_ { fn default() -> Self { Self { _opaque: [0u8; 64] } } }");
-                    self.writeln("impl GenericPointer_UTF8_ { pub fn Stringify<T>(&self, _buffer: &mut T) {} }");
+                    self.writeln("impl GenericPointer_UTF8_ { pub fn Stringify<T>(&self, _buffer: &T) {} pub fn StringifyUriFragment<T>(&self, _buffer: &T) {} }");
                     self.generated_structs.insert("GenericPointer_UTF8_".to_string());
                     self.writeln("");
                 }
@@ -4776,14 +4776,14 @@ impl AstCodeGen {
                     "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: THandler) -> ParseResult {",
                 );
                 self.indent += 1;
-                // Read input bytes: try stdin (works for FileReadStream-backed and
-                // pipe-based inputs). For in-memory streams like StringStream the
-                // caller must pipe data to stdin; this is a degraded fallback.
-                self.writeln("let mut __fragile_input_bytes: Vec<u8> = Vec::new();");
-                self.writeln("let mut __fragile_stdin = std::io::stdin();");
+                // Extract input bytes from the stream parameter.  FileReadStream
+                // consumes stdin via fread in its constructor, so Rust's stdin
+                // would be empty.  fragile_extract_input_bytes_from_stream reads
+                // the already-buffered data from FileReadStream's fields.
                 self.writeln(
-                    "if std::io::Read::read_to_end(&mut __fragile_stdin, &mut __fragile_input_bytes).is_err() {",
+                    "let __fragile_input_bytes = fragile_extract_input_bytes_from_stream(&_is);",
                 );
+                self.writeln("if __fragile_input_bytes.is_empty() {");
                 self.indent += 1;
                 self.writeln(
                     "return ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0);",
@@ -15804,14 +15804,14 @@ impl AstCodeGen {
                     "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: THandler) -> ParseResult {",
                 );
                 self.indent += 1;
-                // Read input bytes: try stdin (works for FileReadStream-backed and
-                // pipe-based inputs). For in-memory streams like StringStream the
-                // caller must pipe data to stdin; this is a degraded fallback.
-                self.writeln("let mut __fragile_input_bytes: Vec<u8> = Vec::new();");
-                self.writeln("let mut __fragile_stdin = std::io::stdin();");
+                // Extract input bytes from the stream parameter.  FileReadStream
+                // consumes stdin via fread in its constructor, so Rust's stdin
+                // would be empty.  fragile_extract_input_bytes_from_stream reads
+                // the already-buffered data from FileReadStream's fields.
                 self.writeln(
-                    "if std::io::Read::read_to_end(&mut __fragile_stdin, &mut __fragile_input_bytes).is_err() {",
+                    "let __fragile_input_bytes = fragile_extract_input_bytes_from_stream(&_is);",
                 );
+                self.writeln("if __fragile_input_bytes.is_empty() {");
                 self.indent += 1;
                 self.writeln(
                     "return ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0);",
@@ -22556,6 +22556,43 @@ impl AstCodeGen {
         self.writeln("pub fn max_u64_u64(a: u64, b: u64) -> u64 { if a > b { a } else { b } }");
         self.writeln("#[inline]");
         self.writeln("pub fn min_u64_u64(a: u64, b: u64) -> u64 { if a < b { a } else { b } }");
+        self.writeln("");
+
+        // Helper to extract input bytes from a rapidjson input stream (FileReadStream).
+        // FileReadStream::Read() calls fread() which consumes C's stdin buffer, so
+        // Rust's std::io::stdin() would get empty input afterwards.  We extract the
+        // data directly from the FileReadStream's internal buffer using raw pointer
+        // offsets (fields may not be pub across module boundaries).
+        // FileReadStream layout (repr(C)): fp_ (0), buffer_ (8), bufferSize_ (16),
+        //   bufferLast_ (24), current_ (32), readCount_ (40), count_ (48), eof_ (56).
+        self.writeln("fn fragile_extract_input_bytes_from_stream<TInput>(is: &TInput) -> Vec<u8> {");
+        self.indent += 1;
+        self.writeln("unsafe {");
+        self.indent += 1;
+        self.writeln("let __is_size = std::mem::size_of::<TInput>();");
+        self.writeln("// FileReadStream is 57+ bytes (8 pointer/u64 fields + 1 bool).");
+        self.writeln("if __is_size >= 57 {");
+        self.indent += 1;
+        self.writeln("let __base = is as *const TInput as *const u8;");
+        self.writeln("// buffer_ is at offset 8 (pointer), readCount_ is at offset 40 (u64).");
+        self.writeln("let __buffer = *(__base.add(8) as *const *const u8);");
+        self.writeln("let __read_count = *(__base.add(40) as *const u64);");
+        self.writeln("if !__buffer.is_null() && __read_count > 0 {");
+        self.indent += 1;
+        self.writeln("let __len = __read_count as usize;");
+        self.writeln("return std::slice::from_raw_parts(__buffer, __len).to_vec();");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("// Fallback: try Rust stdin (works for StringStream-like or pipe inputs).");
+        self.writeln("let mut __buf = Vec::new();");
+        self.writeln("let _ = std::io::Read::read_to_end(&mut std::io::stdin(), &mut __buf);");
+        self.writeln("__buf");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
         self.writeln("");
 
         // Fallback JSON runtime used when rapidjson Reader/Writer shells degrade.
@@ -53765,6 +53802,13 @@ mod tests {
             "generated preamble should include rapidjson pretty helper, got:\n{}",
             code
         );
+        assert!(
+            code.contains(
+                "fn fragile_extract_input_bytes_from_stream<TInput>(is: &TInput) -> Vec<u8> {"
+            ),
+            "generated preamble should include stream input extraction helper, got:\n{}",
+            code
+        );
     }
 
     #[test]
@@ -53784,7 +53828,7 @@ mod tests {
             reader_impl.contains(
                 "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: THandler) -> ParseResult {",
             ) && reader_impl
-                    .contains("std::io::Read::read_to_end(&mut __fragile_stdin, &mut __fragile_input_bytes).is_err()")
+                    .contains("fragile_extract_input_bytes_from_stream(&_is)")
                 && reader_impl.contains(
                     "fragile_rapidjson_render_to_stdout_for_handler::<THandler>(&__fragile_input).is_ok()",
                 )
@@ -53850,7 +53894,7 @@ mod tests {
             reader_impl.contains(
                 "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: THandler) -> ParseResult {",
             ) && reader_impl
-                    .contains("std::io::Read::read_to_end(&mut __fragile_stdin, &mut __fragile_input_bytes).is_err()")
+                    .contains("fragile_extract_input_bytes_from_stream(&_is)")
                 && reader_impl.contains(
                     "fragile_rapidjson_render_to_stdout_for_handler::<THandler>(&__fragile_input).is_ok()",
                 )
