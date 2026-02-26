@@ -789,9 +789,9 @@ fn convert_node_with_depth(
             ClangNodeKind::Unknown("InlineClassTemplateDecl".to_string())
         }
 
-        ASTEntryTag::TagNamespaceDecl
-        | ASTEntryTag::TagUsingDecl
-        | ASTEntryTag::TagUsingDirectiveDecl => {
+        ASTEntryTag::TagNamespaceDecl => convert_namespace_decl_node(node),
+
+        ASTEntryTag::TagUsingDecl | ASTEntryTag::TagUsingDirectiveDecl => {
             ClangNodeKind::Unknown("NamespaceRelated".to_string())
         }
 
@@ -1065,6 +1065,18 @@ fn convert_enum_constant_decl_node(
     }
     let value = node.get_int(1).map(|v| v as i64);
     ClangNodeKind::EnumConstantDecl { name, value }
+}
+
+fn convert_namespace_decl_node(node: &fragile_ast_exporter::clang_ast::AstNode) -> ClangNodeKind {
+    let raw_name = node.get_string(0).unwrap_or("").to_string();
+    let is_inline = node.get_bool(1).unwrap_or(false);
+    let is_anonymous = node.get_bool(2).unwrap_or(false);
+    let name = if is_anonymous || raw_name.is_empty() {
+        None
+    } else {
+        Some(raw_name)
+    };
+    ClangNodeKind::NamespaceDecl { name, is_inline }
 }
 
 fn extract_type_from_node(

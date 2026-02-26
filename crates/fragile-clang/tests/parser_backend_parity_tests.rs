@@ -19,6 +19,8 @@ const MARKER_ENUM_MODE_B: &str = "ModeB = 2";
 const MARKER_STRUCT_POINT: &str = "pub struct Point";
 const MARKER_STRUCT_POINT_X: &str = "pub x: i32";
 const MARKER_STRUCT_POINT_Y: &str = "pub y: i32";
+const MARKER_NAMESPACE_MATH: &str = "pub mod math";
+const MARKER_NAMESPACE_NS_ADD: &str = "pub extern \"C\" fn ns_add";
 
 #[derive(Debug, Clone)]
 struct BackendReplayResult {
@@ -37,6 +39,8 @@ struct BackendReplayResult {
     has_struct_point: bool,
     has_struct_point_x: bool,
     has_struct_point_y: bool,
+    has_namespace_math: bool,
+    has_namespace_ns_add: bool,
 }
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {
@@ -95,6 +99,12 @@ struct Point {
     int x;
     int y;
 };
+
+namespace math {
+int ns_add(int lhs, int rhs) {
+    return lhs + rhs;
+}
+}
 
 int add(int a, int b) {
     return a + b;
@@ -174,6 +184,8 @@ int mul(int x, int y) {
             has_struct_point: rust_code.contains(MARKER_STRUCT_POINT),
             has_struct_point_x: rust_code.contains(MARKER_STRUCT_POINT_X),
             has_struct_point_y: rust_code.contains(MARKER_STRUCT_POINT_Y),
+            has_namespace_math: rust_code.contains(MARKER_NAMESPACE_MATH),
+            has_namespace_ns_add: rust_code.contains(MARKER_NAMESPACE_NS_ADD),
         });
     }
 
@@ -184,7 +196,7 @@ int mul(int x, int y) {
     );
     for result in &results {
         manifest.push_str(&format!(
-            "backend={} rust_path={} rustc_status={} markers=fn_add:{},fn_mul:{},ret_add:{},ret_mul:{},typedef_count:{},alias_distance:{},enum_mode:{},enum_mode_a:{},enum_mode_b:{},struct_point:{},struct_point_x:{},struct_point_y:{}\n",
+            "backend={} rust_path={} rustc_status={} markers=fn_add:{},fn_mul:{},ret_add:{},ret_mul:{},typedef_count:{},alias_distance:{},enum_mode:{},enum_mode_a:{},enum_mode_b:{},struct_point:{},struct_point_x:{},struct_point_y:{},namespace_math:{},namespace_ns_add:{}\n",
             result.backend_name,
             result.rust_path.display(),
             result.rustc_status,
@@ -199,7 +211,9 @@ int mul(int x, int y) {
             result.has_enum_mode_b,
             result.has_struct_point,
             result.has_struct_point_x,
-            result.has_struct_point_y
+            result.has_struct_point_y,
+            result.has_namespace_math,
+            result.has_namespace_ns_add
         ));
     }
     fs::write(log_dir.join("parser_backend_parity_manifest.txt"), manifest).map_err(|e| {
@@ -256,7 +270,9 @@ fn test_parser_backend_parity_local_fixture_replay() {
             && reference.has_enum_mode_b
             && reference.has_struct_point
             && reference.has_struct_point_x
-            && reference.has_struct_point_y,
+            && reference.has_struct_point_y
+            && reference.has_namespace_math
+            && reference.has_namespace_ns_add,
         "reference backend marker-set should contain expected function/return markers; logs: {}",
         log_dir.display()
     );
@@ -266,7 +282,7 @@ fn test_parser_backend_parity_local_fixture_replay() {
         .find(|entry| entry.backend_name == "hybrid")
         .expect("missing hybrid parity result");
     assert_eq!(
-        (
+        [
             hybrid.has_fn_add,
             hybrid.has_fn_mul,
             hybrid.has_return_add,
@@ -278,9 +294,11 @@ fn test_parser_backend_parity_local_fixture_replay() {
             hybrid.has_enum_mode_b,
             hybrid.has_struct_point,
             hybrid.has_struct_point_x,
-            hybrid.has_struct_point_y
-        ),
-        (
+            hybrid.has_struct_point_y,
+            hybrid.has_namespace_math,
+            hybrid.has_namespace_ns_add
+        ],
+        [
             reference.has_fn_add,
             reference.has_fn_mul,
             reference.has_return_add,
@@ -292,8 +310,10 @@ fn test_parser_backend_parity_local_fixture_replay() {
             reference.has_enum_mode_b,
             reference.has_struct_point,
             reference.has_struct_point_x,
-            reference.has_struct_point_y
-        ),
+            reference.has_struct_point_y,
+            reference.has_namespace_math,
+            reference.has_namespace_ns_add
+        ],
         "hybrid backend should currently match libclang marker-set parity; logs: {}",
         log_dir.display()
     );
@@ -303,7 +323,7 @@ fn test_parser_backend_parity_local_fixture_replay() {
         .find(|entry| entry.backend_name == "libtooling")
         .expect("missing libtooling parity result");
     assert_eq!(
-        (
+        [
             libtooling.has_fn_add,
             libtooling.has_fn_mul,
             libtooling.has_return_add,
@@ -315,9 +335,11 @@ fn test_parser_backend_parity_local_fixture_replay() {
             libtooling.has_enum_mode_b,
             libtooling.has_struct_point,
             libtooling.has_struct_point_x,
-            libtooling.has_struct_point_y
-        ),
-        (
+            libtooling.has_struct_point_y,
+            libtooling.has_namespace_math,
+            libtooling.has_namespace_ns_add
+        ],
+        [
             reference.has_fn_add,
             reference.has_fn_mul,
             reference.has_return_add,
@@ -329,8 +351,10 @@ fn test_parser_backend_parity_local_fixture_replay() {
             reference.has_enum_mode_b,
             reference.has_struct_point,
             reference.has_struct_point_x,
-            reference.has_struct_point_y
-        ),
+            reference.has_struct_point_y,
+            reference.has_namespace_math,
+            reference.has_namespace_ns_add
+        ],
         "libtooling backend should match libclang marker-set parity for this fixture; logs: {}",
         log_dir.display()
     );

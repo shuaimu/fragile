@@ -1297,6 +1297,11 @@ bool ASTExporterVisitor::VisitNamespaceDecl(NamespaceDecl *ND) {
         return true;
 
     std::vector<const void *> children;
+    for (auto *D : ND->decls()) {
+        if (D) {
+            children.push_back(D);
+        }
+    }
 
     encodeEntry(ND, TagNamespaceDecl, ND->getSourceRange(), children,
                 QualType(), [ND](CborEncoder *enc) {
