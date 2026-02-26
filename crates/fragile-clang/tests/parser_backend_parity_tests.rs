@@ -1,12 +1,15 @@
 use fragile_clang::{
-    transpile_cpp_to_rust_with_options, ParserBackend, ParserLanguage, TranspileOptions,
+    convert_to_clang_node, transpile_cpp_to_rust_with_options, ClangNode, ClangNodeKind,
+    ClangParser, CppType, LibToolingParser, ParserBackend, ParserLanguage, TranspileOptions,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const PARITY_LOG_ROOT_PREFIX: &str = "fragile_parser_backend_parity_local_fixture";
+const CPP_TYPE_SNAPSHOT_LOG_ROOT_PREFIX: &str = "fragile_parser_backend_cpp_type_snapshot_fixture";
 const MARKER_FN_ADD: &str = "pub extern \"C\" fn add";
 const MARKER_FN_MUL: &str = "pub extern \"C\" fn mul";
 const MARKER_RETURN_ADD: &str = "return a + b";
@@ -65,12 +68,31 @@ struct BackendReplayResult {
     has_dependent_type_placeholder_struct: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BackendCppTypeSnapshot {
+    backend_name: &'static str,
+    decltype_alias_underlying: Option<CppType>,
+    decltype_alias_fn_return: Option<CppType>,
+    decltype_alias_fn_param0: Option<CppType>,
+    decltype_direct_fn_return: Option<CppType>,
+    decltype_direct_fn_param0: Option<CppType>,
+    dependent_identity_return: Option<CppType>,
+    dependent_identity_param0: Option<CppType>,
+    dependent_holder_identity_return: Option<CppType>,
+    dependent_holder_identity_param0: Option<CppType>,
+}
+
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock must be monotonic")
         .as_nanos();
     std::env::temp_dir().join(format!("{prefix}_{stamp}"))
+}
+
+fn parser_backend_parity_test_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 fn write_command_capture(log_dir: &Path, step: &str, output: &Output) -> Result<(), String> {
@@ -311,6 +333,9 @@ int mul(int x, int y) {
 
 #[test]
 fn test_parser_backend_parity_local_fixture_replay() {
+    let _guard = parser_backend_parity_test_lock()
+        .lock()
+        .expect("parity test lock should not be poisoned");
     let (log_dir, results) = run_parser_backend_parity_local_fixture()
         .expect("failed to run parser-backend parity local fixture replay");
 
@@ -489,6 +514,434 @@ fn test_parser_backend_parity_local_fixture_replay() {
             reference.has_dependent_type_placeholder_struct
         ],
         "libtooling backend should match libclang marker-set parity for this fixture; logs: {}",
+        log_dir.display()
+    );
+}
+
+fn parse_translation_unit_for_backend(
+    source_path: &Path,
+    backend: ParserBackend,
+) -> Result<ClangNode, String> {
+    match backend {
+        ParserBackend::Libclang | ParserBackend::Hybrid => {
+            let parser = ClangParser::with_paths_defines_language_and_ignored_errors(
+                Vec::new(),
+                Vec::new(),
+                ParserLanguage::Cpp,
+                Vec::new(),
+            )
+            .map_err(|e| format!("failed to create libclang parser: {e}"))?;
+            let ast = parser
+                .parse_file(source_path)
+                .map_err(|e| format!("libclang parse failed for {}: {e}", source_path.display()))?;
+            Ok(ast.translation_unit)
+        }
+        ParserBackend::Libtooling => {
+            let compile_dir = source_path
+                .parent()
+                .ok_or_else(|| format!("missing parent directory for {}", source_path.display()))?;
+            let parser = LibToolingParser::new().with_compile_commands_dir(
+                compile_dir
+                    .to_str()
+                    .ok_or_else(|| format!("non UTF-8 compile dir path: {}", compile_dir.display()))?,
+            );
+            let ctx = parser
+                .parse_file(source_path)
+                .map_err(|e| format!("libtooling parse failed for {}: {e}", source_path.display()))?;
+            let children = ctx
+                .top_nodes
+                .iter()
+                .filter_map(|id| convert_to_clang_node(&ctx, *id))
+                .collect();
+            Ok(ClangNode::new(ClangNodeKind::TranslationUnit).with_children(children))
+        }
+    }
+}
+
+fn collect_cpp_type_snapshot(node: &ClangNode, snapshot: &mut BackendCppTypeSnapshot) {
+    match &node.kind {
+        ClangNodeKind::TypeAliasDecl {
+            name,
+            underlying_type,
+        }
+        | ClangNodeKind::TypedefDecl {
+            name,
+            underlying_type,
+        } if name == "DecltypeAlias" => {
+            snapshot.decltype_alias_underlying = Some(underlying_type.clone());
+        }
+        ClangNodeKind::FunctionDecl {
+            name,
+            return_type,
+            params,
+            ..
+        } => {
+            if name == "decltype_alias_identity" {
+                snapshot.decltype_alias_fn_return = Some(return_type.clone());
+                snapshot.decltype_alias_fn_param0 = params.first().map(|(_, ty)| ty.clone());
+            } else if name == "decltype_direct_identity" {
+                snapshot.decltype_direct_fn_return = Some(return_type.clone());
+                snapshot.decltype_direct_fn_param0 = params.first().map(|(_, ty)| ty.clone());
+            }
+        }
+        ClangNodeKind::FunctionTemplateDecl {
+            name,
+            return_type,
+            params,
+            ..
+        } => {
+            if name == "dependent_identity" {
+                snapshot.dependent_identity_return = Some(return_type.clone());
+                snapshot.dependent_identity_param0 = params.first().map(|(_, ty)| ty.clone());
+            } else if name == "dependent_holder_identity" {
+                snapshot.dependent_holder_identity_return = Some(return_type.clone());
+                snapshot.dependent_holder_identity_param0 =
+                    params.first().map(|(_, ty)| ty.clone());
+            }
+        }
+        _ => {}
+    }
+
+    for child in &node.children {
+        collect_cpp_type_snapshot(child, snapshot);
+    }
+}
+
+fn cpp_type_family_snapshot(ty: &CppType) -> String {
+    match ty {
+        CppType::TemplateParam { name, depth, index } => {
+            format!("template_param:{name}:{depth}:{index}")
+        }
+        CppType::DependentType { spelling } => format!("dependent:{spelling}"),
+        CppType::Named(name) if name.contains("type-parameter-") => {
+            format!("named_type_parameter:{name}")
+        }
+        CppType::Named(name) if name.contains("value_type") || name.contains("Holder<") => {
+            format!("named_dependent:{name}")
+        }
+        _ => format!("concrete:{:?}", ty),
+    }
+}
+
+fn snapshot_entry(label: &str, ty: &Option<CppType>) -> String {
+    match ty {
+        Some(ty) => format!("{label}={}", cpp_type_family_snapshot(ty)),
+        None => format!("{label}=<missing>"),
+    }
+}
+
+fn run_cpp_type_snapshot_local_fixture() -> Result<(PathBuf, Vec<BackendCppTypeSnapshot>), String> {
+    let log_dir = unique_temp_dir(CPP_TYPE_SNAPSHOT_LOG_ROOT_PREFIX);
+    fs::create_dir_all(&log_dir)
+        .map_err(|e| format!("failed to create cpp-type snapshot log dir {}: {e}", log_dir.display()))?;
+
+    let source_path = log_dir.join("parser_backend_cpp_type_snapshot_fixture.cpp");
+    fs::write(
+        &source_path,
+        r#"
+template<typename T>
+struct Holder {
+    using value_type = T;
+};
+
+template<typename T>
+T dependent_identity(T value) {
+    return value;
+}
+
+template<typename T>
+typename Holder<T>::value_type dependent_holder_identity(typename Holder<T>::value_type value) {
+    return value;
+}
+
+using DecltypeAlias = decltype(1 + 2);
+
+DecltypeAlias decltype_alias_identity(DecltypeAlias value) {
+    return value;
+}
+
+decltype(1 + 2) decltype_direct_identity(decltype(1 + 2) value) {
+    return value;
+}
+"#,
+    )
+    .map_err(|e| {
+        format!(
+            "failed to write cpp-type snapshot fixture source {}: {e}",
+            source_path.display()
+        )
+    })?;
+
+    let backends: [(&str, ParserBackend); 3] = [
+        ("libclang", ParserBackend::Libclang),
+        ("hybrid", ParserBackend::Hybrid),
+        ("libtooling", ParserBackend::Libtooling),
+    ];
+
+    let mut snapshots = Vec::new();
+    for (backend_name, backend) in backends {
+        let translation_unit = parse_translation_unit_for_backend(&source_path, backend).map_err(|e| {
+            format!(
+                "backend {} failed to parse fixture {}: {}",
+                backend_name,
+                source_path.display(),
+                e
+            )
+        })?;
+
+        let mut snapshot = BackendCppTypeSnapshot {
+            backend_name,
+            decltype_alias_underlying: None,
+            decltype_alias_fn_return: None,
+            decltype_alias_fn_param0: None,
+            decltype_direct_fn_return: None,
+            decltype_direct_fn_param0: None,
+            dependent_identity_return: None,
+            dependent_identity_param0: None,
+            dependent_holder_identity_return: None,
+            dependent_holder_identity_param0: None,
+        };
+        collect_cpp_type_snapshot(&translation_unit, &mut snapshot);
+        snapshots.push(snapshot);
+    }
+
+    let mut manifest = format!(
+        "fixture=parser_backend_cpp_type_snapshot_local\nsource={}\nbackend_count={}\n",
+        source_path.display(),
+        snapshots.len()
+    );
+    for snapshot in &snapshots {
+        manifest.push_str(&format!(
+            "backend={} {} {} {} {} {} {} {} {} {}\n",
+            snapshot.backend_name,
+            snapshot_entry("decltype_alias_underlying", &snapshot.decltype_alias_underlying),
+            snapshot_entry("decltype_alias_fn_return", &snapshot.decltype_alias_fn_return),
+            snapshot_entry("decltype_alias_fn_param0", &snapshot.decltype_alias_fn_param0),
+            snapshot_entry("decltype_direct_fn_return", &snapshot.decltype_direct_fn_return),
+            snapshot_entry("decltype_direct_fn_param0", &snapshot.decltype_direct_fn_param0),
+            snapshot_entry("dependent_identity_return", &snapshot.dependent_identity_return),
+            snapshot_entry("dependent_identity_param0", &snapshot.dependent_identity_param0),
+            snapshot_entry(
+                "dependent_holder_identity_return",
+                &snapshot.dependent_holder_identity_return
+            ),
+            snapshot_entry(
+                "dependent_holder_identity_param0",
+                &snapshot.dependent_holder_identity_param0
+            ),
+        ));
+    }
+    fs::write(log_dir.join("parser_backend_cpp_type_snapshot_manifest.txt"), manifest).map_err(
+        |e| {
+            format!(
+                "failed to write parser_backend_cpp_type_snapshot_manifest.txt in {}: {e}",
+                log_dir.display()
+            )
+        },
+    )?;
+
+    Ok((log_dir, snapshots))
+}
+
+#[test]
+fn test_parser_backend_cpp_type_snapshot_decltype_and_template_families() {
+    let _guard = parser_backend_parity_test_lock()
+        .lock()
+        .expect("parity test lock should not be poisoned");
+    let (log_dir, snapshots) = run_cpp_type_snapshot_local_fixture()
+        .expect("failed to run parser-backend cpp-type snapshot fixture");
+
+    let manifest_path = log_dir.join("parser_backend_cpp_type_snapshot_manifest.txt");
+    assert!(
+        manifest_path.exists(),
+        "expected cpp-type snapshot manifest at {}",
+        manifest_path.display()
+    );
+    assert_eq!(
+        snapshots.len(),
+        3,
+        "expected snapshot results for libclang/hybrid/libtooling"
+    );
+
+    let reference = snapshots
+        .iter()
+        .find(|entry| entry.backend_name == "libclang")
+        .expect("missing libclang snapshot");
+    let hybrid = snapshots
+        .iter()
+        .find(|entry| entry.backend_name == "hybrid")
+        .expect("missing hybrid snapshot");
+    let libtooling = snapshots
+        .iter()
+        .find(|entry| entry.backend_name == "libtooling")
+        .expect("missing libtooling snapshot");
+
+    for snapshot in &snapshots {
+        assert!(
+            snapshot.decltype_alias_underlying.is_some()
+                && snapshot.decltype_alias_fn_return.is_some()
+                && snapshot.decltype_alias_fn_param0.is_some()
+                && snapshot.decltype_direct_fn_return.is_some()
+                && snapshot.decltype_direct_fn_param0.is_some()
+                && snapshot.dependent_identity_return.is_some()
+                && snapshot.dependent_identity_param0.is_some()
+                && snapshot.dependent_holder_identity_return.is_some()
+                && snapshot.dependent_holder_identity_param0.is_some(),
+            "backend {} should expose all target CppType snapshot entries; logs: {}",
+            snapshot.backend_name,
+            log_dir.display()
+        );
+    }
+
+    // Hybrid currently shares direct parser shape with libclang; keep this parity explicit.
+    assert_eq!(
+        [
+            &hybrid.decltype_alias_underlying,
+            &hybrid.decltype_alias_fn_return,
+            &hybrid.decltype_alias_fn_param0,
+            &hybrid.decltype_direct_fn_return,
+            &hybrid.decltype_direct_fn_param0,
+            &hybrid.dependent_identity_return,
+            &hybrid.dependent_identity_param0,
+            &hybrid.dependent_holder_identity_return,
+            &hybrid.dependent_holder_identity_param0,
+        ],
+        [
+            &reference.decltype_alias_underlying,
+            &reference.decltype_alias_fn_return,
+            &reference.decltype_alias_fn_param0,
+            &reference.decltype_direct_fn_return,
+            &reference.decltype_direct_fn_param0,
+            &reference.dependent_identity_return,
+            &reference.dependent_identity_param0,
+            &reference.dependent_holder_identity_return,
+            &reference.dependent_holder_identity_param0,
+        ],
+        "hybrid snapshot should match libclang direct-parser snapshot; logs: {}",
+        log_dir.display()
+    );
+
+    // Lock current libclang/hybrid parse-roundtrip snapshot for decltype + dependent families.
+    assert_eq!(
+        reference.decltype_alias_underlying,
+        Some(CppType::Named("decltype(1 + 2)".to_string())),
+        "libclang decltype alias underlying snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        reference.decltype_alias_fn_return,
+        Some(CppType::Int { signed: true }),
+        "libclang decltype alias return snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        reference.decltype_alias_fn_param0,
+        Some(CppType::Int { signed: true }),
+        "libclang decltype alias param snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        reference.decltype_direct_fn_return,
+        Some(CppType::Named("decltype(1 + 2)".to_string())),
+        "libclang direct decltype return snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        reference.decltype_direct_fn_param0,
+        Some(CppType::Named("decltype(1 + 2)".to_string())),
+        "libclang direct decltype param snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        reference.dependent_identity_return,
+        Some(CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        }),
+        "libclang dependent identity return snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        reference.dependent_identity_param0,
+        Some(CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        }),
+        "libclang dependent identity param snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        reference.dependent_holder_identity_return,
+        Some(CppType::DependentType {
+            spelling: "typename Holder<T>::value_type".to_string(),
+        }),
+        "libclang dependent holder return snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        reference.dependent_holder_identity_param0,
+        Some(CppType::DependentType {
+            spelling: "typename Holder<T>::value_type".to_string(),
+        }),
+        "libclang dependent holder param snapshot changed; logs: {}",
+        log_dir.display()
+    );
+
+    // Lock current libtooling parse-roundtrip snapshot for the same families.
+    assert_eq!(
+        libtooling.decltype_alias_underlying,
+        Some(CppType::Int { signed: true }),
+        "libtooling decltype alias underlying snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        libtooling.decltype_alias_fn_return,
+        Some(CppType::Int { signed: true }),
+        "libtooling decltype alias return snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        libtooling.decltype_alias_fn_param0,
+        Some(CppType::Int { signed: true }),
+        "libtooling decltype alias param snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        libtooling.decltype_direct_fn_return,
+        Some(CppType::Int { signed: true }),
+        "libtooling direct decltype return snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        libtooling.decltype_direct_fn_param0,
+        Some(CppType::Int { signed: true }),
+        "libtooling direct decltype param snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        libtooling.dependent_identity_return,
+        Some(CppType::Int { signed: true }),
+        "libtooling dependent identity return snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        libtooling.dependent_identity_param0,
+        Some(CppType::Named("auto".to_string())),
+        "libtooling dependent identity param snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        libtooling.dependent_holder_identity_return,
+        Some(CppType::Int { signed: true }),
+        "libtooling dependent holder return snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        libtooling.dependent_holder_identity_param0,
+        Some(CppType::Named("auto".to_string())),
+        "libtooling dependent holder param snapshot changed; logs: {}",
         log_dir.display()
     );
 }
