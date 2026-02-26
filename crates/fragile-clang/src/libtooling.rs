@@ -768,21 +768,13 @@ fn convert_node_with_depth(
             ClangNodeKind::Unknown("InlineClassDecl".to_string())
         }
 
-        ASTEntryTag::TagTypedefDecl | ASTEntryTag::TagTypeAliasDecl => {
-            // Inline typedef/using - skip
-            ClangNodeKind::Unknown("InlineTypedef".to_string())
-        }
+        ASTEntryTag::TagTypedefDecl => convert_typedef_decl_node(ctx, node),
 
-        ASTEntryTag::TagEnumDecl => ClangNodeKind::Unknown("InlineEnumDecl".to_string()),
+        ASTEntryTag::TagTypeAliasDecl => convert_type_alias_decl_node(ctx, node),
 
-        ASTEntryTag::TagEnumConstantDecl => {
-            let name = node.get_string(0).unwrap_or("").to_string();
-            ClangNodeKind::DeclRefExpr {
-                name,
-                ty: CppType::Int { signed: true },
-                namespace_path: vec![],
-            }
-        }
+        ASTEntryTag::TagEnumDecl => convert_enum_decl_node(ctx, node),
+
+        ASTEntryTag::TagEnumConstantDecl => convert_enum_constant_decl_node(node),
 
         ASTEntryTag::TagAccessSpecDecl => {
             // public/private/protected - skip
@@ -911,6 +903,80 @@ fn convert_function_decl_node(
         is_coroutine: false,
         coroutine_info: None,
     }
+}
+
+fn convert_typedef_decl_node(
+    ctx: &AstContext,
+    node: &fragile_ast_exporter::clang_ast::AstNode,
+) -> ClangNodeKind {
+    let name = node.get_string(0).unwrap_or("").to_string();
+    if name.is_empty() {
+        return ClangNodeKind::Unknown("InlineTypedef".to_string());
+    }
+
+    let underlying_type = node
+        .type_id
+        .and_then(|type_id| resolve_type(ctx, type_id))
+        .unwrap_or_else(|| extract_type_from_node(ctx, node));
+
+    ClangNodeKind::TypedefDecl {
+        name,
+        underlying_type,
+    }
+}
+
+fn convert_type_alias_decl_node(
+    ctx: &AstContext,
+    node: &fragile_ast_exporter::clang_ast::AstNode,
+) -> ClangNodeKind {
+    let name = node.get_string(0).unwrap_or("").to_string();
+    if name.is_empty() {
+        return ClangNodeKind::Unknown("InlineTypedef".to_string());
+    }
+
+    let underlying_type = node
+        .type_id
+        .and_then(|type_id| resolve_type(ctx, type_id))
+        .unwrap_or_else(|| extract_type_from_node(ctx, node));
+
+    ClangNodeKind::TypeAliasDecl {
+        name,
+        underlying_type,
+    }
+}
+
+fn convert_enum_decl_node(
+    ctx: &AstContext,
+    node: &fragile_ast_exporter::clang_ast::AstNode,
+) -> ClangNodeKind {
+    let name = node.get_string(0).unwrap_or("").to_string();
+    if name.is_empty() {
+        // Keep unnamed enums in the existing conservative path for now.
+        return ClangNodeKind::Unknown("InlineEnumDecl".to_string());
+    }
+
+    let is_scoped = node.get_bool(1).unwrap_or(false);
+    let underlying_type = node
+        .type_id
+        .and_then(|type_id| resolve_type(ctx, type_id))
+        .unwrap_or(CppType::Int { signed: true });
+
+    ClangNodeKind::EnumDecl {
+        name,
+        is_scoped,
+        underlying_type,
+    }
+}
+
+fn convert_enum_constant_decl_node(
+    node: &fragile_ast_exporter::clang_ast::AstNode,
+) -> ClangNodeKind {
+    let name = node.get_string(0).unwrap_or("").to_string();
+    if name.is_empty() {
+        return ClangNodeKind::Unknown("InlineEnumConstantDecl".to_string());
+    }
+    let value = node.get_int(1).map(|v| v as i64);
+    ClangNodeKind::EnumConstantDecl { name, value }
 }
 
 fn extract_type_from_node(

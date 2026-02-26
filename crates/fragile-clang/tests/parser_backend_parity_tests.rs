@@ -11,6 +11,11 @@ const MARKER_FN_ADD: &str = "pub extern \"C\" fn add";
 const MARKER_FN_MUL: &str = "pub extern \"C\" fn mul";
 const MARKER_RETURN_ADD: &str = "return a + b";
 const MARKER_RETURN_MUL: &str = "return x * y";
+const MARKER_TYPEDEF_COUNT: &str = "pub type Count =";
+const MARKER_ALIAS_DISTANCE: &str = "pub type Distance =";
+const MARKER_ENUM_MODE: &str = "pub enum Mode";
+const MARKER_ENUM_MODE_A: &str = "ModeA = 1";
+const MARKER_ENUM_MODE_B: &str = "ModeB = 2";
 
 #[derive(Debug, Clone)]
 struct BackendReplayResult {
@@ -21,6 +26,11 @@ struct BackendReplayResult {
     has_fn_mul: bool,
     has_return_add: bool,
     has_return_mul: bool,
+    has_typedef_count: bool,
+    has_alias_distance: bool,
+    has_enum_mode: bool,
+    has_enum_mode_a: bool,
+    has_enum_mode_b: bool,
 }
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {
@@ -36,15 +46,29 @@ fn write_command_capture(log_dir: &Path, step: &str, output: &Output) -> Result<
         log_dir.join(format!("{step}.status")),
         output.status.code().unwrap_or(-1).to_string(),
     )
-    .map_err(|e| format!("failed to write {step}.status in {}: {e}", log_dir.display()))?;
-    fs::write(log_dir.join(format!("{step}.stdout")), &output.stdout)
-        .map_err(|e| format!("failed to write {step}.stdout in {}: {e}", log_dir.display()))?;
-    fs::write(log_dir.join(format!("{step}.stderr")), &output.stderr)
-        .map_err(|e| format!("failed to write {step}.stderr in {}: {e}", log_dir.display()))?;
+    .map_err(|e| {
+        format!(
+            "failed to write {step}.status in {}: {e}",
+            log_dir.display()
+        )
+    })?;
+    fs::write(log_dir.join(format!("{step}.stdout")), &output.stdout).map_err(|e| {
+        format!(
+            "failed to write {step}.stdout in {}: {e}",
+            log_dir.display()
+        )
+    })?;
+    fs::write(log_dir.join(format!("{step}.stderr")), &output.stderr).map_err(|e| {
+        format!(
+            "failed to write {step}.stderr in {}: {e}",
+            log_dir.display()
+        )
+    })?;
     Ok(())
 }
 
-fn run_parser_backend_parity_local_fixture() -> Result<(PathBuf, Vec<BackendReplayResult>), String> {
+fn run_parser_backend_parity_local_fixture() -> Result<(PathBuf, Vec<BackendReplayResult>), String>
+{
     let log_dir = unique_temp_dir(PARITY_LOG_ROOT_PREFIX);
     fs::create_dir_all(&log_dir)
         .map_err(|e| format!("failed to create parity log dir {}: {e}", log_dir.display()))?;
@@ -53,6 +77,14 @@ fn run_parser_backend_parity_local_fixture() -> Result<(PathBuf, Vec<BackendRepl
     fs::write(
         &source_path,
         r#"
+typedef unsigned long Count;
+using Distance = int;
+
+enum Mode {
+    ModeA = 1,
+    ModeB = 2,
+};
+
 int add(int a, int b) {
     return a + b;
 }
@@ -62,7 +94,12 @@ int mul(int x, int y) {
 }
 "#,
     )
-    .map_err(|e| format!("failed to write fixture source {}: {e}", source_path.display()))?;
+    .map_err(|e| {
+        format!(
+            "failed to write fixture source {}: {e}",
+            source_path.display()
+        )
+    })?;
 
     let backends: [(&str, ParserBackend); 3] = [
         ("libclang", ParserBackend::Libclang),
@@ -80,14 +117,15 @@ int mul(int x, int y) {
             backend,
         };
 
-        let rust_code = transpile_cpp_to_rust_with_options(&source_path, &options).map_err(|e| {
-            format!(
-                "backend {} failed to transpile fixture {}: {}",
-                backend_name,
-                source_path.display(),
-                e
-            )
-        })?;
+        let rust_code =
+            transpile_cpp_to_rust_with_options(&source_path, &options).map_err(|e| {
+                format!(
+                    "backend {} failed to transpile fixture {}: {}",
+                    backend_name,
+                    source_path.display(),
+                    e
+                )
+            })?;
 
         let rust_path = log_dir.join(format!("generated_{backend_name}.rs"));
         fs::write(&rust_path, rust_code.as_bytes())
@@ -117,6 +155,11 @@ int mul(int x, int y) {
             has_fn_mul: rust_code.contains(MARKER_FN_MUL),
             has_return_add: rust_code.contains(MARKER_RETURN_ADD),
             has_return_mul: rust_code.contains(MARKER_RETURN_MUL),
+            has_typedef_count: rust_code.contains(MARKER_TYPEDEF_COUNT),
+            has_alias_distance: rust_code.contains(MARKER_ALIAS_DISTANCE),
+            has_enum_mode: rust_code.contains(MARKER_ENUM_MODE),
+            has_enum_mode_a: rust_code.contains(MARKER_ENUM_MODE_A),
+            has_enum_mode_b: rust_code.contains(MARKER_ENUM_MODE_B),
         });
     }
 
@@ -127,14 +170,19 @@ int mul(int x, int y) {
     );
     for result in &results {
         manifest.push_str(&format!(
-            "backend={} rust_path={} rustc_status={} markers=fn_add:{},fn_mul:{},ret_add:{},ret_mul:{}\n",
+            "backend={} rust_path={} rustc_status={} markers=fn_add:{},fn_mul:{},ret_add:{},ret_mul:{},typedef_count:{},alias_distance:{},enum_mode:{},enum_mode_a:{},enum_mode_b:{}\n",
             result.backend_name,
             result.rust_path.display(),
             result.rustc_status,
             result.has_fn_add,
             result.has_fn_mul,
             result.has_return_add,
-            result.has_return_mul
+            result.has_return_mul,
+            result.has_typedef_count,
+            result.has_alias_distance,
+            result.has_enum_mode,
+            result.has_enum_mode_a,
+            result.has_enum_mode_b
         ));
     }
     fs::write(log_dir.join("parser_backend_parity_manifest.txt"), manifest).map_err(|e| {
@@ -171,7 +219,8 @@ fn test_parser_backend_parity_local_fixture_replay() {
         .expect("missing libclang reference result");
     for result in &results {
         assert_eq!(
-            result.rustc_status, 0,
+            result.rustc_status,
+            0,
             "expected backend {} generated Rust to compile; logs: {}",
             result.backend_name,
             log_dir.display()
@@ -182,7 +231,12 @@ fn test_parser_backend_parity_local_fixture_replay() {
         reference.has_fn_add
             && reference.has_fn_mul
             && reference.has_return_add
-            && reference.has_return_mul,
+            && reference.has_return_mul
+            && reference.has_typedef_count
+            && reference.has_alias_distance
+            && reference.has_enum_mode
+            && reference.has_enum_mode_a
+            && reference.has_enum_mode_b,
         "reference backend marker-set should contain expected function/return markers; logs: {}",
         log_dir.display()
     );
@@ -192,12 +246,27 @@ fn test_parser_backend_parity_local_fixture_replay() {
         .find(|entry| entry.backend_name == "hybrid")
         .expect("missing hybrid parity result");
     assert_eq!(
-        (hybrid.has_fn_add, hybrid.has_fn_mul, hybrid.has_return_add, hybrid.has_return_mul),
+        (
+            hybrid.has_fn_add,
+            hybrid.has_fn_mul,
+            hybrid.has_return_add,
+            hybrid.has_return_mul,
+            hybrid.has_typedef_count,
+            hybrid.has_alias_distance,
+            hybrid.has_enum_mode,
+            hybrid.has_enum_mode_a,
+            hybrid.has_enum_mode_b
+        ),
         (
             reference.has_fn_add,
             reference.has_fn_mul,
             reference.has_return_add,
-            reference.has_return_mul
+            reference.has_return_mul,
+            reference.has_typedef_count,
+            reference.has_alias_distance,
+            reference.has_enum_mode,
+            reference.has_enum_mode_a,
+            reference.has_enum_mode_b
         ),
         "hybrid backend should currently match libclang marker-set parity; logs: {}",
         log_dir.display()
@@ -212,13 +281,23 @@ fn test_parser_backend_parity_local_fixture_replay() {
             libtooling.has_fn_add,
             libtooling.has_fn_mul,
             libtooling.has_return_add,
-            libtooling.has_return_mul
+            libtooling.has_return_mul,
+            libtooling.has_typedef_count,
+            libtooling.has_alias_distance,
+            libtooling.has_enum_mode,
+            libtooling.has_enum_mode_a,
+            libtooling.has_enum_mode_b
         ),
         (
             reference.has_fn_add,
             reference.has_fn_mul,
             reference.has_return_add,
-            reference.has_return_mul
+            reference.has_return_mul,
+            reference.has_typedef_count,
+            reference.has_alias_distance,
+            reference.has_enum_mode,
+            reference.has_enum_mode_a,
+            reference.has_enum_mode_b
         ),
         "libtooling backend should match libclang marker-set parity for this fixture; logs: {}",
         log_dir.display()
