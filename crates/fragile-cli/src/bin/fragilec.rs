@@ -1,4 +1,4 @@
-use fragile_clang::{AstCodeGen, ClangParser, ParserLanguage};
+use fragile_clang::{ParserBackend, ParserLanguage, TranspileOptions};
 use std::collections::hash_map::DefaultHasher;
 use std::ffi::OsString;
 use std::fs;
@@ -15,6 +15,7 @@ const FRAGILEC_ENFORCE_BUILD_ID_ENV: &str = "FRAGILEC_ENFORCE_BUILD_ID";
 const FRAGILEC_REQUIRE_META_ENV: &str = "FRAGILEC_REQUIRE_META";
 const FRAGILEC_KEEP_RS_ENV: &str = "FRAGILEC_KEEP_RS";
 const FRAGILEC_LINKER_ENV: &str = "FRAGILEC_LINKER";
+const FRAGILEC_PARSER_BACKEND_ENV: &str = "FRAGILEC_PARSER_BACKEND";
 
 fn validate_strict_mode_value(mode: &str) -> Result<(), String> {
     match mode.to_ascii_lowercase().as_str() {
@@ -225,6 +226,30 @@ fn strict_parser_ignored_error_patterns(language: ParserLanguage) -> Vec<String>
     Vec::new()
 }
 
+fn parse_parser_backend_value(backend: &str) -> Result<ParserBackend, String> {
+    match backend.to_ascii_lowercase().as_str() {
+        "libclang" => Ok(ParserBackend::Libclang),
+        "libtooling" => Ok(ParserBackend::Libtooling),
+        "hybrid" => Ok(ParserBackend::Hybrid),
+        other => Err(format!(
+            "unsupported FRAGILEC_PARSER_BACKEND value `{}`; expected one of: libclang, libtooling, hybrid",
+            other
+        )),
+    }
+}
+
+fn strict_parser_backend_from_value(raw: Option<&str>) -> Result<ParserBackend, String> {
+    match raw.map(|v| v.trim()).filter(|v| !v.is_empty()) {
+        Some(backend) => parse_parser_backend_value(backend),
+        None => Ok(ParserBackend::Libclang),
+    }
+}
+
+fn strict_parser_backend_from_env() -> Result<ParserBackend, String> {
+    let raw = std::env::var(FRAGILEC_PARSER_BACKEND_ENV).ok();
+    strict_parser_backend_from_value(raw.as_deref())
+}
+
 fn crate_name_for_source(source: &Path) -> String {
     let raw = source
         .file_stem()
@@ -390,6 +415,25 @@ fn strict_compile_source_to_object(
     defines: &[String],
     args_for_meta: &[OsString],
 ) -> Result<(), String> {
+    let parser_backend = strict_parser_backend_from_env()?;
+    strict_compile_source_to_object_with_backend(
+        source_arg,
+        out_obj,
+        includes,
+        defines,
+        args_for_meta,
+        parser_backend,
+    )
+}
+
+fn strict_compile_source_to_object_with_backend(
+    source_arg: &Path,
+    out_obj: &Path,
+    includes: &[String],
+    defines: &[String],
+    args_for_meta: &[OsString],
+    parser_backend: ParserBackend,
+) -> Result<(), String> {
     let cwd = std::env::current_dir().map_err(|e| format!("failed to read cwd: {}", e))?;
     let source = resolve_path(source_arg, &cwd);
     if !source.exists() {
@@ -407,24 +451,23 @@ fn strict_compile_source_to_object(
     }
 
     let language = source_language(&source);
-    let parser = ClangParser::with_paths_defines_language_and_ignored_errors(
-        includes.to_vec(),
-        defines.to_vec(),
+    let transpile_options = TranspileOptions {
+        include_paths: includes.to_vec(),
+        defines: defines.to_vec(),
         language,
-        strict_parser_ignored_error_patterns(language),
-    )
-    .map_err(|e| {
-        format!(
-            "failed to create fragile parser for {}: {}",
-            source.display(),
-            e
-        )
-    })?;
-    let ast = parser
-        .parse_file(&source)
-        .map_err(|e| format!("failed to parse {}: {}", source.display(), e))?;
-    let transpiled =
-        normalize_transpiled_main_entry(AstCodeGen::new().generate(&ast.translation_unit));
+        ignored_error_patterns: strict_parser_ignored_error_patterns(language),
+        backend: parser_backend,
+    };
+    let transpiled = fragile_clang::transpile_cpp_to_rust_with_options(&source, &transpile_options)
+        .map_err(|e| {
+            format!(
+                "failed to transpile {} with parser backend {:?}: {}",
+                source.display(),
+                parser_backend,
+                e
+            )
+        })?;
+    let transpiled = normalize_transpiled_main_entry(transpiled);
 
     let keep_rs = std::env::var(FRAGILEC_KEEP_RS_ENV)
         .map(|v| v == "1")
@@ -891,6 +934,7 @@ Usage:
 
 Environment:
   FRAGILEC_MODE=strict               Optional; strict-only mode (default: strict)
+  FRAGILEC_PARSER_BACKEND=<name>     Parser backend: libclang | libtooling | hybrid (default: libclang)
   FRAGILEC_LOG=<path>                Append invocation log (cwd/args records)
   FRAGILEC_BUILD_ID=<id>             Build-id used for metadata writes/checks
   FRAGILEC_ENFORCE_BUILD_ID=1        Enforce build-id on .o/.a inputs during link
@@ -1014,6 +1058,51 @@ mod tests {
 
         let c = strict_parser_ignored_error_patterns(ParserLanguage::C);
         assert!(c.is_empty(), "c strict parser ignore list should be empty");
+    }
+
+    #[test]
+    fn strict_parser_backend_validation_accepts_supported_values() {
+        assert_eq!(
+            parse_parser_backend_value("libclang").expect("libclang backend should parse"),
+            ParserBackend::Libclang
+        );
+        assert_eq!(
+            parse_parser_backend_value("LIBTOOLING").expect("libtooling backend should parse"),
+            ParserBackend::Libtooling
+        );
+        assert_eq!(
+            parse_parser_backend_value("hybrid").expect("hybrid backend should parse"),
+            ParserBackend::Hybrid
+        );
+        assert_eq!(
+            strict_parser_backend_from_value(None).expect("missing backend should default"),
+            ParserBackend::Libclang
+        );
+        assert_eq!(
+            strict_parser_backend_from_value(Some("")).expect("empty backend should default"),
+            ParserBackend::Libclang
+        );
+        assert_eq!(
+            strict_parser_backend_from_value(Some(" hybrid "))
+                .expect("trimmed backend should parse"),
+            ParserBackend::Hybrid
+        );
+    }
+
+    #[test]
+    fn strict_parser_backend_validation_rejects_unsupported_values() {
+        let err = parse_parser_backend_value("unsupported")
+            .expect_err("unsupported backend value must be rejected");
+        assert!(
+            err.contains("unsupported FRAGILEC_PARSER_BACKEND value"),
+            "unexpected error: {}",
+            err
+        );
+        assert!(
+            err.contains("libclang") && err.contains("libtooling") && err.contains("hybrid"),
+            "error should list supported backend values, got: {}",
+            err
+        );
     }
 
     #[test]
@@ -1204,6 +1293,45 @@ mod tests {
         assert!(
             object_defines_main_symbol(&out_obj).expect("failed to inspect object symbols"),
             "strict-compiled object should define main symbol: {}",
+            out_obj.display()
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn strict_compile_source_with_hybrid_backend_exports_main_symbol() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock must be monotonic")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("fragilec_hybrid_backend_test_{}", stamp));
+        fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
+        let source = temp_dir.join("program.cpp");
+        let out_obj = temp_dir.join("program.o");
+        fs::write(
+            &source,
+            "int helper() { return 1; }\nint main() { return helper() - 1; }\n",
+        )
+        .expect("failed to write source");
+
+        strict_compile_source_to_object_with_backend(
+            &source,
+            &out_obj,
+            &[],
+            &[],
+            &[],
+            ParserBackend::Hybrid,
+        )
+        .expect("strict compile should succeed with hybrid backend");
+        assert!(
+            out_obj.exists(),
+            "expected object output at {}",
+            out_obj.display()
+        );
+        assert!(
+            object_defines_main_symbol(&out_obj).expect("failed to inspect object symbols"),
+            "strict-compiled object should define main symbol when using hybrid backend: {}",
             out_obj.display()
         );
 
