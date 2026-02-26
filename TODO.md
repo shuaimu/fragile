@@ -1,19 +1,20 @@
 # Fragile TODO (Current)
 
 Last updated: 2026-02-25
-Owner focus: LibTooling-primary parser migration for strict `fragilec` with parity gates.
+Owner focus: Generic STL container types (`std_vector<T>`, `std_unique_ptr<T>`, `std_shared_ptr<T>`) to unblock serialize target (15/15).
 
 ## Scope (active)
-Make LibTooling-primary parsing the default strict pipeline while preserving current RapidJSON build/runtime parity.
+Generalize STL container stubs to use Rust generics, enabling arbitrary element types (user-defined structs, etc.) and unblocking the `serialize` RapidJSON target to reach 15/15.
 
 Reference command:
 - `CXX=/home/shuai/workspace/fragile/target/debug/fragilec FRAGILEC_MODE=strict cmake -DRAPIDJSON_BUILD_TESTS=OFF ..`
 - `CXX=/home/shuai/workspace/fragile/target/debug/fragilec FRAGILEC_MODE=strict cmake --build . -j4`
 
 Success criteria:
-- LibTooling-primary backend can be selected for strict compile and reaches parity with current strict baseline.
-- `CXX=/home/shuai/workspace/fragile/target/debug/fragilec FRAGILEC_MODE=strict cmake -DRAPIDJSON_BUILD_TESTS=OFF ..` + `cmake --build . -j4` pass under LibTooling-primary path.
-- `bin/condense` and `bin/pretty` keep expected JSON output shape under LibTooling-primary path.
+- Generic `std_vector<T>`, `std_unique_ptr<T>`, `std_shared_ptr<T>` stubs in `fragile-stl` crate.
+- Transpiler emits `type std_vector_Foo = std_vector<Foo>;` aliases for each container instantiation.
+- `serialize` target compiles and links under strict CMake build (13/15 → 15/15 or 14/15).
+- `bin/condense` and `bin/pretty` runtime output continues to match native baseline.
 
 ## Current status snapshot
 - Configure with tests disabled: passes.
@@ -60,17 +61,18 @@ Success criteria:
 ## Execution plan
 
 ## Priority order (effective 2026-02-25)
-- `P0` (highest): Phase 5 LibTooling-primary parser unification.
-- `P1` (downgraded): Phase 4 hardening tasks.
-- `P2` (downgraded): Remaining open Phase 3 validation tasks.
-- `P3` (maintenance/archive): Historical Phase 0-2 guardrail/triage/correctness breakdown tasks unless needed by `P0`.
+- `P0` (highest): Phase 6 Generic STL container types — unblock serialize target (13/15 → 15/15).
+- `P1` (downgraded): Phase 5 LibTooling-primary parser unification.
+- `P2` (downgraded): Phase 4 hardening tasks.
+- `P3` (downgraded): Remaining open Phase 3 validation tasks.
+- `P4` (maintenance/archive): Historical Phase 0-2 guardrail/triage/correctness breakdown tasks unless needed by `P0`.
 
-## Phase 0 [P3]: Guardrails (prevent misleading green builds)
+## Phase 0 [P4]: Guardrails (prevent misleading green builds)
 - [x] Remove/disable strict-link fallback shim `main` for RapidJSON example builds; fail link when no real `main` is defined. (Done 2026-02-24: strict link now errors for executable-style links that lack a real `main` in inspected objects.)
 - [x] Add link-time diagnostic that prints which input objects define `main`. (Done 2026-02-24: strict link errors now include `main` symbol diagnostics listing defining and inspected object sets.)
 - [x] Add regression test: if source contains `main`, generated object must export `main`. (Done 2026-02-24: added strict compile regression test that emits an object from a source TU containing `main` and asserts symbol export via `nm` inspection.)
 
-## Phase 1 [P3]: Repro harness and deterministic triage
+## Phase 1 [P4]: Repro harness and deterministic triage
 - [x] Add a dedicated ignored real-world test: `rapidjson cmake no-tests full build with fragilec` that captures first failing compile command and stderr to stable logs. (Done 2026-02-24: added strict cmake no-tests real-world ignored test plus stable `first_failing_compile_command.txt` / `first_failing_compile_stderr.txt` capture logs and manifest.)
 - [x] Add a local fixture variant that replays first-failure class for quick iteration. (Done 2026-02-24: added a deterministic local strict-cmake fixture test that forces one compile failure via a fake `fragilec` wrapper and verifies first failing command/stderr capture artifacts.)
 - [x] Record and maintain ordered failure classes in this file as each class is cleared. (Done 2026-02-24: added an explicit ordered clearance ledger with per-class status/evidence notes, plus a regression test that enforces marker presence and ordering in `TODO.md`.)
@@ -125,7 +127,7 @@ Use this as the authoritative clear order after Phase 0 guardrails. Update each 
 - [x] 5.3) Normalize pointer/value call-shape mismatches for borrowed value arguments (remove invalid direct value-to-pointer casts in remaining unresolved paths). Done 2026-02-24. Evidence: non-constructor pointer-parameter call paths now route through `normalize_pointer_arg_for_target`, reusing borrow-aware object-lvalue handling instead of emitting direct value-to-pointer casts; added/passing regressions `test_call_pointer_param_borrows_value_lvalue_before_base_pointer_cast` and `test_struct_return_call_pointer_param_borrows_value_lvalue_before_base_pointer_cast`; reran ignored strict RapidJSON captures (`test_real_world_rapidjson_strict_filterkeydom_compile_capture`, `test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_first_failure`) plus full `cargo test` with all green.
 - [x] 5.4) Re-run strict `filterkeydom` + strict no-tests CMake captures and require first-failure stderr to be free of item-5 marker set before marking ordered ledger item 5 CLEARED. Done 2026-02-24. Evidence: strengthened replay assertions in `real_world_rapidjson_tests` to check item-5 markers (`non-primitive cast: [i8; 65536] as *mut i8`, `non-primitive cast:`, and `error[E0605]`) and reran ignored tests `test_real_world_rapidjson_strict_filterkeydom_compile_capture` and `test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_first_failure` plus full `cargo test` with all green.
 
-## Phase 2 [P3]: Must-fix compiler correctness blockers
+## Phase 2 [P4]: Must-fix compiler correctness blockers
 - [ ] Fix `main` rollback/drop behavior so real example `main` survives codegen + rustc object emission.
 - [ ] Fix duplicate emission pipeline (helpers/types/templates) to eliminate `E0428` families.
 - [ ] Fix placeholder degradation for required rapidjson template types (`Reader`, handlers, writers, streams).
@@ -155,7 +157,7 @@ Use this as the authoritative clear order after Phase 0 guardrails. Update each 
   - [x] 7.7.e) Re-run strict real-world fragilec-driver baseline and require `run_condense_driver.status=0` / `run_pretty_driver.status=0` with expected output shape when 7.7.d is active. Done 2026-02-24. Evidence: reran ignored `test_real_world_rapidjson_fragilec_native_no_stl_examples_baseline`; captured logs under `/tmp/fragile_real_world_rapidjson_fragilec_driver_baseline/driver_logs` show `compile_condense_driver.status=0`, `compile_pretty_driver.status=0`, `run_condense_driver.status=0`, `run_pretty_driver.status=0`, `run_condense_driver.stdout` equals `{\"a\":1,\"b\":[true,false],\"msg\":\"hi\"}`, and `run_pretty_driver.stdout` preserves expected pretty JSON field structure.
   - [x] 7.7.f) Remove temporary “explicit parse-failure allowed” branch from ignored real-world baseline assertions once 7.7.e passes, then close 7.7. Done 2026-02-24. Evidence: removed helper `assert_runtime_output_or_explicit_parse_failure` and parse-error-fragment constants from `real_world_rapidjson_tests`; ignored baseline now strictly asserts run status `0`, empty stderr, and expected condense/pretty stdout output shape.
 
-## Phase 3 [P2]: Build-level validation
+## Phase 3 [P3]: Build-level validation
 - [x] Re-run full `cmake --build . -j4 -k` with tests disabled; require 13/15 example targets to compile/link. Done 2026-02-25. 13 of 15 example targets compile and link; 2 known failing (serialize, tutorial).
   - [x] 3.1) Lock deterministic strict-no-tests CMake first-failure marker set for the current `example/capitalize/capitalize.cpp` blocker cluster so follow-up fixes are measurable. Done 2026-02-24. Evidence: reran ignored `test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_first_failure` and strengthened assertions to require current marker set in `first_failing_compile_stderr.txt` (`__gv___c`, `__gv_fill_n`, `__gv_copy_n`, missing `__constexpr_strlen_i8`, missing `__constexpr_strlen_u8`, missing `__constexpr_wmemchr_i32_i32`, missing `CapitalizeFilter_Writer_FileWriteStream::new_0`) while preserving first-failure class `unresolved_name_or_type_e0425`.
   - [x] 3.2) Fix declref/global-storage remap regressions in strict capitalize path that currently emit unresolved global references (`__gv___c`, `__gv_fill_n`, `__gv_copy_n`) inside generated helper bodies. Done 2026-02-24. Evidence: hardened degraded function-like declref detection and added degraded algorithm-functor call rewrites (`fill_n`/`copy_n`) to concrete helpers (`fill_n_char_u64_i8` / `copy_n_char_i32_char`); reran ignored strict no-tests CMake replay `test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_first_failure` with passing assertions that `first_failing_compile_stderr.txt` no longer contains the 3.2 remap marker set.
@@ -177,13 +179,13 @@ Use this as the authoritative clear order after Phase 0 guardrails. Update each 
 
 ### Known failing targets (2/15)
 
-#### `serialize` — user-type constructors with `std::string` params + missing `std::vector<UserType>` stubs
+#### `serialize` — missing `std::vector<UserType>` stubs [ACTIVE — Phase 6 P0]
 
-Root cause: `std::string` is now mapped to `std_string` (a real type with allocation, clone, c_str, etc.) instead of `c_void`. User-defined types with `const std::string&` constructor parameters (`Person`, `Education`, `Dependent`, `Employee`) now resolve correctly. However, remaining errors relate to missing `std::vector<UserType>` stubs (the transpiler only generates vector stubs for known element types, not user-defined ones) and incomplete string iterator support (`__wrap_iter_const_char`).
+Root cause: `std::string` is now mapped to `std_string` (a real type with allocation, clone, c_str, etc.) instead of `c_void`. User-defined types with `const std::string&` constructor parameters (`Person`, `Education`, `Dependent`, `Employee`) now resolve correctly. However, remaining 16 errors relate to missing `std::vector<UserType>` stubs — the transpiler generates `std_vector_Employee` and `std_vector_Dependent` as empty opaque structs with no methods (`new_0`, `push_back`, `back`, `size` all missing). The root fix is Phase 6: generic `std_vector<T>` with type aliases.
 
-Needed fix: generalize `std::vector<T>` stub generation for arbitrary element types T, or transpile libcxx vector template bodies directly.
+Fix: Phase 6 (Generic STL container types) — see detailed breakdown above.
 
-Key files: `crates/fragile-clang/src/ast_codegen.rs` (vector stub generation), `crates/fragile-clang/src/types.rs` (`convert_type`).
+Key files: `crates/fragile-stl/src/vector.rs` (generic stub), `crates/fragile-clang/src/ast_codegen.rs` (type alias emission).
 
 #### `tutorial` — methods on raw pointers + missing type aliases (34 errors)
 
@@ -200,11 +202,11 @@ Needed fixes:
 
 Key files: `crates/fragile-clang/src/ast_codegen.rs` (MemberExpr handler, CallExpr handler), `crates/fragile-clang/src/types.rs` (type alias resolution).
 
-## Phase 4 [P1]: Hardening for real drop-in behavior
+## Phase 4 [P2]: Hardening for real drop-in behavior
 - [ ] Make CMake compiler-ID/feature checks robust enough for default RapidJSON configure path (without requiring tests-off workaround).
 - [ ] Add CI lane for strict `rapidjson cmake no-tests build + condense/pretty runtime check`.
 
-## Phase 5 [P0]: LibTooling-primary parser unification
+## Phase 5 [P1]: LibTooling-primary parser unification
 Goal: converge on one primary AST source (LibTooling) for strict compile paths while preserving current build/runtime parity.
 
 ### Why this phase exists
@@ -239,6 +241,145 @@ Goal: converge on one primary AST source (LibTooling) for strict compile paths w
   - Switch strict default backend to LibTooling-primary only after 5.1-5.4 gates are green.
   - Keep emergency escape hatch to `libclang` for one hardening window; remove only after stable CI/replay history.
   - Update `CLAUDE.md` + this `TODO.md` status snapshot with exact cutover date and evidence links.
+
+## Phase 6 [P0]: Generic STL container types
+
+Goal: replace monomorphic STL stubs (`std_vector_int`, `std_unique_ptr_int`, `std_shared_ptr_int`) with Rust-generic implementations (`std_vector<T>`, `std_unique_ptr<T>`, `std_shared_ptr<T>`), then have the transpiler emit type aliases for each concrete instantiation. This unblocks the `serialize` target (needs `std::vector<Employee>` and `std::vector<Dependent>`) and enables any future user-defined-type containers without per-type stub work.
+
+### Why this phase exists
+- Currently `crates/fragile-stl/src/vector.rs` defines `std_vector_int` hardcoded to `i32`. Same for `std_unique_ptr_int` and `std_shared_ptr_int` in `smart_ptr.rs`.
+- The transpiler converts `std::vector<Employee>` → `std_vector_Employee` via character replacement in `CppType::to_rust_type_str()`, but generates an empty opaque struct with no methods for it.
+- The `serialize` target fails with 16 errors: `std_vector_Employee::new_0()`, `std_vector_Dependent::push_back()`, `.back()`, `.size()` are all missing.
+- The `is_container_type` check at `ast_codegen.rs:7563` doesn't include `std_vector_` at all — only list/map/set variants.
+- With generic stubs, the transpiler only needs to emit `type std_vector_Employee = std_vector<Employee>;` and all methods come for free.
+
+### Exit criteria
+- `std_vector<T>`, `std_unique_ptr<T>`, `std_shared_ptr<T>` are generic Rust structs in `fragile-stl`.
+- Transpiler emits `type std_vector_Foo = std_vector<Foo>;` for each `std::vector<Foo>` instantiation encountered.
+- `cargo test -p fragile-stl` passes (generic stubs compile, existing tests updated).
+- `serialize` target compiles and links (15/15 targets).
+- No regression: 13/15 → 15/15 targets, `condense`/`pretty` runtime still pass.
+
+### Breakdown
+
+#### 6.1) Convert `std_vector_int` to generic `std_vector<T>` in fragile-stl (Effort: S)
+Replace the monomorphic `std_vector_int` struct and impl in `crates/fragile-stl/src/vector.rs` with:
+```rust
+#[repr(C)]
+pub struct std_vector<T> {
+    _data: *mut T,
+    _size: usize,
+    _capacity: usize,
+}
+impl<T> std_vector<T> {
+    pub fn new_0() -> Self { ... }
+    pub fn push_back(&mut self, val: T) { ... }
+    pub fn size(&self) -> usize { ... }
+    pub fn capacity(&self) -> usize { ... }
+    pub fn reserve(&mut self, new_cap: i32) { ... }
+    pub fn resize(&mut self, new_size: i32) where T: Default { ... }
+    pub fn back(&mut self) -> &mut T { ... }
+    pub fn front(&mut self) -> &mut T { ... }
+    pub fn begin(&mut self) -> *mut T { ... }
+    pub fn end(&mut self) -> *mut T { ... }
+    pub fn data(&self) -> *const T { ... }
+    pub fn empty(&self) -> bool { ... }
+    pub fn clear(&mut self) { ... }
+}
+```
+Key changes:
+- `push_back` takes `val: T` (by value) for primitives; for `const T&` args the transpiler already emits `&T` which works.
+- `resize` requires `T: Default` bound (only called when `T` supports zero-init).
+- `back()`/`front()` return `&mut T` (matches C++ reference returns).
+- Keep `type std_vector_int = std_vector<i32>;` as a backwards-compatible alias.
+
+Files: `crates/fragile-stl/src/vector.rs`.
+
+#### 6.2) Convert `std_unique_ptr_int` and `std_shared_ptr_int` to generics (Effort: S)
+Replace monomorphic smart pointer stubs in `crates/fragile-stl/src/smart_ptr.rs` with:
+```rust
+pub struct std_unique_ptr<T> { _ptr: *mut T }
+pub struct std_shared_ptr<T> { _ptr: *mut T, _refcount: *mut usize }
+```
+- Keep all existing methods, just parameterize on `T`.
+- Add backwards-compatible aliases: `type std_unique_ptr_int = std_unique_ptr<i32>;` etc.
+
+Files: `crates/fragile-stl/src/smart_ptr.rs`.
+
+#### 6.3) Update fragile-stl tests for generic types (Effort: S)
+- Update `tests/vector_tests.rs` to test `std_vector<i32>` and `std_vector<String>` (or another non-primitive type).
+- Update `tests/smart_ptr_tests.rs` to test generics.
+- Update `tests/compilation_tests.rs` to verify type aliases resolve.
+- Verify: `cargo test -p fragile-stl` passes.
+
+Files: `crates/fragile-stl/tests/*.rs`.
+
+#### 6.4) Transpiler: emit type aliases for container instantiations (Effort: M)
+When the transpiler encounters a template instantiation like `std::vector<Employee>`, it currently generates an opaque struct `std_vector_Employee` with empty impl. Instead:
+
+1. **Detect container instantiation** in `generate_template_struct()` or `generate_missing_type_stubs()`: if `rust_name` matches `std_vector_*`, `std_unique_ptr_*`, or `std_shared_ptr_*`, extract the element type suffix.
+2. **Emit a type alias** instead of a struct: `pub type std_vector_Employee = std_vector<Employee>;`
+3. **Skip empty impl block generation**: the generic impl provides all methods.
+4. **Register the alias** in `generated_structs` and `generated_aliases` to prevent duplicate emission.
+
+Element type extraction logic:
+- `std_vector_Employee` → strip `std_vector_` prefix → `Employee` → look up whether `Employee` is a known generated struct, and use that name.
+- For multi-word types like `std_vector_unsigned_int` → `std_vector<u32>` (primitive type normalization).
+- For nested templates like `std_vector_std_string` → `std_vector<std_string>`.
+
+Files: `crates/fragile-clang/src/ast_codegen.rs` (in `generate_template_struct`, `generate_missing_type_stubs`, and/or `generate_template_impl`).
+
+#### 6.5) Transpiler: add `std_vector_` to container type recognition (Effort: S)
+Add `rust_name.starts_with("std_vector_")` to the `is_container_type` check at `ast_codegen.rs:7563`. This ensures vector types get impl blocks even when no AST methods are found. However, with 6.4 emitting type aliases instead of structs, this may become unnecessary — the generic impl already provides all methods.
+
+Also add `std_unique_ptr_` and `std_shared_ptr_` if they go through the same path.
+
+Files: `crates/fragile-clang/src/ast_codegen.rs`.
+
+#### 6.6) Handle `push_back` argument type mismatch (Effort: S)
+C++ `vector::push_back(const T&)` takes a const reference. The transpiler may emit either:
+- `employees.push_back(&Employee::new_3(...))` — Rust type `&Employee`, but our generic `push_back` takes `T` by value.
+- `employees.push_back(employee)` — Rust type `Employee`, which works directly.
+
+Options:
+- Make `push_back` accept both: add `push_back_ref(&mut self, val: &T)` where `T: Clone`, or
+- Add a `push_back` overload that takes `*const T` (matching the C++ lowering pattern) and clones, or
+- Accept `push_back(val: T)` by value and fix the call sites in the transpiler to dereference/clone.
+
+The simplest approach: the preamble's `push_back` takes `val: T` by value. If the transpiler emits `push_back(&x)`, add a `push_back_1(&mut self, val: &T) where T: Clone` overload that clones.
+
+Files: `crates/fragile-stl/src/vector.rs`, possibly `crates/fragile-clang/src/ast_codegen.rs`.
+
+#### 6.7) Verify serialize target compiles (Effort: S)
+Build the serialize target directly:
+```bash
+CXX=.../fragilec FRAGILEC_MODE=strict cmake --build . --target serialize
+```
+Fix any remaining errors specific to serialize (likely: constructor argument types, string-to-vector interactions).
+
+Verification: rerun the full CMake build test and confirm 15/15 targets (or 14/15 if tutorial still fails).
+
+#### 6.8) Investigate tutorial target improvements (Effort: M, optional)
+The tutorial target has 3 independent root causes unrelated to generic containers:
+1. Raw pointer auto-deref (method calls on `*mut GenericValue_UTF8_`).
+2. Namespace-qualified type alias resolution (`rapidjson_GenericValue_rapidjson_UTF8_` vs `GenericValue_UTF8_`).
+3. Iterator field-vs-method confusion.
+
+These are transpiler codegen issues, not STL stub issues. Address separately if time permits after 6.7.
+
+Files: `crates/fragile-clang/src/ast_codegen.rs` (MemberExpr handler, CallExpr handler), `crates/fragile-clang/src/types.rs`.
+
+### Key files modified
+- `crates/fragile-stl/src/vector.rs` — generic `std_vector<T>` + `type std_vector_int = std_vector<i32>;`
+- `crates/fragile-stl/src/smart_ptr.rs` — generic `std_unique_ptr<T>`, `std_shared_ptr<T>` + aliases
+- `crates/fragile-stl/tests/*.rs` — updated tests for generics
+- `crates/fragile-clang/src/ast_codegen.rs` — type alias emission for container instantiations, container type recognition
+
+### Constraints
+- Generic stubs must work both as `include!()` in the crate and as `include_str!()` in the preamble (no `use crate::` or `mod` declarations).
+- The `<T>` syntax in struct/impl names must not conflict with the preamble's flat namespace.
+- Backwards compatibility: existing code referencing `std_vector_int` directly must still work (via type alias).
+- `resize()` with `T: Default` bound: this only compiles if the instantiation type implements `Default`. For user types that don't, omit `resize` calls or provide a `resize`-less path. In practice, serialize.cpp doesn't call `resize` on user-type vectors.
 
 ## Out of scope (for this cycle)
 - GTest/rapidjson unit test execution under fragilec.
