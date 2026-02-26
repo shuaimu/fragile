@@ -162,6 +162,7 @@ public:
     bool VisitFieldDecl(FieldDecl *FD);
     bool VisitCXXRecordDecl(CXXRecordDecl *RD);
     bool VisitClassTemplateDecl(ClassTemplateDecl *CTD);
+    bool VisitFunctionTemplateDecl(FunctionTemplateDecl *FTD);
     bool VisitTemplateTypeParmDecl(TemplateTypeParmDecl *TTPD);
     bool VisitNonTypeTemplateParmDecl(NonTypeTemplateParmDecl *NTPD);
     bool VisitTemplateTemplateParmDecl(TemplateTemplateParmDecl *TTPD);
@@ -812,6 +813,10 @@ bool ASTExporterVisitor::VisitFunctionDecl(FunctionDecl *FD) {
     // Skip methods - they're handled by VisitCXXMethodDecl
     if (isa<CXXMethodDecl>(FD))
         return true;
+    // Skip primary function-template declarations - handled by
+    // VisitFunctionTemplateDecl with template metadata/children.
+    if (FD->getDescribedFunctionTemplate())
+        return true;
 
     if (!markExported(FD))
         return true;
@@ -1184,6 +1189,55 @@ bool ASTExporterVisitor::VisitClassTemplateDecl(ClassTemplateDecl *CTD) {
                     auto *templatedDecl = dyn_cast<CXXRecordDecl>(CTD->getTemplatedDecl());
                     cbor_encode_boolean(enc, templatedDecl && templatedDecl->isClass());
                 });
+
+    return true;
+}
+
+bool ASTExporterVisitor::VisitFunctionTemplateDecl(FunctionTemplateDecl *FTD) {
+    if (!markExported(FTD))
+        return true;
+
+    FunctionDecl *templatedDecl = FTD->getTemplatedDecl();
+    Stmt *body = templatedDecl ? templatedDecl->getBody() : nullptr;
+
+    std::vector<const void *> children;
+    auto *params = FTD->getTemplateParameters();
+    for (auto *param : *params) {
+        children.push_back(param);
+    }
+    if (templatedDecl) {
+        for (auto *param : templatedDecl->parameters()) {
+            children.push_back(param);
+        }
+    }
+    children.push_back(body);
+    bool isNoexcept = false;
+    if (templatedDecl) {
+        if (const auto *protoTy = dyn_cast<FunctionProtoType>(templatedDecl->getType().getTypePtr())) {
+            isNoexcept = protoTy->isNothrow();
+        }
+    }
+
+    encodeEntry(FTD, TagFunctionTemplateDecl, FTD->getSourceRange(), children,
+                templatedDecl ? templatedDecl->getType() : QualType(),
+                [FTD, isNoexcept](CborEncoder *enc) {
+                    cbor_encode_string(enc, FTD->getNameAsString());
+
+                    // Template parameter names
+                    auto *params = FTD->getTemplateParameters();
+                    CborEncoder paramArray;
+                    cbor_encoder_create_array(enc, &paramArray, params->size());
+                    for (auto *param : *params) {
+                        cbor_encode_string(&paramArray, param->getNameAsString());
+                    }
+                    cbor_encoder_close_container(enc, &paramArray);
+
+                    cbor_encode_boolean(enc, isNoexcept);
+                });
+
+    if (body) {
+        visitStmt(body);
+    }
 
     return true;
 }

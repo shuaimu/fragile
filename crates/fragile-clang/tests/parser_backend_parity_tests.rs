@@ -105,6 +105,15 @@ struct Box {
     T value;
 };
 
+template<typename T>
+T identity(T value) {
+    return value;
+}
+
+int use_identity() {
+    return identity<int>(7);
+}
+
 namespace math {
 int ns_add(int lhs, int rhs) {
     return lhs + rhs;

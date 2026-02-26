@@ -779,11 +779,7 @@ fn convert_node_with_depth(
 
         ASTEntryTag::TagFunctionDecl => convert_function_decl_node(ctx, node),
 
-        ASTEntryTag::TagFunctionTemplateDecl => {
-            // Function template conversion requires template parameter extraction.
-            // Keep this mapped to Unknown until that surface is fully modeled.
-            ClangNodeKind::Unknown("InlineFunctionTemplateDecl".to_string())
-        }
+        ASTEntryTag::TagFunctionTemplateDecl => convert_function_template_decl_node(ctx, node),
 
         ASTEntryTag::TagClassTemplateDecl => convert_class_template_decl_node(node),
 
@@ -894,6 +890,111 @@ fn convert_function_decl_node(
         is_noexcept: false,
         is_coroutine: false,
         coroutine_info: None,
+    }
+}
+
+fn convert_function_template_decl_node(
+    ctx: &AstContext,
+    node: &fragile_ast_exporter::clang_ast::AstNode,
+) -> ClangNodeKind {
+    use fragile_ast_exporter::CborValue;
+
+    let raw_name = node.get_string(0).unwrap_or("").to_string();
+    let name = if raw_name.is_empty() {
+        "__fragile_libtooling_anon_fn_template".to_string()
+    } else {
+        raw_name
+    };
+
+    let mut template_params = Vec::new();
+    if let Some(CborValue::Array(params)) = node.extras.get(1) {
+        for entry in params {
+            if let CborValue::Text(param) = entry {
+                if !param.is_empty() {
+                    template_params.push(param.clone());
+                }
+            }
+        }
+    }
+
+    let (return_type_opt, fn_param_types, _is_variadic) = if let Some(type_id) = node.type_id {
+        resolve_function_proto_type(ctx, type_id)
+    } else {
+        (None, Vec::new(), false)
+    };
+    let return_type = return_type_opt.unwrap_or(CppType::Int { signed: true });
+
+    let mut parameter_pack_indices = Vec::new();
+    let mut template_param_index = 0usize;
+    let mut params: Vec<(String, CppType)> = Vec::new();
+    let mut param_index = 0usize;
+
+    for child_id_opt in &node.children {
+        let Some(child_id) = child_id_opt else {
+            continue;
+        };
+        let Some(child_node) = ctx.ast_nodes.get(child_id) else {
+            continue;
+        };
+
+        match child_node.tag {
+            ASTEntryTag::TagTemplateTypeParmDecl
+            | ASTEntryTag::TagNonTypeTemplateParmDecl
+            | ASTEntryTag::TagTemplateTemplateParmDecl => {
+                if child_node.get_bool(3).unwrap_or(false) {
+                    parameter_pack_indices.push(template_param_index);
+                }
+                if template_params.len() <= template_param_index {
+                    let raw_param_name = child_node.get_string(0).unwrap_or("").to_string();
+                    if raw_param_name.is_empty() {
+                        template_params.push(format!("T{template_param_index}"));
+                    } else {
+                        template_params.push(raw_param_name);
+                    }
+                }
+                template_param_index += 1;
+            }
+            ASTEntryTag::TagParmVarDecl => {
+                let raw_param_name = child_node.get_string(0).unwrap_or("").to_string();
+                let param_name = if raw_param_name.is_empty() {
+                    format!("arg{param_index}")
+                } else {
+                    raw_param_name
+                };
+                let param_type = child_node
+                    .type_id
+                    .and_then(|type_id| resolve_type(ctx, type_id))
+                    .or_else(|| fn_param_types.get(param_index).cloned())
+                    .unwrap_or_else(|| CppType::Named("auto".to_string()));
+                params.push((param_name, param_type));
+                param_index += 1;
+            }
+            _ => {}
+        }
+    }
+
+    // Preserve parameter arity/types when ParmVarDecl children are unavailable.
+    if params.is_empty() && !fn_param_types.is_empty() {
+        for (idx, ty) in fn_param_types.iter().cloned().enumerate() {
+            params.push((format!("arg{idx}"), ty));
+        }
+    }
+
+    let is_definition = node.children.iter().any(|child_id_opt| {
+        child_id_opt
+            .and_then(|child_id| ctx.ast_nodes.get(&child_id))
+            .is_some_and(|child_node| child_node.tag == ASTEntryTag::TagCompoundStmt)
+    });
+
+    ClangNodeKind::FunctionTemplateDecl {
+        name,
+        template_params,
+        return_type,
+        params,
+        is_definition,
+        parameter_pack_indices,
+        requires_clause: None,
+        is_noexcept: node.get_bool(2).unwrap_or(false),
     }
 }
 
@@ -1941,6 +2042,152 @@ mod tests {
             }
             other => panic!("expected TemplateTypeParmDecl, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_convert_to_clang_node_maps_function_template_decl() {
+        let mut ast_nodes = HashMap::new();
+        ast_nodes.insert(
+            20,
+            make_node(
+                20,
+                ASTEntryTag::TagFunctionTemplateDecl,
+                vec![Some(21), Some(22), Some(23)],
+                vec![
+                    CborValue::Text("identity".to_string()),
+                    CborValue::Array(vec![CborValue::Text("T".to_string())]),
+                    CborValue::Bool(true),
+                ],
+            ),
+        );
+        ast_nodes.insert(
+            21,
+            make_node(
+                21,
+                ASTEntryTag::TagTemplateTypeParmDecl,
+                vec![],
+                vec![
+                    CborValue::Text("T".to_string()),
+                    CborValue::Integer(0.into()),
+                    CborValue::Integer(0.into()),
+                    CborValue::Bool(false),
+                ],
+            ),
+        );
+        ast_nodes.insert(
+            22,
+            make_node(
+                22,
+                ASTEntryTag::TagParmVarDecl,
+                vec![],
+                vec![CborValue::Text("value".to_string())],
+            ),
+        );
+        ast_nodes.insert(
+            23,
+            make_node(23, ASTEntryTag::TagCompoundStmt, vec![], vec![]),
+        );
+
+        let ctx = AstContext {
+            ast_nodes,
+            type_nodes: HashMap::new(),
+            top_nodes: vec![20],
+            files: vec![],
+        };
+
+        let converted =
+            convert_to_clang_node(&ctx, 20).expect("synthetic function template conversion failed");
+        match converted.kind {
+            ClangNodeKind::FunctionTemplateDecl {
+                name,
+                template_params,
+                is_definition,
+                params,
+                is_noexcept,
+                ..
+            } => {
+                assert_eq!(name, "identity");
+                assert_eq!(template_params, vec!["T"]);
+                assert!(is_definition);
+                assert_eq!(params.len(), 1);
+                assert_eq!(params[0].0, "value");
+                assert!(is_noexcept);
+            }
+            other => panic!("expected FunctionTemplateDecl, got {:?}", other),
+        }
+        assert!(
+            converted
+                .children
+                .iter()
+                .any(|child| matches!(child.kind, ClangNodeKind::TemplateTypeParmDecl { .. })),
+            "function template conversion should map template parameter children"
+        );
+    }
+
+    #[test]
+    fn test_parse_file_converts_function_template_decl_and_children() {
+        let log_dir = unique_temp_dir("fragile_libtooling_function_template_children");
+        fs::create_dir_all(&log_dir).expect("failed to create temp dir");
+        let source_path = log_dir.join("function_template_fixture.cpp");
+        fs::write(
+            &source_path,
+            r#"
+template<typename T>
+T identity(T value) {
+    return value;
+}
+
+int use_identity() {
+    return identity<int>(7);
+}
+"#,
+        )
+        .expect("failed to write fixture source");
+
+        let parser = LibToolingParser::new().with_compile_commands_dir(
+            log_dir
+                .to_str()
+                .expect("temp dir path should be valid UTF-8"),
+        );
+        let ctx = parser
+            .parse_file(&source_path)
+            .expect("libtooling parse should succeed");
+
+        let function_template_node = ctx
+            .ast_nodes
+            .values()
+            .find(|node| node.tag == ASTEntryTag::TagFunctionTemplateDecl)
+            .expect("expected TagFunctionTemplateDecl in exported AST");
+        assert_eq!(function_template_node.get_string(0), Some("identity"));
+        assert!(
+            function_template_node.children.iter().any(|c| c.is_some()),
+            "function template should export child links (template params/params/body)"
+        );
+
+        let converted = convert_to_clang_node(&ctx, function_template_node.id)
+            .expect("function template conversion should succeed");
+        match converted.kind {
+            ClangNodeKind::FunctionTemplateDecl {
+                name,
+                template_params,
+                is_definition,
+                params,
+                ..
+            } => {
+                assert_eq!(name, "identity");
+                assert_eq!(template_params, vec!["T"]);
+                assert!(is_definition);
+                assert_eq!(params.len(), 1);
+            }
+            other => panic!("expected FunctionTemplateDecl conversion, got {:?}", other),
+        }
+        assert!(
+            converted
+                .children
+                .iter()
+                .any(|child| matches!(child.kind, ClangNodeKind::CompoundStmt)),
+            "converted function template should include body child nodes"
+        );
     }
 
     #[test]
