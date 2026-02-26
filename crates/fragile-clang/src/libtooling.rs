@@ -1429,6 +1429,10 @@ pub struct SpecializationFieldInfo {
     pub qualified_name: String,
     /// Template arguments as strings (e.g., ["int", "int", "std::less<int>", ...])
     pub template_args: Vec<String>,
+    /// Whether this specialization was emitted as an implicit instantiation.
+    pub is_implicit_instantiation: bool,
+    /// Whether this specialization was emitted as an explicit specialization.
+    pub is_explicit_specialization: bool,
     /// Map from field name to its resolved C++ type
     pub field_types: HashMap<String, CppType>,
 }
@@ -1456,6 +1460,8 @@ pub fn extract_specialization_field_types(
 
         let type_name = node.get_string(0).unwrap_or("").to_string();
         let qualified_name = node.get_string(1).unwrap_or("").to_string();
+        let is_implicit_instantiation = node.get_bool(3).unwrap_or(false);
+        let is_explicit_specialization = node.get_bool(4).unwrap_or(false);
 
         // Extract template arguments from extras[2] (an array of [kind, value] pairs)
         let mut template_args = Vec::new();
@@ -1508,6 +1514,8 @@ pub fn extract_specialization_field_types(
                     type_name,
                     qualified_name: full_name,
                     template_args,
+                    is_implicit_instantiation,
+                    is_explicit_specialization,
                     field_types,
                 },
             );
@@ -2009,7 +2017,7 @@ fn resolve_type(ctx: &AstContext, type_id: u64) -> Option<CppType> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fragile_ast_exporter::clang_ast::{AstContext, AstNode, SrcSpan};
+    use fragile_ast_exporter::clang_ast::{AstContext, AstNode, SrcSpan, TypeNode};
     use fragile_ast_exporter::CborValue;
     use std::collections::HashMap;
     use std::fs;
@@ -2179,6 +2187,78 @@ mod tests {
                 .iter()
                 .any(|child| matches!(child.kind, ClangNodeKind::FieldDecl { .. })),
             "converted class template specialization should include field child linkage"
+        );
+    }
+
+    #[test]
+    fn test_extract_specialization_field_types_preserves_instantiation_metadata() {
+        let mut ast_nodes = HashMap::new();
+        ast_nodes.insert(
+            60,
+            make_node(
+                60,
+                ASTEntryTag::TagClassTemplateSpecializationDecl,
+                vec![Some(61)],
+                vec![
+                    CborValue::Text("Box".to_string()),
+                    CborValue::Text("std::Box".to_string()),
+                    CborValue::Array(vec![CborValue::Array(vec![
+                        CborValue::Integer(0.into()),
+                        CborValue::Text("int".to_string()),
+                    ])]),
+                    CborValue::Bool(true),
+                    CborValue::Bool(false),
+                ],
+            ),
+        );
+
+        let mut field = make_node(
+            61,
+            ASTEntryTag::TagFieldDecl,
+            vec![],
+            vec![
+                CborValue::Text("value".to_string()),
+                CborValue::Bool(false),
+                CborValue::Integer(1.into()),
+            ],
+        );
+        field.type_id = Some(904);
+        ast_nodes.insert(61, field);
+
+        let mut type_nodes = HashMap::new();
+        type_nodes.insert(
+            904,
+            TypeNode {
+                id: 904,
+                tag: ASTEntryTag::TagInt,
+                extras: vec![],
+            },
+        );
+
+        let ctx = AstContext {
+            ast_nodes,
+            type_nodes,
+            top_nodes: vec![60],
+            files: vec![],
+        };
+
+        let extracted = extract_specialization_field_types(&ctx);
+        assert_eq!(extracted.len(), 1);
+        let info = extracted
+            .values()
+            .next()
+            .expect("expected one specialization metadata entry");
+        assert_eq!(info.type_name, "Box");
+        assert_eq!(info.template_args, vec!["int"]);
+        assert!(info.is_implicit_instantiation);
+        assert!(!info.is_explicit_specialization);
+        assert!(
+            info.qualified_name.contains("std::Box"),
+            "qualified specialization identity should be preserved"
+        );
+        assert!(
+            info.field_types.contains_key("value"),
+            "resolved specialization field metadata should include field names"
         );
     }
 
@@ -2606,6 +2686,98 @@ int use_box() {
                 .iter()
                 .any(|child| matches!(child.kind, ClangNodeKind::FieldDecl { .. })),
             "converted specialization should include concrete field children"
+        );
+    }
+
+    #[test]
+    fn test_parse_file_specialization_metadata_includes_args_and_instantiation_markers() {
+        let _guard = libtooling_parse_test_lock()
+            .lock()
+            .expect("parse-test lock should not be poisoned");
+        let log_dir = unique_temp_dir("fragile_libtooling_specialization_metadata");
+        fs::create_dir_all(&log_dir).expect("failed to create temp dir");
+        let source_path = log_dir.join("specialization_metadata_fixture.cpp");
+        fs::write(
+            &source_path,
+            r#"
+template<typename T>
+struct Box {
+    T value;
+};
+
+template<>
+struct Box<int> {
+    int value;
+};
+
+int use_specializations() {
+    Box<int> a{1};
+    Box<long> b{2};
+    return a.value + static_cast<int>(b.value);
+}
+"#,
+        )
+        .expect("failed to write fixture source");
+
+        let parser = LibToolingParser::new().with_compile_commands_dir(
+            log_dir
+                .to_str()
+                .expect("temp dir path should be valid UTF-8"),
+        );
+        let ctx = parser
+            .parse_file(&source_path)
+            .expect("libtooling parse should succeed");
+
+        let specialization_nodes: Vec<_> = ctx
+            .ast_nodes
+            .values()
+            .filter(|node| node.tag == ASTEntryTag::TagClassTemplateSpecializationDecl)
+            .collect();
+        assert!(
+            !specialization_nodes.is_empty(),
+            "expected class-template specialization nodes in exported AST"
+        );
+        assert!(
+            specialization_nodes
+                .iter()
+                .any(|node| node.get_bool(4).unwrap_or(false)),
+            "expected at least one explicit specialization marker"
+        );
+        assert!(
+            specialization_nodes
+                .iter()
+                .any(|node| node.get_bool(3).unwrap_or(false)),
+            "expected at least one implicit-instantiation marker"
+        );
+        assert!(
+            specialization_nodes.iter().any(|node| {
+                if let Some(CborValue::Array(args)) = node.extras.get(2) {
+                    args.iter().any(|arg| {
+                        if let CborValue::Array(pair) = arg {
+                            matches!(pair.get(1), Some(CborValue::Text(text)) if !text.is_empty())
+                        } else {
+                            false
+                        }
+                    })
+                } else {
+                    false
+                }
+            }),
+            "expected specialization nodes to include template-argument text payloads"
+        );
+
+        let extracted = extract_specialization_field_types(&ctx);
+        assert!(
+            extracted
+                .values()
+                .any(|info| info.is_explicit_specialization && info.template_args.iter().any(|arg| arg == "int")),
+            "expected extracted specialization metadata for explicit Box<int> specialization"
+        );
+        assert!(
+            extracted
+                .values()
+                .any(|info| info.is_implicit_instantiation && info.template_args.iter().any(|arg| arg == "long")),
+            "expected extracted specialization metadata for implicit Box<long> instantiation"
         );
     }
 
