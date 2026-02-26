@@ -23158,6 +23158,13 @@ impl AstCodeGen {
             return;
         }
 
+        // `std::ffi::VaList` requires an explicit lifetime parameter in type aliases.
+        // Keep va_list handling in function signatures/runtime shims and avoid
+        // emitting alias forms like `type __builtin_va_list = [VaList; 1]`.
+        if rust_type.contains("std::ffi::VaList") {
+            return;
+        }
+
         // Forward-declared/incomplete named targets can still appear in aliases.
         // Track them so generate_missing_type_stubs can emit opaque placeholders.
         if matches!(underlying_type, CppType::Named(_)) {
@@ -45678,6 +45685,27 @@ mod tests {
         assert!(
             !code.contains("config { 1i32, 2i32 }"),
             "positional struct-literal syntax is invalid Rust and should not be emitted:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_typedef_alias_with_valist_target_is_skipped() {
+        let va_list_alias = make_node(
+            ClangNodeKind::TypedefDecl {
+                name: "__builtin_va_list".to_string(),
+                underlying_type: CppType::Array {
+                    element: Box::new(CppType::Named("va_list".to_string())),
+                    size: Some(1),
+                },
+            },
+            vec![],
+        );
+        let ast = make_node(ClangNodeKind::TranslationUnit, vec![va_list_alias]);
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            !code.contains("pub type __builtin_va_list"),
+            "va_list aliases should be skipped to avoid invalid VaList lifetime elision in type aliases, got:\n{}",
             code
         );
     }

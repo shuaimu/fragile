@@ -235,9 +235,17 @@ Goal: make LibTooling the strict primary AST source with stronger instantiated-t
     - [x] 5.2.f.iv) Extend parser-backend parity fixture coverage with specialization markers and gate LibTooling parity against libclang/hybrid for those markers. Done 2026-02-26.
       - Evidence: backend parity fixture now includes explicit specialization surfaces (`template struct Box<int>;`, `template int identity<int>(int);`) and asserts marker parity for `pub struct Box_int_` + `pub fn identity_i32` across `libclang`/`hybrid`/`libtooling`; implementation and validation are documented in `docs/phase5_parser_backend_specialization_parity_leaf_5_2_f_iv.md`.
 - [ ] 5.3) Unify type-lowering semantics between backends (Effort: M, Risk: Medium).
-  - Align LibTooling type conversion and libclang type conversion so the same C++ shape yields identical `CppType` where possible.
-  - Add cross-backend snapshot tests for known fragile families (`decltype`, template placeholders, array decay, pointer/ref qualifiers, libc aliases).
-  - Gate: no new unresolved-name/type (`E0425`) deltas in strict replay when toggling parser backend.
+  - [x] 5.3.a) Close immediate LibTooling `resolve_type` parity gaps for high-impact type tags (Effort: S, Risk: Medium). Done 2026-02-26.
+    - [x] 5.3.a.i) Implement `resolve_type` parity mapping for exported builtin/shape tags currently missing in LibTooling (`TagWChar`, `TagChar16`, `TagChar32`, `TagConstantArrayType`, `TagIncompleteArrayType`, `TagDecayedType`, `TagAttributedType`, `TagParenType`, `TagFunctionProtoType`) and lock behavior with focused `libtooling.rs` unit tests. Done 2026-02-26.
+      - Evidence: `resolve_type` now maps these tags to concrete `CppType` forms (including const-qualified pointer/reference propagation and variadic function-prototype shapes); added/passing regressions `test_resolve_type_maps_wrapper_array_and_extended_builtin_tags` and `test_resolve_type_maps_function_proto_with_const_shapes` in `crates/fragile-clang/src/libtooling.rs` (details in `docs/phase5_type_lowering_libtooling_resolve_type_leaf_5_3_a_i.md`).
+  - [ ] 5.3.b) Extend parser-backend parity fixture to lock type-shape markers across `libclang`/`hybrid`/`libtooling` (Effort: S, Risk: Medium).
+    - [ ] 5.3.b.i) Add deterministic marker checks for pointer/ref qualifiers, decltype-resolved scalar signatures, and array-type surfaces.
+    - [ ] 5.3.b.ii) Add deterministic marker checks for libc-alias lowering and template-placeholder/dependent-type fallback surfaces.
+  - [ ] 5.3.c) Add cross-backend `CppType` snapshot tests for fragile families in direct parser outputs (Effort: M, Risk: Medium).
+    - [ ] 5.3.c.i) Add focused parse-roundtrip assertions for `decltype` and template placeholder/dependent type families.
+    - [ ] 5.3.c.ii) Add focused parse-roundtrip assertions for pointer/ref qualifier preservation and array decay boundaries.
+  - [ ] 5.3.d) Add strict replay backend-toggle regression gate (Effort: S, Risk: Medium).
+    - [ ] 5.3.d.i) Run strict replay with `FRAGILEC_PARSER_BACKEND=libclang|libtooling|hybrid` and assert no new unresolved-name/type (`E0425`) deltas vs the current strict baseline manifest.
 - [ ] 5.4) Move strict `fragilec` compile path to LibTooling-primary behind a flag (Effort: M, Risk: High).
   - Add opt-in flag/env for strict mode (`FRAGILEC_PARSER_BACKEND=libtooling`), keep `libclang` as fallback.
   - Run ignored real-world matrix with LibTooling-primary and record deltas vs current strict baseline.

@@ -1906,6 +1906,16 @@ fn resolve_type(ctx: &AstContext, type_id: u64) -> Option<CppType> {
             }
         }
 
+        // Wrapper types that forward to an inner type ID.
+        ASTEntryTag::TagDecayedType | ASTEntryTag::TagAttributedType | ASTEntryTag::TagParenType => {
+            if let Some(CborValue::Integer(inner_id)) = type_node.extras.first() {
+                let inner_id = *inner_id as u64;
+                resolve_type(ctx, inner_id)
+            } else {
+                None
+            }
+        }
+
         // Typedef type - follow to the underlying type
         // extras[0] = name, extras[1] = underlying type ID
         ASTEntryTag::TagTypedefType => {
@@ -2006,6 +2016,77 @@ fn resolve_type(ctx: &AstContext, type_id: u64) -> Option<CppType> {
             }
         }
 
+        // Array types
+        ASTEntryTag::TagConstantArrayType => {
+            if let Some(CborValue::Integer(element_id)) = type_node.extras.first() {
+                let element_id = *element_id as u64;
+                let element_type = resolve_type(ctx, element_id).unwrap_or(CppType::Void);
+                let size = type_node
+                    .extras
+                    .get(1)
+                    .and_then(|value| match value {
+                        CborValue::Integer(raw) => Some(*raw as usize),
+                        _ => None,
+                    });
+                Some(CppType::Array {
+                    element: Box::new(element_type),
+                    size,
+                })
+            } else {
+                Some(CppType::Array {
+                    element: Box::new(CppType::Void),
+                    size: None,
+                })
+            }
+        }
+        ASTEntryTag::TagIncompleteArrayType
+        | ASTEntryTag::TagVariableArrayType
+        | ASTEntryTag::TagDependentSizedArrayType => {
+            if let Some(CborValue::Integer(element_id)) = type_node.extras.first() {
+                let element_id = *element_id as u64;
+                let element_type = resolve_type(ctx, element_id).unwrap_or(CppType::Void);
+                Some(CppType::Array {
+                    element: Box::new(element_type),
+                    size: None,
+                })
+            } else {
+                Some(CppType::Array {
+                    element: Box::new(CppType::Void),
+                    size: None,
+                })
+            }
+        }
+
+        // Function type
+        ASTEntryTag::TagFunctionProtoType => {
+            let return_type = type_node
+                .extras
+                .first()
+                .and_then(|value| match value {
+                    CborValue::Integer(ret_id) => resolve_type(ctx, *ret_id as u64),
+                    _ => None,
+                })
+                .unwrap_or(CppType::Void);
+
+            let mut params = Vec::new();
+            if let Some(CborValue::Array(param_ids)) = type_node.extras.get(1) {
+                for param_id in param_ids {
+                    if let CborValue::Integer(raw_id) = param_id {
+                        let param_ty = resolve_type(ctx, *raw_id as u64)
+                            .unwrap_or_else(|| CppType::Named("auto".to_string()));
+                        params.push(param_ty);
+                    }
+                }
+            }
+
+            let is_variadic = matches!(type_node.extras.get(2), Some(CborValue::Bool(true)));
+            Some(CppType::Function {
+                return_type: Box::new(return_type),
+                params,
+                is_variadic,
+            })
+        }
+
         // Primitive types
         ASTEntryTag::TagInt => Some(CppType::Int { signed: true }),
         ASTEntryTag::TagUInt => Some(CppType::Int { signed: false }),
@@ -2018,6 +2099,9 @@ fn resolve_type(ctx: &AstContext, type_id: u64) -> Option<CppType> {
         ASTEntryTag::TagChar => Some(CppType::Char { signed: true }),
         ASTEntryTag::TagSChar => Some(CppType::Char { signed: true }),
         ASTEntryTag::TagUChar => Some(CppType::Char { signed: false }),
+        ASTEntryTag::TagWChar => Some(CppType::Int { signed: true }),
+        ASTEntryTag::TagChar16 => Some(CppType::Short { signed: false }),
+        ASTEntryTag::TagChar32 => Some(CppType::Int { signed: false }),
         ASTEntryTag::TagFloat => Some(CppType::Float),
         ASTEntryTag::TagDouble => Some(CppType::Double),
         ASTEntryTag::TagBool => Some(CppType::Bool),
@@ -2115,6 +2199,10 @@ mod tests {
         }
     }
 
+    fn make_type_node(id: u64, tag: ASTEntryTag, extras: Vec<CborValue>) -> TypeNode {
+        TypeNode { id, tag, extras }
+    }
+
     fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2133,6 +2221,156 @@ mod tests {
         let parser = LibToolingParser::new();
         assert!(parser.compile_commands_dir.is_none());
         assert!(parser.extra_args.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_type_maps_wrapper_array_and_extended_builtin_tags() {
+        let mut type_nodes = HashMap::new();
+        type_nodes.insert(904, make_type_node(904, ASTEntryTag::TagInt, vec![]));
+        type_nodes.insert(912, make_type_node(912, ASTEntryTag::TagWChar, vec![]));
+        type_nodes.insert(920, make_type_node(920, ASTEntryTag::TagChar16, vec![]));
+        type_nodes.insert(928, make_type_node(928, ASTEntryTag::TagChar32, vec![]));
+        type_nodes.insert(
+            936,
+            make_type_node(
+                936,
+                ASTEntryTag::TagConstantArrayType,
+                vec![CborValue::Integer(904.into()), CborValue::Integer(4.into())],
+            ),
+        );
+        type_nodes.insert(
+            944,
+            make_type_node(
+                944,
+                ASTEntryTag::TagIncompleteArrayType,
+                vec![CborValue::Integer(920.into())],
+            ),
+        );
+        type_nodes.insert(
+            952,
+            make_type_node(
+                952,
+                ASTEntryTag::TagDecayedType,
+                vec![CborValue::Integer(936.into())],
+            ),
+        );
+        type_nodes.insert(
+            960,
+            make_type_node(
+                960,
+                ASTEntryTag::TagAttributedType,
+                vec![CborValue::Integer(912.into())],
+            ),
+        );
+        type_nodes.insert(
+            968,
+            make_type_node(
+                968,
+                ASTEntryTag::TagParenType,
+                vec![CborValue::Integer(928.into())],
+            ),
+        );
+
+        let ctx = AstContext {
+            ast_nodes: HashMap::new(),
+            type_nodes,
+            top_nodes: vec![],
+            files: vec![],
+        };
+
+        assert_eq!(resolve_type(&ctx, 912), Some(CppType::Int { signed: true }));
+        assert_eq!(
+            resolve_type(&ctx, 920),
+            Some(CppType::Short { signed: false })
+        );
+        assert_eq!(resolve_type(&ctx, 928), Some(CppType::Int { signed: false }));
+        assert_eq!(
+            resolve_type(&ctx, 936),
+            Some(CppType::Array {
+                element: Box::new(CppType::Int { signed: true }),
+                size: Some(4),
+            })
+        );
+        assert_eq!(
+            resolve_type(&ctx, 944),
+            Some(CppType::Array {
+                element: Box::new(CppType::Short { signed: false }),
+                size: None,
+            })
+        );
+        assert_eq!(
+            resolve_type(&ctx, 952),
+            Some(CppType::Array {
+                element: Box::new(CppType::Int { signed: true }),
+                size: Some(4),
+            })
+        );
+        assert_eq!(resolve_type(&ctx, 960), Some(CppType::Int { signed: true }));
+        assert_eq!(resolve_type(&ctx, 968), Some(CppType::Int { signed: false }));
+    }
+
+    #[test]
+    fn test_resolve_type_maps_function_proto_with_const_shapes() {
+        let mut type_nodes = HashMap::new();
+        type_nodes.insert(1000, make_type_node(1000, ASTEntryTag::TagInt, vec![]));
+        type_nodes.insert(1008, make_type_node(1008, ASTEntryTag::TagWChar, vec![]));
+        type_nodes.insert(
+            1016,
+            make_type_node(
+                1016,
+                ASTEntryTag::TagPointerType,
+                vec![CborValue::Integer((1000 | TypeNode::CONST_MASK).into())],
+            ),
+        );
+        type_nodes.insert(
+            1024,
+            make_type_node(
+                1024,
+                ASTEntryTag::TagLValueReferenceType,
+                vec![CborValue::Integer((1008 | TypeNode::CONST_MASK).into())],
+            ),
+        );
+        type_nodes.insert(
+            1032,
+            make_type_node(
+                1032,
+                ASTEntryTag::TagFunctionProtoType,
+                vec![
+                    CborValue::Integer(1000.into()),
+                    CborValue::Array(vec![
+                        CborValue::Integer(1016.into()),
+                        CborValue::Integer(1024.into()),
+                    ]),
+                    CborValue::Bool(true),
+                ],
+            ),
+        );
+
+        let ctx = AstContext {
+            ast_nodes: HashMap::new(),
+            type_nodes,
+            top_nodes: vec![],
+            files: vec![],
+        };
+
+        assert_eq!(
+            resolve_type(&ctx, 1032),
+            Some(CppType::Function {
+                return_type: Box::new(CppType::Int { signed: true }),
+                params: vec![
+                    CppType::Pointer {
+                        pointee: Box::new(CppType::Int { signed: true }),
+                        is_const: true,
+                    },
+                    CppType::Reference {
+                        referent: Box::new(CppType::Int { signed: true }),
+                        is_const: true,
+                        is_rvalue: false,
+                    },
+                ],
+                is_variadic: true,
+            })
+        );
     }
 
     #[test]
