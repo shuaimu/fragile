@@ -158,6 +158,30 @@ const RAPIDJSON_STRICT_CMAKE_LOCAL_FIXTURE_LOG_FILES: &[&str] = &[
     "first_failing_compile_class.txt",
     "strict_cmake_local_fixture_manifest.txt",
 ];
+const RAPIDJSON_STRICT_BACKEND_TOGGLE_LOCAL_FIXTURE_LOG_FILES: &[&str] = &[
+    "strict_backend_toggle_manifest.txt",
+    "backend_libclang/compile.status",
+    "backend_libclang/compile.stdout",
+    "backend_libclang/compile.stderr",
+    "backend_libclang/fragilec_driver.log",
+    "backend_libclang/first_failing_compile_command.txt",
+    "backend_libclang/first_failing_compile_stderr.txt",
+    "backend_libclang/first_failing_compile_class.txt",
+    "backend_hybrid/compile.status",
+    "backend_hybrid/compile.stdout",
+    "backend_hybrid/compile.stderr",
+    "backend_hybrid/fragilec_driver.log",
+    "backend_hybrid/first_failing_compile_command.txt",
+    "backend_hybrid/first_failing_compile_stderr.txt",
+    "backend_hybrid/first_failing_compile_class.txt",
+    "backend_libtooling/compile.status",
+    "backend_libtooling/compile.stdout",
+    "backend_libtooling/compile.stderr",
+    "backend_libtooling/fragilec_driver.log",
+    "backend_libtooling/first_failing_compile_command.txt",
+    "backend_libtooling/first_failing_compile_stderr.txt",
+    "backend_libtooling/first_failing_compile_class.txt",
+];
 const RAPIDJSON_STRICT_CAPITALIZE_CAPTURE_LOG_FILES: &[&str] = &[
     "compile_capitalize.status",
     "compile_capitalize.stdout",
@@ -462,6 +486,14 @@ struct FragilecDriverInvocation {
     args: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StrictBackendReplayResult {
+    backend_name: &'static str,
+    compile_status: i32,
+    first_failure_class: String,
+    first_failure_e0425_count: usize,
+}
+
 fn parse_fragilec_driver_invocations(driver_log: &str) -> Vec<FragilecDriverInvocation> {
     let mut invocations = Vec::new();
     let mut current_cwd: Option<String> = None;
@@ -528,6 +560,10 @@ fn classify_first_failing_compile_stderr(first_stderr: &str) -> &'static str {
         return "other_rustc_error";
     }
     "non_rustc_error"
+}
+
+fn count_error_e0425_occurrences(text: &str) -> usize {
+    text.match_indices("error[E0425]").count()
 }
 
 fn write_first_failing_compile_capture_files(
@@ -1622,6 +1658,169 @@ fn run_local_strict_cmake_no_tests_first_failure_capture_fixture(
     Ok(log_dir)
 }
 
+fn run_local_strict_backend_toggle_e0425_delta_replay_fixture(
+    root: &Path,
+) -> Result<(PathBuf, Vec<StrictBackendReplayResult>), String> {
+    let fixture_dir = root.join("strict_backend_toggle_fixture");
+    fs::create_dir_all(&fixture_dir).map_err(|e| {
+        format!(
+            "failed to create strict backend-toggle fixture dir {}: {}",
+            fixture_dir.display(),
+            e
+        )
+    })?;
+    let source_path = fixture_dir.join("backend_toggle_fixture.cpp");
+    fs::write(
+        &source_path,
+        r#"
+template<typename T>
+struct Box {
+    T value;
+};
+
+template<typename T>
+T add_one(T value) {
+    return value + 1;
+}
+
+int use_box() {
+    Box<int> box{41};
+    return add_one<int>(box.value);
+}
+"#,
+    )
+    .map_err(|e| {
+        format!(
+            "failed to write strict backend-toggle fixture source {}: {}",
+            source_path.display(),
+            e
+        )
+    })?;
+
+    let log_dir = root.join("strict_backend_toggle_logs");
+    fs::create_dir_all(&log_dir).map_err(|e| {
+        format!(
+            "failed to create strict backend-toggle log dir {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+    let fragilec = ensure_fragilec_binary()?;
+
+    let backends: [(&str, &str); 3] = [
+        ("libclang", "libclang"),
+        ("hybrid", "hybrid"),
+        ("libtooling", "libtooling"),
+    ];
+    let mut results = Vec::new();
+    for (backend_name, backend_env_value) in backends {
+        let backend_log_dir = log_dir.join(format!("backend_{backend_name}"));
+        fs::create_dir_all(&backend_log_dir).map_err(|e| {
+            format!(
+                "failed to create strict backend-toggle backend log dir {}: {}",
+                backend_log_dir.display(),
+                e
+            )
+        })?;
+        let driver_log = backend_log_dir.join("fragilec_driver.log");
+        fs::write(&driver_log, "").map_err(|e| {
+            format!(
+                "failed to initialize strict backend-toggle fragilec driver log {}: {}",
+                driver_log.display(),
+                e
+            )
+        })?;
+        let output_obj = backend_log_dir.join("backend_toggle_fixture.o");
+
+        let compile_output = Command::new(&fragilec)
+            .arg("-std=c++11")
+            .arg("-c")
+            .arg(source_path.to_string_lossy().to_string())
+            .arg("-o")
+            .arg(output_obj.to_string_lossy().to_string())
+            .current_dir(&fixture_dir)
+            .env("FRAGILEC_MODE", "strict")
+            .env("FRAGILEC_PARSER_BACKEND", backend_env_value)
+            .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string())
+            .output()
+            .map_err(|e| {
+                format!(
+                    "failed to run strict backend-toggle compile replay for {}: {}",
+                    backend_name, e
+                )
+            })?;
+        write_command_capture(&backend_log_dir, "compile", &compile_output)?;
+
+        let driver_log_content = fs::read_to_string(&driver_log).map_err(|e| {
+            format!(
+                "failed to read strict backend-toggle fragilec driver log {}: {}",
+                driver_log.display(),
+                e
+            )
+        })?;
+        let compile_stdout = String::from_utf8_lossy(&compile_output.stdout);
+        let compile_stderr = String::from_utf8_lossy(&compile_output.stderr);
+        let (first_command, first_stderr) = select_first_failing_compile_capture(
+            &driver_log_content,
+            !compile_output.status.success(),
+            &compile_stdout,
+            &compile_stderr,
+        );
+        write_first_failing_compile_capture_files(&backend_log_dir, &first_command, &first_stderr)?;
+        let first_failure_class = classify_first_failing_compile_stderr(&first_stderr).to_string();
+        write_first_failing_compile_class_file(&backend_log_dir, first_failure_class.as_str())?;
+        let first_failure_e0425_count = count_error_e0425_occurrences(&first_stderr);
+
+        results.push(StrictBackendReplayResult {
+            backend_name,
+            compile_status: status_code(&compile_output),
+            first_failure_class,
+            first_failure_e0425_count,
+        });
+    }
+
+    let baseline = results
+        .iter()
+        .find(|entry| entry.backend_name == "libclang")
+        .ok_or_else(|| {
+            "missing strict backend-toggle baseline replay result for libclang".to_string()
+        })?;
+    let baseline_e0425_count = baseline.first_failure_e0425_count;
+    let baseline_status = baseline.compile_status;
+
+    let mut manifest = String::new();
+    manifest.push_str("fixture=local_strict_backend_toggle_e0425_delta\n");
+    manifest.push_str(&format!("source={}\n", source_path.display()));
+    manifest.push_str(&format!("fragilec={}\n", fragilec.display()));
+    manifest.push_str("mode=strict\n");
+    manifest.push_str("backends=libclang,hybrid,libtooling\n");
+    manifest.push_str(&format!(
+        "baseline_backend=libclang baseline_compile_status={} baseline_first_failure_e0425_count={}\n",
+        baseline_status, baseline_e0425_count
+    ));
+    for result in &results {
+        let e0425_delta_vs_baseline =
+            result.first_failure_e0425_count as i64 - baseline_e0425_count as i64;
+        manifest.push_str(&format!(
+            "backend={} compile_status={} first_failure_class={} first_failure_e0425_count={} e0425_delta_vs_baseline={}\n",
+            result.backend_name,
+            result.compile_status,
+            result.first_failure_class,
+            result.first_failure_e0425_count,
+            e0425_delta_vs_baseline
+        ));
+    }
+    fs::write(log_dir.join("strict_backend_toggle_manifest.txt"), manifest).map_err(|e| {
+        format!(
+            "failed to write strict_backend_toggle_manifest.txt in {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+
+    Ok((log_dir, results))
+}
+
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2039,6 +2238,56 @@ fn test_rapidjson_strict_cmake_local_fixture_replays_first_failure_capture() {
 }
 
 #[test]
+fn test_rapidjson_strict_backend_toggle_local_fixture_keeps_e0425_delta_at_baseline() {
+    let root = unique_temp_dir("rapidjson_strict_backend_toggle_e0425_delta");
+    fs::create_dir_all(&root).expect("failed to create strict backend-toggle fixture root");
+
+    let (log_dir, results) = run_local_strict_backend_toggle_e0425_delta_replay_fixture(&root)
+        .expect("failed to run strict backend-toggle E0425-delta fixture");
+    for rel in RAPIDJSON_STRICT_BACKEND_TOGGLE_LOCAL_FIXTURE_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected strict backend-toggle fixture log file {}",
+            log_dir.join(rel).display()
+        );
+    }
+    assert_eq!(
+        results.len(),
+        3,
+        "strict backend-toggle fixture should produce three backend replay results"
+    );
+
+    let baseline = results
+        .iter()
+        .find(|entry| entry.backend_name == "libclang")
+        .expect("missing strict backend-toggle baseline result for libclang");
+
+    for result in &results {
+        assert_eq!(
+            result.first_failure_e0425_count, baseline.first_failure_e0425_count,
+            "strict backend-toggle fixture should keep E0425 count delta at baseline for backend {} (logs: {})",
+            result.backend_name,
+            log_dir.display()
+        );
+        assert_eq!(
+            result.compile_status, baseline.compile_status,
+            "strict backend-toggle fixture compile status should match baseline backend for {} (logs: {})",
+            result.backend_name,
+            log_dir.display()
+        );
+        assert_eq!(
+            result.first_failure_class == "unresolved_name_or_type_e0425",
+            result.first_failure_e0425_count > 0,
+            "strict backend-toggle fixture class/count mismatch for backend {} (logs: {})",
+            result.backend_name,
+            log_dir.display()
+        );
+    }
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn test_ci_workflow_keeps_rapidjson_smoke_coverage() {
     let ci_workflow = read_workflow_file("ci.yml")
         .expect("failed to read CI workflow for rapidjson smoke coverage");
@@ -2328,12 +2577,10 @@ fn test_real_world_rapidjson_strict_filterkeydom_compile_capture() {
                 .find(|tok| tok.contains("fragilec_") && tok.ends_with("_filterkeydom.rs"))
         })
         .or_else(|| {
-            compile_stderr
-                .lines()
-                .find_map(|l| {
-                    l.split_whitespace()
-                        .find(|tok| tok.contains("fragilec_") && tok.ends_with("_filterkeydom.rs"))
-                })
+            compile_stderr.lines().find_map(|l| {
+                l.split_whitespace()
+                    .find(|tok| tok.contains("fragilec_") && tok.ends_with("_filterkeydom.rs"))
+            })
         });
 
     if let Some(rs_path) = generated_rs_path {
@@ -2454,9 +2701,19 @@ fn test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_fir
     // Known failing targets (require std::string type resolution in user constructors)
     let known_failing: &[&str] = &["serialize", "tutorial"];
     let required_targets: &[&str] = &[
-        "capitalize", "condense", "filterkey", "filterkeydom", "jsonx",
-        "messagereader", "parsebyparts", "pretty", "prettyauto",
-        "schemavalidator", "simpledom", "simplereader", "simplewriter",
+        "capitalize",
+        "condense",
+        "filterkey",
+        "filterkeydom",
+        "jsonx",
+        "messagereader",
+        "parsebyparts",
+        "pretty",
+        "prettyauto",
+        "schemavalidator",
+        "simpledom",
+        "simplereader",
+        "simplewriter",
     ];
 
     // Assert all required targets built
@@ -2498,10 +2755,8 @@ fn test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_fir
     )
     .expect("failed to run CMake-built condense");
     let condense_run_status = status_code(&condense_output);
-    let condense_stdout =
-        String::from_utf8_lossy(&condense_output.stdout).to_string();
-    let condense_stderr =
-        String::from_utf8_lossy(&condense_output.stderr).to_string();
+    let condense_stdout = String::from_utf8_lossy(&condense_output.stdout).to_string();
+    let condense_stderr = String::from_utf8_lossy(&condense_output.stderr).to_string();
     assert_eq!(
         condense_run_status, 0,
         "CMake-built condense should run successfully; stderr:\n{}",
@@ -2533,10 +2788,8 @@ fn test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_fir
     )
     .expect("failed to run CMake-built pretty");
     let pretty_run_status = status_code(&pretty_output);
-    let pretty_stdout =
-        String::from_utf8_lossy(&pretty_output.stdout).to_string();
-    let pretty_stderr =
-        String::from_utf8_lossy(&pretty_output.stderr).to_string();
+    let pretty_stdout = String::from_utf8_lossy(&pretty_output.stdout).to_string();
+    let pretty_stderr = String::from_utf8_lossy(&pretty_output.stderr).to_string();
     assert_eq!(
         pretty_run_status, 0,
         "CMake-built pretty should run successfully; stderr:\n{}",
@@ -2554,18 +2807,15 @@ fn test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_fir
     );
 
     // --- Native baseline comparison ---
-    let source_dir = PathBuf::from(RAPIDJSON_STRICT_CMAKE_NO_TESTS_BUILD_DIR)
-        .join("worktree");
+    let source_dir = PathBuf::from(RAPIDJSON_STRICT_CMAKE_NO_TESTS_BUILD_DIR).join("worktree");
     let native_log_dir = log_dir.join("native_comparison");
     run_native_no_stl_examples_in_tree(&source_dir, &native_log_dir)
         .expect("failed to run native baseline for comparison");
 
-    let native_condense_stdout =
-        fs::read_to_string(native_log_dir.join("run_condense.stdout"))
-            .expect("failed to read native run_condense.stdout");
-    let native_pretty_stdout =
-        fs::read_to_string(native_log_dir.join("run_pretty.stdout"))
-            .expect("failed to read native run_pretty.stdout");
+    let native_condense_stdout = fs::read_to_string(native_log_dir.join("run_condense.stdout"))
+        .expect("failed to read native run_condense.stdout");
+    let native_pretty_stdout = fs::read_to_string(native_log_dir.join("run_pretty.stdout"))
+        .expect("failed to read native run_pretty.stdout");
 
     assert_eq!(
         condense_stdout.trim(),
@@ -2588,8 +2838,11 @@ fn test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_fir
         condense_stdout.trim(),
         pretty_stdout.lines().count(),
     );
-    fs::write(log_dir.join("runtime_comparison_manifest.txt"), comparison_manifest)
-        .expect("failed to write runtime_comparison_manifest.txt");
+    fs::write(
+        log_dir.join("runtime_comparison_manifest.txt"),
+        comparison_manifest,
+    )
+    .expect("failed to write runtime_comparison_manifest.txt");
 }
 
 #[test]
