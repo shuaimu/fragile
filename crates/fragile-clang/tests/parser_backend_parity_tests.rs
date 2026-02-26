@@ -10,6 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const PARITY_LOG_ROOT_PREFIX: &str = "fragile_parser_backend_parity_local_fixture";
 const CPP_TYPE_SNAPSHOT_LOG_ROOT_PREFIX: &str = "fragile_parser_backend_cpp_type_snapshot_fixture";
+const CPP_TYPE_QUALIFIER_DECAY_SNAPSHOT_LOG_ROOT_PREFIX: &str =
+    "fragile_parser_backend_cpp_type_qualifier_decay_snapshot_fixture";
 const MARKER_FN_ADD: &str = "pub extern \"C\" fn add";
 const MARKER_FN_MUL: &str = "pub extern \"C\" fn mul";
 const MARKER_RETURN_ADD: &str = "return a + b";
@@ -80,6 +82,20 @@ struct BackendCppTypeSnapshot {
     dependent_identity_param0: Option<CppType>,
     dependent_holder_identity_return: Option<CppType>,
     dependent_holder_identity_param0: Option<CppType>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BackendQualifierDecaySnapshot {
+    backend_name: &'static str,
+    const_ptr_param0: Option<CppType>,
+    mut_ptr_param0: Option<CppType>,
+    const_ref_param0: Option<CppType>,
+    mut_ref_param0: Option<CppType>,
+    sized_array_alias_underlying: Option<CppType>,
+    unsized_array_alias_underlying: Option<CppType>,
+    decay_sized_array_param0: Option<CppType>,
+    decay_unsized_array_param0: Option<CppType>,
+    preserve_array_ref_boundary_param0: Option<CppType>,
 }
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {
@@ -541,13 +557,13 @@ fn parse_translation_unit_for_backend(
                 .parent()
                 .ok_or_else(|| format!("missing parent directory for {}", source_path.display()))?;
             let parser = LibToolingParser::new().with_compile_commands_dir(
-                compile_dir
-                    .to_str()
-                    .ok_or_else(|| format!("non UTF-8 compile dir path: {}", compile_dir.display()))?,
+                compile_dir.to_str().ok_or_else(|| {
+                    format!("non UTF-8 compile dir path: {}", compile_dir.display())
+                })?,
             );
-            let ctx = parser
-                .parse_file(source_path)
-                .map_err(|e| format!("libtooling parse failed for {}: {e}", source_path.display()))?;
+            let ctx = parser.parse_file(source_path).map_err(|e| {
+                format!("libtooling parse failed for {}: {e}", source_path.display())
+            })?;
             let children = ctx
                 .top_nodes
                 .iter()
@@ -607,6 +623,57 @@ fn collect_cpp_type_snapshot(node: &ClangNode, snapshot: &mut BackendCppTypeSnap
     }
 }
 
+fn collect_qualifier_decay_snapshot(
+    node: &ClangNode,
+    snapshot: &mut BackendQualifierDecaySnapshot,
+) {
+    match &node.kind {
+        ClangNodeKind::TypeAliasDecl {
+            name,
+            underlying_type,
+        }
+        | ClangNodeKind::TypedefDecl {
+            name,
+            underlying_type,
+        } if name == "SizedArrayAlias" => {
+            snapshot.sized_array_alias_underlying = Some(underlying_type.clone());
+        }
+        ClangNodeKind::TypeAliasDecl {
+            name,
+            underlying_type,
+        }
+        | ClangNodeKind::TypedefDecl {
+            name,
+            underlying_type,
+        } if name == "UnsizedArrayAlias" => {
+            snapshot.unsized_array_alias_underlying = Some(underlying_type.clone());
+        }
+        ClangNodeKind::FunctionDecl { name, params, .. } => {
+            if name == "read_const_ptr" {
+                snapshot.const_ptr_param0 = params.first().map(|(_, ty)| ty.clone());
+            } else if name == "read_mut_ptr" {
+                snapshot.mut_ptr_param0 = params.first().map(|(_, ty)| ty.clone());
+            } else if name == "read_const_ref" {
+                snapshot.const_ref_param0 = params.first().map(|(_, ty)| ty.clone());
+            } else if name == "bump_mut_ref" {
+                snapshot.mut_ref_param0 = params.first().map(|(_, ty)| ty.clone());
+            } else if name == "decay_sized_array_param" {
+                snapshot.decay_sized_array_param0 = params.first().map(|(_, ty)| ty.clone());
+            } else if name == "decay_unsized_array_param" {
+                snapshot.decay_unsized_array_param0 = params.first().map(|(_, ty)| ty.clone());
+            } else if name == "preserve_array_ref_boundary" {
+                snapshot.preserve_array_ref_boundary_param0 =
+                    params.first().map(|(_, ty)| ty.clone());
+            }
+        }
+        _ => {}
+    }
+
+    for child in &node.children {
+        collect_qualifier_decay_snapshot(child, snapshot);
+    }
+}
+
 fn cpp_type_family_snapshot(ty: &CppType) -> String {
     match ty {
         CppType::TemplateParam { name, depth, index } => {
@@ -632,8 +699,12 @@ fn snapshot_entry(label: &str, ty: &Option<CppType>) -> String {
 
 fn run_cpp_type_snapshot_local_fixture() -> Result<(PathBuf, Vec<BackendCppTypeSnapshot>), String> {
     let log_dir = unique_temp_dir(CPP_TYPE_SNAPSHOT_LOG_ROOT_PREFIX);
-    fs::create_dir_all(&log_dir)
-        .map_err(|e| format!("failed to create cpp-type snapshot log dir {}: {e}", log_dir.display()))?;
+    fs::create_dir_all(&log_dir).map_err(|e| {
+        format!(
+            "failed to create cpp-type snapshot log dir {}: {e}",
+            log_dir.display()
+        )
+    })?;
 
     let source_path = log_dir.join("parser_backend_cpp_type_snapshot_fixture.cpp");
     fs::write(
@@ -680,14 +751,15 @@ decltype(1 + 2) decltype_direct_identity(decltype(1 + 2) value) {
 
     let mut snapshots = Vec::new();
     for (backend_name, backend) in backends {
-        let translation_unit = parse_translation_unit_for_backend(&source_path, backend).map_err(|e| {
-            format!(
-                "backend {} failed to parse fixture {}: {}",
-                backend_name,
-                source_path.display(),
-                e
-            )
-        })?;
+        let translation_unit =
+            parse_translation_unit_for_backend(&source_path, backend).map_err(|e| {
+                format!(
+                    "backend {} failed to parse fixture {}: {}",
+                    backend_name,
+                    source_path.display(),
+                    e
+                )
+            })?;
 
         let mut snapshot = BackendCppTypeSnapshot {
             backend_name,
@@ -714,13 +786,34 @@ decltype(1 + 2) decltype_direct_identity(decltype(1 + 2) value) {
         manifest.push_str(&format!(
             "backend={} {} {} {} {} {} {} {} {} {}\n",
             snapshot.backend_name,
-            snapshot_entry("decltype_alias_underlying", &snapshot.decltype_alias_underlying),
-            snapshot_entry("decltype_alias_fn_return", &snapshot.decltype_alias_fn_return),
-            snapshot_entry("decltype_alias_fn_param0", &snapshot.decltype_alias_fn_param0),
-            snapshot_entry("decltype_direct_fn_return", &snapshot.decltype_direct_fn_return),
-            snapshot_entry("decltype_direct_fn_param0", &snapshot.decltype_direct_fn_param0),
-            snapshot_entry("dependent_identity_return", &snapshot.dependent_identity_return),
-            snapshot_entry("dependent_identity_param0", &snapshot.dependent_identity_param0),
+            snapshot_entry(
+                "decltype_alias_underlying",
+                &snapshot.decltype_alias_underlying
+            ),
+            snapshot_entry(
+                "decltype_alias_fn_return",
+                &snapshot.decltype_alias_fn_return
+            ),
+            snapshot_entry(
+                "decltype_alias_fn_param0",
+                &snapshot.decltype_alias_fn_param0
+            ),
+            snapshot_entry(
+                "decltype_direct_fn_return",
+                &snapshot.decltype_direct_fn_return
+            ),
+            snapshot_entry(
+                "decltype_direct_fn_param0",
+                &snapshot.decltype_direct_fn_param0
+            ),
+            snapshot_entry(
+                "dependent_identity_return",
+                &snapshot.dependent_identity_return
+            ),
+            snapshot_entry(
+                "dependent_identity_param0",
+                &snapshot.dependent_identity_param0
+            ),
             snapshot_entry(
                 "dependent_holder_identity_return",
                 &snapshot.dependent_holder_identity_return
@@ -731,14 +824,16 @@ decltype(1 + 2) decltype_direct_identity(decltype(1 + 2) value) {
             ),
         ));
     }
-    fs::write(log_dir.join("parser_backend_cpp_type_snapshot_manifest.txt"), manifest).map_err(
-        |e| {
-            format!(
-                "failed to write parser_backend_cpp_type_snapshot_manifest.txt in {}: {e}",
-                log_dir.display()
-            )
-        },
-    )?;
+    fs::write(
+        log_dir.join("parser_backend_cpp_type_snapshot_manifest.txt"),
+        manifest,
+    )
+    .map_err(|e| {
+        format!(
+            "failed to write parser_backend_cpp_type_snapshot_manifest.txt in {}: {e}",
+            log_dir.display()
+        )
+    })?;
 
     Ok((log_dir, snapshots))
 }
@@ -942,6 +1037,354 @@ fn test_parser_backend_cpp_type_snapshot_decltype_and_template_families() {
         libtooling.dependent_holder_identity_param0,
         Some(CppType::Named("auto".to_string())),
         "libtooling dependent holder param snapshot changed; logs: {}",
+        log_dir.display()
+    );
+}
+
+fn run_qualifier_decay_cpp_type_snapshot_local_fixture(
+) -> Result<(PathBuf, Vec<BackendQualifierDecaySnapshot>), String> {
+    let log_dir = unique_temp_dir(CPP_TYPE_QUALIFIER_DECAY_SNAPSHOT_LOG_ROOT_PREFIX);
+    fs::create_dir_all(&log_dir).map_err(|e| {
+        format!(
+            "failed to create qualifier/decay snapshot log dir {}: {e}",
+            log_dir.display()
+        )
+    })?;
+
+    let source_path = log_dir.join("parser_backend_cpp_type_qualifier_decay_snapshot_fixture.cpp");
+    fs::write(
+        &source_path,
+        r#"
+typedef int SizedArrayAlias[4];
+typedef int UnsizedArrayAlias[];
+
+int read_const_ptr(const int* value) {
+    return *value;
+}
+
+int read_mut_ptr(int* value) {
+    return *value;
+}
+
+int read_const_ref(const int& value) {
+    return value;
+}
+
+int bump_mut_ref(int& value) {
+    value += 1;
+    return value;
+}
+
+int decay_sized_array_param(SizedArrayAlias value) {
+    return value[0];
+}
+
+int decay_unsized_array_param(int value[]) {
+    return value[0];
+}
+
+int preserve_array_ref_boundary(int (&value)[4]) {
+    return value[0];
+}
+"#,
+    )
+    .map_err(|e| {
+        format!(
+            "failed to write qualifier/decay snapshot fixture source {}: {e}",
+            source_path.display()
+        )
+    })?;
+
+    let backends: [(&str, ParserBackend); 3] = [
+        ("libclang", ParserBackend::Libclang),
+        ("hybrid", ParserBackend::Hybrid),
+        ("libtooling", ParserBackend::Libtooling),
+    ];
+
+    let mut snapshots = Vec::new();
+    for (backend_name, backend) in backends {
+        let translation_unit =
+            parse_translation_unit_for_backend(&source_path, backend).map_err(|e| {
+                format!(
+                    "backend {} failed to parse qualifier/decay fixture {}: {}",
+                    backend_name,
+                    source_path.display(),
+                    e
+                )
+            })?;
+
+        let mut snapshot = BackendQualifierDecaySnapshot {
+            backend_name,
+            const_ptr_param0: None,
+            mut_ptr_param0: None,
+            const_ref_param0: None,
+            mut_ref_param0: None,
+            sized_array_alias_underlying: None,
+            unsized_array_alias_underlying: None,
+            decay_sized_array_param0: None,
+            decay_unsized_array_param0: None,
+            preserve_array_ref_boundary_param0: None,
+        };
+        collect_qualifier_decay_snapshot(&translation_unit, &mut snapshot);
+        snapshots.push(snapshot);
+    }
+
+    let mut manifest = format!(
+        "fixture=parser_backend_cpp_type_qualifier_decay_snapshot_local\nsource={}\nbackend_count={}\n",
+        source_path.display(),
+        snapshots.len()
+    );
+    for snapshot in &snapshots {
+        manifest.push_str(&format!(
+            "backend={} {} {} {} {} {} {} {} {} {}\n",
+            snapshot.backend_name,
+            snapshot_entry("const_ptr_param0", &snapshot.const_ptr_param0),
+            snapshot_entry("mut_ptr_param0", &snapshot.mut_ptr_param0),
+            snapshot_entry("const_ref_param0", &snapshot.const_ref_param0),
+            snapshot_entry("mut_ref_param0", &snapshot.mut_ref_param0),
+            snapshot_entry(
+                "sized_array_alias_underlying",
+                &snapshot.sized_array_alias_underlying
+            ),
+            snapshot_entry(
+                "unsized_array_alias_underlying",
+                &snapshot.unsized_array_alias_underlying
+            ),
+            snapshot_entry(
+                "decay_sized_array_param0",
+                &snapshot.decay_sized_array_param0
+            ),
+            snapshot_entry(
+                "decay_unsized_array_param0",
+                &snapshot.decay_unsized_array_param0
+            ),
+            snapshot_entry(
+                "preserve_array_ref_boundary_param0",
+                &snapshot.preserve_array_ref_boundary_param0
+            ),
+        ));
+    }
+    fs::write(
+        log_dir.join("parser_backend_cpp_type_qualifier_decay_snapshot_manifest.txt"),
+        manifest,
+    )
+    .map_err(|e| {
+        format!(
+            "failed to write parser_backend_cpp_type_qualifier_decay_snapshot_manifest.txt in {}: {e}",
+            log_dir.display()
+        )
+    })?;
+
+    Ok((log_dir, snapshots))
+}
+
+#[test]
+fn test_parser_backend_cpp_type_snapshot_pointer_ref_qualifiers_and_array_decay_boundaries() {
+    let _guard = parser_backend_parity_test_lock()
+        .lock()
+        .expect("parity test lock should not be poisoned");
+    let (log_dir, snapshots) = run_qualifier_decay_cpp_type_snapshot_local_fixture()
+        .expect("failed to run parser-backend qualifier/decay cpp-type snapshot fixture");
+
+    let manifest_path =
+        log_dir.join("parser_backend_cpp_type_qualifier_decay_snapshot_manifest.txt");
+    assert!(
+        manifest_path.exists(),
+        "expected qualifier/decay cpp-type snapshot manifest at {}",
+        manifest_path.display()
+    );
+    assert_eq!(
+        snapshots.len(),
+        3,
+        "expected snapshot results for libclang/hybrid/libtooling"
+    );
+
+    let reference = snapshots
+        .iter()
+        .find(|entry| entry.backend_name == "libclang")
+        .expect("missing libclang snapshot");
+    let hybrid = snapshots
+        .iter()
+        .find(|entry| entry.backend_name == "hybrid")
+        .expect("missing hybrid snapshot");
+    let libtooling = snapshots
+        .iter()
+        .find(|entry| entry.backend_name == "libtooling")
+        .expect("missing libtooling snapshot");
+
+    for snapshot in &snapshots {
+        assert!(
+            snapshot.const_ptr_param0.is_some()
+                && snapshot.mut_ptr_param0.is_some()
+                && snapshot.const_ref_param0.is_some()
+                && snapshot.mut_ref_param0.is_some()
+                && snapshot.sized_array_alias_underlying.is_some()
+                && snapshot.unsized_array_alias_underlying.is_some()
+                && snapshot.decay_sized_array_param0.is_some()
+                && snapshot.decay_unsized_array_param0.is_some()
+                && snapshot.preserve_array_ref_boundary_param0.is_some(),
+            "backend {} should expose all qualifier/decay snapshot entries; logs: {}",
+            snapshot.backend_name,
+            log_dir.display()
+        );
+    }
+
+    // Hybrid currently shares direct parser shape with libclang; keep this parity explicit.
+    assert_eq!(
+        [
+            &hybrid.const_ptr_param0,
+            &hybrid.mut_ptr_param0,
+            &hybrid.const_ref_param0,
+            &hybrid.mut_ref_param0,
+            &hybrid.sized_array_alias_underlying,
+            &hybrid.unsized_array_alias_underlying,
+            &hybrid.decay_sized_array_param0,
+            &hybrid.decay_unsized_array_param0,
+            &hybrid.preserve_array_ref_boundary_param0,
+        ],
+        [
+            &reference.const_ptr_param0,
+            &reference.mut_ptr_param0,
+            &reference.const_ref_param0,
+            &reference.mut_ref_param0,
+            &reference.sized_array_alias_underlying,
+            &reference.unsized_array_alias_underlying,
+            &reference.decay_sized_array_param0,
+            &reference.decay_unsized_array_param0,
+            &reference.preserve_array_ref_boundary_param0,
+        ],
+        "hybrid snapshot should match libclang direct-parser snapshot; logs: {}",
+        log_dir.display()
+    );
+
+    let expected_const_ptr = Some(CppType::Pointer {
+        pointee: Box::new(CppType::Int { signed: true }),
+        is_const: true,
+    });
+    let expected_mut_ptr = Some(CppType::Pointer {
+        pointee: Box::new(CppType::Int { signed: true }),
+        is_const: false,
+    });
+    let expected_const_ref = Some(CppType::Reference {
+        referent: Box::new(CppType::Int { signed: true }),
+        is_const: true,
+        is_rvalue: false,
+    });
+    let expected_mut_ref = Some(CppType::Reference {
+        referent: Box::new(CppType::Int { signed: true }),
+        is_const: false,
+        is_rvalue: false,
+    });
+    let expected_sized_array = Some(CppType::Array {
+        element: Box::new(CppType::Int { signed: true }),
+        size: Some(4),
+    });
+    let expected_unsized_array = Some(CppType::Array {
+        element: Box::new(CppType::Int { signed: true }),
+        size: None,
+    });
+    let expected_decayed_mut_ptr = Some(CppType::Pointer {
+        pointee: Box::new(CppType::Int { signed: true }),
+        is_const: false,
+    });
+    let expected_array_ref_boundary = Some(CppType::Reference {
+        referent: Box::new(CppType::Array {
+            element: Box::new(CppType::Int { signed: true }),
+            size: Some(4),
+        }),
+        is_const: false,
+        is_rvalue: false,
+    });
+
+    // Lock current libclang/hybrid parse-roundtrip snapshot for qualifier + decay/boundary families.
+    assert_eq!(
+        reference.const_ptr_param0,
+        expected_const_ptr,
+        "libclang const pointer qualifier snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        reference.mut_ptr_param0,
+        expected_mut_ptr.clone(),
+        "libclang mutable pointer qualifier snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        reference.const_ref_param0,
+        expected_const_ref,
+        "libclang const reference qualifier snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        reference.mut_ref_param0,
+        expected_mut_ref.clone(),
+        "libclang mutable reference qualifier snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        reference.sized_array_alias_underlying,
+        expected_sized_array.clone(),
+        "libclang sized-array alias snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        reference.unsized_array_alias_underlying,
+        expected_unsized_array,
+        "libclang unsized-array alias snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        reference.decay_sized_array_param0,
+        expected_sized_array.clone(),
+        "libclang sized-array param snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        reference.decay_unsized_array_param0,
+        expected_unsized_array.clone(),
+        "libclang unsized-array param snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        reference.preserve_array_ref_boundary_param0,
+        expected_array_ref_boundary,
+        "libclang array-reference boundary snapshot changed; logs: {}",
+        log_dir.display()
+    );
+
+    // Lock libtooling to current direct-parser shape for these families.
+    assert_eq!(
+        [
+            &libtooling.const_ptr_param0,
+            &libtooling.mut_ptr_param0,
+            &libtooling.const_ref_param0,
+            &libtooling.mut_ref_param0,
+            &libtooling.sized_array_alias_underlying,
+            &libtooling.unsized_array_alias_underlying,
+            &libtooling.preserve_array_ref_boundary_param0,
+        ],
+        [
+            &reference.const_ptr_param0,
+            &reference.mut_ptr_param0,
+            &reference.const_ref_param0,
+            &reference.mut_ref_param0,
+            &reference.sized_array_alias_underlying,
+            &reference.unsized_array_alias_underlying,
+            &reference.preserve_array_ref_boundary_param0,
+        ],
+        "libtooling qualifier + non-decay-boundary snapshot should match libclang direct-parser snapshot; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        libtooling.decay_sized_array_param0,
+        expected_decayed_mut_ptr.clone(),
+        "libtooling sized-array decay snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        libtooling.decay_unsized_array_param0,
+        expected_decayed_mut_ptr,
+        "libtooling unsized-array decay snapshot changed; logs: {}",
         log_dir.display()
     );
 }
