@@ -887,7 +887,7 @@ fn convert_function_decl_node(
 
     let is_template_instantiation = node.get_bool(4).unwrap_or(false);
     let template_args = extract_function_template_instantiation_args(node);
-    if is_template_instantiation && !template_args.is_empty() {
+    if (is_template_instantiation || !template_args.is_empty()) && !template_args.is_empty() {
         return ClangNodeKind::FunctionTemplateInstantiation {
             name: name.clone(),
             mangled_name: name,
@@ -1176,12 +1176,33 @@ fn convert_class_template_specialization_decl_node(
     ctx: &AstContext,
     node: &fragile_ast_exporter::clang_ast::AstNode,
 ) -> ClangNodeKind {
+    use fragile_ast_exporter::CborValue;
+
     let raw_name = node.get_string(1).unwrap_or("").to_string();
-    let name = if raw_name.is_empty() {
+    let mut name = if raw_name.is_empty() {
         node.get_string(0).unwrap_or("").to_string()
     } else {
         raw_name
     };
+    if !name.contains('<') {
+        let mut template_args = Vec::new();
+        if let Some(CborValue::Array(args)) = node.extras.get(2) {
+            for arg in args {
+                if let CborValue::Array(pair) = arg {
+                    if let Some(CborValue::Text(arg_str)) = pair.get(1) {
+                        let normalized = arg_str.trim();
+                        if !normalized.is_empty() {
+                            template_args.push(normalized.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        if !template_args.is_empty() {
+            name = format!("{}<{}>", name, template_args.join(", "));
+        }
+    }
+
     if name.is_empty() {
         return ClangNodeKind::Unknown("InlineClassTemplateSpecializationDecl".to_string());
     }

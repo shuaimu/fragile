@@ -30,7 +30,7 @@ pub use libtooling::{
 pub use parse::{ClangParser, ParserLanguage};
 pub use types::{CppType, TypeProperties, TypeTraitEvaluator, TypeTraitResult};
 
-use fragile_ast_exporter::clang_ast::AstContext;
+use fragile_ast_exporter::{clang_ast::AstContext, ASTEntryTag, CborValue};
 use miette::Result;
 use std::path::Path;
 
@@ -136,8 +136,43 @@ fn parse_libtooling_context(path: &Path, options: &TranspileOptions) -> Result<A
 }
 
 fn translation_unit_from_libtooling_context(ctx: &AstContext) -> ClangNode {
-    let children = ctx
-        .top_nodes
+    let mut root_ids = ctx.top_nodes.clone();
+    let mut seen_roots: std::collections::HashSet<u64> = root_ids.iter().copied().collect();
+
+    // Promote concrete function-template instantiation decls that can be nested
+    // in the exported graph and therefore omitted from computed top nodes.
+    for node in ctx.ast_nodes.values() {
+        if node.tag != ASTEntryTag::TagFunctionDecl || seen_roots.contains(&node.id) {
+            continue;
+        }
+
+        let has_body = node.children.iter().flatten().any(|child_id| {
+            ctx.ast_nodes
+                .get(child_id)
+                .is_some_and(|child| child.tag == ASTEntryTag::TagCompoundStmt)
+        });
+        if !has_body {
+            continue;
+        }
+
+        let has_template_args = node
+            .extras
+            .get(5)
+            .is_some_and(|extra| matches!(extra, CborValue::Array(args) if !args.is_empty()));
+        if !node.get_bool(4).unwrap_or(false) && !has_template_args {
+            continue;
+        }
+
+        let name = node.get_string(0).unwrap_or("");
+        if name.is_empty() || name.starts_with("__") {
+            continue;
+        }
+
+        root_ids.push(node.id);
+        seen_roots.insert(node.id);
+    }
+
+    let children = root_ids
         .iter()
         .filter_map(|id| convert_to_clang_node(ctx, *id))
         .collect();

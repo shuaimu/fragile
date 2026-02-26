@@ -830,17 +830,17 @@ bool ASTExporterVisitor::VisitFunctionDecl(FunctionDecl *FD) {
     }
     children.push_back(body);
 
-    bool isTemplateInstantiation = FD->isTemplateInstantiation();
+    const auto *templateArgs = FD->getTemplateSpecializationArgs();
+    bool hasTemplateSpecializationArgs = templateArgs && templateArgs->size() > 0;
+    bool isTemplateInstantiation = FD->isTemplateInstantiation() || hasTemplateSpecializationArgs;
     std::vector<std::string> templateArgStrings;
-    if (isTemplateInstantiation) {
-        if (const auto *args = FD->getTemplateSpecializationArgs()) {
-            templateArgStrings.reserve(args->size());
-            for (unsigned i = 0; i < args->size(); ++i) {
+    if (templateArgs) {
+        templateArgStrings.reserve(templateArgs->size());
+        for (unsigned i = 0; i < templateArgs->size(); ++i) {
                 std::string argStr;
                 llvm::raw_string_ostream os(argStr);
-                args->get(i).print(PrintingPolicy(LangOptions()), os, true);
+                templateArgs->get(i).print(PrintingPolicy(LangOptions()), os, true);
                 templateArgStrings.push_back(os.str());
-            }
         }
     }
 

@@ -19838,6 +19838,10 @@ impl AstCodeGen {
                     );
                 }
             }
+            ClangNodeKind::FunctionTemplateInstantiation { mangled_name, .. } => {
+                // Emit parser-surfaced function-template instantiations directly.
+                self.generate_variadic_template_instance(mangled_name, node);
+            }
             ClangNodeKind::RecordDecl {
                 name,
                 is_class,

@@ -21,6 +21,8 @@ const MARKER_STRUCT_POINT_X: &str = "pub x: i32";
 const MARKER_STRUCT_POINT_Y: &str = "pub y: i32";
 const MARKER_NAMESPACE_MATH: &str = "pub mod math";
 const MARKER_NAMESPACE_NS_ADD: &str = "pub extern \"C\" fn ns_add";
+const MARKER_TEMPLATE_FN_IDENTITY_I32: &str = "pub fn identity_i32";
+const MARKER_TEMPLATE_STRUCT_BOX_INT: &str = "pub struct Box_int_";
 
 #[derive(Debug, Clone)]
 struct BackendReplayResult {
@@ -41,6 +43,8 @@ struct BackendReplayResult {
     has_struct_point_y: bool,
     has_namespace_math: bool,
     has_namespace_ns_add: bool,
+    has_template_fn_identity_i32: bool,
+    has_template_struct_box_int: bool,
 }
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {
@@ -105,10 +109,14 @@ struct Box {
     T value;
 };
 
+template struct Box<int>;
+
 template<typename T>
 T identity(T value) {
     return value;
 }
+
+template int identity<int>(int);
 
 int use_identity() {
     return identity<int>(7);
@@ -200,6 +208,8 @@ int mul(int x, int y) {
             has_struct_point_y: rust_code.contains(MARKER_STRUCT_POINT_Y),
             has_namespace_math: rust_code.contains(MARKER_NAMESPACE_MATH),
             has_namespace_ns_add: rust_code.contains(MARKER_NAMESPACE_NS_ADD),
+            has_template_fn_identity_i32: rust_code.contains(MARKER_TEMPLATE_FN_IDENTITY_I32),
+            has_template_struct_box_int: rust_code.contains(MARKER_TEMPLATE_STRUCT_BOX_INT),
         });
     }
 
@@ -210,7 +220,7 @@ int mul(int x, int y) {
     );
     for result in &results {
         manifest.push_str(&format!(
-            "backend={} rust_path={} rustc_status={} markers=fn_add:{},fn_mul:{},ret_add:{},ret_mul:{},typedef_count:{},alias_distance:{},enum_mode:{},enum_mode_a:{},enum_mode_b:{},struct_point:{},struct_point_x:{},struct_point_y:{},namespace_math:{},namespace_ns_add:{}\n",
+            "backend={} rust_path={} rustc_status={} markers=fn_add:{},fn_mul:{},ret_add:{},ret_mul:{},typedef_count:{},alias_distance:{},enum_mode:{},enum_mode_a:{},enum_mode_b:{},struct_point:{},struct_point_x:{},struct_point_y:{},namespace_math:{},namespace_ns_add:{},template_fn_identity_i32:{},template_struct_box_int:{}\n",
             result.backend_name,
             result.rust_path.display(),
             result.rustc_status,
@@ -227,7 +237,9 @@ int mul(int x, int y) {
             result.has_struct_point_x,
             result.has_struct_point_y,
             result.has_namespace_math,
-            result.has_namespace_ns_add
+            result.has_namespace_ns_add,
+            result.has_template_fn_identity_i32,
+            result.has_template_struct_box_int
         ));
     }
     fs::write(log_dir.join("parser_backend_parity_manifest.txt"), manifest).map_err(|e| {
@@ -286,7 +298,9 @@ fn test_parser_backend_parity_local_fixture_replay() {
             && reference.has_struct_point_x
             && reference.has_struct_point_y
             && reference.has_namespace_math
-            && reference.has_namespace_ns_add,
+            && reference.has_namespace_ns_add
+            && reference.has_template_fn_identity_i32
+            && reference.has_template_struct_box_int,
         "reference backend marker-set should contain expected function/return markers; logs: {}",
         log_dir.display()
     );
@@ -310,7 +324,9 @@ fn test_parser_backend_parity_local_fixture_replay() {
             hybrid.has_struct_point_x,
             hybrid.has_struct_point_y,
             hybrid.has_namespace_math,
-            hybrid.has_namespace_ns_add
+            hybrid.has_namespace_ns_add,
+            hybrid.has_template_fn_identity_i32,
+            hybrid.has_template_struct_box_int
         ],
         [
             reference.has_fn_add,
@@ -326,7 +342,9 @@ fn test_parser_backend_parity_local_fixture_replay() {
             reference.has_struct_point_x,
             reference.has_struct_point_y,
             reference.has_namespace_math,
-            reference.has_namespace_ns_add
+            reference.has_namespace_ns_add,
+            reference.has_template_fn_identity_i32,
+            reference.has_template_struct_box_int
         ],
         "hybrid backend should currently match libclang marker-set parity; logs: {}",
         log_dir.display()
@@ -351,7 +369,9 @@ fn test_parser_backend_parity_local_fixture_replay() {
             libtooling.has_struct_point_x,
             libtooling.has_struct_point_y,
             libtooling.has_namespace_math,
-            libtooling.has_namespace_ns_add
+            libtooling.has_namespace_ns_add,
+            libtooling.has_template_fn_identity_i32,
+            libtooling.has_template_struct_box_int
         ],
         [
             reference.has_fn_add,
@@ -367,7 +387,9 @@ fn test_parser_backend_parity_local_fixture_replay() {
             reference.has_struct_point_x,
             reference.has_struct_point_y,
             reference.has_namespace_math,
-            reference.has_namespace_ns_add
+            reference.has_namespace_ns_add,
+            reference.has_template_fn_identity_i32,
+            reference.has_template_struct_box_int
         ],
         "libtooling backend should match libclang marker-set parity for this fixture; logs: {}",
         log_dir.display()
