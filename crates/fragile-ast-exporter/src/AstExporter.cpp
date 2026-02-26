@@ -830,12 +830,34 @@ bool ASTExporterVisitor::VisitFunctionDecl(FunctionDecl *FD) {
     }
     children.push_back(body);
 
+    bool isTemplateInstantiation = FD->isTemplateInstantiation();
+    std::vector<std::string> templateArgStrings;
+    if (isTemplateInstantiation) {
+        if (const auto *args = FD->getTemplateSpecializationArgs()) {
+            templateArgStrings.reserve(args->size());
+            for (unsigned i = 0; i < args->size(); ++i) {
+                std::string argStr;
+                llvm::raw_string_ostream os(argStr);
+                args->get(i).print(PrintingPolicy(LangOptions()), os, true);
+                templateArgStrings.push_back(os.str());
+            }
+        }
+    }
+
     encodeEntry(FD, TagFunctionDecl, FD->getSourceRange(), children,
-                FD->getType(), [FD](CborEncoder *enc) {
+                FD->getType(), [FD, isTemplateInstantiation, templateArgStrings](CborEncoder *enc) {
                     cbor_encode_string(enc, FD->getNameAsString());
                     cbor_encode_boolean(enc, FD->isGlobal());
                     cbor_encode_boolean(enc, FD->isInlineSpecified());
                     cbor_encode_boolean(enc, FD->isStatic());
+                    cbor_encode_boolean(enc, isTemplateInstantiation);
+
+                    CborEncoder templateArgArray;
+                    cbor_encoder_create_array(enc, &templateArgArray, templateArgStrings.size());
+                    for (const auto &arg : templateArgStrings) {
+                        cbor_encode_string(&templateArgArray, arg);
+                    }
+                    cbor_encoder_close_container(enc, &templateArgArray);
                 });
 
     // Visit body

@@ -885,6 +885,19 @@ fn convert_function_decl_node(
             .is_some_and(|child_node| child_node.tag == ASTEntryTag::TagCompoundStmt)
     });
 
+    let is_template_instantiation = node.get_bool(4).unwrap_or(false);
+    let template_args = extract_function_template_instantiation_args(node);
+    if is_template_instantiation && !template_args.is_empty() {
+        return ClangNodeKind::FunctionTemplateInstantiation {
+            name: name.clone(),
+            mangled_name: name,
+            return_type,
+            params,
+            template_args,
+            is_noexcept: false,
+        };
+    }
+
     ClangNodeKind::FunctionDecl {
         name: name.clone(),
         mangled_name: name,
@@ -896,6 +909,47 @@ fn convert_function_decl_node(
         is_noexcept: false,
         is_coroutine: false,
         coroutine_info: None,
+    }
+}
+
+fn extract_function_template_instantiation_args(
+    node: &fragile_ast_exporter::clang_ast::AstNode,
+) -> Vec<CppType> {
+    use fragile_ast_exporter::CborValue;
+
+    let mut template_args = Vec::new();
+    if let Some(CborValue::Array(args)) = node.extras.get(5) {
+        for arg in args {
+            if let CborValue::Text(text) = arg {
+                let normalized = text.trim();
+                if !normalized.is_empty() {
+                    template_args.push(convert_template_arg_text_to_cpp_type(normalized));
+                }
+            }
+        }
+    }
+
+    template_args
+}
+
+fn convert_template_arg_text_to_cpp_type(arg: &str) -> CppType {
+    match arg {
+        "void" => CppType::Void,
+        "bool" => CppType::Bool,
+        "char" => CppType::Char { signed: true },
+        "signed char" => CppType::Char { signed: true },
+        "unsigned char" => CppType::Char { signed: false },
+        "short" => CppType::Short { signed: true },
+        "unsigned short" => CppType::Short { signed: false },
+        "int" => CppType::Int { signed: true },
+        "unsigned int" => CppType::Int { signed: false },
+        "long" | "long int" => CppType::Long { signed: true },
+        "unsigned long" | "unsigned long int" => CppType::Long { signed: false },
+        "long long" | "long long int" => CppType::LongLong { signed: true },
+        "unsigned long long" | "unsigned long long int" => CppType::LongLong { signed: false },
+        "float" => CppType::Float,
+        "double" | "long double" => CppType::Double,
+        _ => CppType::Named(arg.to_string()),
     }
 }
 
@@ -2457,6 +2511,67 @@ mod tests {
     }
 
     #[test]
+    fn test_convert_to_clang_node_maps_function_decl_template_instantiation() {
+        let mut ast_nodes = HashMap::new();
+        ast_nodes.insert(
+            90,
+            make_node(
+                90,
+                ASTEntryTag::TagFunctionDecl,
+                vec![Some(91), Some(92)],
+                vec![
+                    CborValue::Text("identity".to_string()),
+                    CborValue::Bool(true),
+                    CborValue::Bool(false),
+                    CborValue::Bool(false),
+                    CborValue::Bool(true),
+                    CborValue::Array(vec![CborValue::Text("int".to_string())]),
+                ],
+            ),
+        );
+        ast_nodes.insert(
+            91,
+            make_node(
+                91,
+                ASTEntryTag::TagParmVarDecl,
+                vec![],
+                vec![CborValue::Text("value".to_string())],
+            ),
+        );
+        ast_nodes.insert(
+            92,
+            make_node(92, ASTEntryTag::TagCompoundStmt, vec![], vec![]),
+        );
+
+        let ctx = AstContext {
+            ast_nodes,
+            type_nodes: HashMap::new(),
+            top_nodes: vec![90],
+            files: vec![],
+        };
+
+        let converted = convert_to_clang_node(&ctx, 90)
+            .expect("synthetic function template-instantiation conversion failed");
+        match converted.kind {
+            ClangNodeKind::FunctionTemplateInstantiation {
+                name,
+                params,
+                template_args,
+                ..
+            } => {
+                assert_eq!(name, "identity");
+                assert_eq!(params.len(), 1);
+                assert_eq!(template_args.len(), 1);
+                assert_eq!(template_args[0], CppType::Int { signed: true });
+            }
+            other => panic!(
+                "expected FunctionTemplateInstantiation conversion, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
     fn test_parse_file_converts_function_template_decl_and_children() {
         let _guard = libtooling_parse_test_lock()
             .lock()
@@ -2523,6 +2638,75 @@ int use_identity() {
                 .any(|child| matches!(child.kind, ClangNodeKind::CompoundStmt)),
             "converted function template should include body child nodes"
         );
+    }
+
+    #[test]
+    fn test_parse_file_converts_function_decl_template_instantiation_surfaces() {
+        let _guard = libtooling_parse_test_lock()
+            .lock()
+            .expect("parse-test lock should not be poisoned");
+        let log_dir = unique_temp_dir("fragile_libtooling_function_template_instantiation");
+        fs::create_dir_all(&log_dir).expect("failed to create temp dir");
+        let source_path = log_dir.join("function_template_instantiation_fixture.cpp");
+        fs::write(
+            &source_path,
+            r#"
+template<typename T>
+T identity(T value) {
+    return value;
+}
+
+template int identity<int>(int);
+
+int use_identity_inst() {
+    return identity<int>(7);
+}
+"#,
+        )
+        .expect("failed to write fixture source");
+
+        let parser = LibToolingParser::new().with_compile_commands_dir(
+            log_dir
+                .to_str()
+                .expect("temp dir path should be valid UTF-8"),
+        );
+        let ctx = parser
+            .parse_file(&source_path)
+            .expect("libtooling parse should succeed");
+
+        let inst_decl_node = ctx
+            .ast_nodes
+            .values()
+            .find(|node| {
+                node.tag == ASTEntryTag::TagFunctionDecl
+                    && node.get_string(0) == Some("identity")
+                    && node.get_bool(4).unwrap_or(false)
+            })
+            .expect("expected template-instantiated TagFunctionDecl in exported AST");
+        assert!(
+            inst_decl_node
+                .extras
+                .get(5)
+                .is_some_and(|v| matches!(v, CborValue::Array(args) if !args.is_empty())),
+            "template-instantiated function decl should export non-empty template-arg payload"
+        );
+
+        let converted = convert_to_clang_node(&ctx, inst_decl_node.id)
+            .expect("function template-instantiation conversion should succeed");
+        match &converted.kind {
+            ClangNodeKind::FunctionTemplateInstantiation {
+                template_args, ..
+            } => {
+                assert!(
+                    !template_args.is_empty(),
+                    "converted template-instantiation should preserve template args"
+                );
+            }
+            other => panic!(
+                "expected FunctionTemplateInstantiation conversion, got {:?}",
+                other
+            ),
+        }
     }
 
     #[test]
