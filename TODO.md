@@ -1,20 +1,21 @@
 # Fragile TODO (Current)
 
 Last updated: 2026-02-26
-Owner focus: Phase 6 complete (`serialize` + `tutorial` unblocked); shift focus to Phase 4/5 hardening.
+Owner focus: Phase 5 LibTooling-primary parser unification with template-instantiation fidelity and fallback-stub burn-down.
 
 ## Scope (active)
-Complete generic STL container rollout (`std_vector<T>`, `std_unique_ptr<T>`, `std_shared_ptr<T>`) and maintain strict RapidJSON build/runtime parity through full strict no-tests CMake success.
+Promote LibTooling to the strict primary AST backend, improve instantiated-template coverage, and reduce fallback stub reliance while preserving full strict RapidJSON build/runtime parity.
 
 Reference command:
 - `CXX=/home/shuai/workspace/fragile/target/debug/fragilec FRAGILEC_MODE=strict cmake -DRAPIDJSON_BUILD_TESTS=OFF ..`
 - `CXX=/home/shuai/workspace/fragile/target/debug/fragilec FRAGILEC_MODE=strict cmake --build . -j4`
+- `FRAGILEC_MODE=strict FRAGILEC_PARSER_BACKEND=libtooling fragilec -c example/tutorial/tutorial.cpp`
 
 Success criteria:
-- Generic `std_vector<T>`, `std_unique_ptr<T>`, `std_shared_ptr<T>` stubs in `fragile-stl` crate.
-- Transpiler emits `type std_vector_Foo = std_vector<Foo>;` aliases for each container instantiation.
-- `serialize` target compiles and links under strict CMake build (13/15 → 15/15 or 14/15).
-- `bin/condense` and `bin/pretty` runtime output continues to match native baseline.
+- LibTooling-primary strict lane compiles all RapidJSON no-tests examples (`cmake_build.status=0`).
+- `bin/condense` and `bin/pretty` runtime output still matches native baseline with LibTooling-primary.
+- Active strict paths no longer depend on injected placeholder fallback stubs when concrete template instantiations are present in parser output.
+- `libclang` remains available as an explicit fallback backend until one full hardening cycle passes.
 
 ## Current status snapshot
 - Configure with tests disabled: passes.
@@ -60,11 +61,11 @@ Success criteria:
 
 ## Execution plan
 
-## Priority order (effective 2026-02-25)
-- `P0` (highest): Phase 6 Generic STL container types — unblock serialize target (13/15 → 15/15).
-- `P1` (downgraded): Phase 5 LibTooling-primary parser unification.
-- `P2` (downgraded): Phase 4 hardening tasks.
-- `P3` (downgraded): Remaining open Phase 3 validation tasks.
+## Priority order (effective 2026-02-26)
+- `P0` (highest): Phase 5 LibTooling-primary parser unification with instantiated-template fidelity + fallback-stub burn-down.
+- `P1`: Phase 4 hardening tasks.
+- `P2`: Remaining open Phase 3 validation tasks.
+- `P3` (completed/archive): Phase 6 Generic STL container rollout (done; keep for traceability).
 - `P4` (maintenance/archive): Historical Phase 0-2 guardrail/triage/correctness breakdown tasks unless needed by `P0`.
 
 ## Phase 0 [P4]: Guardrails (prevent misleading green builds)
@@ -157,7 +158,7 @@ Use this as the authoritative clear order after Phase 0 guardrails. Update each 
   - [x] 7.7.e) Re-run strict real-world fragilec-driver baseline and require `run_condense_driver.status=0` / `run_pretty_driver.status=0` with expected output shape when 7.7.d is active. Done 2026-02-24. Evidence: reran ignored `test_real_world_rapidjson_fragilec_native_no_stl_examples_baseline`; captured logs under `/tmp/fragile_real_world_rapidjson_fragilec_driver_baseline/driver_logs` show `compile_condense_driver.status=0`, `compile_pretty_driver.status=0`, `run_condense_driver.status=0`, `run_pretty_driver.status=0`, `run_condense_driver.stdout` equals `{\"a\":1,\"b\":[true,false],\"msg\":\"hi\"}`, and `run_pretty_driver.stdout` preserves expected pretty JSON field structure.
   - [x] 7.7.f) Remove temporary “explicit parse-failure allowed” branch from ignored real-world baseline assertions once 7.7.e passes, then close 7.7. Done 2026-02-24. Evidence: removed helper `assert_runtime_output_or_explicit_parse_failure` and parse-error-fragment constants from `real_world_rapidjson_tests`; ignored baseline now strictly asserts run status `0`, empty stderr, and expected condense/pretty stdout output shape.
 
-## Phase 3 [P3]: Build-level validation
+## Phase 3 [P2]: Build-level validation
 - [x] Re-run full `cmake --build . -j4 -k` with tests disabled; require 13/15 example targets to compile/link. Done 2026-02-25. 13 of 15 example targets compile and link; 2 known failing (serialize, tutorial).
   - [x] 3.1) Lock deterministic strict-no-tests CMake first-failure marker set for the current `example/capitalize/capitalize.cpp` blocker cluster so follow-up fixes are measurable. Done 2026-02-24. Evidence: reran ignored `test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_first_failure` and strengthened assertions to require current marker set in `first_failing_compile_stderr.txt` (`__gv___c`, `__gv_fill_n`, `__gv_copy_n`, missing `__constexpr_strlen_i8`, missing `__constexpr_strlen_u8`, missing `__constexpr_wmemchr_i32_i32`, missing `CapitalizeFilter_Writer_FileWriteStream::new_0`) while preserving first-failure class `unresolved_name_or_type_e0425`.
   - [x] 3.2) Fix declref/global-storage remap regressions in strict capitalize path that currently emit unresolved global references (`__gv___c`, `__gv_fill_n`, `__gv_copy_n`) inside generated helper bodies. Done 2026-02-24. Evidence: hardened degraded function-like declref detection and added degraded algorithm-functor call rewrites (`fill_n`/`copy_n`) to concrete helpers (`fill_n_char_u64_i8` / `copy_n_char_i32_char`); reran ignored strict no-tests CMake replay `test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_first_failure` with passing assertions that `first_failing_compile_stderr.txt` no longer contains the 3.2 remap marker set.
@@ -187,33 +188,52 @@ Verification:
 - Fresh strict no-tests full build (`-k`) now reports all example targets built (15/15) plus aggregate `examples` target.
 - Direct strict TU replays for `tutorial.cpp` and `messagereader.cpp` both compile after the Phase 6.8 fixes.
 
-## Phase 4 [P2]: Hardening for real drop-in behavior
+## Phase 4 [P1]: Hardening for real drop-in behavior
 - [ ] Make CMake compiler-ID/feature checks robust enough for default RapidJSON configure path (without requiring tests-off workaround).
 - [ ] Add CI lane for strict `rapidjson cmake no-tests build + condense/pretty runtime check`.
 
-## Phase 5 [P1]: LibTooling-primary parser unification
-Goal: converge on one primary AST source (LibTooling) for strict compile paths while preserving current build/runtime parity.
+## Phase 5 [P0]: LibTooling-primary parser unification
+Goal: make LibTooling the strict primary AST source with stronger instantiated-template fidelity, so strict codegen uses concrete parser data instead of runtime/preamble fallback stubs wherever possible.
 
 ### Why this phase exists
 - Current architecture is hybrid by design: libclang provides the main AST graph, LibTooling provides template/specialization enrichment.
 - A direct LibTooling-only cutover today is high risk because `libtooling.rs` still maps many declarations to `Unknown(...)` placeholder node kinds in `convert_to_clang_node`.
+- Fallback stubs currently mask missing parser/codegen coverage; they keep builds running but hide template transpilation debt and reduce behavior fidelity.
 - We need measured parity gates before touching `fragilec` strict default behavior.
 
 ### Exit criteria
 - `fragilec` strict can compile RapidJSON no-tests CMake build with LibTooling-primary parsing enabled (`cmake_build.status=0`).
 - `condense`/`pretty` runtime baseline remains green with LibTooling-primary path.
 - No regression in existing strict replay harnesses (first-failure capture tests remain green).
+- Strict active paths show no required fallback-stub injections for template families where concrete LibTooling instantiations are available.
 - Parser backend can be switched deterministically (`libclang` fallback kept as explicit escape hatch until at least one full CI cycle passes).
 
 ### Breakdown and estimates
-- [ ] 5.1) Add parser-backend abstraction and A/B harness (Effort: M, Risk: Medium).
-  - Add a backend selector (`libclang`, `libtooling`, `hybrid`) at `fragile-clang` entry points and `fragilec` strict compile path.
-  - Add deterministic A/B replay command in tests: parse same TU with each backend, then compare generated Rust for compileability and key marker sets.
-  - Evidence target: tracked parity report artifact per replay (`/tmp/fragile_parser_backend_parity_*`).
-- [ ] 5.2) Close LibTooling AST node-shape gaps for strict active paths (Effort: L, Risk: High).
-  - Replace high-impact `Unknown(...)` mappings in `convert_to_clang_node` for declarations currently needed by strict rapidjson/zlib/xxhash fixtures.
-  - Prioritize nodes that currently force downstream fallback heuristics (function/class/typedef/enum/template-related decls).
-  - Add focused regressions proving converted LibTooling nodes preserve required names/types/children/source spans.
+- [x] 5.1) Add parser-backend abstraction and A/B harness (Effort: M, Risk: Medium). Done 2026-02-26.
+  - Evidence: `ParserBackend` selector is wired at `fragile-clang` transpile entry points and `fragilec` strict path accepts `FRAGILEC_PARSER_BACKEND=libclang|libtooling|hybrid`.
+  - Evidence: deterministic replay exists in `crates/fragile-clang/tests/parser_backend_parity_tests.rs` and emits per-run manifests under temp paths matching `/tmp/fragile_parser_backend_parity_local_fixture_*`.
+- [x] 5.2) Close LibTooling AST node-shape and template-instantiation gaps for strict active paths (Effort: L, Risk: High). Done 2026-02-26.
+  - [x] 5.2.a) Convert top-level `FunctionDecl` LibTooling nodes from `Unknown(...)` to concrete `ClangNodeKind::FunctionDecl` with parameter/return metadata parity. Done 2026-02-26.
+  - [x] 5.2.b) Convert `TypedefDecl` / `TypeAliasDecl` / `EnumDecl` / `EnumConstantDecl` LibTooling nodes from `Unknown(...)` to concrete declaration node kinds. Done 2026-02-26.
+  - [x] 5.2.c) Convert non-template `CXXRecordDecl` shape and link concrete `FieldDecl` children (including flattened anonymous struct/union field members) for backend parity fixture coverage. Done 2026-02-26.
+  - [x] 5.2.d) Add namespace container parity for LibTooling node graph (`TagNamespaceDecl` child linkage + conversion to `ClangNodeKind::NamespaceDecl`) and lock with parser-backend parity markers. Done 2026-02-26.
+    - Evidence: `VisitNamespaceDecl` now exports namespace child links; `convert_to_clang_node` maps `TagNamespaceDecl` to `ClangNodeKind::NamespaceDecl`; parser-backend parity fixture now asserts namespace markers (`pub mod math`, `ns_add`) across `libclang`/`hybrid`/`libtooling`.
+  - [x] 5.2.e) Convert template declaration node kinds currently mapped to `Unknown(...)` (`ClassTemplateDecl`, template parameter decls, and function-template surfaces where exporter data is present). Done 2026-02-26.
+    - [x] 5.2.e.i) Convert `TagClassTemplateDecl` + `TagTemplateTypeParmDecl` into concrete `ClangNodeKind` variants (including template-parameter metadata and class-template child linkage), and lock with backend parity markers. Done 2026-02-26.
+      - Evidence: `AstExporter.cpp` now exports class-template child links and template-parameter decl entries; `libtooling.rs` maps both tags to concrete node kinds; added `libtooling` conversion/roundtrip tests plus backend parity replay coverage with template fixture content.
+    - [x] 5.2.e.ii) Add `FunctionTemplateDecl` conversion for exporter-supported surfaces (name/template params/signature/body-child linking), with focused regressions. Done 2026-02-26.
+      - Evidence: `AstExporter.cpp` exports function-template child linkage and noexcept metadata; `libtooling.rs` maps `TagFunctionTemplateDecl` to concrete `ClangNodeKind::FunctionTemplateDecl`; focused synthetic + parse-roundtrip regressions added and passing (details in `docs/phase5_libtooling_function_template_decl_leaf_5_2_e_ii.md`).
+    - [x] 5.2.e.iii) Decide handling for `NonTypeTemplateParmDecl` / `TemplateTemplateParmDecl` in the current AST model (direct variant vs constrained fallback), implement chosen path, and lock with tests. Done 2026-02-26.
+      - Evidence: adopted constrained fallback mapping in `libtooling.rs` (`TagNonTypeTemplateParmDecl` / `TagTemplateTemplateParmDecl` -> `TemplateTypeParmDecl` with preserved depth/index/is_pack), plus synthetic conversion and parse-roundtrip regressions; rationale documented in `docs/phase5_libtooling_template_param_model_leaf_5_2_e_iii.md`.
+  - [x] 5.2.f) Close template-specialization declaration gaps for strict active paths (class/function template specialization node-shape parity with concrete names/types/children/source spans). Done 2026-02-26.
+    - [x] 5.2.f.i) Convert `TagClassTemplateSpecializationDecl` from `Unknown(...)` to a concrete declaration node shape that preserves specialization identity and field/member child linkage. Done 2026-02-26.
+      - Evidence: `libtooling.rs` now maps `TagClassTemplateSpecializationDecl` through concrete conversion to `ClangNodeKind::RecordDecl` with specialization identity + field/member child linkage; added synthetic/parse-roundtrip regressions and parse-test serialization lock for deterministic `libtooling::tests` execution (`docs/phase5_libtooling_class_template_specialization_leaf_5_2_f_i.md`).
+    - [x] 5.2.f.ii) Lock class-template-specialization metadata parity in LibTooling conversion tests (qualified specialization naming + argument/instantiation markers currently exported by AST exporter). Done 2026-02-26.
+      - Evidence: `SpecializationFieldInfo` now preserves `is_implicit_instantiation` / `is_explicit_specialization`; `extract_specialization_field_types` propagates extras metadata and focused synthetic + parse-roundtrip regressions lock qualified-name/arg/marker parity (`docs/phase5_libtooling_class_template_specialization_metadata_leaf_5_2_f_ii.md`).
+    - [x] 5.2.f.iii) Add deterministic handling for free-function template specialization surfaces (`FunctionDecl` template-instantiation forms) in LibTooling conversion with focused regressions. Done 2026-02-26.
+      - Evidence: `AstExporter.cpp` now exports `FunctionDecl` template-instantiation markers/arg payloads; `libtooling.rs` maps tagged surfaces to `ClangNodeKind::FunctionTemplateInstantiation` and includes focused synthetic + parse-roundtrip regressions (`docs/phase5_libtooling_function_template_instantiation_leaf_5_2_f_iii.md`).
+    - [x] 5.2.f.iv) Extend parser-backend parity fixture coverage with specialization markers and gate LibTooling parity against libclang/hybrid for those markers. Done 2026-02-26.
+      - Evidence: backend parity fixture now includes explicit specialization surfaces (`template struct Box<int>;`, `template int identity<int>(int);`) and asserts marker parity for `pub struct Box_int_` + `pub fn identity_i32` across `libclang`/`hybrid`/`libtooling`; implementation and validation are documented in `docs/phase5_parser_backend_specialization_parity_leaf_5_2_f_iv.md`.
 - [ ] 5.3) Unify type-lowering semantics between backends (Effort: M, Risk: Medium).
   - Align LibTooling type conversion and libclang type conversion so the same C++ shape yields identical `CppType` where possible.
   - Add cross-backend snapshot tests for known fragile families (`decltype`, template placeholders, array decay, pointer/ref qualifiers, libc aliases).
@@ -221,13 +241,13 @@ Goal: converge on one primary AST source (LibTooling) for strict compile paths w
 - [ ] 5.4) Move strict `fragilec` compile path to LibTooling-primary behind a flag (Effort: M, Risk: High).
   - Add opt-in flag/env for strict mode (`FRAGILEC_PARSER_BACKEND=libtooling`), keep `libclang` as fallback.
   - Run ignored real-world matrix with LibTooling-primary and record deltas vs current strict baseline.
-  - Fix regressions until LibTooling-primary reaches current baseline parity for build + runtime checks.
+  - Fix regressions until LibTooling-primary reaches current baseline parity for build + runtime checks and does not require fallback stubs for active template-instantiation surfaces.
 - [ ] 5.5) Cutover and de-risk period (Effort: S, Risk: Medium).
   - Switch strict default backend to LibTooling-primary only after 5.1-5.4 gates are green.
   - Keep emergency escape hatch to `libclang` for one hardening window; remove only after stable CI/replay history.
-  - Update `CLAUDE.md` + this `TODO.md` status snapshot with exact cutover date and evidence links.
+  - Update `CLAUDE.md` + this `TODO.md` status snapshot with exact cutover date, backend parity evidence, and fallback-stub inventory delta.
 
-## Phase 6 [P0]: Generic STL container types
+## Phase 6 [P3 completed/archive]: Generic STL container types
 
 Goal: replace monomorphic STL stubs (`std_vector_int`, `std_unique_ptr_int`, `std_shared_ptr_int`) with Rust-generic implementations (`std_vector<T>`, `std_unique_ptr<T>`, `std_shared_ptr<T>`), then have the transpiler emit type aliases for each concrete instantiation. This unblocks the `serialize` target (needs `std::vector<Employee>` and `std::vector<Dependent>`) and enables any future user-defined-type containers without per-type stub work.
 
