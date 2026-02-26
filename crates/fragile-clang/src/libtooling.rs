@@ -791,9 +791,12 @@ fn convert_node_with_depth(
 
         ASTEntryTag::TagStaticAssertDecl => ClangNodeKind::Unknown("StaticAssert".to_string()),
 
-        ASTEntryTag::TagFunctionDecl | ASTEntryTag::TagFunctionTemplateDecl => {
-            // Inline function declaration - skip
-            ClangNodeKind::Unknown("InlineFunctionDecl".to_string())
+        ASTEntryTag::TagFunctionDecl => convert_function_decl_node(ctx, node),
+
+        ASTEntryTag::TagFunctionTemplateDecl => {
+            // Function template conversion requires template parameter extraction.
+            // Keep this mapped to Unknown until that surface is fully modeled.
+            ClangNodeKind::Unknown("InlineFunctionTemplateDecl".to_string())
         }
 
         ASTEntryTag::TagClassTemplateDecl => {
@@ -832,6 +835,82 @@ fn convert_node_with_depth(
         children,
         location,
     })
+}
+
+fn convert_function_decl_node(
+    ctx: &AstContext,
+    node: &fragile_ast_exporter::clang_ast::AstNode,
+) -> ClangNodeKind {
+    let raw_name = node.get_string(0).unwrap_or("").to_string();
+    let name = if raw_name.is_empty() {
+        "__fragile_libtooling_anon_fn".to_string()
+    } else {
+        raw_name
+    };
+    let is_static = node.get_bool(3).unwrap_or(false);
+
+    let (return_type_opt, fn_param_types, is_variadic) = if let Some(type_id) = node.type_id {
+        resolve_function_proto_type(ctx, type_id)
+    } else {
+        (None, Vec::new(), false)
+    };
+
+    let return_type = return_type_opt.unwrap_or(CppType::Int { signed: true });
+
+    let mut params: Vec<(String, CppType)> = Vec::new();
+    let mut param_index = 0usize;
+    for child_id_opt in &node.children {
+        let Some(child_id) = child_id_opt else {
+            continue;
+        };
+        let Some(child_node) = ctx.ast_nodes.get(child_id) else {
+            continue;
+        };
+        if child_node.tag != ASTEntryTag::TagParmVarDecl {
+            continue;
+        }
+
+        let raw_param_name = child_node.get_string(0).unwrap_or("").to_string();
+        let param_name = if raw_param_name.is_empty() {
+            format!("arg{param_index}")
+        } else {
+            raw_param_name
+        };
+        let param_type = child_node
+            .type_id
+            .and_then(|type_id| resolve_type(ctx, type_id))
+            .or_else(|| fn_param_types.get(param_index).cloned())
+            .unwrap_or_else(|| CppType::Named("auto".to_string()));
+        params.push((param_name, param_type));
+        param_index += 1;
+    }
+
+    // If ParmVarDecl children are unavailable, preserve parameter arity/types
+    // from FunctionProtoType to avoid dropping callable function surfaces.
+    if params.is_empty() && !fn_param_types.is_empty() {
+        for (idx, ty) in fn_param_types.iter().cloned().enumerate() {
+            params.push((format!("arg{idx}"), ty));
+        }
+    }
+
+    let is_definition = node.children.iter().any(|child_id_opt| {
+        child_id_opt
+            .and_then(|child_id| ctx.ast_nodes.get(&child_id))
+            .is_some_and(|child_node| child_node.tag == ASTEntryTag::TagCompoundStmt)
+    });
+
+    ClangNodeKind::FunctionDecl {
+        name: name.clone(),
+        mangled_name: name,
+        is_static,
+        return_type,
+        params,
+        is_definition,
+        is_variadic,
+        is_noexcept: false,
+        is_coroutine: false,
+        coroutine_info: None,
+    }
 }
 
 fn extract_type_from_node(
@@ -1136,10 +1215,10 @@ pub fn extract_specialization_method_signatures(
             let is_static = child_node.get_bool(1).unwrap_or(false);
 
             // Resolve return type and param types via FunctionProtoType
-            let (return_type, fn_param_types) = if let Some(type_id) = child_node.type_id {
+            let (return_type, fn_param_types, _) = if let Some(type_id) = child_node.type_id {
                 resolve_function_proto_type(ctx, type_id)
             } else {
-                (None, Vec::new())
+                (None, Vec::new(), false)
             };
 
             // Extract parameter names from ParmVarDecl children,
@@ -1217,18 +1296,21 @@ pub fn extract_specialization_method_signatures(
     result
 }
 
-/// Resolve a FunctionProtoType to extract return type and parameter types.
-fn resolve_function_proto_type(ctx: &AstContext, type_id: u64) -> (Option<CppType>, Vec<CppType>) {
+/// Resolve a FunctionProtoType to extract return type, parameter types, and variadic shape.
+fn resolve_function_proto_type(
+    ctx: &AstContext,
+    type_id: u64,
+) -> (Option<CppType>, Vec<CppType>, bool) {
     use fragile_ast_exporter::clang_ast::TypeNode;
     use fragile_ast_exporter::CborValue;
 
     let type_node = match ctx.get_type(TypeNode::unqualified_id(type_id)) {
         Some(t) => t,
-        None => return (None, Vec::new()),
+        None => return (None, Vec::new(), false),
     };
 
     if type_node.tag != ASTEntryTag::TagFunctionProtoType {
-        return (None, Vec::new());
+        return (None, Vec::new(), false);
     }
 
     // extras[0] = return type ID
@@ -1253,7 +1335,10 @@ fn resolve_function_proto_type(ctx: &AstContext, type_id: u64) -> (Option<CppTyp
         }
     }
 
-    (return_type, param_types)
+    // extras[2] = isVariadic
+    let is_variadic = matches!(type_node.extras.get(2), Some(CborValue::Bool(true)));
+
+    (return_type, param_types, is_variadic)
 }
 
 /// Format a CppType as a C++ type string for use in template arguments.

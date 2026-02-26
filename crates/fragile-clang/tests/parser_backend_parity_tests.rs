@@ -214,8 +214,13 @@ fn test_parser_backend_parity_local_fixture_replay() {
             libtooling.has_return_add,
             libtooling.has_return_mul
         ),
-        (false, false, false, false),
-        "libtooling marker-set baseline changed; update parity expectations and follow-up tasks. logs: {}",
+        (
+            reference.has_fn_add,
+            reference.has_fn_mul,
+            reference.has_return_add,
+            reference.has_return_mul
+        ),
+        "libtooling backend should match libclang marker-set parity for this fixture; logs: {}",
         log_dir.display()
     );
 }
