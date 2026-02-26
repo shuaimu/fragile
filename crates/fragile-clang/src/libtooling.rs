@@ -791,8 +791,16 @@ fn convert_node_with_depth(
 
         ASTEntryTag::TagTemplateTypeParmDecl => convert_template_type_param_decl_node(node),
 
-        ASTEntryTag::TagNonTypeTemplateParmDecl | ASTEntryTag::TagTemplateTemplateParmDecl => {
-            ClangNodeKind::Unknown("TemplateParam".to_string())
+        ASTEntryTag::TagNonTypeTemplateParmDecl => {
+            // Constrained fallback: keep non-type template params in the current
+            // AST model by normalizing them into TemplateTypeParmDecl metadata.
+            convert_template_param_decl_fallback_node(node, "__fragile_nttp")
+        }
+
+        ASTEntryTag::TagTemplateTemplateParmDecl => {
+            // Constrained fallback: preserve template-template param position/pack
+            // metadata without introducing a new node variant yet.
+            convert_template_param_decl_fallback_node(node, "__fragile_ttpl")
         }
 
         _ => {
@@ -1115,11 +1123,18 @@ fn convert_class_template_decl_node(
 fn convert_template_type_param_decl_node(
     node: &fragile_ast_exporter::clang_ast::AstNode,
 ) -> ClangNodeKind {
+    convert_template_param_decl_fallback_node(node, "__fragile_tparam")
+}
+
+fn convert_template_param_decl_fallback_node(
+    node: &fragile_ast_exporter::clang_ast::AstNode,
+    unnamed_prefix: &str,
+) -> ClangNodeKind {
     let depth = node.get_u64(1).unwrap_or(0) as u32;
     let index = node.get_u64(2).unwrap_or(0) as u32;
     let raw_name = node.get_string(0).unwrap_or("").to_string();
     let name = if raw_name.is_empty() {
-        format!("__fragile_tparam_{}_{}", depth, index)
+        format!("{unnamed_prefix}_{depth}_{index}")
     } else {
         raw_name
     };
@@ -2045,6 +2060,120 @@ mod tests {
     }
 
     #[test]
+    fn test_convert_to_clang_node_maps_non_type_template_param_decl_with_fallback() {
+        let mut ast_nodes = HashMap::new();
+        ast_nodes.insert(
+            10,
+            make_node(
+                10,
+                ASTEntryTag::TagClassTemplateDecl,
+                vec![Some(11)],
+                vec![
+                    CborValue::Text("ArrayLike".to_string()),
+                    CborValue::Array(vec![CborValue::Text("N".to_string())]),
+                    CborValue::Bool(false),
+                ],
+            ),
+        );
+        ast_nodes.insert(
+            11,
+            make_node(
+                11,
+                ASTEntryTag::TagNonTypeTemplateParmDecl,
+                vec![],
+                vec![
+                    CborValue::Text("N".to_string()),
+                    CborValue::Integer(0.into()),
+                    CborValue::Integer(0.into()),
+                    CborValue::Bool(false),
+                ],
+            ),
+        );
+
+        let ctx = AstContext {
+            ast_nodes,
+            type_nodes: HashMap::new(),
+            top_nodes: vec![10],
+            files: vec![],
+        };
+
+        let converted =
+            convert_to_clang_node(&ctx, 10).expect("synthetic class template conversion failed");
+        assert!(
+            converted.children.iter().any(|child| {
+                matches!(
+                    &child.kind,
+                    ClangNodeKind::TemplateTypeParmDecl { name, .. } if name == "N"
+                )
+            }),
+            "non-type template parameter should be normalized to TemplateTypeParmDecl fallback"
+        );
+        assert!(
+            !converted.children.iter().any(|child| {
+                matches!(&child.kind, ClangNodeKind::Unknown(kind) if kind == "TemplateParam")
+            }),
+            "fallback mapping should avoid TemplateParam unknown nodes"
+        );
+    }
+
+    #[test]
+    fn test_convert_to_clang_node_maps_template_template_param_decl_with_fallback() {
+        let mut ast_nodes = HashMap::new();
+        ast_nodes.insert(
+            20,
+            make_node(
+                20,
+                ASTEntryTag::TagClassTemplateDecl,
+                vec![Some(21)],
+                vec![
+                    CborValue::Text("WrapperUser".to_string()),
+                    CborValue::Array(vec![CborValue::Text("W".to_string())]),
+                    CborValue::Bool(false),
+                ],
+            ),
+        );
+        ast_nodes.insert(
+            21,
+            make_node(
+                21,
+                ASTEntryTag::TagTemplateTemplateParmDecl,
+                vec![],
+                vec![
+                    CborValue::Text("W".to_string()),
+                    CborValue::Integer(0.into()),
+                    CborValue::Integer(0.into()),
+                    CborValue::Bool(false),
+                ],
+            ),
+        );
+
+        let ctx = AstContext {
+            ast_nodes,
+            type_nodes: HashMap::new(),
+            top_nodes: vec![20],
+            files: vec![],
+        };
+
+        let converted =
+            convert_to_clang_node(&ctx, 20).expect("synthetic class template conversion failed");
+        assert!(
+            converted.children.iter().any(|child| {
+                matches!(
+                    &child.kind,
+                    ClangNodeKind::TemplateTypeParmDecl { name, .. } if name == "W"
+                )
+            }),
+            "template-template parameter should be normalized to TemplateTypeParmDecl fallback"
+        );
+        assert!(
+            !converted.children.iter().any(|child| {
+                matches!(&child.kind, ClangNodeKind::Unknown(kind) if kind == "TemplateParam")
+            }),
+            "fallback mapping should avoid TemplateParam unknown nodes"
+        );
+    }
+
+    #[test]
     fn test_convert_to_clang_node_maps_function_template_decl() {
         let mut ast_nodes = HashMap::new();
         ast_nodes.insert(
@@ -2187,6 +2316,88 @@ int use_identity() {
                 .iter()
                 .any(|child| matches!(child.kind, ClangNodeKind::CompoundStmt)),
             "converted function template should include body child nodes"
+        );
+    }
+
+    #[test]
+    fn test_parse_file_converts_non_type_and_template_template_params_with_fallback() {
+        let log_dir = unique_temp_dir("fragile_libtooling_template_param_fallback");
+        fs::create_dir_all(&log_dir).expect("failed to create temp dir");
+        let source_path = log_dir.join("template_param_fallback_fixture.cpp");
+        fs::write(
+            &source_path,
+            r#"
+template<typename T>
+struct Wrap {
+    using type = T;
+};
+
+template<int N, template<typename> class W, typename T>
+T passthrough(T value) {
+    return value;
+}
+
+int use_passthrough() {
+    return passthrough<3, Wrap, int>(7);
+}
+"#,
+        )
+        .expect("failed to write fixture source");
+
+        let parser = LibToolingParser::new().with_compile_commands_dir(
+            log_dir
+                .to_str()
+                .expect("temp dir path should be valid UTF-8"),
+        );
+        let ctx = parser
+            .parse_file(&source_path)
+            .expect("libtooling parse should succeed");
+
+        let function_template_node = ctx
+            .ast_nodes
+            .values()
+            .find(|node| {
+                node.tag == ASTEntryTag::TagFunctionTemplateDecl
+                    && node.get_string(0) == Some("passthrough")
+            })
+            .expect("expected passthrough function template in exported AST");
+
+        let converted = convert_to_clang_node(&ctx, function_template_node.id)
+            .expect("function template conversion should succeed");
+        match &converted.kind {
+            ClangNodeKind::FunctionTemplateDecl {
+                template_params, ..
+            } => {
+                assert_eq!(template_params, &vec!["N", "W", "T"]);
+            }
+            other => panic!("expected FunctionTemplateDecl conversion, got {:?}", other),
+        }
+
+        let normalized_param_names: Vec<String> = converted
+            .children
+            .iter()
+            .filter_map(|child| match &child.kind {
+                ClangNodeKind::TemplateTypeParmDecl { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            normalized_param_names.contains(&"N".to_string()),
+            "expected non-type template parameter to map through fallback"
+        );
+        assert!(
+            normalized_param_names.contains(&"W".to_string()),
+            "expected template-template parameter to map through fallback"
+        );
+        assert!(
+            normalized_param_names.contains(&"T".to_string()),
+            "expected type template parameter to remain mapped"
+        );
+        assert!(
+            !converted.children.iter().any(|child| {
+                matches!(&child.kind, ClangNodeKind::Unknown(kind) if kind == "TemplateParam")
+            }),
+            "fallback mapping should avoid TemplateParam unknown nodes in converted children"
         );
     }
 
