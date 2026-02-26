@@ -1080,10 +1080,24 @@ bool ASTExporterVisitor::VisitCXXRecordDecl(CXXRecordDecl *RD) {
 
     std::vector<const void *> children;
 
-    // Add base classes
+    // Add record members needed by downstream AST conversion.
+    // Keep this scoped to concrete declarations (non-template patterns and
+    // non-specializations) to preserve current specialization routing.
     if (RD->hasDefinition()) {
-        for (const auto &base : RD->bases()) {
-            // Store base class type
+        for (auto *D : RD->decls()) {
+            if (auto *FD = dyn_cast<FieldDecl>(D)) {
+                children.push_back(FD);
+            } else if (auto *InnerRD = dyn_cast<RecordDecl>(D)) {
+                // Flatten anonymous struct/union members so field lists for
+                // concrete records include macro-expanded anonymous storage.
+                if (InnerRD->isAnonymousStructOrUnion()) {
+                    for (auto *InnerD : InnerRD->decls()) {
+                        if (auto *InnerFD = dyn_cast<FieldDecl>(InnerD)) {
+                            children.push_back(InnerFD);
+                        }
+                    }
+                }
+            }
         }
     }
 
