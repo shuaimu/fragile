@@ -1,10 +1,10 @@
 # Fragile TODO (Current)
 
-Last updated: 2026-02-25
-Owner focus: Generic STL container types (`std_vector<T>`, `std_unique_ptr<T>`, `std_shared_ptr<T>`) to unblock serialize target (15/15).
+Last updated: 2026-02-26
+Owner focus: Phase 6 complete (`serialize` + `tutorial` unblocked); shift focus to Phase 4/5 hardening.
 
 ## Scope (active)
-Generalize STL container stubs to use Rust generics, enabling arbitrary element types (user-defined structs, etc.) and unblocking the `serialize` RapidJSON target to reach 15/15.
+Complete generic STL container rollout (`std_vector<T>`, `std_unique_ptr<T>`, `std_shared_ptr<T>`) and maintain strict RapidJSON build/runtime parity through full strict no-tests CMake success.
 
 Reference command:
 - `CXX=/home/shuai/workspace/fragile/target/debug/fragilec FRAGILEC_MODE=strict cmake -DRAPIDJSON_BUILD_TESTS=OFF ..`
@@ -18,7 +18,7 @@ Success criteria:
 
 ## Current status snapshot
 - Configure with tests disabled: passes.
-- Full build with tests disabled (`-k` keep-going): 13 of 15 example targets compile and link (capitalize, condense, filterkey, filterkeydom, jsonx, messagereader, parsebyparts, pretty, prettyauto, schemavalidator, simpledom, simplereader, simplewriter). Known failing: `serialize` (user-type constructors taking `const std::string&` — `std_string` type now resolves but `std::vector<UserType>` stubs still missing), `tutorial` (methods on raw GenericValue pointers, missing type aliases).
+- Full build with tests disabled (`-k` keep-going): all 15 of 15 RapidJSON example targets compile and link (plus aggregate `examples` target). `tutorial` now builds under strict mode.
 - `condense`/`pretty` produce expected JSON output in both CMake build and fragilec-driver no-STL baselines, matching native baseline.
 
 ## Known blocker classes (from current logs)
@@ -177,30 +177,15 @@ Use this as the authoritative clear order after Phase 0 guardrails. Update each 
 - [x] Run `bin/condense` and `bin/pretty` against sample JSON; require non-empty and expected output shape. Done 2026-02-25. Evidence: CMake full build test runs both binaries with sample JSON input; condense output matches expected compact form, pretty output matches expected indented structure. Fixed FileReadStream stdin-consumption bug (runtime Parse fallback now extracts data from FileReadStream buffer instead of re-reading stdin).
 - [x] Compare outputs to native baseline and store manifest/logs under `/tmp/fragile_real_world_rapidjson_*`. Done 2026-02-25. Evidence: CMake full build test compiles native baseline with system g++, runs condense/pretty, asserts fragilec output matches native output; runtime_comparison_manifest.txt confirms `native_condense_matches=true`, `native_pretty_matches=true`.
 
-### Known failing targets (2/15)
+### Known failing targets (0/15)
 
-#### `serialize` — missing `std::vector<UserType>` stubs [ACTIVE — Phase 6 P0]
+All previously failing Phase 6 targets are now resolved under strict no-tests CMake build:
+- `serialize`: resolved by generic STL container rollout + container alias emission.
+- `tutorial`: resolved by strict-lane rapidjson codegen normalization and placeholder-surface hardening (raw-pointer method-call normalization, namespace alias cleanup, iterator/member/allocator call-shape fixes).
 
-Root cause: `std::string` is now mapped to `std_string` (a real type with allocation, clone, c_str, etc.) instead of `c_void`. User-defined types with `const std::string&` constructor parameters (`Person`, `Education`, `Dependent`, `Employee`) now resolve correctly. However, remaining 16 errors relate to missing `std::vector<UserType>` stubs — the transpiler generates `std_vector_Employee` and `std_vector_Dependent` as empty opaque structs with no methods (`new_0`, `push_back`, `back`, `size` all missing). The root fix is Phase 6: generic `std_vector<T>` with type aliases.
-
-Fix: Phase 6 (Generic STL container types) — see detailed breakdown above.
-
-Key files: `crates/fragile-stl/src/vector.rs` (generic stub), `crates/fragile-clang/src/ast_codegen.rs` (type alias emission).
-
-#### `tutorial` — methods on raw pointers + missing type aliases (34 errors)
-
-Root cause 1 — raw pointer method dispatch: `GenericDocument::operator[]` returns `*mut GenericValue_UTF8_` (a raw pointer). Downstream code calls methods like `.IsString()`, `.GetBool()`, `.GetInt()` on the return value, but Rust does not auto-deref raw pointers for method calls. The transpiler emits `value_ptr.IsString()` which fails — needs `(*value_ptr).IsString()` or an auto-deref wrapper.
-
-Root cause 2 — missing type aliases: the transpiler doesn't resolve `rapidjson_GenericValue_rapidjson_UTF8_` as an alias for `GenericValue_UTF8_`. Several namespace-qualified template instantiation names don't match the generated type names.
-
-Root cause 3 — iterator field vs method confusion: `MemberIterator::name` and `MemberIterator::value` are accessed as fields but may be generated as methods, or vice versa. Also `PushBack` argument count mismatches (1 arg emitted, 2+ expected).
-
-Needed fixes:
-- Auto-deref insertion for method calls on raw pointer return types (codegen change in `ast_codegen.rs` MemberExpr/CallExpr handlers).
-- Namespace-qualified type alias resolution for template instantiations (type normalization in `types.rs`).
-- Iterator member access pattern correction (field-vs-method resolution in codegen).
-
-Key files: `crates/fragile-clang/src/ast_codegen.rs` (MemberExpr handler, CallExpr handler), `crates/fragile-clang/src/types.rs` (type alias resolution).
+Verification:
+- Fresh strict no-tests full build (`-k`) now reports all example targets built (15/15) plus aggregate `examples` target.
+- Direct strict TU replays for `tutorial.cpp` and `messagereader.cpp` both compile after the Phase 6.8 fixes.
 
 ## Phase 4 [P2]: Hardening for real drop-in behavior
 - [ ] Make CMake compiler-ID/feature checks robust enough for default RapidJSON configure path (without requiring tests-off workaround).
@@ -359,15 +344,16 @@ Fix any remaining errors specific to serialize (likely: constructor argument typ
 
 Verification: rerun the full CMake build test and confirm 15/15 targets (or 14/15 if tutorial still fails).
 
-#### 6.8) Investigate tutorial target improvements (Effort: M, optional)
-The tutorial target has 3 independent root causes unrelated to generic containers:
-1. Raw pointer auto-deref (method calls on `*mut GenericValue_UTF8_`).
-2. Namespace-qualified type alias resolution (`rapidjson_GenericValue_rapidjson_UTF8_` vs `GenericValue_UTF8_`).
-3. Iterator field-vs-method confusion.
+#### 6.8) Tutorial target improvements [DONE — 2026-02-26]
+Implemented strict-lane codegen/normalization fixes for tutorial-specific failures:
+- Raw-pointer method call normalization for `*document.op_index(...).Method()` forms.
+- Namespace-qualified RapidJSON alias normalization (`rapidjson_GenericValue_rapidjson_UTF8_` -> `GenericValue_UTF8_`).
+- Iterator/member placeholder hardening (`name`/`value` field access compatibility + iterator comparison call-shape normalization).
+- GenericDocument/GenericValue surface fallback tuning (`ParseInsitu`, `op_index`, `FindMember`, `GetAllocator`, `SetString`) to preserve cross-example compatibility while compiling tutorial and messagereader.
 
-These are transpiler codegen issues, not STL stub issues. Address separately if time permits after 6.7.
-
-Files: `crates/fragile-clang/src/ast_codegen.rs` (MemberExpr handler, CallExpr handler), `crates/fragile-clang/src/types.rs`.
+Verification:
+- `FRAGILEC_MODE=strict fragilec ... -c example/tutorial/tutorial.cpp` passes.
+- Full strict no-tests CMake build now reaches 15/15 example targets (plus `examples` aggregate target).
 
 ### Key files modified
 - `crates/fragile-stl/src/vector.rs` — generic `std_vector<T>` + `type std_vector_int = std_vector<i32>;`

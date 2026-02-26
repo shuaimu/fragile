@@ -130,3 +130,20 @@ fn tree_types_compile() {
     let _result = __tree_emplace_result::default();
     assert!(!_result.__second);
 }
+
+#[test]
+fn generic_container_aliases_compile() {
+    let mut v_alias: std_vector_int = std_vector_int::new_0();
+    v_alias.push_back(1);
+    assert_eq!(v_alias.size(), 1);
+
+    let mut v_generic: std_vector<std_string> = std_vector::new_0();
+    let empty: std_string = Default::default();
+    v_generic.push_back(&empty);
+    assert_eq!(v_generic.size(), 1);
+
+    let u_alias: std_unique_ptr_int = std_unique_ptr_int::new_0();
+    let s_alias: std_shared_ptr_int = std_shared_ptr_int::new_0();
+    assert!(u_alias.get().is_null());
+    assert!(s_alias.get().is_null());
+}
