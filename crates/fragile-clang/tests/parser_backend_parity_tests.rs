@@ -30,6 +30,9 @@ const MARKER_CONST_PTR_FN_SIG: &str = "pub extern \"C\" fn read_const_ptr(p: *co
 const MARKER_MUT_REF_FN_SIG: &str = "pub extern \"C\" fn bump_ref(mut value: &mut i32) -> i32";
 const MARKER_ARRAY_DECAY_FN_SIG: &str =
     "pub extern \"C\" fn array_decay_head(data: *mut i32) -> i32";
+const MARKER_TYPEDEF_FRAGILE_FILE_ALIAS: &str = "pub type FragileFileAlias = std::ffi::c_void";
+const MARKER_TEMPLATE_PLACEHOLDER_VALUE_TYPE_ALIAS: &str = "pub type value_type = std::ffi::c_void";
+const MARKER_DEPENDENT_TYPE_PLACEHOLDER_STRUCT: &str = "pub struct _dependent_type;";
 
 #[derive(Debug, Clone)]
 struct BackendReplayResult {
@@ -57,6 +60,9 @@ struct BackendReplayResult {
     has_const_ptr_fn_sig: bool,
     has_mut_ref_fn_sig: bool,
     has_array_decay_fn_sig: bool,
+    has_typedef_fragile_file_alias: bool,
+    has_template_placeholder_value_type_alias: bool,
+    has_dependent_type_placeholder_struct: bool,
 }
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {
@@ -107,6 +113,8 @@ typedef unsigned long Count;
 using Distance = int;
 typedef int IntArray4[4];
 using DecltypeScalar = decltype(1);
+struct __FILE;
+typedef __FILE FragileFileAlias;
 
 enum Mode {
     ModeA = 1,
@@ -246,6 +254,11 @@ int mul(int x, int y) {
             has_const_ptr_fn_sig: rust_code.contains(MARKER_CONST_PTR_FN_SIG),
             has_mut_ref_fn_sig: rust_code.contains(MARKER_MUT_REF_FN_SIG),
             has_array_decay_fn_sig: rust_code.contains(MARKER_ARRAY_DECAY_FN_SIG),
+            has_typedef_fragile_file_alias: rust_code.contains(MARKER_TYPEDEF_FRAGILE_FILE_ALIAS),
+            has_template_placeholder_value_type_alias: rust_code
+                .contains(MARKER_TEMPLATE_PLACEHOLDER_VALUE_TYPE_ALIAS),
+            has_dependent_type_placeholder_struct: rust_code
+                .contains(MARKER_DEPENDENT_TYPE_PLACEHOLDER_STRUCT),
         });
     }
 
@@ -256,7 +269,7 @@ int mul(int x, int y) {
     );
     for result in &results {
         manifest.push_str(&format!(
-            "backend={} rust_path={} rustc_status={} markers=fn_add:{},fn_mul:{},ret_add:{},ret_mul:{},typedef_count:{},alias_distance:{},enum_mode:{},enum_mode_a:{},enum_mode_b:{},struct_point:{},struct_point_x:{},struct_point_y:{},namespace_math:{},namespace_ns_add:{},template_fn_identity_i32:{},template_struct_box_int:{},typedef_intarray4:{},decltype_scalar_fn_sig:{},const_ptr_fn_sig:{},mut_ref_fn_sig:{},array_decay_fn_sig:{}\n",
+            "backend={} rust_path={} rustc_status={} markers=fn_add:{},fn_mul:{},ret_add:{},ret_mul:{},typedef_count:{},alias_distance:{},enum_mode:{},enum_mode_a:{},enum_mode_b:{},struct_point:{},struct_point_x:{},struct_point_y:{},namespace_math:{},namespace_ns_add:{},template_fn_identity_i32:{},template_struct_box_int:{},typedef_intarray4:{},decltype_scalar_fn_sig:{},const_ptr_fn_sig:{},mut_ref_fn_sig:{},array_decay_fn_sig:{},typedef_fragile_file_alias:{},template_placeholder_value_type_alias:{},dependent_type_placeholder_struct:{}\n",
             result.backend_name,
             result.rust_path.display(),
             result.rustc_status,
@@ -280,7 +293,10 @@ int mul(int x, int y) {
             result.has_decltype_scalar_fn_sig,
             result.has_const_ptr_fn_sig,
             result.has_mut_ref_fn_sig,
-            result.has_array_decay_fn_sig
+            result.has_array_decay_fn_sig,
+            result.has_typedef_fragile_file_alias,
+            result.has_template_placeholder_value_type_alias,
+            result.has_dependent_type_placeholder_struct
         ));
     }
     fs::write(log_dir.join("parser_backend_parity_manifest.txt"), manifest).map_err(|e| {
@@ -346,7 +362,10 @@ fn test_parser_backend_parity_local_fixture_replay() {
             && reference.has_decltype_scalar_fn_sig
             && reference.has_const_ptr_fn_sig
             && reference.has_mut_ref_fn_sig
-            && reference.has_array_decay_fn_sig,
+            && reference.has_array_decay_fn_sig
+            && reference.has_typedef_fragile_file_alias
+            && reference.has_template_placeholder_value_type_alias
+            && reference.has_dependent_type_placeholder_struct,
         "reference backend marker-set should contain expected function/return markers; logs: {}",
         log_dir.display()
     );
@@ -377,7 +396,10 @@ fn test_parser_backend_parity_local_fixture_replay() {
             hybrid.has_decltype_scalar_fn_sig,
             hybrid.has_const_ptr_fn_sig,
             hybrid.has_mut_ref_fn_sig,
-            hybrid.has_array_decay_fn_sig
+            hybrid.has_array_decay_fn_sig,
+            hybrid.has_typedef_fragile_file_alias,
+            hybrid.has_template_placeholder_value_type_alias,
+            hybrid.has_dependent_type_placeholder_struct
         ],
         [
             reference.has_fn_add,
@@ -400,7 +422,10 @@ fn test_parser_backend_parity_local_fixture_replay() {
             reference.has_decltype_scalar_fn_sig,
             reference.has_const_ptr_fn_sig,
             reference.has_mut_ref_fn_sig,
-            reference.has_array_decay_fn_sig
+            reference.has_array_decay_fn_sig,
+            reference.has_typedef_fragile_file_alias,
+            reference.has_template_placeholder_value_type_alias,
+            reference.has_dependent_type_placeholder_struct
         ],
         "hybrid backend should currently match libclang marker-set parity; logs: {}",
         log_dir.display()
@@ -432,7 +457,10 @@ fn test_parser_backend_parity_local_fixture_replay() {
             libtooling.has_decltype_scalar_fn_sig,
             libtooling.has_const_ptr_fn_sig,
             libtooling.has_mut_ref_fn_sig,
-            libtooling.has_array_decay_fn_sig
+            libtooling.has_array_decay_fn_sig,
+            libtooling.has_typedef_fragile_file_alias,
+            libtooling.has_template_placeholder_value_type_alias,
+            libtooling.has_dependent_type_placeholder_struct
         ],
         [
             reference.has_fn_add,
@@ -455,7 +483,10 @@ fn test_parser_backend_parity_local_fixture_replay() {
             reference.has_decltype_scalar_fn_sig,
             reference.has_const_ptr_fn_sig,
             reference.has_mut_ref_fn_sig,
-            reference.has_array_decay_fn_sig
+            reference.has_array_decay_fn_sig,
+            reference.has_typedef_fragile_file_alias,
+            reference.has_template_placeholder_value_type_alias,
+            reference.has_dependent_type_placeholder_struct
         ],
         "libtooling backend should match libclang marker-set parity for this fixture; logs: {}",
         log_dir.display()
