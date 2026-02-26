@@ -252,9 +252,15 @@ Goal: make LibTooling the strict primary AST source with stronger instantiated-t
     - [x] 5.3.d.i) Run strict replay with `FRAGILEC_PARSER_BACKEND=libclang|libtooling|hybrid` and assert no new unresolved-name/type (`E0425`) deltas vs the current strict baseline manifest. Done 2026-02-26.
       - Evidence: added deterministic local strict replay gate `test_rapidjson_strict_backend_toggle_local_fixture_keeps_e0425_delta_at_baseline` in `crates/fragile-clang/tests/real_world_rapidjson_tests.rs`; fixture replays `fragilec` strict compile with backend toggles (`libclang`/`hybrid`/`libtooling`), writes per-backend first-failure capture artifacts plus `strict_backend_toggle_manifest.txt` under `/tmp/fragile_rapidjson_strict_backend_toggle_e0425_delta_*`, and asserts both compile-status parity and zero `error[E0425]` delta against the `libclang` baseline manifest entry (details in `docs/phase5_strict_replay_backend_toggle_leaf_5_3_d_i.md`).
 - [ ] 5.4) Move strict `fragilec` compile path to LibTooling-primary behind a flag (Effort: M, Risk: High).
-  - Add opt-in flag/env for strict mode (`FRAGILEC_PARSER_BACKEND=libtooling`), keep `libclang` as fallback.
-  - Run ignored real-world matrix with LibTooling-primary and record deltas vs current strict baseline.
-  - Fix regressions until LibTooling-primary reaches current baseline parity for build + runtime checks and does not require fallback stubs for active template-instantiation surfaces.
+  - [x] 5.4.a) Add strict backend-matrix replay harness + delta manifests (Effort: S, Risk: Medium). Done 2026-02-26.
+    - [x] 5.4.a.i) Add deterministic local strict CMake backend-matrix fixture replay (`FRAGILEC_PARSER_BACKEND=libclang|hybrid|libtooling`) that captures per-backend first-failure artifacts and asserts zero build/class/`E0425` delta vs `libclang` baseline. Done 2026-02-26.
+      - Evidence: added local fixture helper `run_local_strict_cmake_no_tests_backend_matrix_capture_fixture` and regression test `test_rapidjson_strict_cmake_backend_matrix_local_fixture_keeps_baseline_deltas` in `crates/fragile-clang/tests/real_world_rapidjson_tests.rs`; fixture writes per-backend captures under `backend_{libclang,hybrid,libtooling}` and records `strict_cmake_backend_matrix_local_fixture_manifest.txt`, with parser-backend env propagation logged by the fake fragilec wrapper (details in `docs/phase5_strict_cmake_backend_matrix_local_fixture_leaf_5_4_a_i.md`).
+    - [ ] 5.4.a.ii) Add ignored real-world RapidJSON strict CMake backend-matrix replay (`libclang` baseline vs `libtooling`) and persist/validate delta manifest under `/tmp/fragile_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_*`.
+  - [ ] 5.4.b) Evaluate LibTooling-primary real-world strict-lane deltas from 5.4.a.ii and classify blocking regressions (Effort: S, Risk: Medium).
+    - [ ] 5.4.b.i) Record first-failure class/code deltas and generated-surface diffs (with fallback-stub inventory) in docs for the current pinned RapidJSON replay.
+  - [ ] 5.4.c) Fix LibTooling-primary regressions until parity with current strict baseline (Effort: M, Risk: High).
+    - [ ] 5.4.c.i) Resolve top-ranked unresolved-name/type and call-shape regressions surfaced by 5.4.b manifests and keep replay deltas non-increasing.
+    - [ ] 5.4.c.ii) Re-run ignored strict backend matrix and require LibTooling-primary build/runtime parity with baseline (CMake no-tests build + condense/pretty runtime checks) before cutover.
 - [ ] 5.5) Cutover and de-risk period (Effort: S, Risk: Medium).
   - Switch strict default backend to LibTooling-primary only after 5.1-5.4 gates are green.
   - Keep emergency escape hatch to `libclang` for one hardening window; remove only after stable CI/replay history.

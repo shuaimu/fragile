@@ -158,6 +158,39 @@ const RAPIDJSON_STRICT_CMAKE_LOCAL_FIXTURE_LOG_FILES: &[&str] = &[
     "first_failing_compile_class.txt",
     "strict_cmake_local_fixture_manifest.txt",
 ];
+const RAPIDJSON_STRICT_CMAKE_BACKEND_MATRIX_LOCAL_FIXTURE_LOG_FILES: &[&str] = &[
+    "strict_cmake_backend_matrix_local_fixture_manifest.txt",
+    "backend_libclang/cmake_configure.status",
+    "backend_libclang/cmake_configure.stdout",
+    "backend_libclang/cmake_configure.stderr",
+    "backend_libclang/cmake_build.status",
+    "backend_libclang/cmake_build.stdout",
+    "backend_libclang/cmake_build.stderr",
+    "backend_libclang/fragilec_driver.log",
+    "backend_libclang/first_failing_compile_command.txt",
+    "backend_libclang/first_failing_compile_stderr.txt",
+    "backend_libclang/first_failing_compile_class.txt",
+    "backend_hybrid/cmake_configure.status",
+    "backend_hybrid/cmake_configure.stdout",
+    "backend_hybrid/cmake_configure.stderr",
+    "backend_hybrid/cmake_build.status",
+    "backend_hybrid/cmake_build.stdout",
+    "backend_hybrid/cmake_build.stderr",
+    "backend_hybrid/fragilec_driver.log",
+    "backend_hybrid/first_failing_compile_command.txt",
+    "backend_hybrid/first_failing_compile_stderr.txt",
+    "backend_hybrid/first_failing_compile_class.txt",
+    "backend_libtooling/cmake_configure.status",
+    "backend_libtooling/cmake_configure.stdout",
+    "backend_libtooling/cmake_configure.stderr",
+    "backend_libtooling/cmake_build.status",
+    "backend_libtooling/cmake_build.stdout",
+    "backend_libtooling/cmake_build.stderr",
+    "backend_libtooling/fragilec_driver.log",
+    "backend_libtooling/first_failing_compile_command.txt",
+    "backend_libtooling/first_failing_compile_stderr.txt",
+    "backend_libtooling/first_failing_compile_class.txt",
+];
 const RAPIDJSON_STRICT_BACKEND_TOGGLE_LOCAL_FIXTURE_LOG_FILES: &[&str] = &[
     "strict_backend_toggle_manifest.txt",
     "backend_libclang/compile.status",
@@ -1535,7 +1568,7 @@ fn create_local_cmake_first_failure_fixture(base_dir: &Path) -> Result<(PathBuf,
     let fake_fragilec = base_dir.join("fake_fragilec.sh");
     fs::write(
         &fake_fragilec,
-        "#!/usr/bin/env bash\nset -euo pipefail\nlog=\"${FRAGILEC_LOG:-}\"\nif [[ -n \"$log\" ]]; then\n  printf 'cwd=%s\\n' \"$(pwd)\" >> \"$log\"\n  printf 'args=%s\\n' \"$*\" >> \"$log\"\nfi\nfor arg in \"$@\"; do\n  if [[ \"$arg\" == *\"fail.cpp\"* ]]; then\n    echo \"forced local fixture compile failure for fail.cpp\" >&2\n    exit 42\n  fi\ndone\nexec c++ \"$@\"\n",
+        "#!/usr/bin/env bash\nset -euo pipefail\nlog=\"${FRAGILEC_LOG:-}\"\nif [[ -n \"$log\" ]]; then\n  printf 'parser_backend=%s\\n' \"${FRAGILEC_PARSER_BACKEND:-<unset>}\" >> \"$log\"\n  printf 'cwd=%s\\n' \"$(pwd)\" >> \"$log\"\n  printf 'args=%s\\n' \"$*\" >> \"$log\"\nfi\nfor arg in \"$@\"; do\n  if [[ \"$arg\" == *\"fail.cpp\"* ]]; then\n    echo \"forced local fixture compile failure for fail.cpp\" >&2\n    exit 42\n  fi\ndone\nexec c++ \"$@\"\n",
     )
     .map_err(|e| format!("failed to write fake fragilec wrapper script: {}", e))?;
     let chmod_output = Command::new("chmod")
@@ -1656,6 +1689,177 @@ fn run_local_strict_cmake_no_tests_first_failure_capture_fixture(
     })?;
 
     Ok(log_dir)
+}
+
+fn run_local_strict_cmake_no_tests_backend_matrix_capture_fixture(
+    root: &Path,
+) -> Result<(PathBuf, Vec<StrictBackendReplayResult>), String> {
+    let (project_dir, fake_fragilec) = create_local_cmake_first_failure_fixture(root)?;
+    let log_dir = root.join("strict_cmake_backend_matrix_local_fixture_logs");
+    fs::create_dir_all(&log_dir).map_err(|e| {
+        format!(
+            "failed to create strict backend-matrix local fixture log dir {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+
+    let backends: [(&str, &str); 3] = [
+        ("libclang", "libclang"),
+        ("hybrid", "hybrid"),
+        ("libtooling", "libtooling"),
+    ];
+    let mut results = Vec::new();
+    for (backend_name, backend_env_value) in backends {
+        let backend_log_dir = log_dir.join(format!("backend_{backend_name}"));
+        fs::create_dir_all(&backend_log_dir).map_err(|e| {
+            format!(
+                "failed to create strict backend-matrix local fixture backend log dir {}: {}",
+                backend_log_dir.display(),
+                e
+            )
+        })?;
+        let driver_log = backend_log_dir.join("fragilec_driver.log");
+        fs::write(&driver_log, "").map_err(|e| {
+            format!(
+                "failed to initialize strict backend-matrix local fixture fragilec driver log {}: {}",
+                driver_log.display(),
+                e
+            )
+        })?;
+
+        let build_dir = project_dir.join(format!("build_{backend_name}"));
+        fs::create_dir_all(&build_dir).map_err(|e| {
+            format!(
+                "failed to create strict backend-matrix local fixture build dir {}: {}",
+                build_dir.display(),
+                e
+            )
+        })?;
+
+        let configure_output = Command::new("cmake")
+            .arg("-DRAPIDJSON_BUILD_TESTS=OFF")
+            .arg("..")
+            .current_dir(&build_dir)
+            .env("CXX", fake_fragilec.to_string_lossy().to_string())
+            .env("FRAGILEC_MODE", "strict")
+            .env("FRAGILEC_PARSER_BACKEND", backend_env_value)
+            .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string())
+            .output()
+            .map_err(|e| {
+                format!(
+                    "failed to run strict backend-matrix local fixture cmake configure for {}: {}",
+                    backend_name, e
+                )
+            })?;
+        write_command_capture(&backend_log_dir, "cmake_configure", &configure_output)?;
+        if !configure_output.status.success() {
+            return Err(format!(
+                "strict backend-matrix local fixture cmake configure failed for {} with status {} (logs: {})",
+                backend_name,
+                status_code(&configure_output),
+                backend_log_dir.display()
+            ));
+        }
+
+        let build_output = Command::new("cmake")
+            .arg("--build")
+            .arg(".")
+            .arg("--verbose")
+            .arg("--")
+            .arg("-j1")
+            .current_dir(&build_dir)
+            .env("CXX", fake_fragilec.to_string_lossy().to_string())
+            .env("FRAGILEC_MODE", "strict")
+            .env("FRAGILEC_PARSER_BACKEND", backend_env_value)
+            .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string())
+            .output()
+            .map_err(|e| {
+                format!(
+                    "failed to run strict backend-matrix local fixture cmake build for {}: {}",
+                    backend_name, e
+                )
+            })?;
+        write_command_capture(&backend_log_dir, "cmake_build", &build_output)?;
+
+        let driver_log_content = fs::read_to_string(&driver_log).map_err(|e| {
+            format!(
+                "failed to read strict backend-matrix local fixture fragilec driver log {}: {}",
+                driver_log.display(),
+                e
+            )
+        })?;
+        let build_stdout = String::from_utf8_lossy(&build_output.stdout);
+        let build_stderr = String::from_utf8_lossy(&build_output.stderr);
+        let (first_command, first_stderr) = select_first_failing_compile_capture(
+            &driver_log_content,
+            !build_output.status.success(),
+            &build_stdout,
+            &build_stderr,
+        );
+        write_first_failing_compile_capture_files(&backend_log_dir, &first_command, &first_stderr)?;
+        let first_failure_class = classify_first_failing_compile_stderr(&first_stderr).to_string();
+        write_first_failing_compile_class_file(&backend_log_dir, first_failure_class.as_str())?;
+        let first_failure_e0425_count = count_error_e0425_occurrences(&first_stderr);
+
+        results.push(StrictBackendReplayResult {
+            backend_name,
+            compile_status: status_code(&build_output),
+            first_failure_class,
+            first_failure_e0425_count,
+        });
+    }
+
+    let baseline = results
+        .iter()
+        .find(|entry| entry.backend_name == "libclang")
+        .ok_or_else(|| {
+            "missing strict backend-matrix local fixture baseline replay result for libclang"
+                .to_string()
+        })?;
+    let baseline_e0425_count = baseline.first_failure_e0425_count;
+    let baseline_status = baseline.compile_status;
+    let baseline_class = baseline.first_failure_class.clone();
+
+    let mut manifest = String::new();
+    manifest.push_str("fixture=local_strict_cmake_backend_matrix_first_failure\n");
+    manifest.push_str(&format!("source_dir={}\n", project_dir.display()));
+    manifest.push_str(&format!("fake_fragilec={}\n", fake_fragilec.display()));
+    manifest.push_str("mode=strict\n");
+    manifest.push_str("backends=libclang,hybrid,libtooling\n");
+    manifest.push_str(&format!(
+        "baseline_backend=libclang baseline_build_status={} baseline_first_failure_class={} baseline_first_failure_e0425_count={}\n",
+        baseline_status, baseline_class, baseline_e0425_count
+    ));
+    for result in &results {
+        let build_status_delta_vs_baseline = result.compile_status - baseline_status;
+        let e0425_delta_vs_baseline =
+            result.first_failure_e0425_count as i64 - baseline_e0425_count as i64;
+        let class_delta_vs_baseline = result.first_failure_class != baseline_class;
+        manifest.push_str(&format!(
+            "backend={} build_status={} first_failure_class={} first_failure_e0425_count={} build_status_delta_vs_baseline={} class_delta_vs_baseline={} e0425_delta_vs_baseline={}\n",
+            result.backend_name,
+            result.compile_status,
+            result.first_failure_class,
+            result.first_failure_e0425_count,
+            build_status_delta_vs_baseline,
+            class_delta_vs_baseline,
+            e0425_delta_vs_baseline
+        ));
+    }
+    fs::write(
+        log_dir.join("strict_cmake_backend_matrix_local_fixture_manifest.txt"),
+        manifest,
+    )
+    .map_err(|e| {
+        format!(
+            "failed to write strict_cmake_backend_matrix_local_fixture_manifest.txt in {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+
+    Ok((log_dir, results))
 }
 
 fn run_local_strict_backend_toggle_e0425_delta_replay_fixture(
@@ -2233,6 +2437,106 @@ fn test_rapidjson_strict_cmake_local_fixture_replays_first_failure_capture() {
         "local fixture forced failure should classify as non-rustc error, got:\n{}",
         first_class
     );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_rapidjson_strict_cmake_backend_matrix_local_fixture_keeps_baseline_deltas() {
+    let root = unique_temp_dir("rapidjson_strict_cmake_backend_matrix_local_fixture");
+    fs::create_dir_all(&root).expect("failed to create strict backend-matrix local fixture root");
+
+    let (log_dir, results) = run_local_strict_cmake_no_tests_backend_matrix_capture_fixture(&root)
+        .expect("failed to run strict backend-matrix local fixture first-failure capture");
+
+    for rel in RAPIDJSON_STRICT_CMAKE_BACKEND_MATRIX_LOCAL_FIXTURE_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected strict backend-matrix local fixture log file {}",
+            log_dir.join(rel).display()
+        );
+    }
+    assert_eq!(
+        results.len(),
+        3,
+        "strict backend-matrix local fixture should produce three backend replay results"
+    );
+
+    let baseline = results
+        .iter()
+        .find(|entry| entry.backend_name == "libclang")
+        .expect("missing strict backend-matrix baseline result for libclang");
+    assert_ne!(
+        baseline.compile_status, 0,
+        "strict backend-matrix local fixture baseline should fail build to exercise first-failure capture"
+    );
+    assert_eq!(
+        baseline.first_failure_class, "non_rustc_error",
+        "strict backend-matrix local fixture baseline should classify forced wrapper failure as non-rustc"
+    );
+
+    let backend_env_pairs: [(&str, &str); 3] = [
+        ("libclang", "libclang"),
+        ("hybrid", "hybrid"),
+        ("libtooling", "libtooling"),
+    ];
+    for (backend_name, backend_env_value) in backend_env_pairs {
+        let backend = results
+            .iter()
+            .find(|entry| entry.backend_name == backend_name)
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing strict backend-matrix local fixture result for {}",
+                    backend_name
+                )
+            });
+        assert_eq!(
+            backend.compile_status, baseline.compile_status,
+            "strict backend-matrix local fixture build status should match baseline for backend {} (logs: {})",
+            backend_name,
+            log_dir.display()
+        );
+        assert_eq!(
+            backend.first_failure_class, baseline.first_failure_class,
+            "strict backend-matrix local fixture first-failure class should match baseline for backend {} (logs: {})",
+            backend_name,
+            log_dir.display()
+        );
+        assert_eq!(
+            backend.first_failure_e0425_count, baseline.first_failure_e0425_count,
+            "strict backend-matrix local fixture E0425 count should match baseline for backend {} (logs: {})",
+            backend_name,
+            log_dir.display()
+        );
+
+        let driver_log =
+            fs::read_to_string(log_dir.join(format!("backend_{backend_name}/fragilec_driver.log")))
+                .unwrap_or_default();
+        assert!(
+            driver_log.contains(format!("parser_backend={backend_env_value}").as_str()),
+            "strict backend-matrix local fixture driver log should capture parser backend {} for backend {}. got:\n{}",
+            backend_env_value,
+            backend_name,
+            driver_log
+        );
+    }
+
+    let manifest =
+        fs::read_to_string(log_dir.join("strict_cmake_backend_matrix_local_fixture_manifest.txt"))
+            .expect("failed to read strict_cmake_backend_matrix_local_fixture_manifest.txt");
+    assert!(
+        manifest.contains("baseline_backend=libclang"),
+        "strict backend-matrix local fixture manifest should record baseline backend, got:\n{}",
+        manifest
+    );
+    for backend_name in ["libclang", "hybrid", "libtooling"] {
+        assert!(
+            manifest.contains(format!("backend={backend_name}").as_str()),
+            "strict backend-matrix local fixture manifest should include backend entry {}, got:\n{}",
+            backend_name,
+            manifest
+        );
+    }
 
     let _ = fs::remove_dir_all(&root);
 }
