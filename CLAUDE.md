@@ -56,6 +56,7 @@ Do not introduce:
 | `fragile-common` | Shared utilities |
 | `fragile-runtime` | Runtime helpers used by generated code |
 | `fragile-ast-exporter` | AST exporter utilities |
+| `fragile-stl` | Hand-written STL stub implementations (string, vector, map, etc.) |
 
 ## Build Commands
 
