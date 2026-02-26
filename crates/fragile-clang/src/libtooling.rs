@@ -785,9 +785,7 @@ fn convert_node_with_depth(
             ClangNodeKind::Unknown("InlineFunctionTemplateDecl".to_string())
         }
 
-        ASTEntryTag::TagClassTemplateDecl => {
-            ClangNodeKind::Unknown("InlineClassTemplateDecl".to_string())
-        }
+        ASTEntryTag::TagClassTemplateDecl => convert_class_template_decl_node(node),
 
         ASTEntryTag::TagNamespaceDecl => convert_namespace_decl_node(node),
 
@@ -795,9 +793,9 @@ fn convert_node_with_depth(
             ClangNodeKind::Unknown("NamespaceRelated".to_string())
         }
 
-        ASTEntryTag::TagTemplateTypeParmDecl
-        | ASTEntryTag::TagNonTypeTemplateParmDecl
-        | ASTEntryTag::TagTemplateTemplateParmDecl => {
+        ASTEntryTag::TagTemplateTypeParmDecl => convert_template_type_param_decl_node(node),
+
+        ASTEntryTag::TagNonTypeTemplateParmDecl | ASTEntryTag::TagTemplateTemplateParmDecl => {
             ClangNodeKind::Unknown("TemplateParam".to_string())
         }
 
@@ -979,6 +977,57 @@ fn convert_field_decl_node(
         access,
         is_static: false,
         bit_field_width: None,
+    }
+}
+
+fn convert_class_template_decl_node(
+    node: &fragile_ast_exporter::clang_ast::AstNode,
+) -> ClangNodeKind {
+    use fragile_ast_exporter::CborValue;
+
+    let name = node.get_string(0).unwrap_or("").to_string();
+    if name.is_empty() {
+        return ClangNodeKind::Unknown("InlineClassTemplateDecl".to_string());
+    }
+
+    let mut template_params = Vec::new();
+    if let Some(CborValue::Array(params)) = node.extras.get(1) {
+        for entry in params {
+            if let CborValue::Text(param) = entry {
+                if !param.is_empty() {
+                    template_params.push(param.clone());
+                }
+            }
+        }
+    }
+
+    let is_class = node.get_bool(2).unwrap_or(false);
+    ClangNodeKind::ClassTemplateDecl {
+        name,
+        template_params,
+        is_class,
+        parameter_pack_indices: Vec::new(),
+        requires_clause: None,
+    }
+}
+
+fn convert_template_type_param_decl_node(
+    node: &fragile_ast_exporter::clang_ast::AstNode,
+) -> ClangNodeKind {
+    let depth = node.get_u64(1).unwrap_or(0) as u32;
+    let index = node.get_u64(2).unwrap_or(0) as u32;
+    let raw_name = node.get_string(0).unwrap_or("").to_string();
+    let name = if raw_name.is_empty() {
+        format!("__fragile_tparam_{}_{}", depth, index)
+    } else {
+        raw_name
+    };
+
+    ClangNodeKind::TemplateTypeParmDecl {
+        name,
+        depth,
+        index,
+        is_pack: node.get_bool(3).unwrap_or(false),
     }
 }
 
@@ -1794,11 +1843,214 @@ fn resolve_type(ctx: &AstContext, type_id: u64) -> Option<CppType> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fragile_ast_exporter::clang_ast::{AstContext, AstNode, SrcSpan};
+    use fragile_ast_exporter::CborValue;
+    use std::collections::HashMap;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn make_node(
+        id: u64,
+        tag: ASTEntryTag,
+        children: Vec<Option<u64>>,
+        extras: Vec<CborValue>,
+    ) -> AstNode {
+        AstNode {
+            id,
+            tag,
+            children,
+            loc: SrcSpan::default(),
+            type_id: None,
+            extras,
+        }
+    }
+
+    fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock must be monotonic")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}_{stamp}"))
+    }
 
     #[test]
     fn test_libtooling_parser_creation() {
         let parser = LibToolingParser::new();
         assert!(parser.compile_commands_dir.is_none());
         assert!(parser.extra_args.is_empty());
+    }
+
+    #[test]
+    fn test_convert_class_template_decl_node_from_exporter_shape() {
+        let node = make_node(
+            1,
+            ASTEntryTag::TagClassTemplateDecl,
+            vec![],
+            vec![
+                CborValue::Text("Box".to_string()),
+                CborValue::Array(vec![CborValue::Text("T".to_string())]),
+                CborValue::Bool(false),
+            ],
+        );
+
+        let kind = convert_class_template_decl_node(&node);
+        match kind {
+            ClangNodeKind::ClassTemplateDecl {
+                name,
+                template_params,
+                is_class,
+                parameter_pack_indices,
+                requires_clause,
+            } => {
+                assert_eq!(name, "Box");
+                assert_eq!(template_params, vec!["T"]);
+                assert!(!is_class);
+                assert!(parameter_pack_indices.is_empty());
+                assert!(requires_clause.is_none());
+            }
+            other => panic!("expected ClassTemplateDecl, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_convert_template_type_param_decl_node_from_exporter_shape() {
+        let node = make_node(
+            2,
+            ASTEntryTag::TagTemplateTypeParmDecl,
+            vec![],
+            vec![
+                CborValue::Text("T".to_string()),
+                CborValue::Integer(0.into()),
+                CborValue::Integer(1.into()),
+                CborValue::Bool(true),
+            ],
+        );
+
+        let kind = convert_template_type_param_decl_node(&node);
+        match kind {
+            ClangNodeKind::TemplateTypeParmDecl {
+                name,
+                depth,
+                index,
+                is_pack,
+            } => {
+                assert_eq!(name, "T");
+                assert_eq!(depth, 0);
+                assert_eq!(index, 1);
+                assert!(is_pack);
+            }
+            other => panic!("expected TemplateTypeParmDecl, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_file_converts_class_template_and_template_param_children() {
+        let log_dir = unique_temp_dir("fragile_libtooling_class_template_children");
+        fs::create_dir_all(&log_dir).expect("failed to create temp dir");
+        let source_path = log_dir.join("class_template_fixture.cpp");
+        fs::write(
+            &source_path,
+            r#"
+template<typename T>
+struct Box {
+    T value;
+};
+"#,
+        )
+        .expect("failed to write fixture source");
+
+        let parser = LibToolingParser::new().with_compile_commands_dir(
+            log_dir
+                .to_str()
+                .expect("temp dir path should be valid UTF-8"),
+        );
+        let ctx = parser
+            .parse_file(&source_path)
+            .expect("libtooling parse should succeed");
+
+        let class_template_node = ctx
+            .ast_nodes
+            .values()
+            .find(|node| node.tag == ASTEntryTag::TagClassTemplateDecl)
+            .expect("expected TagClassTemplateDecl in exported AST");
+        assert_eq!(class_template_node.get_string(0), Some("Box"));
+        assert!(
+            class_template_node.children.iter().any(|c| c.is_some()),
+            "class template should export child links (template params/members)"
+        );
+
+        let converted = convert_to_clang_node(&ctx, class_template_node.id)
+            .expect("class template conversion should succeed");
+        match converted.kind {
+            ClangNodeKind::ClassTemplateDecl {
+                name,
+                template_params,
+                ..
+            } => {
+                assert_eq!(name, "Box");
+                assert_eq!(template_params, vec!["T"]);
+            }
+            other => panic!("expected ClassTemplateDecl conversion, got {:?}", other),
+        }
+        assert!(
+            converted
+                .children
+                .iter()
+                .any(|child| matches!(child.kind, ClangNodeKind::TemplateTypeParmDecl { .. })),
+            "converted class template should include template parameter child nodes"
+        );
+    }
+
+    #[test]
+    fn test_convert_to_clang_node_maps_template_type_param_decl() {
+        let mut ast_nodes = HashMap::new();
+        ast_nodes.insert(
+            10,
+            make_node(
+                10,
+                ASTEntryTag::TagClassTemplateDecl,
+                vec![Some(11)],
+                vec![
+                    CborValue::Text("Box".to_string()),
+                    CborValue::Array(vec![CborValue::Text("T".to_string())]),
+                    CborValue::Bool(false),
+                ],
+            ),
+        );
+        ast_nodes.insert(
+            11,
+            make_node(
+                11,
+                ASTEntryTag::TagTemplateTypeParmDecl,
+                vec![],
+                vec![
+                    CborValue::Text("T".to_string()),
+                    CborValue::Integer(0.into()),
+                    CborValue::Integer(0.into()),
+                    CborValue::Bool(false),
+                ],
+            ),
+        );
+
+        let ctx = AstContext {
+            ast_nodes,
+            type_nodes: HashMap::new(),
+            top_nodes: vec![10],
+            files: vec![],
+        };
+
+        let converted =
+            convert_to_clang_node(&ctx, 10).expect("synthetic class template conversion failed");
+        assert!(matches!(
+            converted.kind,
+            ClangNodeKind::ClassTemplateDecl { .. }
+        ));
+        assert!(
+            converted
+                .children
+                .iter()
+                .any(|child| matches!(child.kind, ClangNodeKind::TemplateTypeParmDecl { .. })),
+            "class template conversion should map template parameter children"
+        );
     }
 }

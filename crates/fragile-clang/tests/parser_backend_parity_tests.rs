@@ -100,6 +100,11 @@ struct Point {
     int y;
 };
 
+template<typename T>
+struct Box {
+    T value;
+};
+
 namespace math {
 int ns_add(int lhs, int rhs) {
     return lhs + rhs;

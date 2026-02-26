@@ -162,6 +162,9 @@ public:
     bool VisitFieldDecl(FieldDecl *FD);
     bool VisitCXXRecordDecl(CXXRecordDecl *RD);
     bool VisitClassTemplateDecl(ClassTemplateDecl *CTD);
+    bool VisitTemplateTypeParmDecl(TemplateTypeParmDecl *TTPD);
+    bool VisitNonTypeTemplateParmDecl(NonTypeTemplateParmDecl *NTPD);
+    bool VisitTemplateTemplateParmDecl(TemplateTemplateParmDecl *TTPD);
     bool VisitClassTemplateSpecializationDecl(ClassTemplateSpecializationDecl *CTSD);
     bool VisitNamespaceDecl(NamespaceDecl *ND);
     bool VisitTypedefDecl(TypedefDecl *TD);
@@ -1137,6 +1140,33 @@ bool ASTExporterVisitor::VisitClassTemplateDecl(ClassTemplateDecl *CTD) {
         return true;
 
     std::vector<const void *> children;
+    auto *params = CTD->getTemplateParameters();
+    for (auto *param : *params) {
+        children.push_back(param);
+    }
+
+    auto *templatedDecl = dyn_cast<CXXRecordDecl>(CTD->getTemplatedDecl());
+    if (templatedDecl && templatedDecl->hasDefinition()) {
+        for (auto *D : templatedDecl->decls()) {
+            if (auto *FD = dyn_cast<FieldDecl>(D)) {
+                children.push_back(FD);
+            } else if (auto *MD = dyn_cast<CXXMethodDecl>(D)) {
+                children.push_back(MD);
+            } else if (auto *CD = dyn_cast<CXXConstructorDecl>(D)) {
+                children.push_back(CD);
+            } else if (auto *DD = dyn_cast<CXXDestructorDecl>(D)) {
+                children.push_back(DD);
+            } else if (auto *InnerRD = dyn_cast<RecordDecl>(D)) {
+                if (InnerRD->isAnonymousStructOrUnion()) {
+                    for (auto *InnerD : InnerRD->decls()) {
+                        if (auto *InnerFD = dyn_cast<FieldDecl>(InnerD)) {
+                            children.push_back(InnerFD);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     encodeEntry(CTD, TagClassTemplateDecl, CTD->getSourceRange(), children,
                 QualType(), [CTD](CborEncoder *enc) {
@@ -1150,6 +1180,65 @@ bool ASTExporterVisitor::VisitClassTemplateDecl(ClassTemplateDecl *CTD) {
                         cbor_encode_string(&paramArray, param->getNameAsString());
                     }
                     cbor_encoder_close_container(enc, &paramArray);
+
+                    auto *templatedDecl = dyn_cast<CXXRecordDecl>(CTD->getTemplatedDecl());
+                    cbor_encode_boolean(enc, templatedDecl && templatedDecl->isClass());
+                });
+
+    return true;
+}
+
+bool ASTExporterVisitor::VisitTemplateTypeParmDecl(TemplateTypeParmDecl *TTPD) {
+    if (!markExported(TTPD))
+        return true;
+
+    std::vector<const void *> children;
+
+    encodeEntry(TTPD, TagTemplateTypeParmDecl, TTPD->getSourceRange(), children,
+                QualType(), [TTPD](CborEncoder *enc) {
+                    cbor_encode_string(enc, TTPD->getNameAsString());
+                    cbor_encode_uint(enc, TTPD->getDepth());
+                    cbor_encode_uint(enc, TTPD->getIndex());
+                    cbor_encode_boolean(enc, TTPD->isParameterPack());
+                });
+
+    return true;
+}
+
+bool ASTExporterVisitor::VisitNonTypeTemplateParmDecl(NonTypeTemplateParmDecl *NTPD) {
+    if (!markExported(NTPD))
+        return true;
+
+    std::vector<const void *> children;
+
+    encodeEntry(NTPD, TagNonTypeTemplateParmDecl, NTPD->getSourceRange(), children,
+                NTPD->getType(), [NTPD](CborEncoder *enc) {
+                    cbor_encode_string(enc, NTPD->getNameAsString());
+                    cbor_encode_uint(enc, NTPD->getDepth());
+                    cbor_encode_uint(enc, NTPD->getPosition());
+                    cbor_encode_boolean(enc, NTPD->isParameterPack());
+                });
+
+    return true;
+}
+
+bool ASTExporterVisitor::VisitTemplateTemplateParmDecl(TemplateTemplateParmDecl *TTPD) {
+    if (!markExported(TTPD))
+        return true;
+
+    std::vector<const void *> children;
+    if (auto *params = TTPD->getTemplateParameters()) {
+        for (auto *param : *params) {
+            children.push_back(param);
+        }
+    }
+
+    encodeEntry(TTPD, TagTemplateTemplateParmDecl, TTPD->getSourceRange(), children,
+                QualType(), [TTPD](CborEncoder *enc) {
+                    cbor_encode_string(enc, TTPD->getNameAsString());
+                    cbor_encode_uint(enc, TTPD->getDepth());
+                    cbor_encode_uint(enc, TTPD->getPosition());
+                    cbor_encode_boolean(enc, TTPD->isParameterPack());
                 });
 
     return true;
