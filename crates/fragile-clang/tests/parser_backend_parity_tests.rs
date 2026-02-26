@@ -23,6 +23,13 @@ const MARKER_NAMESPACE_MATH: &str = "pub mod math";
 const MARKER_NAMESPACE_NS_ADD: &str = "pub extern \"C\" fn ns_add";
 const MARKER_TEMPLATE_FN_IDENTITY_I32: &str = "pub fn identity_i32";
 const MARKER_TEMPLATE_STRUCT_BOX_INT: &str = "pub struct Box_int_";
+const MARKER_TYPEDEF_INTARRAY4: &str = "pub type IntArray4 = [i32; 4]";
+const MARKER_DECLTYPE_SCALAR_FN_SIG: &str =
+    "pub extern \"C\" fn decltype_scalar_identity(v: i32) -> i32";
+const MARKER_CONST_PTR_FN_SIG: &str = "pub extern \"C\" fn read_const_ptr(p: *const i32) -> i32";
+const MARKER_MUT_REF_FN_SIG: &str = "pub extern \"C\" fn bump_ref(mut value: &mut i32) -> i32";
+const MARKER_ARRAY_DECAY_FN_SIG: &str =
+    "pub extern \"C\" fn array_decay_head(data: *mut i32) -> i32";
 
 #[derive(Debug, Clone)]
 struct BackendReplayResult {
@@ -45,6 +52,11 @@ struct BackendReplayResult {
     has_namespace_ns_add: bool,
     has_template_fn_identity_i32: bool,
     has_template_struct_box_int: bool,
+    has_typedef_intarray4: bool,
+    has_decltype_scalar_fn_sig: bool,
+    has_const_ptr_fn_sig: bool,
+    has_mut_ref_fn_sig: bool,
+    has_array_decay_fn_sig: bool,
 }
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {
@@ -93,6 +105,8 @@ fn run_parser_backend_parity_local_fixture() -> Result<(PathBuf, Vec<BackendRepl
         r#"
 typedef unsigned long Count;
 using Distance = int;
+typedef int IntArray4[4];
+using DecltypeScalar = decltype(1);
 
 enum Mode {
     ModeA = 1,
@@ -120,6 +134,23 @@ template int identity<int>(int);
 
 int use_identity() {
     return identity<int>(7);
+}
+
+int read_const_ptr(const int* p) {
+    return *p;
+}
+
+int bump_ref(int& value) {
+    value += 1;
+    return value;
+}
+
+DecltypeScalar decltype_scalar_identity(DecltypeScalar v) {
+    return v + 1;
+}
+
+int array_decay_head(int* data) {
+    return data[0];
 }
 
 namespace math {
@@ -210,6 +241,11 @@ int mul(int x, int y) {
             has_namespace_ns_add: rust_code.contains(MARKER_NAMESPACE_NS_ADD),
             has_template_fn_identity_i32: rust_code.contains(MARKER_TEMPLATE_FN_IDENTITY_I32),
             has_template_struct_box_int: rust_code.contains(MARKER_TEMPLATE_STRUCT_BOX_INT),
+            has_typedef_intarray4: rust_code.contains(MARKER_TYPEDEF_INTARRAY4),
+            has_decltype_scalar_fn_sig: rust_code.contains(MARKER_DECLTYPE_SCALAR_FN_SIG),
+            has_const_ptr_fn_sig: rust_code.contains(MARKER_CONST_PTR_FN_SIG),
+            has_mut_ref_fn_sig: rust_code.contains(MARKER_MUT_REF_FN_SIG),
+            has_array_decay_fn_sig: rust_code.contains(MARKER_ARRAY_DECAY_FN_SIG),
         });
     }
 
@@ -220,7 +256,7 @@ int mul(int x, int y) {
     );
     for result in &results {
         manifest.push_str(&format!(
-            "backend={} rust_path={} rustc_status={} markers=fn_add:{},fn_mul:{},ret_add:{},ret_mul:{},typedef_count:{},alias_distance:{},enum_mode:{},enum_mode_a:{},enum_mode_b:{},struct_point:{},struct_point_x:{},struct_point_y:{},namespace_math:{},namespace_ns_add:{},template_fn_identity_i32:{},template_struct_box_int:{}\n",
+            "backend={} rust_path={} rustc_status={} markers=fn_add:{},fn_mul:{},ret_add:{},ret_mul:{},typedef_count:{},alias_distance:{},enum_mode:{},enum_mode_a:{},enum_mode_b:{},struct_point:{},struct_point_x:{},struct_point_y:{},namespace_math:{},namespace_ns_add:{},template_fn_identity_i32:{},template_struct_box_int:{},typedef_intarray4:{},decltype_scalar_fn_sig:{},const_ptr_fn_sig:{},mut_ref_fn_sig:{},array_decay_fn_sig:{}\n",
             result.backend_name,
             result.rust_path.display(),
             result.rustc_status,
@@ -239,7 +275,12 @@ int mul(int x, int y) {
             result.has_namespace_math,
             result.has_namespace_ns_add,
             result.has_template_fn_identity_i32,
-            result.has_template_struct_box_int
+            result.has_template_struct_box_int,
+            result.has_typedef_intarray4,
+            result.has_decltype_scalar_fn_sig,
+            result.has_const_ptr_fn_sig,
+            result.has_mut_ref_fn_sig,
+            result.has_array_decay_fn_sig
         ));
     }
     fs::write(log_dir.join("parser_backend_parity_manifest.txt"), manifest).map_err(|e| {
@@ -300,7 +341,12 @@ fn test_parser_backend_parity_local_fixture_replay() {
             && reference.has_namespace_math
             && reference.has_namespace_ns_add
             && reference.has_template_fn_identity_i32
-            && reference.has_template_struct_box_int,
+            && reference.has_template_struct_box_int
+            && reference.has_typedef_intarray4
+            && reference.has_decltype_scalar_fn_sig
+            && reference.has_const_ptr_fn_sig
+            && reference.has_mut_ref_fn_sig
+            && reference.has_array_decay_fn_sig,
         "reference backend marker-set should contain expected function/return markers; logs: {}",
         log_dir.display()
     );
@@ -326,7 +372,12 @@ fn test_parser_backend_parity_local_fixture_replay() {
             hybrid.has_namespace_math,
             hybrid.has_namespace_ns_add,
             hybrid.has_template_fn_identity_i32,
-            hybrid.has_template_struct_box_int
+            hybrid.has_template_struct_box_int,
+            hybrid.has_typedef_intarray4,
+            hybrid.has_decltype_scalar_fn_sig,
+            hybrid.has_const_ptr_fn_sig,
+            hybrid.has_mut_ref_fn_sig,
+            hybrid.has_array_decay_fn_sig
         ],
         [
             reference.has_fn_add,
@@ -344,7 +395,12 @@ fn test_parser_backend_parity_local_fixture_replay() {
             reference.has_namespace_math,
             reference.has_namespace_ns_add,
             reference.has_template_fn_identity_i32,
-            reference.has_template_struct_box_int
+            reference.has_template_struct_box_int,
+            reference.has_typedef_intarray4,
+            reference.has_decltype_scalar_fn_sig,
+            reference.has_const_ptr_fn_sig,
+            reference.has_mut_ref_fn_sig,
+            reference.has_array_decay_fn_sig
         ],
         "hybrid backend should currently match libclang marker-set parity; logs: {}",
         log_dir.display()
@@ -371,7 +427,12 @@ fn test_parser_backend_parity_local_fixture_replay() {
             libtooling.has_namespace_math,
             libtooling.has_namespace_ns_add,
             libtooling.has_template_fn_identity_i32,
-            libtooling.has_template_struct_box_int
+            libtooling.has_template_struct_box_int,
+            libtooling.has_typedef_intarray4,
+            libtooling.has_decltype_scalar_fn_sig,
+            libtooling.has_const_ptr_fn_sig,
+            libtooling.has_mut_ref_fn_sig,
+            libtooling.has_array_decay_fn_sig
         ],
         [
             reference.has_fn_add,
@@ -389,7 +450,12 @@ fn test_parser_backend_parity_local_fixture_replay() {
             reference.has_namespace_math,
             reference.has_namespace_ns_add,
             reference.has_template_fn_identity_i32,
-            reference.has_template_struct_box_int
+            reference.has_template_struct_box_int,
+            reference.has_typedef_intarray4,
+            reference.has_decltype_scalar_fn_sig,
+            reference.has_const_ptr_fn_sig,
+            reference.has_mut_ref_fn_sig,
+            reference.has_array_decay_fn_sig
         ],
         "libtooling backend should match libclang marker-set parity for this fixture; logs: {}",
         log_dir.display()
