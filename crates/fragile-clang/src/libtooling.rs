@@ -7,7 +7,7 @@
 //! The primary use case is to get the fully instantiated method bodies of
 //! class templates like std::vector<T> with concrete types substituted.
 
-use crate::ast::{ClangNode, ClangNodeKind, SourceLocation};
+use crate::ast::{AccessSpecifier, ClangNode, ClangNodeKind, SourceLocation};
 use crate::types::CppType;
 use fragile_ast_exporter::{clang_ast::AstContext, export_ast, ASTEntryTag};
 use miette::{miette, Result};
@@ -645,16 +645,7 @@ fn convert_node_with_depth(
         }
 
         // Declaration nodes that appear within method bodies
-        ASTEntryTag::TagFieldDecl => {
-            // Field declarations - we treat these as DeclRefExpr for transpilation
-            let name = node.get_string(0).unwrap_or("").to_string();
-            let ty = extract_type_from_node(ctx, node);
-            ClangNodeKind::DeclRefExpr {
-                name,
-                ty,
-                namespace_path: vec![],
-            }
-        }
+        ASTEntryTag::TagFieldDecl => convert_field_decl_node(ctx, node),
 
         ASTEntryTag::TagCXXMethodDecl => {
             // Method declarations within bodies - skip (these are inline definitions)
@@ -763,8 +754,11 @@ fn convert_node_with_depth(
         }
 
         // Record/class related declarations that might appear in bodies
-        ASTEntryTag::TagCXXRecordDecl | ASTEntryTag::TagClassTemplateSpecializationDecl => {
-            // Inline class/struct definition within method - skip
+        ASTEntryTag::TagCXXRecordDecl => convert_record_decl_node(ctx, node),
+
+        ASTEntryTag::TagClassTemplateSpecializationDecl => {
+            // Class template specialization conversion still uses dedicated
+            // specialization extraction paths for strict active surfaces.
             ClangNodeKind::Unknown("InlineClassDecl".to_string())
         }
 
@@ -902,6 +896,100 @@ fn convert_function_decl_node(
         is_noexcept: false,
         is_coroutine: false,
         coroutine_info: None,
+    }
+}
+
+fn convert_record_decl_node(
+    ctx: &AstContext,
+    node: &fragile_ast_exporter::clang_ast::AstNode,
+) -> ClangNodeKind {
+    let name = node.get_string(0).unwrap_or("").to_string();
+    if name.is_empty() {
+        return ClangNodeKind::Unknown("InlineClassDecl".to_string());
+    }
+
+    let is_struct = node.get_bool(1).unwrap_or(false);
+    let is_class = node.get_bool(2).unwrap_or(false);
+    let is_union = node.get_bool(3).unwrap_or(false);
+    let is_definition = node.get_bool(4).unwrap_or(false);
+
+    if is_union {
+        let mut fields = Vec::new();
+        for child_id_opt in &node.children {
+            let Some(child_id) = child_id_opt else {
+                continue;
+            };
+            let Some(child_node) = ctx.ast_nodes.get(child_id) else {
+                continue;
+            };
+            if child_node.tag != ASTEntryTag::TagFieldDecl {
+                continue;
+            }
+            let field_name = child_node.get_string(0).unwrap_or("").to_string();
+            let field_ty = child_node
+                .type_id
+                .and_then(|type_id| resolve_type(ctx, type_id))
+                .unwrap_or_else(|| extract_type_from_node(ctx, child_node));
+            fields.push((field_name, field_ty));
+        }
+
+        return ClangNodeKind::UnionDecl { name, fields };
+    }
+
+    let mut fields = Vec::new();
+    for child_id_opt in &node.children {
+        let Some(child_id) = child_id_opt else {
+            continue;
+        };
+        let Some(child_node) = ctx.ast_nodes.get(child_id) else {
+            continue;
+        };
+        if child_node.tag != ASTEntryTag::TagFieldDecl {
+            continue;
+        }
+        let field_name = child_node.get_string(0).unwrap_or("").to_string();
+        let field_ty = child_node
+            .type_id
+            .and_then(|type_id| resolve_type(ctx, type_id))
+            .unwrap_or_else(|| extract_type_from_node(ctx, child_node));
+        fields.push((field_name, field_ty));
+    }
+
+    ClangNodeKind::RecordDecl {
+        name,
+        is_class: if is_struct { false } else { is_class },
+        is_definition,
+        fields,
+    }
+}
+
+fn convert_field_decl_node(
+    ctx: &AstContext,
+    node: &fragile_ast_exporter::clang_ast::AstNode,
+) -> ClangNodeKind {
+    let name = node.get_string(0).unwrap_or("").to_string();
+    let ty = node
+        .type_id
+        .and_then(|type_id| resolve_type(ctx, type_id))
+        .unwrap_or_else(|| extract_type_from_node(ctx, node));
+    let access = decode_access_specifier(node.get_int(2));
+    ClangNodeKind::FieldDecl {
+        name,
+        ty,
+        access,
+        is_static: false,
+        bit_field_width: None,
+    }
+}
+
+fn decode_access_specifier(raw: Option<i64>) -> AccessSpecifier {
+    match raw {
+        // Accept both clang::AccessSpecifier and CX_CXXAccessSpecifier-like
+        // numeric encodings; default permissive for record field emission.
+        Some(0) | Some(1) => AccessSpecifier::Public,
+        Some(2) => AccessSpecifier::Protected,
+        Some(3) => AccessSpecifier::Private,
+        _ => AccessSpecifier::Public,
     }
 }
 

@@ -16,6 +16,7 @@ const MARKER_ALIAS_DISTANCE: &str = "pub type Distance =";
 const MARKER_ENUM_MODE: &str = "pub enum Mode";
 const MARKER_ENUM_MODE_A: &str = "ModeA = 1";
 const MARKER_ENUM_MODE_B: &str = "ModeB = 2";
+const MARKER_STRUCT_POINT: &str = "pub struct Point";
 
 #[derive(Debug, Clone)]
 struct BackendReplayResult {
@@ -31,6 +32,7 @@ struct BackendReplayResult {
     has_enum_mode: bool,
     has_enum_mode_a: bool,
     has_enum_mode_b: bool,
+    has_struct_point: bool,
 }
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {
@@ -83,6 +85,11 @@ using Distance = int;
 enum Mode {
     ModeA = 1,
     ModeB = 2,
+};
+
+struct Point {
+    int x;
+    int y;
 };
 
 int add(int a, int b) {
@@ -160,6 +167,7 @@ int mul(int x, int y) {
             has_enum_mode: rust_code.contains(MARKER_ENUM_MODE),
             has_enum_mode_a: rust_code.contains(MARKER_ENUM_MODE_A),
             has_enum_mode_b: rust_code.contains(MARKER_ENUM_MODE_B),
+            has_struct_point: rust_code.contains(MARKER_STRUCT_POINT),
         });
     }
 
@@ -170,7 +178,7 @@ int mul(int x, int y) {
     );
     for result in &results {
         manifest.push_str(&format!(
-            "backend={} rust_path={} rustc_status={} markers=fn_add:{},fn_mul:{},ret_add:{},ret_mul:{},typedef_count:{},alias_distance:{},enum_mode:{},enum_mode_a:{},enum_mode_b:{}\n",
+            "backend={} rust_path={} rustc_status={} markers=fn_add:{},fn_mul:{},ret_add:{},ret_mul:{},typedef_count:{},alias_distance:{},enum_mode:{},enum_mode_a:{},enum_mode_b:{},struct_point:{}\n",
             result.backend_name,
             result.rust_path.display(),
             result.rustc_status,
@@ -182,7 +190,8 @@ int mul(int x, int y) {
             result.has_alias_distance,
             result.has_enum_mode,
             result.has_enum_mode_a,
-            result.has_enum_mode_b
+            result.has_enum_mode_b,
+            result.has_struct_point
         ));
     }
     fs::write(log_dir.join("parser_backend_parity_manifest.txt"), manifest).map_err(|e| {
@@ -236,7 +245,8 @@ fn test_parser_backend_parity_local_fixture_replay() {
             && reference.has_alias_distance
             && reference.has_enum_mode
             && reference.has_enum_mode_a
-            && reference.has_enum_mode_b,
+            && reference.has_enum_mode_b
+            && reference.has_struct_point,
         "reference backend marker-set should contain expected function/return markers; logs: {}",
         log_dir.display()
     );
@@ -255,7 +265,8 @@ fn test_parser_backend_parity_local_fixture_replay() {
             hybrid.has_alias_distance,
             hybrid.has_enum_mode,
             hybrid.has_enum_mode_a,
-            hybrid.has_enum_mode_b
+            hybrid.has_enum_mode_b,
+            hybrid.has_struct_point
         ),
         (
             reference.has_fn_add,
@@ -266,7 +277,8 @@ fn test_parser_backend_parity_local_fixture_replay() {
             reference.has_alias_distance,
             reference.has_enum_mode,
             reference.has_enum_mode_a,
-            reference.has_enum_mode_b
+            reference.has_enum_mode_b,
+            reference.has_struct_point
         ),
         "hybrid backend should currently match libclang marker-set parity; logs: {}",
         log_dir.display()
@@ -286,7 +298,8 @@ fn test_parser_backend_parity_local_fixture_replay() {
             libtooling.has_alias_distance,
             libtooling.has_enum_mode,
             libtooling.has_enum_mode_a,
-            libtooling.has_enum_mode_b
+            libtooling.has_enum_mode_b,
+            libtooling.has_struct_point
         ),
         (
             reference.has_fn_add,
@@ -297,7 +310,8 @@ fn test_parser_backend_parity_local_fixture_replay() {
             reference.has_alias_distance,
             reference.has_enum_mode,
             reference.has_enum_mode_a,
-            reference.has_enum_mode_b
+            reference.has_enum_mode_b,
+            reference.has_struct_point
         ),
         "libtooling backend should match libclang marker-set parity for this fixture; logs: {}",
         log_dir.display()
