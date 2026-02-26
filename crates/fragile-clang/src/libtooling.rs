@@ -757,9 +757,7 @@ fn convert_node_with_depth(
         ASTEntryTag::TagCXXRecordDecl => convert_record_decl_node(ctx, node),
 
         ASTEntryTag::TagClassTemplateSpecializationDecl => {
-            // Class template specialization conversion still uses dedicated
-            // specialization extraction paths for strict active surfaces.
-            ClangNodeKind::Unknown("InlineClassDecl".to_string())
+            convert_class_template_specialization_decl_node(ctx, node)
         }
 
         ASTEntryTag::TagTypedefDecl => convert_typedef_decl_node(ctx, node),
@@ -1117,6 +1115,58 @@ fn convert_class_template_decl_node(
         is_class,
         parameter_pack_indices: Vec::new(),
         requires_clause: None,
+    }
+}
+
+fn convert_class_template_specialization_decl_node(
+    ctx: &AstContext,
+    node: &fragile_ast_exporter::clang_ast::AstNode,
+) -> ClangNodeKind {
+    let raw_name = node.get_string(1).unwrap_or("").to_string();
+    let name = if raw_name.is_empty() {
+        node.get_string(0).unwrap_or("").to_string()
+    } else {
+        raw_name
+    };
+    if name.is_empty() {
+        return ClangNodeKind::Unknown("InlineClassTemplateSpecializationDecl".to_string());
+    }
+
+    let mut fields = Vec::new();
+    let mut has_member_children = false;
+    for child_id_opt in &node.children {
+        let Some(child_id) = child_id_opt else {
+            continue;
+        };
+        let Some(child_node) = ctx.ast_nodes.get(child_id) else {
+            continue;
+        };
+        match child_node.tag {
+            ASTEntryTag::TagFieldDecl => {
+                let field_name = child_node.get_string(0).unwrap_or("").to_string();
+                let field_ty = child_node
+                    .type_id
+                    .and_then(|type_id| resolve_type(ctx, type_id))
+                    .unwrap_or_else(|| extract_type_from_node(ctx, child_node));
+                fields.push((field_name, field_ty));
+                has_member_children = true;
+            }
+            ASTEntryTag::TagCXXMethodDecl
+            | ASTEntryTag::TagCXXConstructorDecl
+            | ASTEntryTag::TagCXXDestructorDecl => {
+                has_member_children = true;
+            }
+            _ => {}
+        }
+    }
+
+    ClangNodeKind::RecordDecl {
+        name,
+        // Constrained fallback until class/struct identity is exported directly
+        // for template specializations.
+        is_class: false,
+        is_definition: has_member_children,
+        fields,
     }
 }
 
@@ -1963,6 +2013,7 @@ mod tests {
     use fragile_ast_exporter::CborValue;
     use std::collections::HashMap;
     use std::fs;
+    use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn make_node(
@@ -1987,6 +2038,11 @@ mod tests {
             .expect("clock must be monotonic")
             .as_nanos();
         std::env::temp_dir().join(format!("{prefix}_{stamp}"))
+    }
+
+    fn libtooling_parse_test_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
     }
 
     #[test]
@@ -2057,6 +2113,73 @@ mod tests {
             }
             other => panic!("expected TemplateTypeParmDecl, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_convert_to_clang_node_maps_class_template_specialization_decl() {
+        let mut ast_nodes = HashMap::new();
+        ast_nodes.insert(
+            40,
+            make_node(
+                40,
+                ASTEntryTag::TagClassTemplateSpecializationDecl,
+                vec![Some(41)],
+                vec![
+                    CborValue::Text("Box".to_string()),
+                    CborValue::Text("Box<int>".to_string()),
+                    CborValue::Array(vec![CborValue::Array(vec![
+                        CborValue::Integer(0.into()),
+                        CborValue::Text("int".to_string()),
+                    ])]),
+                    CborValue::Bool(true),
+                    CborValue::Bool(false),
+                ],
+            ),
+        );
+        ast_nodes.insert(
+            41,
+            make_node(
+                41,
+                ASTEntryTag::TagFieldDecl,
+                vec![],
+                vec![
+                    CborValue::Text("value".to_string()),
+                    CborValue::Bool(false),
+                    CborValue::Integer(1.into()),
+                ],
+            ),
+        );
+
+        let ctx = AstContext {
+            ast_nodes,
+            type_nodes: HashMap::new(),
+            top_nodes: vec![40],
+            files: vec![],
+        };
+
+        let converted = convert_to_clang_node(&ctx, 40)
+            .expect("synthetic class template specialization conversion failed");
+        match &converted.kind {
+            ClangNodeKind::RecordDecl {
+                name,
+                is_definition,
+                ..
+            } => {
+                assert_eq!(name, "Box<int>");
+                assert!(*is_definition);
+            }
+            other => panic!(
+                "expected class template specialization to map to RecordDecl, got {:?}",
+                other
+            ),
+        }
+        assert!(
+            converted
+                .children
+                .iter()
+                .any(|child| matches!(child.kind, ClangNodeKind::FieldDecl { .. })),
+            "converted class template specialization should include field child linkage"
+        );
     }
 
     #[test]
@@ -2255,6 +2378,9 @@ mod tests {
 
     #[test]
     fn test_parse_file_converts_function_template_decl_and_children() {
+        let _guard = libtooling_parse_test_lock()
+            .lock()
+            .expect("parse-test lock should not be poisoned");
         let log_dir = unique_temp_dir("fragile_libtooling_function_template_children");
         fs::create_dir_all(&log_dir).expect("failed to create temp dir");
         let source_path = log_dir.join("function_template_fixture.cpp");
@@ -2321,6 +2447,9 @@ int use_identity() {
 
     #[test]
     fn test_parse_file_converts_non_type_and_template_template_params_with_fallback() {
+        let _guard = libtooling_parse_test_lock()
+            .lock()
+            .expect("parse-test lock should not be poisoned");
         let log_dir = unique_temp_dir("fragile_libtooling_template_param_fallback");
         fs::create_dir_all(&log_dir).expect("failed to create temp dir");
         let source_path = log_dir.join("template_param_fallback_fixture.cpp");
@@ -2402,7 +2531,89 @@ int use_passthrough() {
     }
 
     #[test]
+    fn test_parse_file_converts_class_template_specialization_decl_and_children() {
+        let _guard = libtooling_parse_test_lock()
+            .lock()
+            .expect("parse-test lock should not be poisoned");
+        let log_dir = unique_temp_dir("fragile_libtooling_class_template_specialization");
+        fs::create_dir_all(&log_dir).expect("failed to create temp dir");
+        let source_path = log_dir.join("class_template_specialization_fixture.cpp");
+        fs::write(
+            &source_path,
+            r#"
+template<typename T>
+struct Box {
+    T value;
+};
+
+int use_box() {
+    Box<int> b{7};
+    return b.value;
+}
+"#,
+        )
+        .expect("failed to write fixture source");
+
+        let parser = LibToolingParser::new().with_compile_commands_dir(
+            log_dir
+                .to_str()
+                .expect("temp dir path should be valid UTF-8"),
+        );
+        let ctx = parser
+            .parse_file(&source_path)
+            .expect("libtooling parse should succeed");
+
+        let specialization_node = ctx
+            .ast_nodes
+            .values()
+            .find(|node| {
+                node.tag == ASTEntryTag::TagClassTemplateSpecializationDecl
+                    && node.get_string(0) == Some("Box")
+            })
+            .expect("expected TagClassTemplateSpecializationDecl in exported AST");
+        assert!(
+            specialization_node.children.iter().any(|c| c.is_some()),
+            "specialization should export member child links"
+        );
+
+        let converted = convert_to_clang_node(&ctx, specialization_node.id)
+            .expect("class template specialization conversion should succeed");
+        match &converted.kind {
+            ClangNodeKind::RecordDecl {
+                name,
+                is_definition,
+                fields,
+                ..
+            } => {
+                assert!(
+                    name.contains("Box"),
+                    "specialization record name should preserve specialization identity"
+                );
+                assert!(
+                    *is_definition,
+                    "specialization conversion should preserve definition shape"
+                );
+                assert!(
+                    !fields.is_empty(),
+                    "specialization conversion should preserve field list"
+                );
+            }
+            other => panic!("expected RecordDecl conversion, got {:?}", other),
+        }
+        assert!(
+            converted
+                .children
+                .iter()
+                .any(|child| matches!(child.kind, ClangNodeKind::FieldDecl { .. })),
+            "converted specialization should include concrete field children"
+        );
+    }
+
+    #[test]
     fn test_parse_file_converts_class_template_and_template_param_children() {
+        let _guard = libtooling_parse_test_lock()
+            .lock()
+            .expect("parse-test lock should not be poisoned");
         let log_dir = unique_temp_dir("fragile_libtooling_class_template_children");
         fs::create_dir_all(&log_dir).expect("failed to create temp dir");
         let source_path = log_dir.join("class_template_fixture.cpp");
