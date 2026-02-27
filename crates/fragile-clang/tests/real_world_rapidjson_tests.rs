@@ -23,6 +23,8 @@ const RAPIDJSON_FRAGILEC_DRIVER_BASELINE_DIR: &str =
     "/tmp/fragile_real_world_rapidjson_fragilec_driver_baseline";
 const RAPIDJSON_STRICT_CAPITALIZE_CAPTURE_DIR: &str =
     "/tmp/fragile_real_world_rapidjson_strict_capitalize_capture";
+const RAPIDJSON_STRICT_CAPITALIZE_BACKEND_SURFACE_DELTA_DIR: &str =
+    "/tmp/fragile_real_world_rapidjson_strict_capitalize_backend_surface_delta";
 const RAPIDJSON_STRICT_FILTERKEYDOM_CAPTURE_DIR: &str =
     "/tmp/fragile_real_world_rapidjson_strict_filterkeydom_capture";
 const RAPIDJSON_STRICT_CMAKE_NO_TESTS_BUILD_DIR: &str =
@@ -30,6 +32,7 @@ const RAPIDJSON_STRICT_CMAKE_NO_TESTS_BUILD_DIR: &str =
 const RAPIDJSON_STRICT_CMAKE_NO_TESTS_BACKEND_MATRIX_DIR: &str =
     "/tmp/fragile_real_world_rapidjson_strict_cmake_no_tests_backend_matrix";
 const RAPIDJSON_STRICT_CMAKE_BACKEND_MATRIX_BUILD_TIMEOUT_SECS: u64 = 1200;
+const RAPIDJSON_STRICT_CAPITALIZE_BACKEND_SURFACE_DELTA_TIMEOUT_SECS: u64 = 180;
 const COMMAND_TIMEOUT_STATUS: i32 = 124;
 const RAPIDJSON_REQUIRED_PATHS: &[&str] = &[
     "include/rapidjson/document.h",
@@ -98,6 +101,12 @@ const RAPIDJSON_FILTERKEYDOM_PLACEHOLDER_API_HOLE_MARKERS: &[&str] = &[
     "no method named `Populate` found for struct `GenericDocument_UTF8_`",
     "no method named `Accept` found for struct `GenericDocument_UTF8_`",
 ];
+const RAPIDJSON_GENERATED_SURFACE_PLACEHOLDER_MARKER: &str = "/// Placeholder for C++";
+const RAPIDJSON_GENERATED_SURFACE_RAPIDJSON_PLACEHOLDER_MARKER: &str =
+    "/// Placeholder for C++ `rapidjson::";
+const RAPIDJSON_GENERATED_SURFACE_C_VOID_ALIAS_MARKER: &str = "= std::ffi::c_void;";
+const RAPIDJSON_GENERATED_SURFACE_PARSE_UNSPECIFIC_MARKER: &str =
+    "kParseErrorUnspecificSyntaxError";
 const RAPIDJSON_NATIVE_LOG_FILES: &[&str] = &[
     "compile_condense.status",
     "compile_condense.stdout",
@@ -251,6 +260,23 @@ const RAPIDJSON_STRICT_CAPITALIZE_CAPTURE_LOG_FILES: &[&str] = &[
     "first_failing_compile_stderr.txt",
     "first_failing_compile_class.txt",
     "strict_capitalize_manifest.txt",
+];
+const RAPIDJSON_STRICT_CAPITALIZE_BACKEND_SURFACE_DELTA_LOG_FILES: &[&str] = &[
+    "strict_capitalize_backend_surface_delta_manifest.txt",
+    "backend_libclang/compile_capitalize.status",
+    "backend_libclang/compile_capitalize.stdout",
+    "backend_libclang/compile_capitalize.stderr",
+    "backend_libclang/fragilec_driver.log",
+    "backend_libclang/first_failing_compile_command.txt",
+    "backend_libclang/first_failing_compile_stderr.txt",
+    "backend_libclang/first_failing_compile_class.txt",
+    "backend_libtooling/compile_capitalize.status",
+    "backend_libtooling/compile_capitalize.stdout",
+    "backend_libtooling/compile_capitalize.stderr",
+    "backend_libtooling/fragilec_driver.log",
+    "backend_libtooling/first_failing_compile_command.txt",
+    "backend_libtooling/first_failing_compile_stderr.txt",
+    "backend_libtooling/first_failing_compile_class.txt",
 ];
 const RAPIDJSON_STRICT_FILTERKEYDOM_CAPTURE_LOG_FILES: &[&str] = &[
     "compile_filterkeydom.status",
@@ -515,6 +541,10 @@ fn strict_cmake_backend_matrix_build_timeout() -> Duration {
     Duration::from_secs(RAPIDJSON_STRICT_CMAKE_BACKEND_MATRIX_BUILD_TIMEOUT_SECS)
 }
 
+fn strict_capitalize_backend_surface_delta_compile_timeout() -> Duration {
+    Duration::from_secs(RAPIDJSON_STRICT_CAPITALIZE_BACKEND_SURFACE_DELTA_TIMEOUT_SECS)
+}
+
 fn run_command_with_timeout(
     command: &mut Command,
     timeout: Duration,
@@ -538,9 +568,9 @@ fn run_command_with_timeout(
 
         if start.elapsed() >= timeout {
             let _ = child.kill();
-            let mut output = child
-                .wait_with_output()
-                .map_err(|e| format!("failed to collect timed-out output for {}: {}", context, e))?;
+            let mut output = child.wait_with_output().map_err(|e| {
+                format!("failed to collect timed-out output for {}: {}", context, e)
+            })?;
             if !output.stderr.is_empty() && !output.stderr.ends_with(b"\n") {
                 output.stderr.push(b'\n');
             }
@@ -627,6 +657,27 @@ struct StrictCmakeBackendReplayResult {
     first_failure_e0425_count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GeneratedSurfaceInventory {
+    line_count: usize,
+    placeholder_count: usize,
+    rapidjson_placeholder_count: usize,
+    c_void_alias_count: usize,
+    parse_unspecific_syntax_error_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StrictCapitalizeBackendSurfaceReplayResult {
+    backend_name: &'static str,
+    compile_status: i32,
+    compile_timed_out: bool,
+    first_failure_class: String,
+    first_failure_e0425_count: usize,
+    sidecar_path: PathBuf,
+    sidecar_exists: bool,
+    generated_surface_inventory: Option<GeneratedSurfaceInventory>,
+}
+
 fn parse_fragilec_driver_invocations(driver_log: &str) -> Vec<FragilecDriverInvocation> {
     let mut invocations = Vec::new();
     let mut current_cwd: Option<String> = None;
@@ -697,6 +748,36 @@ fn classify_first_failing_compile_stderr(first_stderr: &str) -> &'static str {
 
 fn count_error_e0425_occurrences(text: &str) -> usize {
     text.match_indices("error[E0425]").count()
+}
+
+fn collect_generated_surface_inventory(generated_rs: &str) -> GeneratedSurfaceInventory {
+    GeneratedSurfaceInventory {
+        line_count: generated_rs.lines().count(),
+        placeholder_count: generated_rs
+            .match_indices(RAPIDJSON_GENERATED_SURFACE_PLACEHOLDER_MARKER)
+            .count(),
+        rapidjson_placeholder_count: generated_rs
+            .match_indices(RAPIDJSON_GENERATED_SURFACE_RAPIDJSON_PLACEHOLDER_MARKER)
+            .count(),
+        c_void_alias_count: generated_rs
+            .match_indices(RAPIDJSON_GENERATED_SURFACE_C_VOID_ALIAS_MARKER)
+            .count(),
+        parse_unspecific_syntax_error_count: generated_rs
+            .match_indices(RAPIDJSON_GENERATED_SURFACE_PARSE_UNSPECIFIC_MARKER)
+            .count(),
+    }
+}
+
+fn format_optional_usize(value: Option<usize>) -> String {
+    value
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "na".to_string())
+}
+
+fn format_optional_i64(value: Option<i64>) -> String {
+    value
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "na".to_string())
 }
 
 fn write_first_failing_compile_capture_files(
@@ -1581,56 +1662,56 @@ fn run_rapidjson_strict_cmake_no_tests_backend_matrix_capture(
                     String::from_utf8_lossy(&build_output.stdout).to_string(),
                     String::from_utf8_lossy(&build_output.stderr).to_string(),
                 )
-        } else {
-            let configure_stderr = String::from_utf8_lossy(&configure_output.stderr);
-            let configure_stdout = String::from_utf8_lossy(&configure_output.stdout);
-            let synthetic_build_stderr = if !configure_stderr.trim().is_empty() {
-                format!(
-                    "cmake configure failed for backend {} with status {}\n{}",
-                    backend_name,
-                    configure_status,
-                    configure_stderr.trim()
-                )
-            } else if !configure_stdout.trim().is_empty() {
-                format!(
-                    "cmake configure failed for backend {} with status {}\n{}",
-                    backend_name,
-                    configure_status,
-                    configure_stdout.trim()
-                )
             } else {
-                format!(
-                    "cmake configure failed for backend {} with status {} and no output",
-                    backend_name, configure_status
+                let configure_stderr = String::from_utf8_lossy(&configure_output.stderr);
+                let configure_stdout = String::from_utf8_lossy(&configure_output.stdout);
+                let synthetic_build_stderr = if !configure_stderr.trim().is_empty() {
+                    format!(
+                        "cmake configure failed for backend {} with status {}\n{}",
+                        backend_name,
+                        configure_status,
+                        configure_stderr.trim()
+                    )
+                } else if !configure_stdout.trim().is_empty() {
+                    format!(
+                        "cmake configure failed for backend {} with status {}\n{}",
+                        backend_name,
+                        configure_status,
+                        configure_stdout.trim()
+                    )
+                } else {
+                    format!(
+                        "cmake configure failed for backend {} with status {} and no output",
+                        backend_name, configure_status
+                    )
+                };
+                fs::write(backend_log_dir.join("cmake_build.status"), "-1\n").map_err(|e| {
+                    format!(
+                        "failed to write synthetic cmake_build.status in {}: {}",
+                        backend_log_dir.display(),
+                        e
+                    )
+                })?;
+                fs::write(backend_log_dir.join("cmake_build.stdout"), "").map_err(|e| {
+                    format!(
+                        "failed to write synthetic cmake_build.stdout in {}: {}",
+                        backend_log_dir.display(),
+                        e
+                    )
+                })?;
+                fs::write(
+                    backend_log_dir.join("cmake_build.stderr"),
+                    format!("{}\n", synthetic_build_stderr),
                 )
+                .map_err(|e| {
+                    format!(
+                        "failed to write synthetic cmake_build.stderr in {}: {}",
+                        backend_log_dir.display(),
+                        e
+                    )
+                })?;
+                (-1, false, String::new(), synthetic_build_stderr)
             };
-            fs::write(backend_log_dir.join("cmake_build.status"), "-1\n").map_err(|e| {
-                format!(
-                    "failed to write synthetic cmake_build.status in {}: {}",
-                    backend_log_dir.display(),
-                    e
-                )
-            })?;
-            fs::write(backend_log_dir.join("cmake_build.stdout"), "").map_err(|e| {
-                format!(
-                    "failed to write synthetic cmake_build.stdout in {}: {}",
-                    backend_log_dir.display(),
-                    e
-                )
-            })?;
-            fs::write(
-                backend_log_dir.join("cmake_build.stderr"),
-                format!("{}\n", synthetic_build_stderr),
-            )
-            .map_err(|e| {
-                format!(
-                    "failed to write synthetic cmake_build.stderr in {}: {}",
-                    backend_log_dir.display(),
-                    e
-                )
-            })?;
-            (-1, false, String::new(), synthetic_build_stderr)
-        };
 
         let driver_log_content = fs::read_to_string(&driver_log).map_err(|e| {
             format!(
@@ -1683,10 +1764,7 @@ fn run_rapidjson_strict_cmake_no_tests_backend_matrix_capture(
     manifest.push_str(&format!("fragilec={}\n", fragilec.display()));
     manifest.push_str("mode=strict\n");
     manifest.push_str(&format!("run_root={}\n", baseline_root.display()));
-    manifest.push_str(&format!(
-        "build_timeout_secs={}\n",
-        build_timeout.as_secs()
-    ));
+    manifest.push_str(&format!("build_timeout_secs={}\n", build_timeout.as_secs()));
     manifest.push_str("backends=libclang,libtooling\n");
     manifest.push_str(&format!(
         "baseline_backend=libclang baseline_configure_status={} baseline_build_status={} baseline_build_timed_out={} baseline_first_failure_class={} baseline_first_failure_e0425_count={}\n",
@@ -1724,6 +1802,291 @@ fn run_rapidjson_strict_cmake_no_tests_backend_matrix_capture(
     .map_err(|e| {
         format!(
             "failed to write strict_cmake_backend_matrix_manifest.txt in {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+
+    Ok((log_dir, results))
+}
+
+fn run_rapidjson_strict_capitalize_backend_surface_delta_capture(
+) -> Result<(PathBuf, Vec<StrictCapitalizeBackendSurfaceReplayResult>), String> {
+    let checkout_dir = ensure_rapidjson_checkout()?;
+    let baseline_root = unique_prefixed_dir(RAPIDJSON_STRICT_CAPITALIZE_BACKEND_SURFACE_DELTA_DIR);
+    reset_dir(&baseline_root)?;
+
+    let worktree_dir = baseline_root.join("worktree");
+    let checkout_dir_str = checkout_dir.to_string_lossy().to_string();
+    let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
+    run_git(
+        &[
+            "clone",
+            "--no-tags",
+            "--local",
+            checkout_dir_str.as_str(),
+            worktree_dir_str.as_str(),
+        ],
+        None,
+    )?;
+    run_git(
+        &["checkout", "--detach", RAPIDJSON_PINNED_COMMIT],
+        Some(&worktree_dir),
+    )?;
+
+    let actual_head = read_head(&worktree_dir)
+        .ok_or_else(|| format!("failed to read HEAD in {}", worktree_dir.display()))?;
+    if actual_head != RAPIDJSON_PINNED_COMMIT {
+        return Err(format!(
+            "strict capitalize backend-surface worktree expected commit {} but got {}",
+            RAPIDJSON_PINNED_COMMIT, actual_head
+        ));
+    }
+
+    let log_dir = baseline_root.join("strict_capitalize_backend_surface_delta_logs");
+    fs::create_dir_all(&log_dir)
+        .map_err(|e| format!("failed to create log dir {}: {}", log_dir.display(), e))?;
+    let fragilec = ensure_fragilec_binary()?;
+    let source = worktree_dir.join("example/capitalize/capitalize.cpp");
+    let include_dir = worktree_dir.join("include");
+    let compile_timeout = strict_capitalize_backend_surface_delta_compile_timeout();
+
+    let backends: [(&str, &str); 2] = [("libclang", "libclang"), ("libtooling", "libtooling")];
+    let mut results = Vec::new();
+    for (backend_name, backend_env_value) in backends {
+        let backend_log_dir = log_dir.join(format!("backend_{backend_name}"));
+        fs::create_dir_all(&backend_log_dir).map_err(|e| {
+            format!(
+                "failed to create strict capitalize backend-surface backend log dir {}: {}",
+                backend_log_dir.display(),
+                e
+            )
+        })?;
+        let driver_log = backend_log_dir.join("fragilec_driver.log");
+        fs::write(&driver_log, "").map_err(|e| {
+            format!(
+                "failed to initialize strict capitalize backend-surface fragilec driver log {}: {}",
+                driver_log.display(),
+                e
+            )
+        })?;
+
+        let output_obj = backend_log_dir.join("capitalize.o");
+        let sidecar_path = output_obj.with_extension("fragile.rs");
+
+        let mut compile_cmd = Command::new(&fragilec);
+        compile_cmd
+            .arg("-std=c++11")
+            .arg("-I")
+            .arg(include_dir.to_string_lossy().to_string())
+            .arg("-c")
+            .arg(source.to_string_lossy().to_string())
+            .arg("-o")
+            .arg(output_obj.to_string_lossy().to_string())
+            .current_dir(&worktree_dir)
+            .env("FRAGILEC_MODE", "strict")
+            .env("FRAGILEC_PARSER_BACKEND", backend_env_value)
+            .env("FRAGILEC_KEEP_RS", "1")
+            .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string());
+        let context = format!(
+            "strict capitalize backend-surface compile for {} in {}",
+            backend_name,
+            worktree_dir.display()
+        );
+        let (compile_output, compile_timed_out) =
+            run_command_with_timeout(&mut compile_cmd, compile_timeout, context.as_str())?;
+        let compile_status = if compile_timed_out {
+            COMMAND_TIMEOUT_STATUS
+        } else {
+            status_code(&compile_output)
+        };
+        write_command_capture_raw(
+            &backend_log_dir,
+            "compile_capitalize",
+            compile_status,
+            &compile_output.stdout,
+            &compile_output.stderr,
+        )?;
+
+        let driver_log_content = fs::read_to_string(&driver_log).map_err(|e| {
+            format!(
+                "failed to read strict capitalize backend-surface fragilec driver log {}: {}",
+                driver_log.display(),
+                e
+            )
+        })?;
+        let compile_stdout = String::from_utf8_lossy(&compile_output.stdout);
+        let compile_stderr = String::from_utf8_lossy(&compile_output.stderr);
+        let (first_command, first_stderr) = select_first_failing_compile_capture(
+            &driver_log_content,
+            compile_status != 0,
+            &compile_stdout,
+            &compile_stderr,
+        );
+        write_first_failing_compile_capture_files(&backend_log_dir, &first_command, &first_stderr)?;
+        let first_failure_class = if compile_timed_out {
+            "compile_timeout".to_string()
+        } else {
+            classify_first_failing_compile_stderr(&first_stderr).to_string()
+        };
+        write_first_failing_compile_class_file(&backend_log_dir, first_failure_class.as_str())?;
+        let first_failure_e0425_count = count_error_e0425_occurrences(&first_stderr);
+
+        let sidecar_exists = sidecar_path.exists();
+        let generated_surface_inventory = if sidecar_exists {
+            let generated_rs = fs::read_to_string(&sidecar_path).map_err(|e| {
+                format!(
+                    "failed to read strict capitalize backend-surface sidecar {}: {}",
+                    sidecar_path.display(),
+                    e
+                )
+            })?;
+            Some(collect_generated_surface_inventory(&generated_rs))
+        } else {
+            None
+        };
+
+        results.push(StrictCapitalizeBackendSurfaceReplayResult {
+            backend_name,
+            compile_status,
+            compile_timed_out,
+            first_failure_class,
+            first_failure_e0425_count,
+            sidecar_path,
+            sidecar_exists,
+            generated_surface_inventory,
+        });
+    }
+
+    let baseline = results
+        .iter()
+        .find(|entry| entry.backend_name == "libclang")
+        .ok_or_else(|| {
+            "missing strict capitalize backend-surface baseline result for libclang".to_string()
+        })?;
+    let baseline_line_count = baseline
+        .generated_surface_inventory
+        .as_ref()
+        .map(|inv| inv.line_count);
+    let baseline_placeholder_count = baseline
+        .generated_surface_inventory
+        .as_ref()
+        .map(|inv| inv.placeholder_count);
+    let baseline_rapidjson_placeholder_count = baseline
+        .generated_surface_inventory
+        .as_ref()
+        .map(|inv| inv.rapidjson_placeholder_count);
+    let baseline_c_void_alias_count = baseline
+        .generated_surface_inventory
+        .as_ref()
+        .map(|inv| inv.c_void_alias_count);
+    let baseline_parse_unspecific_count = baseline
+        .generated_surface_inventory
+        .as_ref()
+        .map(|inv| inv.parse_unspecific_syntax_error_count);
+
+    let mut manifest = String::new();
+    manifest.push_str("fixture=real_world_strict_capitalize_backend_surface_delta\n");
+    manifest.push_str(&format!("source_dir={}\n", worktree_dir.display()));
+    manifest.push_str(&format!("pinned_commit={}\n", RAPIDJSON_PINNED_COMMIT));
+    manifest.push_str(&format!("fragilec={}\n", fragilec.display()));
+    manifest.push_str("mode=strict\n");
+    manifest.push_str(&format!("run_root={}\n", baseline_root.display()));
+    manifest.push_str(&format!(
+        "compile_timeout_secs={}\n",
+        compile_timeout.as_secs()
+    ));
+    manifest.push_str("backends=libclang,libtooling\n");
+    manifest.push_str(&format!(
+        "baseline_backend=libclang baseline_compile_status={} baseline_compile_timed_out={} baseline_first_failure_class={} baseline_first_failure_e0425_count={} baseline_sidecar_exists={} baseline_surface_line_count={} baseline_surface_placeholder_count={} baseline_surface_rapidjson_placeholder_count={} baseline_surface_c_void_alias_count={} baseline_surface_parse_unspecific_count={}\n",
+        baseline.compile_status,
+        baseline.compile_timed_out,
+        baseline.first_failure_class,
+        baseline.first_failure_e0425_count,
+        baseline.sidecar_exists,
+        format_optional_usize(baseline_line_count),
+        format_optional_usize(baseline_placeholder_count),
+        format_optional_usize(baseline_rapidjson_placeholder_count),
+        format_optional_usize(baseline_c_void_alias_count),
+        format_optional_usize(baseline_parse_unspecific_count),
+    ));
+    for result in &results {
+        let line_count = result
+            .generated_surface_inventory
+            .as_ref()
+            .map(|inv| inv.line_count);
+        let placeholder_count = result
+            .generated_surface_inventory
+            .as_ref()
+            .map(|inv| inv.placeholder_count);
+        let rapidjson_placeholder_count = result
+            .generated_surface_inventory
+            .as_ref()
+            .map(|inv| inv.rapidjson_placeholder_count);
+        let c_void_alias_count = result
+            .generated_surface_inventory
+            .as_ref()
+            .map(|inv| inv.c_void_alias_count);
+        let parse_unspecific_count = result
+            .generated_surface_inventory
+            .as_ref()
+            .map(|inv| inv.parse_unspecific_syntax_error_count);
+
+        let line_count_delta_vs_baseline = match (line_count, baseline_line_count) {
+            (Some(value), Some(base)) => Some(value as i64 - base as i64),
+            _ => None,
+        };
+        let placeholder_delta_vs_baseline = match (placeholder_count, baseline_placeholder_count) {
+            (Some(value), Some(base)) => Some(value as i64 - base as i64),
+            _ => None,
+        };
+        let rapidjson_placeholder_delta_vs_baseline = match (
+            rapidjson_placeholder_count,
+            baseline_rapidjson_placeholder_count,
+        ) {
+            (Some(value), Some(base)) => Some(value as i64 - base as i64),
+            _ => None,
+        };
+        let c_void_alias_delta_vs_baseline = match (c_void_alias_count, baseline_c_void_alias_count)
+        {
+            (Some(value), Some(base)) => Some(value as i64 - base as i64),
+            _ => None,
+        };
+        let parse_unspecific_delta_vs_baseline =
+            match (parse_unspecific_count, baseline_parse_unspecific_count) {
+                (Some(value), Some(base)) => Some(value as i64 - base as i64),
+                _ => None,
+            };
+
+        manifest.push_str(&format!(
+            "backend={} compile_status={} compile_timed_out={} first_failure_class={} first_failure_e0425_count={} sidecar_exists={} sidecar_path={} surface_line_count={} surface_placeholder_count={} surface_rapidjson_placeholder_count={} surface_c_void_alias_count={} surface_parse_unspecific_count={} surface_line_count_delta_vs_baseline={} surface_placeholder_delta_vs_baseline={} surface_rapidjson_placeholder_delta_vs_baseline={} surface_c_void_alias_delta_vs_baseline={} surface_parse_unspecific_delta_vs_baseline={}\n",
+            result.backend_name,
+            result.compile_status,
+            result.compile_timed_out,
+            result.first_failure_class,
+            result.first_failure_e0425_count,
+            result.sidecar_exists,
+            result.sidecar_path.display(),
+            format_optional_usize(line_count),
+            format_optional_usize(placeholder_count),
+            format_optional_usize(rapidjson_placeholder_count),
+            format_optional_usize(c_void_alias_count),
+            format_optional_usize(parse_unspecific_count),
+            format_optional_i64(line_count_delta_vs_baseline),
+            format_optional_i64(placeholder_delta_vs_baseline),
+            format_optional_i64(rapidjson_placeholder_delta_vs_baseline),
+            format_optional_i64(c_void_alias_delta_vs_baseline),
+            format_optional_i64(parse_unspecific_delta_vs_baseline),
+        ));
+    }
+
+    fs::write(
+        log_dir.join("strict_capitalize_backend_surface_delta_manifest.txt"),
+        manifest,
+    )
+    .map_err(|e| {
+        format!(
+            "failed to write strict_capitalize_backend_surface_delta_manifest.txt in {}: {}",
             log_dir.display(),
             e
         )
@@ -2825,6 +3188,22 @@ fn test_classify_first_failing_compile_stderr_covers_known_error_families() {
 }
 
 #[test]
+fn test_collect_generated_surface_inventory_counts_expected_markers() {
+    let generated = r#"
+/// Placeholder for C++ `rapidjson::Reader`
+pub type FragileFileAlias = std::ffi::c_void;
+kParseErrorUnspecificSyntaxError
+/// Placeholder for C++ `OtherType`
+"#;
+    let inventory = collect_generated_surface_inventory(generated);
+    assert_eq!(inventory.line_count, generated.lines().count());
+    assert_eq!(inventory.placeholder_count, 2);
+    assert_eq!(inventory.rapidjson_placeholder_count, 1);
+    assert_eq!(inventory.c_void_alias_count, 1);
+    assert_eq!(inventory.parse_unspecific_syntax_error_count, 1);
+}
+
+#[test]
 fn test_rapidjson_strict_cmake_local_fixture_replays_first_failure_capture() {
     let root = unique_temp_dir("rapidjson_strict_cmake_local_fixture_first_failure");
     fs::create_dir_all(&root).expect("failed to create local fixture root");
@@ -2981,12 +3360,13 @@ fn test_rapidjson_strict_cmake_backend_matrix_local_fixture_classifies_backend_t
     let root = unique_temp_dir("rapidjson_strict_cmake_backend_matrix_local_fixture_timeout");
     fs::create_dir_all(&root).expect("failed to create strict backend-matrix timeout fixture root");
 
-    let (log_dir, results) = run_local_strict_cmake_no_tests_backend_matrix_capture_fixture_with_options(
-        &root,
-        Some(Duration::from_secs(1)),
-        Some("libtooling"),
-    )
-    .expect("failed to run strict backend-matrix local fixture timeout replay");
+    let (log_dir, results) =
+        run_local_strict_cmake_no_tests_backend_matrix_capture_fixture_with_options(
+            &root,
+            Some(Duration::from_secs(1)),
+            Some("libtooling"),
+        )
+        .expect("failed to run strict backend-matrix local fixture timeout replay");
     assert_eq!(
         results.len(),
         3,
@@ -2997,15 +3377,22 @@ fn test_rapidjson_strict_cmake_backend_matrix_local_fixture_classifies_backend_t
         let backend = results
             .iter()
             .find(|entry| entry.backend_name == backend_name)
-            .unwrap_or_else(|| panic!("missing strict backend-matrix timeout result for {}", backend_name));
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing strict backend-matrix timeout result for {}",
+                    backend_name
+                )
+            });
         assert_ne!(
-            backend.compile_status, COMMAND_TIMEOUT_STATUS,
+            backend.compile_status,
+            COMMAND_TIMEOUT_STATUS,
             "backend {} should not time out in timeout fixture (logs: {})",
             backend_name,
             log_dir.display()
         );
         assert_eq!(
-            backend.first_failure_class, "non_rustc_error",
+            backend.first_failure_class,
+            "non_rustc_error",
             "backend {} should keep forced-wrapper failure class when not timed out (logs: {})",
             backend_name,
             log_dir.display()
@@ -3017,12 +3404,14 @@ fn test_rapidjson_strict_cmake_backend_matrix_local_fixture_classifies_backend_t
         .find(|entry| entry.backend_name == "libtooling")
         .expect("missing strict backend-matrix timeout result for libtooling");
     assert_eq!(
-        timed_out_backend.compile_status, COMMAND_TIMEOUT_STATUS,
+        timed_out_backend.compile_status,
+        COMMAND_TIMEOUT_STATUS,
         "libtooling backend should use timeout sentinel status when timeout is forced (logs: {})",
         log_dir.display()
     );
     assert_eq!(
-        timed_out_backend.first_failure_class, "compile_timeout",
+        timed_out_backend.first_failure_class,
+        "compile_timeout",
         "libtooling backend should classify forced timeout as compile_timeout (logs: {})",
         log_dir.display()
     );
@@ -3291,6 +3680,189 @@ fn test_real_world_rapidjson_fragilec_native_no_stl_examples_baseline() {
         "real-world strict pretty output should preserve JSON fields, got:\n{}",
         pretty_stdout
     );
+}
+
+#[test]
+#[ignore = "real-world external project test (strict capitalize backend surface delta capture with FRAGILEC_KEEP_RS=1)"]
+fn test_real_world_rapidjson_strict_capitalize_backend_surface_delta_capture() {
+    let (log_dir, results) = run_rapidjson_strict_capitalize_backend_surface_delta_capture()
+        .expect("failed to run strict capitalize backend surface-delta capture");
+    let run_root = log_dir
+        .parent()
+        .expect("strict capitalize backend-surface log dir should have a run root");
+    let expected_run_root_prefix =
+        format!("{}_", RAPIDJSON_STRICT_CAPITALIZE_BACKEND_SURFACE_DELTA_DIR);
+    assert!(
+        run_root
+            .to_string_lossy()
+            .starts_with(expected_run_root_prefix.as_str()),
+        "expected strict capitalize backend-surface run root to start with {} but got {}",
+        expected_run_root_prefix,
+        run_root.display()
+    );
+
+    for rel in RAPIDJSON_STRICT_CAPITALIZE_BACKEND_SURFACE_DELTA_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected strict capitalize backend-surface log file {}",
+            log_dir.join(rel).display()
+        );
+    }
+    assert_eq!(
+        results.len(),
+        2,
+        "strict capitalize backend-surface capture should produce two backend replay results"
+    );
+
+    let baseline = results
+        .iter()
+        .find(|entry| entry.backend_name == "libclang")
+        .expect("missing strict capitalize backend-surface baseline result for libclang");
+    assert!(
+        baseline.sidecar_exists,
+        "strict capitalize backend-surface baseline should emit a generated sidecar"
+    );
+    assert!(
+        baseline.generated_surface_inventory.is_some(),
+        "strict capitalize backend-surface baseline should have generated-surface inventory"
+    );
+    let baseline_inventory = baseline
+        .generated_surface_inventory
+        .as_ref()
+        .expect("baseline inventory should exist");
+    assert!(
+        baseline_inventory.line_count > 0,
+        "strict capitalize backend-surface baseline generated sidecar should be non-empty"
+    );
+    assert!(
+        baseline_inventory.placeholder_count > 0 && baseline_inventory.c_void_alias_count > 0,
+        "strict capitalize backend-surface baseline inventory should capture fallback markers"
+    );
+
+    let libtooling = results
+        .iter()
+        .find(|entry| entry.backend_name == "libtooling")
+        .expect("missing strict capitalize backend-surface result for libtooling");
+    assert_eq!(
+        libtooling.compile_status, COMMAND_TIMEOUT_STATUS,
+        "strict capitalize backend-surface libtooling compile should currently time out"
+    );
+    assert!(
+        libtooling.compile_timed_out,
+        "strict capitalize backend-surface libtooling result should mark timeout"
+    );
+    assert_eq!(
+        libtooling.first_failure_class, "compile_timeout",
+        "strict capitalize backend-surface libtooling result should classify timeout"
+    );
+    assert!(
+        !libtooling.sidecar_exists,
+        "strict capitalize backend-surface libtooling result should not emit sidecar while timing out"
+    );
+    let libtooling_class =
+        fs::read_to_string(log_dir.join("backend_libtooling/first_failing_compile_class.txt"))
+            .expect("failed to read backend_libtooling/first_failing_compile_class.txt");
+    assert_eq!(
+        libtooling_class.trim(),
+        "compile_timeout",
+        "strict capitalize backend-surface libtooling class file should persist compile_timeout"
+    );
+    let libtooling_stderr =
+        fs::read_to_string(log_dir.join("backend_libtooling/compile_capitalize.stderr"))
+            .expect("failed to read backend_libtooling/compile_capitalize.stderr");
+    assert!(
+        libtooling_stderr.contains("command timed out after"),
+        "strict capitalize backend-surface libtooling stderr should record timeout diagnostic, got:\n{}",
+        libtooling_stderr
+    );
+
+    let manifest =
+        fs::read_to_string(log_dir.join("strict_capitalize_backend_surface_delta_manifest.txt"))
+            .expect("failed to read strict_capitalize_backend_surface_delta_manifest.txt");
+    assert!(
+        manifest.contains("baseline_backend=libclang"),
+        "strict capitalize backend-surface manifest should include baseline metadata, got:\n{}",
+        manifest
+    );
+    assert!(
+        manifest.contains("compile_timeout_secs="),
+        "strict capitalize backend-surface manifest should include timeout metadata, got:\n{}",
+        manifest
+    );
+    let run_root_marker = format!("run_root={}", run_root.display());
+    assert!(
+        manifest.contains(run_root_marker.as_str()),
+        "strict capitalize backend-surface manifest should include run_root marker `{}`. got:\n{}",
+        run_root_marker,
+        manifest
+    );
+
+    for result in &results {
+        let line = manifest
+            .lines()
+            .find(|entry| entry.starts_with(format!("backend={} ", result.backend_name).as_str()))
+            .unwrap_or_else(|| {
+                panic!(
+                    "strict capitalize backend-surface manifest missing backend line for {}:\n{}",
+                    result.backend_name, manifest
+                )
+            });
+        for marker in [
+            format!("compile_status={}", result.compile_status),
+            format!("compile_timed_out={}", result.compile_timed_out),
+            format!("first_failure_class={}", result.first_failure_class),
+            format!(
+                "first_failure_e0425_count={}",
+                result.first_failure_e0425_count
+            ),
+            format!("sidecar_exists={}", result.sidecar_exists),
+        ] {
+            assert!(
+                line.contains(marker.as_str()),
+                "strict capitalize backend-surface manifest line for {} should contain `{}`. line:\n{}",
+                result.backend_name,
+                marker,
+                line
+            );
+        }
+        if result.sidecar_exists {
+            let inventory = result
+                .generated_surface_inventory
+                .as_ref()
+                .expect("backend with sidecar should have inventory");
+            for marker in [
+                format!("surface_line_count={}", inventory.line_count),
+                format!("surface_placeholder_count={}", inventory.placeholder_count),
+                format!(
+                    "surface_rapidjson_placeholder_count={}",
+                    inventory.rapidjson_placeholder_count
+                ),
+                format!(
+                    "surface_c_void_alias_count={}",
+                    inventory.c_void_alias_count
+                ),
+                format!(
+                    "surface_parse_unspecific_count={}",
+                    inventory.parse_unspecific_syntax_error_count
+                ),
+            ] {
+                assert!(
+                    line.contains(marker.as_str()),
+                    "strict capitalize backend-surface manifest line for {} should contain `{}`. line:\n{}",
+                    result.backend_name,
+                    marker,
+                    line
+                );
+            }
+        } else {
+            assert!(
+                line.contains("surface_line_count=na"),
+                "strict capitalize backend-surface manifest line for {} should mark missing sidecar inventory as `na`. line:\n{}",
+                result.backend_name,
+                line
+            );
+        }
+    }
 }
 
 #[test]
