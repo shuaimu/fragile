@@ -9028,10 +9028,16 @@ impl AstCodeGen {
             self.ptr_vars.clear();
             self.arr_vars.clear();
 
-            // Track reference parameters - they are converted to pointers in Rust,
-            // so accesses need to be dereferenced (handled by ref_vars tracking)
+            // Track reference parameters that are still lowered to pointer/reference-like
+            // forms in Rust, so reads use dereference semantics. If substitution lowered
+            // a reference param to a by-value primitive (for example const int& -> i32),
+            // do not track it as a ref var.
             for (param_name, param_ty) in &template_info.params {
-                if matches!(param_ty, CppType::Reference { .. }) {
+                let substituted_rust_ty = self.substitute_template_type(param_ty, &subst_map);
+                if matches!(param_ty, CppType::Reference { .. })
+                    && (substituted_rust_ty.starts_with('*')
+                        || substituted_rust_ty.starts_with('&'))
+                {
                     self.ref_vars.insert(param_name.clone());
                 }
                 if matches!(

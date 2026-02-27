@@ -27,6 +27,8 @@ const RAPIDJSON_STRICT_FILTERKEYDOM_CAPTURE_DIR: &str =
     "/tmp/fragile_real_world_rapidjson_strict_filterkeydom_capture";
 const RAPIDJSON_STRICT_CMAKE_NO_TESTS_BUILD_DIR: &str =
     "/tmp/fragile_real_world_rapidjson_strict_cmake_no_tests_build";
+const RAPIDJSON_STRICT_CMAKE_NO_TESTS_BACKEND_MATRIX_DIR: &str =
+    "/tmp/fragile_real_world_rapidjson_strict_cmake_no_tests_backend_matrix";
 const RAPIDJSON_REQUIRED_PATHS: &[&str] = &[
     "include/rapidjson/document.h",
     "example/condense/condense.cpp",
@@ -180,6 +182,29 @@ const RAPIDJSON_STRICT_CMAKE_BACKEND_MATRIX_LOCAL_FIXTURE_LOG_FILES: &[&str] = &
     "backend_hybrid/first_failing_compile_command.txt",
     "backend_hybrid/first_failing_compile_stderr.txt",
     "backend_hybrid/first_failing_compile_class.txt",
+    "backend_libtooling/cmake_configure.status",
+    "backend_libtooling/cmake_configure.stdout",
+    "backend_libtooling/cmake_configure.stderr",
+    "backend_libtooling/cmake_build.status",
+    "backend_libtooling/cmake_build.stdout",
+    "backend_libtooling/cmake_build.stderr",
+    "backend_libtooling/fragilec_driver.log",
+    "backend_libtooling/first_failing_compile_command.txt",
+    "backend_libtooling/first_failing_compile_stderr.txt",
+    "backend_libtooling/first_failing_compile_class.txt",
+];
+const RAPIDJSON_STRICT_CMAKE_BACKEND_MATRIX_LOG_FILES: &[&str] = &[
+    "strict_cmake_backend_matrix_manifest.txt",
+    "backend_libclang/cmake_configure.status",
+    "backend_libclang/cmake_configure.stdout",
+    "backend_libclang/cmake_configure.stderr",
+    "backend_libclang/cmake_build.status",
+    "backend_libclang/cmake_build.stdout",
+    "backend_libclang/cmake_build.stderr",
+    "backend_libclang/fragilec_driver.log",
+    "backend_libclang/first_failing_compile_command.txt",
+    "backend_libclang/first_failing_compile_stderr.txt",
+    "backend_libclang/first_failing_compile_class.txt",
     "backend_libtooling/cmake_configure.status",
     "backend_libtooling/cmake_configure.stdout",
     "backend_libtooling/cmake_configure.stderr",
@@ -527,6 +552,15 @@ struct StrictBackendReplayResult {
     first_failure_e0425_count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StrictCmakeBackendReplayResult {
+    backend_name: &'static str,
+    configure_status: i32,
+    build_status: i32,
+    first_failure_class: String,
+    first_failure_e0425_count: usize,
+}
+
 fn parse_fragilec_driver_invocations(driver_log: &str) -> Vec<FragilecDriverInvocation> {
     let mut invocations = Vec::new();
     let mut current_cwd: Option<String> = None;
@@ -649,6 +683,14 @@ fn reset_dir(path: &Path) -> Result<(), String> {
             .map_err(|e| format!("failed to remove {}: {}", path.display(), e))?;
     }
     fs::create_dir_all(path).map_err(|e| format!("failed to create {}: {}", path.display(), e))
+}
+
+fn unique_prefixed_dir(prefix: &str) -> PathBuf {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be after UNIX_EPOCH")
+        .as_nanos();
+    PathBuf::from(format!("{prefix}_{}_{}", std::process::id(), now))
 }
 
 fn compile_example(
@@ -1350,6 +1392,251 @@ fn run_rapidjson_strict_cmake_no_tests_full_build_capture() -> Result<(PathBuf, 
     })?;
 
     Ok((log_dir, build_dir))
+}
+
+fn run_rapidjson_strict_cmake_no_tests_backend_matrix_capture(
+) -> Result<(PathBuf, Vec<StrictCmakeBackendReplayResult>), String> {
+    let checkout_dir = ensure_rapidjson_checkout()?;
+    let baseline_root = unique_prefixed_dir(RAPIDJSON_STRICT_CMAKE_NO_TESTS_BACKEND_MATRIX_DIR);
+    reset_dir(&baseline_root)?;
+
+    let worktree_dir = baseline_root.join("worktree");
+    let checkout_dir_str = checkout_dir.to_string_lossy().to_string();
+    let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
+    run_git(
+        &[
+            "clone",
+            "--no-tags",
+            "--local",
+            checkout_dir_str.as_str(),
+            worktree_dir_str.as_str(),
+        ],
+        None,
+    )?;
+    run_git(
+        &["checkout", "--detach", RAPIDJSON_PINNED_COMMIT],
+        Some(&worktree_dir),
+    )?;
+
+    let actual_head = read_head(&worktree_dir)
+        .ok_or_else(|| format!("failed to read HEAD in {}", worktree_dir.display()))?;
+    if actual_head != RAPIDJSON_PINNED_COMMIT {
+        return Err(format!(
+            "strict cmake backend-matrix worktree expected commit {} but got {}",
+            RAPIDJSON_PINNED_COMMIT, actual_head
+        ));
+    }
+
+    let log_dir = baseline_root.join("strict_cmake_backend_matrix_logs");
+    fs::create_dir_all(&log_dir)
+        .map_err(|e| format!("failed to create log dir {}: {}", log_dir.display(), e))?;
+    let fragilec = ensure_fragilec_binary()?;
+
+    let backends: [(&str, &str); 2] = [("libclang", "libclang"), ("libtooling", "libtooling")];
+    let mut results = Vec::new();
+    for (backend_name, backend_env_value) in backends {
+        let backend_log_dir = log_dir.join(format!("backend_{backend_name}"));
+        fs::create_dir_all(&backend_log_dir).map_err(|e| {
+            format!(
+                "failed to create strict cmake backend-matrix backend log dir {}: {}",
+                backend_log_dir.display(),
+                e
+            )
+        })?;
+        let driver_log = backend_log_dir.join("fragilec_driver.log");
+        fs::write(&driver_log, "").map_err(|e| {
+            format!(
+                "failed to initialize strict cmake backend-matrix fragilec driver log {}: {}",
+                driver_log.display(),
+                e
+            )
+        })?;
+
+        let build_dir = worktree_dir.join(format!("build_fragilec_strict_{backend_name}"));
+        fs::create_dir_all(&build_dir)
+            .map_err(|e| format!("failed to create build dir {}: {}", build_dir.display(), e))?;
+
+        let configure_output = Command::new("cmake")
+            .arg("-DRAPIDJSON_BUILD_TESTS=OFF")
+            .arg("..")
+            .current_dir(&build_dir)
+            .env("CXX", fragilec.to_string_lossy().to_string())
+            .env("FRAGILEC_MODE", "strict")
+            .env("FRAGILEC_PARSER_BACKEND", backend_env_value)
+            .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string())
+            .output()
+            .map_err(|e| {
+                format!(
+                    "failed to run strict cmake backend-matrix configure for {}: {}",
+                    backend_name, e
+                )
+            })?;
+        write_command_capture(&backend_log_dir, "cmake_configure", &configure_output)?;
+        let configure_status = status_code(&configure_output);
+
+        let (build_status, build_stdout, build_stderr) = if configure_output.status.success() {
+            let build_output = Command::new("cmake")
+                .arg("--build")
+                .arg(".")
+                .arg("--verbose")
+                .arg("--")
+                .arg("-j1")
+                .arg("-k")
+                .current_dir(&build_dir)
+                .env("CXX", fragilec.to_string_lossy().to_string())
+                .env("FRAGILEC_MODE", "strict")
+                .env("FRAGILEC_PARSER_BACKEND", backend_env_value)
+                .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string())
+                .output()
+                .map_err(|e| {
+                    format!(
+                        "failed to run strict cmake backend-matrix build for {}: {}",
+                        backend_name, e
+                    )
+                })?;
+            write_command_capture(&backend_log_dir, "cmake_build", &build_output)?;
+            (
+                status_code(&build_output),
+                String::from_utf8_lossy(&build_output.stdout).to_string(),
+                String::from_utf8_lossy(&build_output.stderr).to_string(),
+            )
+        } else {
+            let configure_stderr = String::from_utf8_lossy(&configure_output.stderr);
+            let configure_stdout = String::from_utf8_lossy(&configure_output.stdout);
+            let synthetic_build_stderr = if !configure_stderr.trim().is_empty() {
+                format!(
+                    "cmake configure failed for backend {} with status {}\n{}",
+                    backend_name,
+                    configure_status,
+                    configure_stderr.trim()
+                )
+            } else if !configure_stdout.trim().is_empty() {
+                format!(
+                    "cmake configure failed for backend {} with status {}\n{}",
+                    backend_name,
+                    configure_status,
+                    configure_stdout.trim()
+                )
+            } else {
+                format!(
+                    "cmake configure failed for backend {} with status {} and no output",
+                    backend_name, configure_status
+                )
+            };
+            fs::write(backend_log_dir.join("cmake_build.status"), "-1\n").map_err(|e| {
+                format!(
+                    "failed to write synthetic cmake_build.status in {}: {}",
+                    backend_log_dir.display(),
+                    e
+                )
+            })?;
+            fs::write(backend_log_dir.join("cmake_build.stdout"), "").map_err(|e| {
+                format!(
+                    "failed to write synthetic cmake_build.stdout in {}: {}",
+                    backend_log_dir.display(),
+                    e
+                )
+            })?;
+            fs::write(
+                backend_log_dir.join("cmake_build.stderr"),
+                format!("{}\n", synthetic_build_stderr),
+            )
+            .map_err(|e| {
+                format!(
+                    "failed to write synthetic cmake_build.stderr in {}: {}",
+                    backend_log_dir.display(),
+                    e
+                )
+            })?;
+            (-1, String::new(), synthetic_build_stderr)
+        };
+
+        let driver_log_content = fs::read_to_string(&driver_log).map_err(|e| {
+            format!(
+                "failed to read strict cmake backend-matrix fragilec driver log {}: {}",
+                driver_log.display(),
+                e
+            )
+        })?;
+        let (first_command, first_stderr) = select_first_failing_compile_capture(
+            &driver_log_content,
+            build_status != 0,
+            &build_stdout,
+            &build_stderr,
+        );
+        write_first_failing_compile_capture_files(&backend_log_dir, &first_command, &first_stderr)?;
+        let first_failure_class = classify_first_failing_compile_stderr(&first_stderr).to_string();
+        write_first_failing_compile_class_file(&backend_log_dir, first_failure_class.as_str())?;
+        let first_failure_e0425_count = count_error_e0425_occurrences(&first_stderr);
+
+        results.push(StrictCmakeBackendReplayResult {
+            backend_name,
+            configure_status,
+            build_status,
+            first_failure_class,
+            first_failure_e0425_count,
+        });
+    }
+
+    let baseline = results
+        .iter()
+        .find(|entry| entry.backend_name == "libclang")
+        .ok_or_else(|| {
+            "missing strict cmake backend-matrix baseline result for libclang".to_string()
+        })?;
+    let baseline_configure_status = baseline.configure_status;
+    let baseline_build_status = baseline.build_status;
+    let baseline_first_failure_class = baseline.first_failure_class.clone();
+    let baseline_first_failure_e0425_count = baseline.first_failure_e0425_count;
+
+    let mut manifest = String::new();
+    manifest.push_str("fixture=real_world_strict_cmake_backend_matrix_first_failure\n");
+    manifest.push_str(&format!("source_dir={}\n", worktree_dir.display()));
+    manifest.push_str(&format!("pinned_commit={}\n", RAPIDJSON_PINNED_COMMIT));
+    manifest.push_str(&format!("fragilec={}\n", fragilec.display()));
+    manifest.push_str("mode=strict\n");
+    manifest.push_str(&format!("run_root={}\n", baseline_root.display()));
+    manifest.push_str("backends=libclang,libtooling\n");
+    manifest.push_str(&format!(
+        "baseline_backend=libclang baseline_configure_status={} baseline_build_status={} baseline_first_failure_class={} baseline_first_failure_e0425_count={}\n",
+        baseline_configure_status,
+        baseline_build_status,
+        baseline_first_failure_class,
+        baseline_first_failure_e0425_count
+    ));
+    for result in &results {
+        let configure_status_delta_vs_baseline =
+            result.configure_status - baseline_configure_status;
+        let build_status_delta_vs_baseline = result.build_status - baseline_build_status;
+        let class_delta_vs_baseline = result.first_failure_class != baseline_first_failure_class;
+        let e0425_delta_vs_baseline =
+            result.first_failure_e0425_count as i64 - baseline_first_failure_e0425_count as i64;
+        manifest.push_str(&format!(
+            "backend={} configure_status={} build_status={} first_failure_class={} first_failure_e0425_count={} configure_status_delta_vs_baseline={} build_status_delta_vs_baseline={} class_delta_vs_baseline={} e0425_delta_vs_baseline={}\n",
+            result.backend_name,
+            result.configure_status,
+            result.build_status,
+            result.first_failure_class,
+            result.first_failure_e0425_count,
+            configure_status_delta_vs_baseline,
+            build_status_delta_vs_baseline,
+            class_delta_vs_baseline,
+            e0425_delta_vs_baseline
+        ));
+    }
+    fs::write(
+        log_dir.join("strict_cmake_backend_matrix_manifest.txt"),
+        manifest,
+    )
+    .map_err(|e| {
+        format!(
+            "failed to write strict_cmake_backend_matrix_manifest.txt in {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+
+    Ok((log_dir, results))
 }
 
 fn run_rapidjson_strict_capitalize_compile_capture() -> Result<PathBuf, String> {
@@ -3147,6 +3434,110 @@ fn test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_fir
         comparison_manifest,
     )
     .expect("failed to write runtime_comparison_manifest.txt");
+}
+
+#[test]
+#[ignore = "real-world external project test (rapidjson strict cmake no-tests backend matrix capture: libclang baseline vs libtooling)"]
+fn test_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_capture_first_failure() {
+    let (log_dir, results) = run_rapidjson_strict_cmake_no_tests_backend_matrix_capture()
+        .expect("failed to run rapidjson strict cmake no-tests backend-matrix capture");
+    let run_root = log_dir
+        .parent()
+        .expect("strict cmake backend-matrix log dir should have a run root");
+    let expected_run_root_prefix =
+        format!("{}_", RAPIDJSON_STRICT_CMAKE_NO_TESTS_BACKEND_MATRIX_DIR);
+    assert!(
+        run_root
+            .to_string_lossy()
+            .starts_with(expected_run_root_prefix.as_str()),
+        "expected strict cmake backend-matrix run root to start with {} but got {}",
+        expected_run_root_prefix,
+        run_root.display()
+    );
+
+    for rel in RAPIDJSON_STRICT_CMAKE_BACKEND_MATRIX_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected strict cmake backend-matrix log file {}",
+            log_dir.join(rel).display()
+        );
+    }
+    assert_eq!(
+        results.len(),
+        2,
+        "strict cmake backend-matrix capture should produce two backend replay results"
+    );
+
+    let baseline = results
+        .iter()
+        .find(|entry| entry.backend_name == "libclang")
+        .expect("missing strict cmake backend-matrix baseline result for libclang");
+    assert_eq!(
+        baseline.configure_status, 0,
+        "strict cmake backend-matrix baseline configure should succeed"
+    );
+
+    let manifest = fs::read_to_string(log_dir.join("strict_cmake_backend_matrix_manifest.txt"))
+        .expect("failed to read strict_cmake_backend_matrix_manifest.txt");
+    assert!(
+        manifest.contains("baseline_backend=libclang"),
+        "strict cmake backend-matrix manifest should include baseline metadata, got:\n{}",
+        manifest
+    );
+    let run_root_marker = format!("run_root={}", run_root.display());
+    assert!(
+        manifest.contains(run_root_marker.as_str()),
+        "strict cmake backend-matrix manifest should include run_root metadata `{}`. got:\n{}",
+        run_root_marker,
+        manifest
+    );
+
+    for result in &results {
+        let line = manifest
+            .lines()
+            .find(|entry| entry.starts_with(format!("backend={} ", result.backend_name).as_str()))
+            .unwrap_or_else(|| {
+                panic!(
+                    "strict cmake backend-matrix manifest missing backend line for {}:\n{}",
+                    result.backend_name, manifest
+                )
+            });
+
+        let configure_status_delta_vs_baseline =
+            result.configure_status - baseline.configure_status;
+        let build_status_delta_vs_baseline = result.build_status - baseline.build_status;
+        let class_delta_vs_baseline = result.first_failure_class != baseline.first_failure_class;
+        let e0425_delta_vs_baseline =
+            result.first_failure_e0425_count as i64 - baseline.first_failure_e0425_count as i64;
+
+        for marker in [
+            format!("configure_status={}", result.configure_status),
+            format!("build_status={}", result.build_status),
+            format!("first_failure_class={}", result.first_failure_class),
+            format!(
+                "first_failure_e0425_count={}",
+                result.first_failure_e0425_count
+            ),
+            format!(
+                "configure_status_delta_vs_baseline={}",
+                configure_status_delta_vs_baseline
+            ),
+            format!(
+                "build_status_delta_vs_baseline={}",
+                build_status_delta_vs_baseline
+            ),
+            format!("class_delta_vs_baseline={}", class_delta_vs_baseline),
+            format!("e0425_delta_vs_baseline={}", e0425_delta_vs_baseline),
+        ] {
+            assert!(
+                line.contains(marker.as_str()),
+                "strict cmake backend-matrix manifest line for {} should contain `{}`. line:\n{}",
+                result.backend_name,
+                marker,
+                line
+            );
+        }
+    }
 }
 
 #[test]
