@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::OnceLock;
 use std::thread::sleep;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const RAPIDJSON_REPO_URL: &str = "https://github.com/Tencent/rapidjson.git";
 const RAPIDJSON_PINNED_COMMIT: &str = "f54b0e47a08782a6131cc3d60f94d038fa6e0a51"; // v1.1.0
@@ -29,6 +29,8 @@ const RAPIDJSON_STRICT_CMAKE_NO_TESTS_BUILD_DIR: &str =
     "/tmp/fragile_real_world_rapidjson_strict_cmake_no_tests_build";
 const RAPIDJSON_STRICT_CMAKE_NO_TESTS_BACKEND_MATRIX_DIR: &str =
     "/tmp/fragile_real_world_rapidjson_strict_cmake_no_tests_backend_matrix";
+const RAPIDJSON_STRICT_CMAKE_BACKEND_MATRIX_BUILD_TIMEOUT_SECS: u64 = 1200;
+const COMMAND_TIMEOUT_STATUS: i32 = 124;
 const RAPIDJSON_REQUIRED_PATHS: &[&str] = &[
     "include/rapidjson/document.h",
     "example/condense/condense.cpp",
@@ -509,6 +511,53 @@ fn status_code(output: &Output) -> i32 {
     output.status.code().unwrap_or(-1)
 }
 
+fn strict_cmake_backend_matrix_build_timeout() -> Duration {
+    Duration::from_secs(RAPIDJSON_STRICT_CMAKE_BACKEND_MATRIX_BUILD_TIMEOUT_SECS)
+}
+
+fn run_command_with_timeout(
+    command: &mut Command,
+    timeout: Duration,
+    context: &str,
+) -> Result<(Output, bool), String> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("failed to spawn {}: {}", context, e))?;
+    let start = Instant::now();
+    loop {
+        if let Some(_status) = child
+            .try_wait()
+            .map_err(|e| format!("failed waiting for {}: {}", context, e))?
+        {
+            let output = child
+                .wait_with_output()
+                .map_err(|e| format!("failed to collect output for {}: {}", context, e))?;
+            return Ok((output, false));
+        }
+
+        if start.elapsed() >= timeout {
+            let _ = child.kill();
+            let mut output = child
+                .wait_with_output()
+                .map_err(|e| format!("failed to collect timed-out output for {}: {}", context, e))?;
+            if !output.stderr.is_empty() && !output.stderr.ends_with(b"\n") {
+                output.stderr.push(b'\n');
+            }
+            let timeout_msg = format!(
+                "command timed out after {}s: {}",
+                timeout.as_secs(),
+                context
+            );
+            output.stderr.extend_from_slice(timeout_msg.as_bytes());
+            output.stderr.push(b'\n');
+            return Ok((output, true));
+        }
+
+        sleep(Duration::from_millis(100));
+    }
+}
+
 fn read_status_file(path: &Path) -> Result<i32, String> {
     let raw = fs::read_to_string(path)
         .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
@@ -523,19 +572,35 @@ fn rapidjson_pretty_output_matches_expected(pretty_stdout: &str) -> bool {
         && pretty_stdout.contains("    \"a\": 1")
 }
 
-fn write_command_capture(log_dir: &Path, step: &str, output: &Output) -> Result<(), String> {
+fn write_command_capture_raw(
+    log_dir: &Path,
+    step: &str,
+    status: i32,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> Result<(), String> {
     fs::create_dir_all(log_dir)
         .map_err(|e| format!("failed to create log dir {}: {}", log_dir.display(), e))?;
     fs::write(
         log_dir.join(format!("{}.status", step)),
-        format!("{}\n", status_code(output)),
+        format!("{}\n", status),
     )
     .map_err(|e| format!("failed to write {}.status: {}", step, e))?;
-    fs::write(log_dir.join(format!("{}.stdout", step)), &output.stdout)
+    fs::write(log_dir.join(format!("{}.stdout", step)), stdout)
         .map_err(|e| format!("failed to write {}.stdout: {}", step, e))?;
-    fs::write(log_dir.join(format!("{}.stderr", step)), &output.stderr)
+    fs::write(log_dir.join(format!("{}.stderr", step)), stderr)
         .map_err(|e| format!("failed to write {}.stderr: {}", step, e))?;
     Ok(())
+}
+
+fn write_command_capture(log_dir: &Path, step: &str, output: &Output) -> Result<(), String> {
+    write_command_capture_raw(
+        log_dir,
+        step,
+        status_code(output),
+        &output.stdout,
+        &output.stderr,
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -557,6 +622,7 @@ struct StrictCmakeBackendReplayResult {
     backend_name: &'static str,
     configure_status: i32,
     build_status: i32,
+    build_timed_out: bool,
     first_failure_class: String,
     first_failure_e0425_count: usize,
 }
@@ -1433,6 +1499,7 @@ fn run_rapidjson_strict_cmake_no_tests_backend_matrix_capture(
     let fragilec = ensure_fragilec_binary()?;
 
     let backends: [(&str, &str); 2] = [("libclang", "libclang"), ("libtooling", "libtooling")];
+    let build_timeout = strict_cmake_backend_matrix_build_timeout();
     let mut results = Vec::new();
     for (backend_name, backend_env_value) in backends {
         let backend_log_dir = log_dir.join(format!("backend_{backend_name}"));
@@ -1474,32 +1541,46 @@ fn run_rapidjson_strict_cmake_no_tests_backend_matrix_capture(
         write_command_capture(&backend_log_dir, "cmake_configure", &configure_output)?;
         let configure_status = status_code(&configure_output);
 
-        let (build_status, build_stdout, build_stderr) = if configure_output.status.success() {
-            let build_output = Command::new("cmake")
-                .arg("--build")
-                .arg(".")
-                .arg("--verbose")
-                .arg("--")
-                .arg("-j1")
-                .arg("-k")
-                .current_dir(&build_dir)
-                .env("CXX", fragilec.to_string_lossy().to_string())
-                .env("FRAGILEC_MODE", "strict")
-                .env("FRAGILEC_PARSER_BACKEND", backend_env_value)
-                .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string())
-                .output()
-                .map_err(|e| {
-                    format!(
-                        "failed to run strict cmake backend-matrix build for {}: {}",
-                        backend_name, e
-                    )
-                })?;
-            write_command_capture(&backend_log_dir, "cmake_build", &build_output)?;
-            (
-                status_code(&build_output),
-                String::from_utf8_lossy(&build_output.stdout).to_string(),
-                String::from_utf8_lossy(&build_output.stderr).to_string(),
-            )
+        let (build_status, build_timed_out, build_stdout, build_stderr) =
+            if configure_output.status.success() {
+                let mut build_cmd = Command::new("cmake");
+                build_cmd
+                    .arg("--build")
+                    .arg(".")
+                    .arg("--verbose")
+                    .arg("--")
+                    .arg("-j1")
+                    .arg("-k")
+                    .current_dir(&build_dir)
+                    .env("CXX", fragilec.to_string_lossy().to_string())
+                    .env("FRAGILEC_MODE", "strict")
+                    .env("FRAGILEC_PARSER_BACKEND", backend_env_value)
+                    .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string());
+                let context = format!(
+                    "strict cmake backend-matrix build for {} in {}",
+                    backend_name,
+                    build_dir.display()
+                );
+                let (build_output, timed_out) =
+                    run_command_with_timeout(&mut build_cmd, build_timeout, context.as_str())?;
+                let build_status = if timed_out {
+                    COMMAND_TIMEOUT_STATUS
+                } else {
+                    status_code(&build_output)
+                };
+                write_command_capture_raw(
+                    &backend_log_dir,
+                    "cmake_build",
+                    build_status,
+                    &build_output.stdout,
+                    &build_output.stderr,
+                )?;
+                (
+                    build_status,
+                    timed_out,
+                    String::from_utf8_lossy(&build_output.stdout).to_string(),
+                    String::from_utf8_lossy(&build_output.stderr).to_string(),
+                )
         } else {
             let configure_stderr = String::from_utf8_lossy(&configure_output.stderr);
             let configure_stdout = String::from_utf8_lossy(&configure_output.stdout);
@@ -1548,7 +1629,7 @@ fn run_rapidjson_strict_cmake_no_tests_backend_matrix_capture(
                     e
                 )
             })?;
-            (-1, String::new(), synthetic_build_stderr)
+            (-1, false, String::new(), synthetic_build_stderr)
         };
 
         let driver_log_content = fs::read_to_string(&driver_log).map_err(|e| {
@@ -1565,7 +1646,11 @@ fn run_rapidjson_strict_cmake_no_tests_backend_matrix_capture(
             &build_stderr,
         );
         write_first_failing_compile_capture_files(&backend_log_dir, &first_command, &first_stderr)?;
-        let first_failure_class = classify_first_failing_compile_stderr(&first_stderr).to_string();
+        let first_failure_class = if build_timed_out {
+            "compile_timeout".to_string()
+        } else {
+            classify_first_failing_compile_stderr(&first_stderr).to_string()
+        };
         write_first_failing_compile_class_file(&backend_log_dir, first_failure_class.as_str())?;
         let first_failure_e0425_count = count_error_e0425_occurrences(&first_stderr);
 
@@ -1573,6 +1658,7 @@ fn run_rapidjson_strict_cmake_no_tests_backend_matrix_capture(
             backend_name,
             configure_status,
             build_status,
+            build_timed_out,
             first_failure_class,
             first_failure_e0425_count,
         });
@@ -1586,6 +1672,7 @@ fn run_rapidjson_strict_cmake_no_tests_backend_matrix_capture(
         })?;
     let baseline_configure_status = baseline.configure_status;
     let baseline_build_status = baseline.build_status;
+    let baseline_build_timed_out = baseline.build_timed_out;
     let baseline_first_failure_class = baseline.first_failure_class.clone();
     let baseline_first_failure_e0425_count = baseline.first_failure_e0425_count;
 
@@ -1596,11 +1683,16 @@ fn run_rapidjson_strict_cmake_no_tests_backend_matrix_capture(
     manifest.push_str(&format!("fragilec={}\n", fragilec.display()));
     manifest.push_str("mode=strict\n");
     manifest.push_str(&format!("run_root={}\n", baseline_root.display()));
+    manifest.push_str(&format!(
+        "build_timeout_secs={}\n",
+        build_timeout.as_secs()
+    ));
     manifest.push_str("backends=libclang,libtooling\n");
     manifest.push_str(&format!(
-        "baseline_backend=libclang baseline_configure_status={} baseline_build_status={} baseline_first_failure_class={} baseline_first_failure_e0425_count={}\n",
+        "baseline_backend=libclang baseline_configure_status={} baseline_build_status={} baseline_build_timed_out={} baseline_first_failure_class={} baseline_first_failure_e0425_count={}\n",
         baseline_configure_status,
         baseline_build_status,
+        baseline_build_timed_out,
         baseline_first_failure_class,
         baseline_first_failure_e0425_count
     ));
@@ -1612,10 +1704,11 @@ fn run_rapidjson_strict_cmake_no_tests_backend_matrix_capture(
         let e0425_delta_vs_baseline =
             result.first_failure_e0425_count as i64 - baseline_first_failure_e0425_count as i64;
         manifest.push_str(&format!(
-            "backend={} configure_status={} build_status={} first_failure_class={} first_failure_e0425_count={} configure_status_delta_vs_baseline={} build_status_delta_vs_baseline={} class_delta_vs_baseline={} e0425_delta_vs_baseline={}\n",
+            "backend={} configure_status={} build_status={} build_timed_out={} first_failure_class={} first_failure_e0425_count={} configure_status_delta_vs_baseline={} build_status_delta_vs_baseline={} class_delta_vs_baseline={} e0425_delta_vs_baseline={}\n",
             result.backend_name,
             result.configure_status,
             result.build_status,
+            result.build_timed_out,
             result.first_failure_class,
             result.first_failure_e0425_count,
             configure_status_delta_vs_baseline,
@@ -1855,7 +1948,26 @@ fn create_local_cmake_first_failure_fixture(base_dir: &Path) -> Result<(PathBuf,
     let fake_fragilec = base_dir.join("fake_fragilec.sh");
     fs::write(
         &fake_fragilec,
-        "#!/usr/bin/env bash\nset -euo pipefail\nlog=\"${FRAGILEC_LOG:-}\"\nif [[ -n \"$log\" ]]; then\n  printf 'parser_backend=%s\\n' \"${FRAGILEC_PARSER_BACKEND:-<unset>}\" >> \"$log\"\n  printf 'cwd=%s\\n' \"$(pwd)\" >> \"$log\"\n  printf 'args=%s\\n' \"$*\" >> \"$log\"\nfi\nfor arg in \"$@\"; do\n  if [[ \"$arg\" == *\"fail.cpp\"* ]]; then\n    echo \"forced local fixture compile failure for fail.cpp\" >&2\n    exit 42\n  fi\ndone\nexec c++ \"$@\"\n",
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+log="${FRAGILEC_LOG:-}"
+if [[ -n "$log" ]]; then
+  printf 'parser_backend=%s\n' "${FRAGILEC_PARSER_BACKEND:-<unset>}" >> "$log"
+  printf 'cwd=%s\n' "$(pwd)" >> "$log"
+  printf 'args=%s\n' "$*" >> "$log"
+fi
+sleep_before_fail="${FRAGILEC_LOCAL_FIXTURE_SLEEP_BEFORE_FAIL_SECS:-0}"
+for arg in "$@"; do
+  if [[ "$arg" == *"fail.cpp"* ]]; then
+    if [[ "$sleep_before_fail" =~ ^[0-9]+$ ]] && (( sleep_before_fail > 0 )); then
+      sleep "$sleep_before_fail"
+    fi
+    echo "forced local fixture compile failure for fail.cpp" >&2
+    exit 42
+  fi
+done
+exec c++ "$@"
+"#,
     )
     .map_err(|e| format!("failed to write fake fragilec wrapper script: {}", e))?;
     let chmod_output = Command::new("chmod")
@@ -1978,8 +2090,10 @@ fn run_local_strict_cmake_no_tests_first_failure_capture_fixture(
     Ok(log_dir)
 }
 
-fn run_local_strict_cmake_no_tests_backend_matrix_capture_fixture(
+fn run_local_strict_cmake_no_tests_backend_matrix_capture_fixture_with_options(
     root: &Path,
+    build_timeout: Option<Duration>,
+    sleep_before_fail_backend: Option<&str>,
 ) -> Result<(PathBuf, Vec<StrictBackendReplayResult>), String> {
     let (project_dir, fake_fragilec) = create_local_cmake_first_failure_fixture(root)?;
     let log_dir = root.join("strict_cmake_backend_matrix_local_fixture_logs");
@@ -2049,7 +2163,8 @@ fn run_local_strict_cmake_no_tests_backend_matrix_capture_fixture(
             ));
         }
 
-        let build_output = Command::new("cmake")
+        let mut build_cmd = Command::new("cmake");
+        build_cmd
             .arg("--build")
             .arg(".")
             .arg("--verbose")
@@ -2059,15 +2174,38 @@ fn run_local_strict_cmake_no_tests_backend_matrix_capture_fixture(
             .env("CXX", fake_fragilec.to_string_lossy().to_string())
             .env("FRAGILEC_MODE", "strict")
             .env("FRAGILEC_PARSER_BACKEND", backend_env_value)
-            .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string())
-            .output()
-            .map_err(|e| {
+            .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string());
+        if sleep_before_fail_backend == Some(backend_name) {
+            build_cmd.env("FRAGILEC_LOCAL_FIXTURE_SLEEP_BEFORE_FAIL_SECS", "3");
+        }
+        let (build_output, build_timed_out) = if let Some(timeout) = build_timeout {
+            let context = format!(
+                "strict backend-matrix local fixture cmake build for {} in {}",
+                backend_name,
+                build_dir.display()
+            );
+            run_command_with_timeout(&mut build_cmd, timeout, context.as_str())?
+        } else {
+            let output = build_cmd.output().map_err(|e| {
                 format!(
                     "failed to run strict backend-matrix local fixture cmake build for {}: {}",
                     backend_name, e
                 )
             })?;
-        write_command_capture(&backend_log_dir, "cmake_build", &build_output)?;
+            (output, false)
+        };
+        let build_status = if build_timed_out {
+            COMMAND_TIMEOUT_STATUS
+        } else {
+            status_code(&build_output)
+        };
+        write_command_capture_raw(
+            &backend_log_dir,
+            "cmake_build",
+            build_status,
+            &build_output.stdout,
+            &build_output.stderr,
+        )?;
 
         let driver_log_content = fs::read_to_string(&driver_log).map_err(|e| {
             format!(
@@ -2080,18 +2218,22 @@ fn run_local_strict_cmake_no_tests_backend_matrix_capture_fixture(
         let build_stderr = String::from_utf8_lossy(&build_output.stderr);
         let (first_command, first_stderr) = select_first_failing_compile_capture(
             &driver_log_content,
-            !build_output.status.success(),
+            build_status != 0,
             &build_stdout,
             &build_stderr,
         );
         write_first_failing_compile_capture_files(&backend_log_dir, &first_command, &first_stderr)?;
-        let first_failure_class = classify_first_failing_compile_stderr(&first_stderr).to_string();
+        let first_failure_class = if build_timed_out {
+            "compile_timeout".to_string()
+        } else {
+            classify_first_failing_compile_stderr(&first_stderr).to_string()
+        };
         write_first_failing_compile_class_file(&backend_log_dir, first_failure_class.as_str())?;
         let first_failure_e0425_count = count_error_e0425_occurrences(&first_stderr);
 
         results.push(StrictBackendReplayResult {
             backend_name,
-            compile_status: status_code(&build_output),
+            compile_status: build_status,
             first_failure_class,
             first_failure_e0425_count,
         });
@@ -2147,6 +2289,12 @@ fn run_local_strict_cmake_no_tests_backend_matrix_capture_fixture(
     })?;
 
     Ok((log_dir, results))
+}
+
+fn run_local_strict_cmake_no_tests_backend_matrix_capture_fixture(
+    root: &Path,
+) -> Result<(PathBuf, Vec<StrictBackendReplayResult>), String> {
+    run_local_strict_cmake_no_tests_backend_matrix_capture_fixture_with_options(root, None, None)
 }
 
 fn run_local_strict_backend_toggle_e0425_delta_replay_fixture(
@@ -2829,6 +2977,83 @@ fn test_rapidjson_strict_cmake_backend_matrix_local_fixture_keeps_baseline_delta
 }
 
 #[test]
+fn test_rapidjson_strict_cmake_backend_matrix_local_fixture_classifies_backend_timeout() {
+    let root = unique_temp_dir("rapidjson_strict_cmake_backend_matrix_local_fixture_timeout");
+    fs::create_dir_all(&root).expect("failed to create strict backend-matrix timeout fixture root");
+
+    let (log_dir, results) = run_local_strict_cmake_no_tests_backend_matrix_capture_fixture_with_options(
+        &root,
+        Some(Duration::from_secs(1)),
+        Some("libtooling"),
+    )
+    .expect("failed to run strict backend-matrix local fixture timeout replay");
+    assert_eq!(
+        results.len(),
+        3,
+        "strict backend-matrix timeout fixture should produce three backend replay results"
+    );
+
+    for backend_name in ["libclang", "hybrid"] {
+        let backend = results
+            .iter()
+            .find(|entry| entry.backend_name == backend_name)
+            .unwrap_or_else(|| panic!("missing strict backend-matrix timeout result for {}", backend_name));
+        assert_ne!(
+            backend.compile_status, COMMAND_TIMEOUT_STATUS,
+            "backend {} should not time out in timeout fixture (logs: {})",
+            backend_name,
+            log_dir.display()
+        );
+        assert_eq!(
+            backend.first_failure_class, "non_rustc_error",
+            "backend {} should keep forced-wrapper failure class when not timed out (logs: {})",
+            backend_name,
+            log_dir.display()
+        );
+    }
+
+    let timed_out_backend = results
+        .iter()
+        .find(|entry| entry.backend_name == "libtooling")
+        .expect("missing strict backend-matrix timeout result for libtooling");
+    assert_eq!(
+        timed_out_backend.compile_status, COMMAND_TIMEOUT_STATUS,
+        "libtooling backend should use timeout sentinel status when timeout is forced (logs: {})",
+        log_dir.display()
+    );
+    assert_eq!(
+        timed_out_backend.first_failure_class, "compile_timeout",
+        "libtooling backend should classify forced timeout as compile_timeout (logs: {})",
+        log_dir.display()
+    );
+
+    assert_eq!(
+        read_status_file(&log_dir.join("backend_libtooling/cmake_build.status"))
+            .expect("failed to read backend_libtooling/cmake_build.status"),
+        COMMAND_TIMEOUT_STATUS,
+        "backend_libtooling cmake_build.status should persist timeout sentinel status"
+    );
+    let timeout_stderr = fs::read_to_string(log_dir.join("backend_libtooling/cmake_build.stderr"))
+        .expect("failed to read backend_libtooling/cmake_build.stderr");
+    assert!(
+        timeout_stderr.contains("command timed out after 1s"),
+        "backend_libtooling cmake_build.stderr should record timeout diagnostic, got:\n{}",
+        timeout_stderr
+    );
+    let timeout_first_class =
+        fs::read_to_string(log_dir.join("backend_libtooling/first_failing_compile_class.txt"))
+            .expect("failed to read backend_libtooling/first_failing_compile_class.txt");
+    assert_eq!(
+        timeout_first_class.trim(),
+        "compile_timeout",
+        "backend_libtooling first failure class file should persist compile_timeout, got:\n{}",
+        timeout_first_class
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn test_rapidjson_strict_backend_toggle_local_fixture_keeps_e0425_delta_at_baseline() {
     let root = unique_temp_dir("rapidjson_strict_backend_toggle_e0425_delta");
     fs::create_dir_all(&root).expect("failed to create strict backend-toggle fixture root");
@@ -3484,6 +3709,11 @@ fn test_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_capture_first_
         "strict cmake backend-matrix manifest should include baseline metadata, got:\n{}",
         manifest
     );
+    assert!(
+        manifest.contains("build_timeout_secs="),
+        "strict cmake backend-matrix manifest should include build timeout metadata, got:\n{}",
+        manifest
+    );
     let run_root_marker = format!("run_root={}", run_root.display());
     assert!(
         manifest.contains(run_root_marker.as_str()),
@@ -3513,6 +3743,7 @@ fn test_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_capture_first_
         for marker in [
             format!("configure_status={}", result.configure_status),
             format!("build_status={}", result.build_status),
+            format!("build_timed_out={}", result.build_timed_out),
             format!("first_failure_class={}", result.first_failure_class),
             format!(
                 "first_failure_e0425_count={}",

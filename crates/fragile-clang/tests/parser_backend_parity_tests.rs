@@ -172,8 +172,8 @@ struct Box {
 template struct Box<int>;
 
 template<typename T>
-T identity(T value) {
-    return value;
+T identity(T templ_value) {
+    return templ_value;
 }
 
 template int identity<int>(int);
