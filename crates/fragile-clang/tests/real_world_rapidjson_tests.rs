@@ -114,6 +114,10 @@ const RAPIDJSON_GENERATED_SURFACE_RAPIDJSON_PLACEHOLDER_MARKER: &str =
 const RAPIDJSON_GENERATED_SURFACE_C_VOID_ALIAS_MARKER: &str = "= std::ffi::c_void;";
 const RAPIDJSON_GENERATED_SURFACE_PARSE_UNSPECIFIC_MARKER: &str =
     "kParseErrorUnspecificSyntaxError";
+const RAPIDJSON_GENERATED_SURFACE_PARSE_BRIDGE_EXTRACT_CALL_MARKER: &str =
+    "fragile_extract_input_bytes_from_stream(&_is)";
+const RAPIDJSON_GENERATED_SURFACE_PARSE_BRIDGE_RENDER_CALL_MARKER: &str =
+    "fragile_rapidjson_render_to_stdout_for_handler::<THandler>(&__fragile_input).is_ok()";
 const RAPIDJSON_NATIVE_LOG_FILES: &[&str] = &[
     "compile_condense.status",
     "compile_condense.stdout",
@@ -1149,6 +1153,7 @@ struct GeneratedSurfaceInventory {
     rapidjson_placeholder_count: usize,
     c_void_alias_count: usize,
     parse_unspecific_syntax_error_count: usize,
+    parse_runtime_bridge_call_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -1403,6 +1408,12 @@ fn collect_generated_surface_inventory(generated_rs: &str) -> GeneratedSurfaceIn
         parse_unspecific_syntax_error_count: generated_rs
             .match_indices(RAPIDJSON_GENERATED_SURFACE_PARSE_UNSPECIFIC_MARKER)
             .count(),
+        parse_runtime_bridge_call_count: generated_rs
+            .match_indices(RAPIDJSON_GENERATED_SURFACE_PARSE_BRIDGE_EXTRACT_CALL_MARKER)
+            .count()
+            + generated_rs
+                .match_indices(RAPIDJSON_GENERATED_SURFACE_PARSE_BRIDGE_RENDER_CALL_MARKER)
+                .count(),
     }
 }
 
@@ -2899,6 +2910,10 @@ fn run_rapidjson_strict_single_tu_backend_surface_delta_capture(
         .generated_surface_inventory
         .as_ref()
         .map(|inv| inv.parse_unspecific_syntax_error_count);
+    let baseline_parse_runtime_bridge_call_count = baseline
+        .generated_surface_inventory
+        .as_ref()
+        .map(|inv| inv.parse_runtime_bridge_call_count);
     let baseline_timing_parse_ms = baseline.transpile_stage_timing.parse_ms;
     let baseline_timing_export_ms = baseline.transpile_stage_timing.export_ms;
     let baseline_timing_enrichment_ms = baseline.transpile_stage_timing.enrichment_ms;
@@ -2918,7 +2933,7 @@ fn run_rapidjson_strict_single_tu_backend_surface_delta_capture(
     ));
     manifest.push_str("backends=libclang,libtooling\n");
     manifest.push_str(&format!(
-        "baseline_backend=libclang baseline_compile_status={} baseline_compile_timed_out={} baseline_first_failure_class={} baseline_first_failure_e0425_count={} baseline_sidecar_exists={} baseline_surface_line_count={} baseline_surface_placeholder_count={} baseline_surface_rapidjson_placeholder_count={} baseline_surface_c_void_alias_count={} baseline_surface_parse_unspecific_count={} baseline_transpile_timing_exists={} baseline_transpile_parse_ms={} baseline_transpile_export_ms={} baseline_transpile_enrichment_ms={} baseline_transpile_codegen_ms={} baseline_transpile_total_ms={} baseline_transpile_last_stage_started={} baseline_transpile_last_stage_completed={} baseline_transpile_status={}\n",
+        "baseline_backend=libclang baseline_compile_status={} baseline_compile_timed_out={} baseline_first_failure_class={} baseline_first_failure_e0425_count={} baseline_sidecar_exists={} baseline_surface_line_count={} baseline_surface_placeholder_count={} baseline_surface_rapidjson_placeholder_count={} baseline_surface_c_void_alias_count={} baseline_surface_parse_unspecific_count={} baseline_surface_parse_runtime_bridge_call_count={} baseline_transpile_timing_exists={} baseline_transpile_parse_ms={} baseline_transpile_export_ms={} baseline_transpile_enrichment_ms={} baseline_transpile_codegen_ms={} baseline_transpile_total_ms={} baseline_transpile_last_stage_started={} baseline_transpile_last_stage_completed={} baseline_transpile_status={}\n",
         baseline.compile_status,
         baseline.compile_timed_out,
         baseline.first_failure_class,
@@ -2929,6 +2944,7 @@ fn run_rapidjson_strict_single_tu_backend_surface_delta_capture(
         format_optional_usize(baseline_rapidjson_placeholder_count),
         format_optional_usize(baseline_c_void_alias_count),
         format_optional_usize(baseline_parse_unspecific_count),
+        format_optional_usize(baseline_parse_runtime_bridge_call_count),
         baseline.transpile_stage_timing_exists,
         format_optional_u128(baseline_timing_parse_ms),
         format_optional_u128(baseline_timing_export_ms),
@@ -2960,6 +2976,10 @@ fn run_rapidjson_strict_single_tu_backend_surface_delta_capture(
             .generated_surface_inventory
             .as_ref()
             .map(|inv| inv.parse_unspecific_syntax_error_count);
+        let parse_runtime_bridge_call_count = result
+            .generated_surface_inventory
+            .as_ref()
+            .map(|inv| inv.parse_runtime_bridge_call_count);
         let transpile_parse_ms = result.transpile_stage_timing.parse_ms;
         let transpile_export_ms = result.transpile_stage_timing.export_ms;
         let transpile_enrichment_ms = result.transpile_stage_timing.enrichment_ms;
@@ -2991,6 +3011,14 @@ fn run_rapidjson_strict_single_tu_backend_surface_delta_capture(
                 (Some(value), Some(base)) => Some(value as i64 - base as i64),
                 _ => None,
             };
+        let parse_runtime_bridge_call_delta_vs_baseline =
+            match (
+                parse_runtime_bridge_call_count,
+                baseline_parse_runtime_bridge_call_count,
+            ) {
+                (Some(value), Some(base)) => Some(value as i64 - base as i64),
+                _ => None,
+            };
         let transpile_total_delta_vs_baseline = match (transpile_total_ms, baseline_timing_total_ms)
         {
             (Some(value), Some(base)) => Some(value as i64 - base as i64),
@@ -2998,7 +3026,7 @@ fn run_rapidjson_strict_single_tu_backend_surface_delta_capture(
         };
 
         manifest.push_str(&format!(
-            "backend={} compile_status={} compile_timed_out={} first_failure_class={} first_failure_e0425_count={} sidecar_exists={} sidecar_path={} transpile_timing_exists={} transpile_timing_path={} transpile_parse_ms={} transpile_export_ms={} transpile_enrichment_ms={} transpile_codegen_ms={} transpile_total_ms={} transpile_total_delta_vs_baseline={} transpile_last_stage_started={} transpile_last_stage_completed={} transpile_status={} surface_line_count={} surface_placeholder_count={} surface_rapidjson_placeholder_count={} surface_c_void_alias_count={} surface_parse_unspecific_count={} surface_line_count_delta_vs_baseline={} surface_placeholder_delta_vs_baseline={} surface_rapidjson_placeholder_delta_vs_baseline={} surface_c_void_alias_delta_vs_baseline={} surface_parse_unspecific_delta_vs_baseline={}\n",
+            "backend={} compile_status={} compile_timed_out={} first_failure_class={} first_failure_e0425_count={} sidecar_exists={} sidecar_path={} transpile_timing_exists={} transpile_timing_path={} transpile_parse_ms={} transpile_export_ms={} transpile_enrichment_ms={} transpile_codegen_ms={} transpile_total_ms={} transpile_total_delta_vs_baseline={} transpile_last_stage_started={} transpile_last_stage_completed={} transpile_status={} surface_line_count={} surface_placeholder_count={} surface_rapidjson_placeholder_count={} surface_c_void_alias_count={} surface_parse_unspecific_count={} surface_parse_runtime_bridge_call_count={} surface_line_count_delta_vs_baseline={} surface_placeholder_delta_vs_baseline={} surface_rapidjson_placeholder_delta_vs_baseline={} surface_c_void_alias_delta_vs_baseline={} surface_parse_unspecific_delta_vs_baseline={} surface_parse_runtime_bridge_call_delta_vs_baseline={}\n",
             result.backend_name,
             result.compile_status,
             result.compile_timed_out,
@@ -3022,11 +3050,13 @@ fn run_rapidjson_strict_single_tu_backend_surface_delta_capture(
             format_optional_usize(rapidjson_placeholder_count),
             format_optional_usize(c_void_alias_count),
             format_optional_usize(parse_unspecific_count),
+            format_optional_usize(parse_runtime_bridge_call_count),
             format_optional_i64(line_count_delta_vs_baseline),
             format_optional_i64(placeholder_delta_vs_baseline),
             format_optional_i64(rapidjson_placeholder_delta_vs_baseline),
             format_optional_i64(c_void_alias_delta_vs_baseline),
             format_optional_i64(parse_unspecific_delta_vs_baseline),
+            format_optional_i64(parse_runtime_bridge_call_delta_vs_baseline),
         ));
     }
 
@@ -4435,6 +4465,8 @@ fn test_collect_generated_surface_inventory_counts_expected_markers() {
 /// Placeholder for C++ `rapidjson::Reader`
 pub type FragileFileAlias = std::ffi::c_void;
 kParseErrorUnspecificSyntaxError
+let __fragile_input_bytes = fragile_extract_input_bytes_from_stream(&_is);
+if fragile_rapidjson_render_to_stdout_for_handler::<THandler>(&__fragile_input).is_ok() {}
 /// Placeholder for C++ `OtherType`
 "#;
     let inventory = collect_generated_surface_inventory(generated);
@@ -4443,6 +4475,7 @@ kParseErrorUnspecificSyntaxError
     assert_eq!(inventory.rapidjson_placeholder_count, 1);
     assert_eq!(inventory.c_void_alias_count, 1);
     assert_eq!(inventory.parse_unspecific_syntax_error_count, 1);
+    assert_eq!(inventory.parse_runtime_bridge_call_count, 2);
 }
 
 #[test]
@@ -5278,6 +5311,14 @@ fn test_real_world_rapidjson_strict_capitalize_backend_surface_delta_capture() {
         libtooling.sidecar_exists,
         "strict capitalize backend-surface libtooling run should emit sidecar after hotspot fix"
     );
+    let libtooling_inventory = libtooling
+        .generated_surface_inventory
+        .as_ref()
+        .expect("strict capitalize backend-surface libtooling run should report generated surface inventory");
+    assert_eq!(
+        libtooling_inventory.parse_runtime_bridge_call_count, 0,
+        "strict capitalize backend-surface libtooling run should not rely on rapidjson runtime parse bridge calls anymore"
+    );
     assert_eq!(
         libtooling.transpile_stage_timing.status.as_deref(),
         Some("completed"),
@@ -5402,6 +5443,10 @@ fn test_real_world_rapidjson_strict_capitalize_backend_surface_delta_capture() {
                 format!(
                     "surface_parse_unspecific_count={}",
                     inventory.parse_unspecific_syntax_error_count
+                ),
+                format!(
+                    "surface_parse_runtime_bridge_call_count={}",
+                    inventory.parse_runtime_bridge_call_count
                 ),
             ] {
                 assert!(

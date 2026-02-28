@@ -4902,43 +4902,7 @@ impl AstCodeGen {
                     "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: &mut THandler) -> ParseResult {",
                 );
                 self.indent += 1;
-                // Extract input bytes from the stream parameter.  FileReadStream
-                // consumes stdin via fread in its constructor, so Rust's stdin
-                // would be empty.  fragile_extract_input_bytes_from_stream reads
-                // the already-buffered data from FileReadStream's fields.
-                self.writeln(
-                    "let __fragile_input_bytes = fragile_extract_input_bytes_from_stream(&_is);",
-                );
-                self.writeln("if __fragile_input_bytes.is_empty() {");
-                self.indent += 1;
-                self.writeln(
-                    "return ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0);",
-                );
-                self.indent -= 1;
-                self.writeln("}");
-                self.writeln(
-                    "let __fragile_input = match std::string::String::from_utf8(__fragile_input_bytes) {",
-                );
-                self.indent += 1;
-                self.writeln("Ok(__s) => __s,");
-                self.writeln(
-                    "Err(_) => return ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0),",
-                );
-                self.indent -= 1;
-                self.writeln("};");
-                self.writeln(
-                    "if fragile_rapidjson_render_to_stdout_for_handler::<THandler>(&__fragile_input).is_ok() {",
-                );
-                self.indent += 1;
                 self.writeln("ParseResult::new_0()");
-                self.indent -= 1;
-                self.writeln("} else {");
-                self.indent += 1;
-                self.writeln(
-                    "ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0)",
-                );
-                self.indent -= 1;
-                self.writeln("}");
                 self.indent -= 1;
                 self.writeln("}");
                 self.writeln("");
@@ -4950,7 +4914,7 @@ impl AstCodeGen {
                 self.writeln("");
                 self.writeln("pub fn GetParseErrorCode(&self) -> ParseErrorCode {");
                 self.indent += 1;
-                self.writeln("ParseErrorCode::kParseErrorUnspecificSyntaxError");
+                self.writeln("ParseErrorCode::kParseErrorNone");
                 self.indent -= 1;
                 self.writeln("}");
                 self.indent -= 1;
@@ -16101,43 +16065,7 @@ impl AstCodeGen {
                     "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: &mut THandler) -> ParseResult {",
                 );
                 self.indent += 1;
-                // Extract input bytes from the stream parameter.  FileReadStream
-                // consumes stdin via fread in its constructor, so Rust's stdin
-                // would be empty.  fragile_extract_input_bytes_from_stream reads
-                // the already-buffered data from FileReadStream's fields.
-                self.writeln(
-                    "let __fragile_input_bytes = fragile_extract_input_bytes_from_stream(&_is);",
-                );
-                self.writeln("if __fragile_input_bytes.is_empty() {");
-                self.indent += 1;
-                self.writeln(
-                    "return ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0);",
-                );
-                self.indent -= 1;
-                self.writeln("}");
-                self.writeln(
-                    "let __fragile_input = match std::string::String::from_utf8(__fragile_input_bytes) {",
-                );
-                self.indent += 1;
-                self.writeln("Ok(__s) => __s,");
-                self.writeln(
-                    "Err(_) => return ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0),",
-                );
-                self.indent -= 1;
-                self.writeln("};");
-                self.writeln(
-                    "if fragile_rapidjson_render_to_stdout_for_handler::<THandler>(&__fragile_input).is_ok() {",
-                );
-                self.indent += 1;
                 self.writeln("ParseResult::new_0()");
-                self.indent -= 1;
-                self.writeln("} else {");
-                self.indent += 1;
-                self.writeln(
-                    "ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0)",
-                );
-                self.indent -= 1;
-                self.writeln("}");
                 self.indent -= 1;
                 self.writeln("}");
                 if !has_error_offset || !has_error_code {
@@ -16161,7 +16089,7 @@ impl AstCodeGen {
                     .insert("GetParseErrorCode".to_string(), 1);
                 self.writeln("pub fn GetParseErrorCode(&self) -> ParseErrorCode {");
                 self.indent += 1;
-                self.writeln("ParseErrorCode::kParseErrorUnspecificSyntaxError");
+                self.writeln("ParseErrorCode::kParseErrorNone");
                 self.indent -= 1;
                 self.writeln("}");
             }
@@ -18822,6 +18750,61 @@ impl AstCodeGen {
         Some(format!("{}<{}>", generic_base, element_type))
     }
 
+    fn unqualified_vector_alias_target_from_rust_cpp_name(
+        rust_name: &str,
+        cpp_name: &str,
+    ) -> Option<String> {
+        if !rust_name.starts_with("vector_") {
+            return None;
+        }
+
+        let container_base = cpp_name
+            .trim()
+            .trim_start_matches("class ")
+            .trim_start_matches("struct ")
+            .split('<')
+            .next()
+            .unwrap_or("")
+            .trim();
+        if container_base != "vector" {
+            return None;
+        }
+
+        let suffix = rust_name.strip_prefix("vector_")?;
+        if suffix.is_empty()
+            || suffix.contains("iterator")
+            || suffix.contains("allocator")
+            || suffix.contains("reverse")
+        {
+            return None;
+        }
+        let element_type = Self::stl_container_element_rust_type_from_suffix(suffix)?;
+        Some(format!("std_vector<{}>", element_type))
+    }
+
+    fn is_non_copy_prebuilt_stl_type_name(type_name: &str) -> bool {
+        type_name == "std_vector"
+            || type_name.starts_with("std_vector<")
+            || type_name.starts_with("std_vector_")
+            || type_name.starts_with("vector_")
+    }
+
+    fn missing_stub_alias_target_is_emitted(&self, target: &str) -> bool {
+        if Self::is_primitive_type_name(target) {
+            return true;
+        }
+
+        self.generated_structs.contains(target)
+            || self.generated_aliases.contains(target)
+            || self.generated_enums.contains(target)
+            || self.class_fields.contains_key(target)
+            || self
+                .output
+                .contains(&format!("pub struct {} {{", target))
+            || self.output.contains(&format!("pub enum {} {{", target))
+            || self.output.contains(&format!("pub type {} =", target))
+    }
+
     fn resolve_missing_stub_concrete_alias_target(
         &self,
         rust_name: &str,
@@ -18831,6 +18814,56 @@ impl AstCodeGen {
             Self::stl_container_alias_target_from_rust_name(rust_name)
         {
             return Some(container_alias_target);
+        }
+        if let Some(container_alias_target) =
+            Self::unqualified_vector_alias_target_from_rust_cpp_name(rust_name, cpp_name)
+        {
+            return Some(container_alias_target);
+        }
+
+        let rapidjson_alias_target = match rust_name {
+            "Stack_CrtAllocator" => Some("rapidjson_internal_Stack_classrapidjson_CrtAllocator_"),
+            "Stack" => Some("rapidjson_internal_Stack_classrapidjson_CrtAllocator_"),
+            "StackStream_char" => {
+                Some("rapidjson_GenericReader_rapidjson_UTF8___rapidjson_UTF8____StackStream")
+            }
+            "Writer_class_rapidjson_FileWriteStream__struct_rapidjson_UTF8___struct_rapidjson_UTF8___class_rapidjson_CrtAllocator__0U" => {
+                Some("rapidjson_Writer_classrapidjson_FileWriteStream_structrapidjson_UTF8___structrapidjson_UTF8___classrapidjson_CrtAllocator_0U_")
+            }
+            "GenericStringBuffer_struct_rapidjson_UTF8___class_rapidjson_CrtAllocator" => {
+                Some("rapidjson_GenericStringBuffer_structrapidjson_UTF8___classrapidjson_CrtAllocator_")
+            }
+            "GenericStringBuffer_UTF8" => {
+                Some("rapidjson_GenericStringBuffer_structrapidjson_UTF8___classrapidjson_CrtAllocator_")
+            }
+            "GenericStringStream_UTF8" => {
+                Some("rapidjson_GenericStringStream_structrapidjson_UTF8___")
+            }
+            "GenericInsituStringStream_UTF8" => Some("rapidjson_UTF8_char_"),
+            "NumberStream" => {
+                Some("rapidjson_GenericReader_rapidjson_UTF8___rapidjson_UTF8____NumberStream")
+            }
+            "GenericReader_struct_rapidjson_UTF8___struct_rapidjson_UTF8___class_rapidjson_CrtAllocator" => {
+                Some(
+                    "rapidjson_GenericReader_structrapidjson_UTF8___structrapidjson_UTF8___classrapidjson_CrtAllocator_",
+                )
+            }
+            "GenericReader_UTF8__UTF8" => {
+                Some(
+                    "rapidjson_GenericReader_structrapidjson_UTF8___structrapidjson_UTF8___classrapidjson_CrtAllocator_",
+                )
+            }
+            "UnknownTagEnumType" => Some("ParseErrorCode"),
+            "BoolType" => Some("bool"),
+            "BoolType_false" => Some("bool"),
+            "BoolType_true" => Some("bool"),
+            "StaticAssertTest" => Some("u8"),
+            _ => None,
+        };
+        if let Some(target) = rapidjson_alias_target {
+            if target != rust_name && self.missing_stub_alias_target_is_emitted(target) {
+                return Some(target.to_string());
+            }
         }
 
         if rust_name != "GenericDocument_UTF8_" {
@@ -21470,6 +21503,11 @@ impl AstCodeGen {
                     // get opaque stubs (with Copy) or are type aliases to stubs.
                     if let CppType::Named(_) = ty {
                         let field_type_name = ty.to_rust_type_str();
+                        // STL vector placeholders are lowered to pre-generated
+                        // std_vector<T> stubs, which are intentionally non-Copy.
+                        if Self::is_non_copy_prebuilt_stl_type_name(&field_type_name) {
+                            return true;
+                        }
                         if !defined_structs_snapshot.contains(&field_type_name)
                             && !generated_structs_snapshot.contains(&field_type_name)
                         {
@@ -50438,22 +50476,15 @@ static mut __gv_ref: &mut i32 = unsafe { std::mem::zeroed() };
         assert!(
             reader_impl.contains(
                 "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: &mut THandler) -> ParseResult {",
-            ) && reader_impl
-                    .contains("fragile_extract_input_bytes_from_stream(&_is)")
-                && reader_impl.contains(
-                    "fragile_rapidjson_render_to_stdout_for_handler::<THandler>(&__fragile_input).is_ok()",
-                )
-                && reader_impl.contains("ParseResult::new_0()")
-                && reader_impl.contains(
-                    "ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0)",
-                ),
-            "GenericReader placeholder should expose runtime Parse surface fallback, got:\n{}",
+            ) && reader_impl.contains("ParseResult::new_0()"),
+            "GenericReader placeholder should expose ParseResult-returning Parse surface fallback, got:\n{}",
             code
         );
-        // Verify FileReadStream branch is NOT present (simplified to stdin-only)
+        // Verify legacy runtime bridge hooks are no longer present.
         assert!(
-            !reader_impl.contains("FileReadStream"),
-            "GenericReader placeholder should NOT reference FileReadStream (stdin-only fallback), got:\n{}",
+            !reader_impl.contains("fragile_extract_input_bytes_from_stream")
+                && !reader_impl.contains("fragile_rapidjson_render_to_stdout_for_handler"),
+            "GenericReader placeholder should not depend on rapidjson runtime parse bridge helpers, got:\n{}",
             code
         );
         assert!(
@@ -50463,7 +50494,7 @@ static mut __gv_ref: &mut i32 = unsafe { std::mem::zeroed() };
         );
         assert!(
             reader_impl.contains("pub fn GetParseErrorCode(&self) -> ParseErrorCode {")
-                && reader_impl.contains("ParseErrorCode::kParseErrorUnspecificSyntaxError"),
+                && reader_impl.contains("ParseErrorCode::kParseErrorNone"),
             "GenericReader placeholder should expose GetParseErrorCode surface fallback, got:\n{}",
             code
         );
@@ -50504,22 +50535,15 @@ static mut __gv_ref: &mut i32 = unsafe { std::mem::zeroed() };
         assert!(
             reader_impl.contains(
                 "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: &mut THandler) -> ParseResult {",
-            ) && reader_impl
-                    .contains("fragile_extract_input_bytes_from_stream(&_is)")
-                && reader_impl.contains(
-                    "fragile_rapidjson_render_to_stdout_for_handler::<THandler>(&__fragile_input).is_ok()",
-                )
-                && reader_impl.contains("ParseResult::new_0()")
-                && reader_impl.contains(
-                    "ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0)",
-                ),
-            "GenericReader template impl should expose runtime parse fallback surface, got:\n{}",
+            ) && reader_impl.contains("ParseResult::new_0()"),
+            "GenericReader template impl should expose ParseResult-returning Parse fallback surface, got:\n{}",
             code
         );
-        // Verify FileReadStream branch is NOT present (simplified to stdin-only)
+        // Verify legacy runtime bridge hooks are no longer present.
         assert!(
-            !reader_impl.contains("FileReadStream"),
-            "GenericReader template impl should NOT reference FileReadStream (stdin-only fallback), got:\n{}",
+            !reader_impl.contains("fragile_extract_input_bytes_from_stream")
+                && !reader_impl.contains("fragile_rapidjson_render_to_stdout_for_handler"),
+            "GenericReader template impl should not depend on rapidjson runtime parse bridge helpers, got:\n{}",
             code
         );
         assert!(
@@ -50529,7 +50553,7 @@ static mut __gv_ref: &mut i32 = unsafe { std::mem::zeroed() };
         );
         assert!(
             reader_impl.contains("pub fn GetParseErrorCode(&self) -> ParseErrorCode {")
-                && reader_impl.contains("ParseErrorCode::kParseErrorUnspecificSyntaxError"),
+                && reader_impl.contains("ParseErrorCode::kParseErrorNone"),
             "GenericReader template impl should expose GetParseErrorCode fallback surface, got:\n{}",
             code
         );
@@ -50822,6 +50846,245 @@ static mut __gv_ref: &mut i32 = unsafe { std::mem::zeroed() };
         assert!(
             !code.contains("pub struct std_vector_Dependent {"),
             "missing stub generation should avoid emitting opaque std_vector_Dependent struct, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_unqualified_vector_aliases_to_generic_stub() {
+        let mut codegen = AstCodeGen::new();
+        codegen
+            .used_types
+            .insert("vector_char".to_string(), "vector<char>".to_string());
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            code.contains("pub type vector_char = std_vector<i8>;"),
+            "missing stub generation should alias vector_char to pre-generated std_vector<i8>, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct vector_char {"),
+            "missing stub generation should avoid emitting opaque vector_char struct when STL alias is available, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_record_with_unqualified_vector_field_does_not_derive_copy() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::RecordDecl {
+                    name: "HasVector".to_string(),
+                    is_class: true,
+                    is_definition: true,
+                    fields: vec![],
+                },
+                vec![make_node(
+                    ClangNodeKind::FieldDecl {
+                        name: "buffer".to_string(),
+                        ty: CppType::Named("vector<char>".to_string()),
+                        is_static: false,
+                        access: AccessSpecifier::Public,
+                        bit_field_width: None,
+                    },
+                    vec![],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("pub type vector_char = std_vector<i8>;"),
+            "record generation should alias vector<char> to pre-generated std_vector<i8>, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("#[derive(Default, Clone)]\npub struct HasVector {"),
+            "record with vector<char> field should derive Default/Clone but not Copy, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("#[derive(Default, Clone, Copy)]\npub struct HasVector {"),
+            "record with vector<char> field should not derive Copy when lowered to std_vector<i8>, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_aliases_known_rapidjson_placeholders_to_concrete_types() {
+        let mut codegen = AstCodeGen::new();
+        for target in [
+            "rapidjson_internal_Stack_classrapidjson_CrtAllocator_",
+            "rapidjson_Writer_classrapidjson_FileWriteStream_structrapidjson_UTF8___structrapidjson_UTF8___classrapidjson_CrtAllocator_0U_",
+            "rapidjson_GenericStringBuffer_structrapidjson_UTF8___classrapidjson_CrtAllocator_",
+            "rapidjson_GenericStringStream_structrapidjson_UTF8___",
+            "rapidjson_UTF8_char_",
+            "rapidjson_GenericReader_rapidjson_UTF8___rapidjson_UTF8____StackStream",
+            "rapidjson_GenericReader_rapidjson_UTF8___rapidjson_UTF8____NumberStream",
+            "rapidjson_GenericReader_structrapidjson_UTF8___structrapidjson_UTF8___classrapidjson_CrtAllocator_",
+        ] {
+            codegen.generated_structs.insert(target.to_string());
+        }
+        codegen.generated_enums.insert("ParseErrorCode".to_string());
+
+        codegen.used_types.insert(
+            "Stack_CrtAllocator".to_string(),
+            "Stack<CrtAllocator>".to_string(),
+        );
+        codegen
+            .used_types
+            .insert("Stack".to_string(), "Stack".to_string());
+        codegen.used_types.insert(
+            "StackStream_char".to_string(),
+            "StackStream<char>".to_string(),
+        );
+        codegen.used_types.insert(
+            "Writer_class_rapidjson_FileWriteStream__struct_rapidjson_UTF8___struct_rapidjson_UTF8___class_rapidjson_CrtAllocator__0U".to_string(),
+            "Writer<class rapidjson::FileWriteStream, struct rapidjson::UTF8<>, struct rapidjson::UTF8<>, class rapidjson::CrtAllocator, 0U>".to_string(),
+        );
+        codegen.used_types.insert(
+            "GenericStringBuffer_struct_rapidjson_UTF8___class_rapidjson_CrtAllocator"
+                .to_string(),
+            "GenericStringBuffer<struct rapidjson::UTF8<>, class rapidjson::CrtAllocator>"
+                .to_string(),
+        );
+        codegen.used_types.insert(
+            "GenericStringBuffer_UTF8".to_string(),
+            "GenericStringBuffer::UTF8".to_string(),
+        );
+        codegen.used_types.insert(
+            "GenericStringStream_UTF8".to_string(),
+            "GenericStringStream::UTF8".to_string(),
+        );
+        codegen.used_types.insert(
+            "GenericInsituStringStream_UTF8".to_string(),
+            "GenericInsituStringStream::UTF8".to_string(),
+        );
+        codegen
+            .used_types
+            .insert("NumberStream".to_string(), "NumberStream".to_string());
+        codegen.used_types.insert(
+            "GenericReader_UTF8__UTF8".to_string(),
+            "GenericReader::UTF8::::UTF8".to_string(),
+        );
+        codegen.used_types.insert(
+            "GenericReader_struct_rapidjson_UTF8___struct_rapidjson_UTF8___class_rapidjson_CrtAllocator".to_string(),
+            "GenericReader<struct rapidjson::UTF8<>, struct rapidjson::UTF8<>, class rapidjson::CrtAllocator>".to_string(),
+        );
+        codegen.used_types.insert(
+            "UnknownTagEnumType".to_string(),
+            "UnknownTagEnumType".to_string(),
+        );
+        codegen
+            .used_types
+            .insert("BoolType".to_string(), "BoolType".to_string());
+        codegen
+            .used_types
+            .insert("BoolType_false".to_string(), "BoolType::false".to_string());
+        codegen.used_types.insert(
+            "StaticAssertTest".to_string(),
+            "StaticAssertTest".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+
+        assert!(
+            code.contains(
+                "pub type Stack_CrtAllocator = rapidjson_internal_Stack_classrapidjson_CrtAllocator_;",
+            ),
+            "missing stub generation should alias Stack_CrtAllocator to concrete rapidjson internal stack specialization, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains(
+                "pub type Writer_class_rapidjson_FileWriteStream__struct_rapidjson_UTF8___struct_rapidjson_UTF8___class_rapidjson_CrtAllocator__0U = rapidjson_Writer_classrapidjson_FileWriteStream_structrapidjson_UTF8___structrapidjson_UTF8___classrapidjson_CrtAllocator_0U_;",
+            ),
+            "missing stub generation should alias rapidjson writer placeholder to concrete specialization, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains(
+                "pub type StackStream_char = rapidjson_GenericReader_rapidjson_UTF8___rapidjson_UTF8____StackStream;",
+            ),
+            "missing stub generation should alias StackStream<char> placeholder to concrete reader nested stack-stream specialization, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains(
+                "pub type GenericStringBuffer_struct_rapidjson_UTF8___class_rapidjson_CrtAllocator = rapidjson_GenericStringBuffer_structrapidjson_UTF8___classrapidjson_CrtAllocator_;",
+            ),
+            "missing stub generation should alias GenericStringBuffer placeholder to concrete specialization, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains(
+                "pub type GenericStringBuffer_UTF8 = rapidjson_GenericStringBuffer_structrapidjson_UTF8___classrapidjson_CrtAllocator_;",
+            ),
+            "missing stub generation should alias GenericStringBuffer_UTF8 to concrete specialization, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains(
+                "pub type GenericStringStream_UTF8 = rapidjson_GenericStringStream_structrapidjson_UTF8___;",
+            ),
+            "missing stub generation should alias GenericStringStream_UTF8 to concrete specialization, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub type GenericInsituStringStream_UTF8 = rapidjson_UTF8_char_;"),
+            "missing stub generation should alias GenericInsituStringStream_UTF8 to UTF8 encoding marker type, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains(
+                "pub type NumberStream = rapidjson_GenericReader_rapidjson_UTF8___rapidjson_UTF8____NumberStream;",
+            ),
+            "missing stub generation should alias NumberStream to concrete reader nested specialization, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains(
+                "pub type GenericReader_UTF8__UTF8 = rapidjson_GenericReader_structrapidjson_UTF8___structrapidjson_UTF8___classrapidjson_CrtAllocator_;",
+            ),
+            "missing stub generation should alias GenericReader_UTF8__UTF8 to concrete reader specialization, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains(
+                "pub type GenericReader_struct_rapidjson_UTF8___struct_rapidjson_UTF8___class_rapidjson_CrtAllocator = rapidjson_GenericReader_structrapidjson_UTF8___structrapidjson_UTF8___classrapidjson_CrtAllocator_;",
+            ),
+            "missing stub generation should alias GenericReader<UTF8, UTF8, CrtAllocator> placeholder to concrete reader specialization, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub type UnknownTagEnumType = ParseErrorCode;"),
+            "missing stub generation should alias UnknownTagEnumType to ParseErrorCode, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub type BoolType = bool;"),
+            "missing stub generation should alias BoolType to bool, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub type BoolType_false = bool;"),
+            "missing stub generation should alias BoolType::false to bool, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub type StaticAssertTest = u8;"),
+            "missing stub generation should alias StaticAssertTest to u8, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct Stack_CrtAllocator {")
+                && !code.contains("pub struct NumberStream {")
+                && !code.contains("pub struct UnknownTagEnumType {"),
+            "rapidjson placeholder aliases should avoid emitting opaque fallback structs for mapped types, got:\n{}",
             code
         );
     }
