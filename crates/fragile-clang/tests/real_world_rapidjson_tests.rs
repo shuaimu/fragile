@@ -5685,21 +5685,21 @@ fn test_real_world_rapidjson_strict_cmake_tests_on_configure_capture() {
     let configure_failure_class = fs::read_to_string(log_dir.join("configure_failure_class.txt"))
         .expect("failed to read configure_failure_class.txt");
     let configure_failure_class = configure_failure_class.trim();
-    let expected_class = if configure_status == 0 {
-        "none"
-    } else {
-        classify_cmake_configure_failure(&configure_stdout, &configure_stderr)
-    };
     assert_eq!(
-        configure_failure_class, expected_class,
-        "strict cmake tests-on configure capture should keep class/status coherence"
+        configure_status, 0,
+        "strict cmake tests-on configure capture should succeed after probe passthrough hardening; stderr:\n{}",
+        configure_stderr
     );
-    if configure_status != 0 {
-        assert_ne!(
-            configure_failure_class, "none",
-            "non-zero strict cmake tests-on configure status must not classify as none"
-        );
-    }
+    assert_eq!(
+        configure_failure_class, "none",
+        "strict cmake tests-on configure capture should not classify compiler-check failure after 4.1.c, got:\n{}",
+        configure_failure_class
+    );
+    assert!(
+        !configure_stdout.contains("CXX compiler identification is unknown"),
+        "strict cmake tests-on configure capture should not report unknown compiler identification, got:\n{}",
+        configure_stdout
+    );
 
     let manifest = fs::read_to_string(log_dir.join("strict_cmake_tests_on_configure_manifest.txt"))
         .expect("failed to read strict_cmake_tests_on_configure_manifest.txt");
@@ -5714,8 +5714,8 @@ fn test_real_world_rapidjson_strict_cmake_tests_on_configure_capture() {
         manifest
     );
     assert!(
-        manifest.contains(format!("configure_failure_class={}", configure_failure_class).as_str()),
-        "strict cmake tests-on configure manifest should record failure class, got:\n{}",
+        manifest.contains("configure_failure_class=none"),
+        "strict cmake tests-on configure manifest should record failure_class=none, got:\n{}",
         manifest
     );
 }
