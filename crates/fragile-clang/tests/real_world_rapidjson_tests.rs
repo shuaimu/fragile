@@ -601,6 +601,186 @@ fn read_status_file(path: &Path) -> Result<i32, String> {
         .map_err(|e| format!("failed to parse status file {}: {}", path.display(), e))
 }
 
+fn bool_to_i64(value: bool) -> i64 {
+    if value { 1 } else { 0 }
+}
+
+fn manifest_line_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    line.split_whitespace().find_map(|part| {
+        let (k, v) = part.split_once('=')?;
+        if k == key { Some(v) } else { None }
+    })
+}
+
+fn manifest_line_i64(line: &str, key: &str) -> Option<i64> {
+    manifest_line_value(line, key)?.parse::<i64>().ok()
+}
+
+fn manifest_line_bool(line: &str, key: &str) -> Option<bool> {
+    match manifest_line_value(line, key)? {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+fn parse_backend_matrix_delta_snapshot_from_manifest_line(
+    backend_line: &str,
+    fallback_timeout_incidence_delta_vs_baseline: Option<i64>,
+) -> Option<BackendMatrixDeltaSnapshot> {
+    Some(BackendMatrixDeltaSnapshot {
+        configure_status_delta_vs_baseline: manifest_line_i64(
+            backend_line,
+            "configure_status_delta_vs_baseline",
+        )?,
+        build_status_delta_vs_baseline: manifest_line_i64(
+            backend_line,
+            "build_status_delta_vs_baseline",
+        )?,
+        class_delta_vs_baseline: manifest_line_bool(backend_line, "class_delta_vs_baseline")?,
+        e0425_delta_vs_baseline: manifest_line_i64(backend_line, "e0425_delta_vs_baseline")?,
+        timeout_incidence_delta_vs_baseline: manifest_line_i64(
+            backend_line,
+            "timeout_incidence_delta_vs_baseline",
+        )
+        .or(fallback_timeout_incidence_delta_vs_baseline)?,
+    })
+}
+
+fn parse_backend_matrix_delta_snapshot_from_manifest(
+    manifest: &str,
+    backend_name: &str,
+) -> Option<BackendMatrixDeltaSnapshot> {
+    let backend_prefix = format!("backend={} ", backend_name);
+    let backend_line = manifest
+        .lines()
+        .find(|line| line.starts_with(backend_prefix.as_str()))?;
+    let baseline_line = manifest
+        .lines()
+        .find(|line| line.starts_with("baseline_backend="));
+    let fallback_timeout_incidence_delta_vs_baseline = baseline_line.and_then(|baseline| {
+        let backend_timed_out = manifest_line_bool(backend_line, "build_timed_out")?;
+        let baseline_timed_out = manifest_line_bool(baseline, "baseline_build_timed_out")?;
+        Some(bool_to_i64(backend_timed_out) - bool_to_i64(baseline_timed_out))
+    });
+
+    parse_backend_matrix_delta_snapshot_from_manifest_line(
+        backend_line,
+        fallback_timeout_incidence_delta_vs_baseline,
+    )
+}
+
+fn compute_backend_matrix_delta_snapshot(
+    result: &StrictCmakeBackendReplayResult,
+    baseline: &StrictCmakeBackendReplayResult,
+) -> BackendMatrixDeltaSnapshot {
+    BackendMatrixDeltaSnapshot {
+        configure_status_delta_vs_baseline: i64::from(result.configure_status)
+            - i64::from(baseline.configure_status),
+        build_status_delta_vs_baseline: i64::from(result.build_status)
+            - i64::from(baseline.build_status),
+        class_delta_vs_baseline: result.first_failure_class != baseline.first_failure_class,
+        e0425_delta_vs_baseline: result.first_failure_e0425_count as i64
+            - baseline.first_failure_e0425_count as i64,
+        timeout_incidence_delta_vs_baseline: bool_to_i64(result.build_timed_out)
+            - bool_to_i64(baseline.build_timed_out),
+    }
+}
+
+fn ensure_backend_matrix_delta_non_increase(
+    current: BackendMatrixDeltaSnapshot,
+    baseline: BackendMatrixDeltaSnapshot,
+) -> Result<(), String> {
+    if current.configure_status_delta_vs_baseline > baseline.configure_status_delta_vs_baseline {
+        return Err(format!(
+            "configure-status delta regressed: current={} baseline={}",
+            current.configure_status_delta_vs_baseline, baseline.configure_status_delta_vs_baseline
+        ));
+    }
+    if current.build_status_delta_vs_baseline > baseline.build_status_delta_vs_baseline {
+        return Err(format!(
+            "build-status delta regressed: current={} baseline={}",
+            current.build_status_delta_vs_baseline, baseline.build_status_delta_vs_baseline
+        ));
+    }
+    if bool_to_i64(current.class_delta_vs_baseline) > bool_to_i64(baseline.class_delta_vs_baseline)
+    {
+        return Err(format!(
+            "first-failure-class delta regressed: current={} baseline={}",
+            current.class_delta_vs_baseline, baseline.class_delta_vs_baseline
+        ));
+    }
+    if current.e0425_delta_vs_baseline > baseline.e0425_delta_vs_baseline {
+        return Err(format!(
+            "E0425 delta regressed: current={} baseline={}",
+            current.e0425_delta_vs_baseline, baseline.e0425_delta_vs_baseline
+        ));
+    }
+    if current.timeout_incidence_delta_vs_baseline > baseline.timeout_incidence_delta_vs_baseline {
+        return Err(format!(
+            "timeout-incidence delta regressed: current={} baseline={}",
+            current.timeout_incidence_delta_vs_baseline,
+            baseline.timeout_incidence_delta_vs_baseline
+        ));
+    }
+
+    Ok(())
+}
+
+fn latest_completed_backend_matrix_delta_baseline(
+    backend_name: &str,
+) -> Option<(PathBuf, BackendMatrixDeltaSnapshot)> {
+    let parent = Path::new(RAPIDJSON_STRICT_CMAKE_NO_TESTS_BACKEND_MATRIX_DIR)
+        .parent()
+        .unwrap_or_else(|| Path::new("/tmp"));
+    let run_root_prefix = format!("{}_", RAPIDJSON_STRICT_CMAKE_NO_TESTS_BACKEND_MATRIX_DIR);
+    let mut candidates: Vec<(SystemTime, PathBuf, BackendMatrixDeltaSnapshot)> = Vec::new();
+
+    let entries = fs::read_dir(parent).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let path_text = path.to_string_lossy();
+        if !path_text.starts_with(run_root_prefix.as_str()) {
+            continue;
+        }
+
+        let manifest_path = path
+            .join("strict_cmake_backend_matrix_logs")
+            .join("strict_cmake_backend_matrix_manifest.txt");
+        if !manifest_path.exists() {
+            continue;
+        }
+
+        let manifest = match fs::read_to_string(&manifest_path) {
+            Ok(content) => content,
+            Err(_) => continue,
+        };
+        if !manifest.contains("fixture=real_world_strict_cmake_backend_matrix_first_failure") {
+            continue;
+        }
+
+        let snapshot = match parse_backend_matrix_delta_snapshot_from_manifest(
+            manifest.as_str(),
+            backend_name,
+        ) {
+            Some(parsed) => parsed,
+            None => continue,
+        };
+        let modified = match fs::metadata(&manifest_path).and_then(|meta| meta.modified()) {
+            Ok(ts) => ts,
+            Err(_) => UNIX_EPOCH,
+        };
+
+        candidates.push((modified, manifest_path, snapshot));
+    }
+
+    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    candidates
+        .into_iter()
+        .next()
+        .map(|(_, path, snapshot)| (path, snapshot))
+}
+
 fn rapidjson_pretty_output_matches_expected(pretty_stdout: &str) -> bool {
     pretty_stdout.contains("\n")
         && pretty_stdout.contains("\"msg\": \"hi\"")
@@ -660,6 +840,15 @@ struct StrictCmakeBackendReplayResult {
     build_timed_out: bool,
     first_failure_class: String,
     first_failure_e0425_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BackendMatrixDeltaSnapshot {
+    configure_status_delta_vs_baseline: i64,
+    build_status_delta_vs_baseline: i64,
+    class_delta_vs_baseline: bool,
+    e0425_delta_vs_baseline: i64,
+    timeout_incidence_delta_vs_baseline: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1889,8 +2078,10 @@ fn run_rapidjson_strict_cmake_no_tests_backend_matrix_capture(
         let class_delta_vs_baseline = result.first_failure_class != baseline_first_failure_class;
         let e0425_delta_vs_baseline =
             result.first_failure_e0425_count as i64 - baseline_first_failure_e0425_count as i64;
+        let timeout_incidence_delta_vs_baseline =
+            bool_to_i64(result.build_timed_out) - bool_to_i64(baseline_build_timed_out);
         manifest.push_str(&format!(
-            "backend={} configure_status={} build_status={} build_timed_out={} first_failure_class={} first_failure_e0425_count={} configure_status_delta_vs_baseline={} build_status_delta_vs_baseline={} class_delta_vs_baseline={} e0425_delta_vs_baseline={}\n",
+            "backend={} configure_status={} build_status={} build_timed_out={} first_failure_class={} first_failure_e0425_count={} configure_status_delta_vs_baseline={} build_status_delta_vs_baseline={} class_delta_vs_baseline={} e0425_delta_vs_baseline={} timeout_incidence_delta_vs_baseline={}\n",
             result.backend_name,
             result.configure_status,
             result.build_status,
@@ -1900,7 +2091,8 @@ fn run_rapidjson_strict_cmake_no_tests_backend_matrix_capture(
             configure_status_delta_vs_baseline,
             build_status_delta_vs_baseline,
             class_delta_vs_baseline,
-            e0425_delta_vs_baseline
+            e0425_delta_vs_baseline,
+            timeout_incidence_delta_vs_baseline
         ));
     }
     fs::write(
@@ -3596,6 +3788,84 @@ fn test_rapidjson_strict_cmake_backend_matrix_local_fixture_classifies_backend_t
 }
 
 #[test]
+fn test_parse_backend_matrix_delta_snapshot_from_manifest_line() {
+    let line = "backend=libtooling configure_status=0 build_status=1 build_timed_out=false first_failure_class=other_rustc_error first_failure_e0425_count=0 configure_status_delta_vs_baseline=0 build_status_delta_vs_baseline=1 class_delta_vs_baseline=true e0425_delta_vs_baseline=0 timeout_incidence_delta_vs_baseline=0";
+    let snapshot = parse_backend_matrix_delta_snapshot_from_manifest_line(line, None)
+        .expect("expected backend matrix delta snapshot parse to succeed");
+    assert_eq!(
+        snapshot,
+        BackendMatrixDeltaSnapshot {
+            configure_status_delta_vs_baseline: 0,
+            build_status_delta_vs_baseline: 1,
+            class_delta_vs_baseline: true,
+            e0425_delta_vs_baseline: 0,
+            timeout_incidence_delta_vs_baseline: 0,
+        }
+    );
+}
+
+#[test]
+fn test_parse_backend_matrix_delta_snapshot_from_legacy_manifest_without_timeout_delta_field() {
+    let manifest = "fixture=real_world_strict_cmake_backend_matrix_first_failure\nbaseline_backend=libclang baseline_configure_status=0 baseline_build_status=2 baseline_build_timed_out=false baseline_first_failure_class=other_rustc_error baseline_first_failure_e0425_count=0\nbackend=libclang configure_status=0 build_status=2 build_timed_out=false first_failure_class=other_rustc_error first_failure_e0425_count=0 configure_status_delta_vs_baseline=0 build_status_delta_vs_baseline=0 class_delta_vs_baseline=false e0425_delta_vs_baseline=0\nbackend=libtooling configure_status=0 build_status=124 build_timed_out=true first_failure_class=compile_timeout first_failure_e0425_count=1 configure_status_delta_vs_baseline=0 build_status_delta_vs_baseline=122 class_delta_vs_baseline=true e0425_delta_vs_baseline=1\n";
+    let snapshot = parse_backend_matrix_delta_snapshot_from_manifest(manifest, "libtooling")
+        .expect("expected legacy manifest parse to derive timeout delta from build_timed_out");
+    assert_eq!(
+        snapshot,
+        BackendMatrixDeltaSnapshot {
+            configure_status_delta_vs_baseline: 0,
+            build_status_delta_vs_baseline: 122,
+            class_delta_vs_baseline: true,
+            e0425_delta_vs_baseline: 1,
+            timeout_incidence_delta_vs_baseline: 1,
+        }
+    );
+}
+
+#[test]
+fn test_ensure_backend_matrix_delta_non_increase_enforces_all_dimensions() {
+    let baseline = BackendMatrixDeltaSnapshot {
+        configure_status_delta_vs_baseline: 1,
+        build_status_delta_vs_baseline: 124,
+        class_delta_vs_baseline: true,
+        e0425_delta_vs_baseline: 40,
+        timeout_incidence_delta_vs_baseline: 1,
+    };
+    let improved = BackendMatrixDeltaSnapshot {
+        configure_status_delta_vs_baseline: 0,
+        build_status_delta_vs_baseline: 1,
+        class_delta_vs_baseline: true,
+        e0425_delta_vs_baseline: 0,
+        timeout_incidence_delta_vs_baseline: 0,
+    };
+    ensure_backend_matrix_delta_non_increase(improved, baseline)
+        .expect("expected improved deltas to satisfy non-increase gate");
+
+    let regressed_timeout = BackendMatrixDeltaSnapshot {
+        timeout_incidence_delta_vs_baseline: 2,
+        ..improved
+    };
+    let err = ensure_backend_matrix_delta_non_increase(regressed_timeout, baseline)
+        .expect_err("expected timeout-incidence regression to fail non-increase gate");
+    assert!(
+        err.contains("timeout-incidence"),
+        "expected timeout regression error context, got: {}",
+        err
+    );
+
+    let regressed_e0425 = BackendMatrixDeltaSnapshot {
+        e0425_delta_vs_baseline: 41,
+        ..improved
+    };
+    let err = ensure_backend_matrix_delta_non_increase(regressed_e0425, baseline)
+        .expect_err("expected E0425 regression to fail non-increase gate");
+    assert!(
+        err.contains("E0425"),
+        "expected E0425 regression error context, got: {}",
+        err
+    );
+}
+
+#[test]
 fn test_rapidjson_strict_backend_toggle_local_fixture_keeps_e0425_delta_at_baseline() {
     let root = unique_temp_dir("rapidjson_strict_backend_toggle_e0425_delta");
     fs::create_dir_all(&root).expect("failed to create strict backend-toggle fixture root");
@@ -3930,39 +4200,32 @@ fn test_real_world_rapidjson_strict_capitalize_backend_surface_delta_capture() {
         libtooling.transpile_stage_timing.last_stage_started.is_some(),
         "strict capitalize backend-surface libtooling timing trace should capture at least one started stage"
     );
-    if libtooling.compile_timed_out {
-        assert_eq!(
-            libtooling.compile_status, COMMAND_TIMEOUT_STATUS,
-            "strict capitalize backend-surface libtooling timeout run should use timeout status"
-        );
-        assert_eq!(
-            libtooling.first_failure_class, "compile_timeout",
-            "strict capitalize backend-surface libtooling timeout run should classify compile_timeout"
-        );
-        assert!(
-            !libtooling.sidecar_exists,
-            "strict capitalize backend-surface libtooling timeout run should not emit sidecar"
-        );
-        assert!(
-            libtooling_stderr.contains("command timed out after"),
-            "strict capitalize backend-surface libtooling timeout stderr should record timeout diagnostic, got:\n{}",
-            libtooling_stderr
-        );
-    } else {
-        assert_ne!(
-            libtooling.compile_status, COMMAND_TIMEOUT_STATUS,
-            "strict capitalize backend-surface non-timeout libtooling run should not report timeout status"
-        );
-        assert_ne!(
-            libtooling.first_failure_class, "compile_timeout",
-            "strict capitalize backend-surface non-timeout libtooling run should not classify compile_timeout"
-        );
-        assert_eq!(
-            libtooling.transpile_stage_timing.status.as_deref(),
-            Some("completed"),
-            "strict capitalize backend-surface non-timeout libtooling run should complete timing trace"
-        );
-    }
+    assert!(
+        !libtooling.compile_timed_out,
+        "strict capitalize backend-surface libtooling run must not timeout after hotspot fix"
+    );
+    assert_ne!(
+        libtooling.compile_status, COMMAND_TIMEOUT_STATUS,
+        "strict capitalize backend-surface libtooling run must not report timeout status"
+    );
+    assert_ne!(
+        libtooling.first_failure_class, "compile_timeout",
+        "strict capitalize backend-surface libtooling run must not classify compile_timeout"
+    );
+    assert!(
+        !libtooling_stderr.contains("command timed out after"),
+        "strict capitalize backend-surface libtooling stderr should not include timeout diagnostic after hotspot fix, got:\n{}",
+        libtooling_stderr
+    );
+    assert!(
+        libtooling.sidecar_exists,
+        "strict capitalize backend-surface libtooling run should emit sidecar after hotspot fix"
+    );
+    assert_eq!(
+        libtooling.transpile_stage_timing.status.as_deref(),
+        Some("completed"),
+        "strict capitalize backend-surface libtooling run should complete timing trace"
+    );
 
     let manifest =
         fs::read_to_string(log_dir.join("strict_capitalize_backend_surface_delta_manifest.txt"))
@@ -4474,6 +4737,8 @@ fn test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_fir
 #[test]
 #[ignore = "real-world external project test (rapidjson strict cmake no-tests backend matrix capture: libclang baseline vs libtooling)"]
 fn test_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_capture_first_failure() {
+    let previous_libtooling_delta_baseline =
+        latest_completed_backend_matrix_delta_baseline("libtooling");
     let (log_dir, results) = run_rapidjson_strict_cmake_no_tests_backend_matrix_capture()
         .expect("failed to run rapidjson strict cmake no-tests backend-matrix capture");
     let run_root = log_dir
@@ -4549,6 +4814,8 @@ fn test_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_capture_first_
         let class_delta_vs_baseline = result.first_failure_class != baseline.first_failure_class;
         let e0425_delta_vs_baseline =
             result.first_failure_e0425_count as i64 - baseline.first_failure_e0425_count as i64;
+        let timeout_incidence_delta_vs_baseline =
+            bool_to_i64(result.build_timed_out) - bool_to_i64(baseline.build_timed_out);
 
         for marker in [
             format!("configure_status={}", result.configure_status),
@@ -4569,6 +4836,10 @@ fn test_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_capture_first_
             ),
             format!("class_delta_vs_baseline={}", class_delta_vs_baseline),
             format!("e0425_delta_vs_baseline={}", e0425_delta_vs_baseline),
+            format!(
+                "timeout_incidence_delta_vs_baseline={}",
+                timeout_incidence_delta_vs_baseline
+            ),
         ] {
             assert!(
                 line.contains(marker.as_str()),
@@ -4578,6 +4849,24 @@ fn test_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_capture_first_
                 line
             );
         }
+    }
+
+    let libtooling = results
+        .iter()
+        .find(|entry| entry.backend_name == "libtooling")
+        .expect("missing strict cmake backend-matrix replay result for libtooling");
+    let current_libtooling_delta = compute_backend_matrix_delta_snapshot(libtooling, baseline);
+    if let Some((baseline_manifest_path, baseline_delta)) = previous_libtooling_delta_baseline {
+        ensure_backend_matrix_delta_non_increase(current_libtooling_delta, baseline_delta)
+            .unwrap_or_else(|why| {
+                panic!(
+                    "strict cmake backend-matrix libtooling delta must be non-increasing vs previous baseline manifest {}: {}\ncurrent={:?}\nbaseline={:?}",
+                    baseline_manifest_path.display(),
+                    why,
+                    current_libtooling_delta,
+                    baseline_delta
+                )
+            });
     }
 }
 

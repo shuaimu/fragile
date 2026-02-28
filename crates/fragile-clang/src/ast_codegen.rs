@@ -2583,14 +2583,21 @@ impl AstCodeGen {
         }
         // Unresolved C++ type names from failed template substitution
         const UNRESOLVED_CPP_TYPES: &[&str] = &[
-            "unsigned_int", "signed_int", "unsigned_long", "signed_long",
-            "unsigned_short", "signed_short", "unsigned_char", "signed_char",
+            "unsigned_int",
+            "signed_int",
+            "unsigned_long",
+            "signed_long",
+            "unsigned_short",
+            "signed_short",
+            "unsigned_char",
+            "signed_char",
         ];
         if UNRESOLVED_CPP_TYPES.iter().any(|p| generated.contains(p)) {
             return true;
         }
         // Functions referencing undefined libc struct types (struct tm, etc.)
-        generated.contains(": tm)") || generated.contains(": *const tm)")
+        generated.contains(": tm)")
+            || generated.contains(": *const tm)")
             || generated.contains(": *mut tm)")
     }
 
@@ -2660,8 +2667,8 @@ impl AstCodeGen {
             || (generated.contains("pub fn use_count") && generated.contains("__base.use_count()"))
             // String iterator types not supported — roll back STL functions using them
             || generated.contains("__wrap_iter_const_char")
-            // Broken string(x).substr() where constructor arg is lost → Default::default().substr(
-            // NOTE: not added to rollback because it removes the function entirely, breaking callers
+        // Broken string(x).substr() where constructor arg is lost → Default::default().substr(
+        // NOTE: not added to rollback because it removes the function entirely, breaking callers
     }
 
     /// Check 4c: Detect memory_order type system bugs (transmute, enum-as-struct, bitwise ops).
@@ -3378,7 +3385,6 @@ impl AstCodeGen {
             self.collect_template_info(&ast.children);
         }
 
-
         // Emit STL preamble from fragile-stl crate source files
         self.emit_stl_preamble();
 
@@ -3644,6 +3650,12 @@ impl AstCodeGen {
             "rapidjson_GenericValue_rapidjson_UTF8_",
             "GenericValue_UTF8_",
         );
+        // LibTooling can surface allocator-qualified GenericStringBuffer spellings in
+        // helper signatures while strict placeholders use GenericStringBuffer_UTF8.
+        out = out.replace(
+            "GenericStringBuffer_UTF8_char__CrtAllocator",
+            "GenericStringBuffer_UTF8",
+        );
         // Method calls on dereferenced `op_index` receivers need explicit pointer deref.
         out = out.replace(
             "!*document.op_index(b\"i\\x00\".as_ptr() as *const i8).IsInt()",
@@ -3702,10 +3714,7 @@ impl AstCodeGen {
             "unsafe { (*document.op_index(b\"pi\\x00\".as_ptr() as *const i8)).GetDouble() }",
         );
         // Remove stale bool-to-int compare tail from lowered strcmp assertions.
-        out = out.replace(
-            "}) == 0) != 0 { () } else {",
-            "}) == 0) { () } else {",
-        );
+        out = out.replace("}) == 0) != 0 { () } else {", "}) == 0) { () } else {");
         // `Value::op_index` lowered read expressions can carry a stale extra dereference.
         out = out.replace(
             "(**a.op_index(i)).GetInt()",
@@ -3730,22 +3739,13 @@ impl AstCodeGen {
         );
         // Iterator and comparison-category call-shapes can fail type inference on
         // `&Default::default()`; use an explicit zeroed temporary with inferred type.
-        out = out.replace(
-            ".op_ne(&Default::default())",
-            ".op_ne(&0)",
-        );
+        out = out.replace(".op_ne(&Default::default())", ".op_ne(&0)");
         out = out.replace(
             ".op_eq(&Default::default())",
             ".op_eq(&unsafe { std::mem::zeroed::<_>() })",
         );
-        out = out.replace(
-            ".op_ne(Default::default())",
-            ".op_ne(&0)",
-        );
-        out = out.replace(
-            ".op_ne(&unsafe { std::mem::zeroed::<_>() })",
-            ".op_ne(&0)",
-        );
+        out = out.replace(".op_ne(Default::default())", ".op_ne(&0)");
+        out = out.replace(".op_ne(&unsafe { std::mem::zeroed::<_>() })", ".op_ne(&0)");
         out = out.replace(
             ".op_eq(Default::default())",
             ".op_eq(&unsafe { std::mem::zeroed::<_>() })",
@@ -4307,7 +4307,9 @@ impl AstCodeGen {
                 let stripped = &rust_name["rapidjson_".len()..];
                 // Also strip inner "rapidjson_" prefixes (double-qualified names)
                 let stripped = stripped.replace("rapidjson_", "");
-                if self.generated_structs.contains(&stripped) || self.generated_aliases.contains(&stripped) {
+                if self.generated_structs.contains(&stripped)
+                    || self.generated_aliases.contains(&stripped)
+                {
                     self.writeln(&format!("pub type {} = {};", rust_name, stripped));
                     self.generated_aliases.insert(rust_name.clone());
                     self.writeln("");
@@ -4397,8 +4399,8 @@ impl AstCodeGen {
 
             // Track field names and their default expressions for Default impl
             let mut field_defaults: Vec<(String, String)> = Vec::new();
-            let is_member_iterator_placeholder = rust_name.contains("MemberIterator")
-                || rust_name.contains("ConstMemberIterator");
+            let is_member_iterator_placeholder =
+                rust_name.contains("MemberIterator") || rust_name.contains("ConstMemberIterator");
 
             if has_real_fields {
                 let info = spec_info.as_ref().unwrap();
@@ -4560,7 +4562,8 @@ impl AstCodeGen {
 
             // RapidJSON GenericDocument opaque placeholder: DOM API surface stubs.
             let is_generic_doc_stub = rust_name == "GenericDocument_UTF8_"
-                || (rust_name.starts_with("GenericDocument_") && !rust_name.contains("const_iterator"));
+                || (rust_name.starts_with("GenericDocument_")
+                    && !rust_name.contains("const_iterator"));
             if is_generic_doc_stub {
                 self.writeln(&format!("impl {} {{", rust_name));
                 self.indent += 1;
@@ -4568,7 +4571,9 @@ impl AstCodeGen {
                 self.writeln("pub fn Populate<T>(&mut self, _reader: &mut T) {}");
                 self.writeln("pub fn Accept<T>(&self, _writer: &T) -> bool { true }");
                 self.writeln("pub fn Parse(&mut self, _json: *const i8) -> &mut Self { self }");
-                self.writeln("pub fn ParseInsitu(&mut self, _json: *const i8) -> &mut Self { self }");
+                self.writeln(
+                    "pub fn ParseInsitu(&mut self, _json: *const i8) -> &mut Self { self }",
+                );
                 self.writeln("pub fn ParseStream<T>(&mut self, _stream: T) -> &mut Self { self }");
                 self.writeln("pub fn HasParseError(&self) -> bool { false }");
                 self.writeln("pub fn GetParseError(&self) -> ParseErrorCode { ParseErrorCode::kParseErrorNone }");
@@ -4577,7 +4582,9 @@ impl AstCodeGen {
                 self.writeln("pub fn IsObject(&self) -> bool { true }");
                 self.writeln("pub fn HasMember(&self, _name: *const i8) -> bool { false }");
                 self.writeln("pub fn FindMember<T: Default>(&self, _name: *const i8) -> T { Default::default() }");
-                self.writeln("pub fn GetAllocator<A: Default>(&mut self) -> A { Default::default() }");
+                self.writeln(
+                    "pub fn GetAllocator<A: Default>(&mut self) -> A { Default::default() }",
+                );
                 self.writeln("pub fn AddMember<K, V, A>(&mut self, _key: K, _val: V, _allocator: A) -> &mut Self { self }");
                 self.indent -= 1;
                 self.writeln("}");
@@ -4606,7 +4613,9 @@ impl AstCodeGen {
                 self.writeln("pub fn IsUint64(&self) -> bool { false }");
                 self.writeln("pub fn IsDouble(&self) -> bool { false }");
                 self.writeln("pub fn IsBool(&self) -> bool { false }");
-                self.writeln("pub fn GetString(&self) -> *const i8 { b\"\\0\".as_ptr() as *const i8 }");
+                self.writeln(
+                    "pub fn GetString(&self) -> *const i8 { b\"\\0\".as_ptr() as *const i8 }",
+                );
                 self.writeln("pub fn GetStringLength(&self) -> u32 { 0 }");
                 self.writeln("pub fn GetInt(&self) -> i32 { 0 }");
                 self.writeln("pub fn GetUint(&self) -> u32 { 0 }");
@@ -4621,7 +4630,9 @@ impl AstCodeGen {
                 self.writeln("pub fn SetUint64(&mut self, _u: u64) {}");
                 self.writeln("pub fn SetDouble(&mut self, _d: f64) {}");
                 self.writeln("pub fn SetBool(&mut self, _b: bool) {}");
-                self.writeln("pub fn SetString<A>(&mut self, _s: *const i8, _len: u32, _allocator: A) {}");
+                self.writeln(
+                    "pub fn SetString<A>(&mut self, _s: *const i8, _len: u32, _allocator: A) {}",
+                );
                 self.writeln("pub fn Accept<T>(&self, _writer: &T) -> bool { true }");
                 self.writeln("pub fn HasMember(&self, _name: *const i8) -> bool { false }");
                 self.writeln("pub fn FindMember(&self, _name: *const i8) -> *const Self { std::ptr::null() }");
@@ -4640,8 +4651,8 @@ impl AstCodeGen {
             }
 
             // RapidJSON GenericMemberIterator opaque placeholder: iterator operation stubs.
-            let is_member_iterator_stub = rust_name.contains("MemberIterator")
-                || rust_name.contains("ConstMemberIterator");
+            let is_member_iterator_stub =
+                rust_name.contains("MemberIterator") || rust_name.contains("ConstMemberIterator");
             if is_member_iterator_stub {
                 self.writeln(&format!("impl {} {{", rust_name));
                 self.indent += 1;
@@ -4665,7 +4676,9 @@ impl AstCodeGen {
                 self.writeln(&format!("impl {} {{", rust_name));
                 self.indent += 1;
                 self.writeln("pub fn new_0() -> Self { Default::default() }");
-                self.writeln("pub fn GetString(&self) -> *const i8 { b\"\\0\".as_ptr() as *const i8 }");
+                self.writeln(
+                    "pub fn GetString(&self) -> *const i8 { b\"\\0\".as_ptr() as *const i8 }",
+                );
                 self.writeln("pub fn GetSize(&self) -> u64 { 0 }");
                 self.writeln("pub fn Clear(&mut self) {}");
                 self.indent -= 1;
@@ -4705,7 +4718,8 @@ impl AstCodeGen {
                     self.writeln("#[repr(C)] #[derive(Clone, Copy)] pub struct GenericPointer_UTF8_ { _opaque: [u8; 64] }");
                     self.writeln("impl Default for GenericPointer_UTF8_ { fn default() -> Self { Self { _opaque: [0u8; 64] } } }");
                     self.writeln("impl GenericPointer_UTF8_ { pub fn Stringify<T>(&self, _buffer: &T) {} pub fn StringifyUriFragment<T>(&self, _buffer: &T) {} }");
-                    self.generated_structs.insert("GenericPointer_UTF8_".to_string());
+                    self.generated_structs
+                        .insert("GenericPointer_UTF8_".to_string());
                     self.writeln("");
                 }
                 self.writeln(&format!("impl {} {{", rust_name));
@@ -4721,8 +4735,10 @@ impl AstCodeGen {
             }
 
             // RapidJSON Writer/PrettyWriter<StringBuffer> opaque placeholder: JSON serialization stubs.
-            let is_writer_sb_stub = (rust_name.contains("Writer_") || rust_name.contains("PrettyWriter_"))
-                && (rust_name.contains("StringBuffer") || rust_name.contains("GenericStringBuffer"));
+            let is_writer_sb_stub = (rust_name.contains("Writer_")
+                || rust_name.contains("PrettyWriter_"))
+                && (rust_name.contains("StringBuffer")
+                    || rust_name.contains("GenericStringBuffer"));
             if is_writer_sb_stub {
                 self.writeln(&format!("impl {} {{", rust_name));
                 self.indent += 1;
@@ -5250,7 +5266,12 @@ impl AstCodeGen {
             if is_iterator_type {
                 // Determine the pair type (for map iterators: pair<const Key, Value>)
                 // Use a generic opaque pair as the default
-                let pair_type = format!("{}_value_type", rust_name.trim_end_matches("_iterator").trim_end_matches("_const"));
+                let pair_type = format!(
+                    "{}_value_type",
+                    rust_name
+                        .trim_end_matches("_iterator")
+                        .trim_end_matches("_const")
+                );
                 self.writeln(&format!(
                     "/// Opaque pair type for {} dereference",
                     rust_name
@@ -5880,10 +5901,7 @@ impl AstCodeGen {
             && !layout_entries.iter().any(|e| e.name == "what")
         {
             self.writeln("");
-            self.writeln(&format!(
-                "/// Vtable wrapper for `{}::what`",
-                class_name
-            ));
+            self.writeln(&format!("/// Vtable wrapper for `{}::what`", class_name));
             self.writeln(&format!(
                 "unsafe fn {}_vtable_what(this: *const {}) -> *const i8 {{",
                 sanitized_class, sanitized_root
@@ -5891,14 +5909,8 @@ impl AstCodeGen {
             self.indent += 1;
             // Return a stub message with the class name
             self.writeln("let _ = this; // suppress unused warning");
-            let what_msg = class_name
-                .rsplit("::")
-                .next()
-                .unwrap_or(class_name);
-            self.writeln(&format!(
-                "b\"{}\\0\".as_ptr() as *const i8",
-                what_msg
-            ));
+            let what_msg = class_name.rsplit("::").next().unwrap_or(class_name);
+            self.writeln(&format!("b\"{}\\0\".as_ptr() as *const i8", what_msg));
             self.indent -= 1;
             self.writeln("}");
         }
@@ -8454,9 +8466,7 @@ impl AstCodeGen {
                         let ident = result[(open_paren + 2)..abs_pos].trim();
                         // Verify it's a simple identifier (no spaces, balanced parens)
                         if !ident.is_empty()
-                            && ident
-                                .chars()
-                                .all(|c| c.is_alphanumeric() || c == '_')
+                            && ident.chars().all(|c| c.is_alphanumeric() || c == '_')
                         {
                             // Find the closing ')' of .substr(...)
                             let args_start = abs_pos + ").substr(".len();
@@ -8464,12 +8474,9 @@ impl AstCodeGen {
                                 Self::find_matching_paren(&result, args_start - 1)
                             {
                                 let args = &result[args_start..args_end];
-                                let replacement = format!(
-                                    "fragile_cstr_substr({}, {})",
-                                    ident, args
-                                );
-                                let full_old =
-                                    &result[open_paren..=args_end].to_string();
+                                let replacement =
+                                    format!("fragile_cstr_substr({}, {})", ident, args);
+                                let full_old = &result[open_paren..=args_end].to_string();
                                 result = result.replacen(full_old, &replacement, 1);
                                 search_from = open_paren + replacement.len();
                                 continue;
@@ -8537,17 +8544,12 @@ impl AstCodeGen {
                         if !second_arg.is_empty()
                             && !second_arg.starts_with("&mut ")
                             && !second_arg.starts_with(char::is_numeric)
-                            && second_arg
-                                .chars()
-                                .all(|c| c.is_alphanumeric() || c == '_')
+                            && second_arg.chars().all(|c| c.is_alphanumeric() || c == '_')
                         {
                             let first_arg = &args_str[..comma];
-                            let new_args =
-                                format!("{}, &mut {}", first_arg, second_arg);
-                            let old_call = format!(
-                                ".Parse({})",
-                                &result[(open_paren + 1)..close_paren]
-                            );
+                            let new_args = format!("{}, &mut {}", first_arg, second_arg);
+                            let old_call =
+                                format!(".Parse({})", &result[(open_paren + 1)..close_paren]);
                             let new_call = format!(".Parse({})", new_args);
                             result = result.replacen(&old_call, &new_call, 1);
                             search_from = abs_pos + new_call.len();
@@ -15811,9 +15813,7 @@ impl AstCodeGen {
 
         // FilterKeyReader::GetParseResult — returns the parseResult_ field.
         let is_filter_key_reader = rust_name.starts_with("FilterKeyReader_");
-        if is_filter_key_reader
-            && !has_method(&self.output[impl_block_start..], "GetParseResult")
-        {
+        if is_filter_key_reader && !has_method(&self.output[impl_block_start..], "GetParseResult") {
             self.current_struct_methods
                 .insert("GetParseResult".to_string(), 1);
             self.writeln("");
@@ -15827,8 +15827,7 @@ impl AstCodeGen {
         // FileReadStream::Read stub — Read() reads from fp_ into the buffer.
         // A minimal stub advances current_ to allow constructor/Take to compile.
         // Only match actual FileReadStream, not compound types like FilterKeyReader_FileReadStream.
-        let is_file_read_stream =
-            rust_name == "FileReadStream" || class_name == "FileReadStream";
+        let is_file_read_stream = rust_name == "FileReadStream" || class_name == "FileReadStream";
         if is_file_read_stream && !has_method(&self.output[impl_block_start..], "Read") {
             self.current_struct_methods.insert("Read".to_string(), 1);
             self.writeln("");
@@ -15850,12 +15849,8 @@ impl AstCodeGen {
             self.writeln("self.current_ = self.buffer_;");
             self.writeln("if self.readCount_ < self.bufferSize_ {");
             self.indent += 1;
-            self.writeln(
-                "unsafe { *self.buffer_.add(self.readCount_ as usize) = 0; }",
-            );
-            self.writeln(
-                "self.bufferLast_ = unsafe { self.bufferLast_.add(1) };",
-            );
+            self.writeln("unsafe { *self.buffer_.add(self.readCount_ as usize) = 0; }");
+            self.writeln("self.bufferLast_ = unsafe { self.bufferLast_.add(1) };");
             self.writeln("self.eof_ = true;");
             self.indent -= 1;
             self.writeln("}");
@@ -16001,7 +15996,10 @@ impl AstCodeGen {
                     ("GetAllocator", "pub fn GetAllocator<A: Default>(&mut self) -> A { Default::default() }"),
                     ("AddMember", "pub fn AddMember<K, V, A>(&mut self, _key: K, _val: V, _allocator: A) -> &mut Self { self }"),
                 ];
-                all_methods.into_iter().filter(|(name, _)| !has_method(impl_output, name)).collect()
+                all_methods
+                    .into_iter()
+                    .filter(|(name, _)| !has_method(impl_output, name))
+                    .collect()
             };
             for (name, sig) in &doc_methods_needed {
                 self.current_struct_methods.insert(name.to_string(), 1);
@@ -16018,11 +16016,16 @@ impl AstCodeGen {
             let sb_methods_needed: Vec<(&str, &str)> = {
                 let impl_output = &self.output[impl_block_start..];
                 let all = vec![
-                    ("GetString", "pub fn GetString(&self) -> *const i8 { b\"\\0\".as_ptr() as *const i8 }"),
+                    (
+                        "GetString",
+                        "pub fn GetString(&self) -> *const i8 { b\"\\0\".as_ptr() as *const i8 }",
+                    ),
                     ("Clear", "pub fn Clear(&mut self) {}"),
                     ("GetSize", "pub fn GetSize(&self) -> u64 { 0 }"),
                 ];
-                all.into_iter().filter(|(name, _)| !has_method(impl_output, name)).collect()
+                all.into_iter()
+                    .filter(|(name, _)| !has_method(impl_output, name))
+                    .collect()
             };
             for (name, sig) in &sb_methods_needed {
                 self.current_struct_methods.insert(name.to_string(), 1);
@@ -16032,7 +16035,8 @@ impl AstCodeGen {
         }
 
         // Writer/PrettyWriter<StringBuffer> JSON serialization API stubs
-        let is_writer_stringbuffer = (rust_name.contains("Writer_") || rust_name.contains("PrettyWriter_"))
+        let is_writer_stringbuffer = (rust_name.contains("Writer_")
+            || rust_name.contains("PrettyWriter_"))
             && (rust_name.contains("StringBuffer") || rust_name.contains("GenericStringBuffer"));
         if is_writer_stringbuffer {
             let writer_methods_needed: Vec<(&str, &str)> = {
@@ -16053,7 +16057,9 @@ impl AstCodeGen {
                     ("Double", "pub fn Double(&mut self, _d: f64) -> bool { true }"),
                     ("RawNumber", "pub fn RawNumber(&mut self, _str: *const i8, _length: u64, _copy: bool) -> bool { true }"),
                 ];
-                all.into_iter().filter(|(name, _)| !has_method(impl_output, name)).collect()
+                all.into_iter()
+                    .filter(|(name, _)| !has_method(impl_output, name))
+                    .collect()
             };
             for (name, sig) in &writer_methods_needed {
                 self.current_struct_methods.insert(name.to_string(), 1);
@@ -16063,8 +16069,8 @@ impl AstCodeGen {
         }
 
         // SchemaValidator surface stubs
-        let is_schema_validator = rust_name.contains("SchemaValidator")
-            || class_name.contains("SchemaValidator");
+        let is_schema_validator =
+            rust_name.contains("SchemaValidator") || class_name.contains("SchemaValidator");
         if is_schema_validator && !is_generic_reader_surface_type {
             let sv_methods_needed: Vec<(&str, &str)> = {
                 let impl_output = &self.output[impl_block_start..];
@@ -16074,7 +16080,9 @@ impl AstCodeGen {
                     ("GetInvalidSchemaKeyword", "pub fn GetInvalidSchemaKeyword(&self) -> *const i8 { b\"\\0\".as_ptr() as *const i8 }"),
                     ("GetInvalidDocumentPointer", "pub fn GetInvalidDocumentPointer(&self) -> GenericPointer_UTF8_ { Default::default() }"),
                 ];
-                all.into_iter().filter(|(name, _)| !has_method(impl_output, name)).collect()
+                all.into_iter()
+                    .filter(|(name, _)| !has_method(impl_output, name))
+                    .collect()
             };
             for (name, sig) in &sv_methods_needed {
                 self.current_struct_methods.insert(name.to_string(), 1);
@@ -18796,7 +18804,11 @@ impl AstCodeGen {
     }
 
     fn preamble_owned_struct_names() -> &'static [&'static str] {
-        &["fpos_mbstate_t", "__cxx_atomic_impl___cxx_contention_t", "tm"]
+        &[
+            "fpos_mbstate_t",
+            "__cxx_atomic_impl___cxx_contention_t",
+            "tm",
+        ]
     }
 
     fn preamble_owned_alias_names() -> &'static [&'static str] {
@@ -21401,7 +21413,8 @@ impl AstCodeGen {
                     && !base_name.starts_with("*")
                     && Self::is_valid_rust_item_identifier(&base_name)
                 {
-                    self.referenced_but_undefined_structs.insert(base_name.clone());
+                    self.referenced_but_undefined_structs
+                        .insert(base_name.clone());
                 }
             }
         }
@@ -22256,7 +22269,9 @@ impl AstCodeGen {
                     self.writeln("pub fn new_1(s: *const std_string) -> Self {");
                     self.indent += 1;
                     self.writeln("let mut obj = Self::default();");
-                    self.writeln("if !s.is_null() { obj.__base._M_msg = unsafe { (*s).c_str() }; }");
+                    self.writeln(
+                        "if !s.is_null() { obj.__base._M_msg = unsafe { (*s).c_str() }; }",
+                    );
                     self.writeln("obj");
                     self.indent -= 1;
                     self.writeln("}");
@@ -22658,10 +22673,14 @@ impl AstCodeGen {
                 self.writeln("pub fn do_grouping(&self) -> std_string { std_string::new_0() }");
                 self.writeln("");
                 self.writeln("/// Stub for do_truename virtual method");
-                self.writeln("pub fn do_truename(&self) -> string_type { unsafe { std::mem::zeroed() } }");
+                self.writeln(
+                    "pub fn do_truename(&self) -> string_type { unsafe { std::mem::zeroed() } }",
+                );
                 self.writeln("");
                 self.writeln("/// Stub for do_falsename virtual method");
-                self.writeln("pub fn do_falsename(&self) -> string_type { unsafe { std::mem::zeroed() } }");
+                self.writeln(
+                    "pub fn do_falsename(&self) -> string_type { unsafe { std::mem::zeroed() } }",
+                );
             }
 
             // Add collate virtual method stubs
@@ -25395,9 +25414,20 @@ impl AstCodeGen {
         // Rust primitives
         matches!(
             s,
-            "i8" | "i16" | "i32" | "i64" | "i128"
-                | "u8" | "u16" | "u32" | "u64" | "u128"
-                | "f32" | "f64" | "bool" | "usize" | "isize"
+            "i8" | "i16"
+                | "i32"
+                | "i64"
+                | "i128"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "u128"
+                | "f32"
+                | "f64"
+                | "bool"
+                | "usize"
+                | "isize"
         )
     }
 
@@ -26158,9 +26188,7 @@ impl AstCodeGen {
 
         if !in_function_scope {
             if let ClangNodeKind::VarDecl {
-                name,
-                is_extern,
-                ..
+                name, is_extern, ..
             } = &node.kind
             {
                 if !*is_extern {
@@ -26341,12 +26369,13 @@ impl AstCodeGen {
             } = &node.kind
             {
                 let rust_type = ty.to_rust_type_str();
-                let skip_unresolvable_placeholder_type = matches!(ty, CppType::TemplateParam { .. })
-                    || rust_type == "_dependent_type"
-                    || rust_type == "integral_constant__Tp____v"
-                    || rust_type.starts_with("type_parameter_")
-                    || rust_type.contains("_parameter_")
-                    || rust_type.contains("sizeof___(");
+                let skip_unresolvable_placeholder_type =
+                    matches!(ty, CppType::TemplateParam { .. })
+                        || rust_type == "_dependent_type"
+                        || rust_type == "integral_constant__Tp____v"
+                        || rust_type.starts_with("type_parameter_")
+                        || rust_type.contains("_parameter_")
+                        || rust_type.contains("sizeof___(");
                 if !Self::is_header_decl_without_initializer(node, *has_init)
                     && !self.is_out_of_class_static_member_definition(name, ty, &node.children)
                     && !skip_unresolvable_placeholder_type
@@ -29557,7 +29586,9 @@ impl AstCodeGen {
                         // Fix Default::default() for c_void fields — c_void doesn't impl Default.
                         // This happens when std::string fields get mapped to c_void as a placeholder.
                         let init_val = if init_val == "Default::default()" {
-                            let field_is_cvoid = self.current_class.as_ref()
+                            let field_is_cvoid = self
+                                .current_class
+                                .as_ref()
                                 .and_then(|c| self.class_fields.get(c))
                                 .and_then(|fields| fields.iter().find(|(n, _)| n == name))
                                 .map_or(false, |(_, ty)| ty.to_rust_type_str().contains("c_void"));
@@ -32340,9 +32371,8 @@ impl AstCodeGen {
                     }
 
                     let ident = sanitize_identifier(name);
-                    let preserve_known_function_symbol =
-                        !matches!(ty, CppType::Function { .. })
-                            && self.is_known_function_declref_name(name);
+                    let preserve_known_function_symbol = !matches!(ty, CppType::Function { .. })
+                        && self.is_known_function_declref_name(name);
 
                     // Map C++ math functions to their internal stub implementations
                     // These stubs exist in the preamble with __ prefix
@@ -32381,8 +32411,7 @@ impl AstCodeGen {
                     // Check if this is a static member of the current class.
                     // Clang can report namespace-only qualification for static members,
                     // so don't require `namespace_path` to be empty.
-                    if !matches!(ty, CppType::Function { .. }) && !preserve_known_function_symbol
-                    {
+                    if !matches!(ty, CppType::Function { .. }) && !preserve_known_function_symbol {
                         if let Some(ref current_class) = self.current_class {
                             if let Some(global_name) = self
                                 .static_members
@@ -32402,20 +32431,17 @@ impl AstCodeGen {
                         }
                         return ident;
                     }
-                    if !matches!(ty, CppType::Function { .. }) && !preserve_known_function_symbol
-                    {
+                    if !matches!(ty, CppType::Function { .. }) && !preserve_known_function_symbol {
                         if let Some(static_name) = self.function_static_var_mapping.get(&ident) {
                             return static_name.clone();
                         }
                         if !self.is_declref_local_name_active(&ident) {
                             let composite_ident = sanitize_identifier_for_composite(name);
-                            if let Some(prefixed_name) = self
-                                .lookup_resolvable_global_var_mapping(
-                                    name,
-                                    &ident,
-                                    &composite_ident,
-                                )
-                            {
+                            if let Some(prefixed_name) = self.lookup_resolvable_global_var_mapping(
+                                name,
+                                &ident,
+                                &composite_ident,
+                            ) {
                                 return prefixed_name.clone();
                             }
                         }
@@ -33484,9 +33510,8 @@ impl AstCodeGen {
                     }
 
                     let ident = sanitize_identifier(name);
-                    let preserve_known_function_symbol =
-                        !matches!(ty, CppType::Function { .. })
-                            && self.is_known_function_declref_name(name);
+                    let preserve_known_function_symbol = !matches!(ty, CppType::Function { .. })
+                        && self.is_known_function_declref_name(name);
                     let resolved_ns_for_fn =
                         self.resolve_declref_function_namespace_path(name, ty, namespace_path);
                     if self.va_list_mapping.as_ref().is_some_and(|v| v == name) {
@@ -33531,8 +33556,7 @@ impl AstCodeGen {
                     // Check if this is a static member of the current class.
                     // Clang can report namespace-only qualification for static members,
                     // so don't require `namespace_path` to be empty.
-                    if !matches!(ty, CppType::Function { .. }) && !preserve_known_function_symbol
-                    {
+                    if !matches!(ty, CppType::Function { .. }) && !preserve_known_function_symbol {
                         if let Some(ref current_class) = self.current_class {
                             if let Some(global_name) = self
                                 .static_members
@@ -33558,13 +33582,11 @@ impl AstCodeGen {
                         }
                         if !self.is_declref_local_name_active(&ident) {
                             let composite_ident = sanitize_identifier_for_composite(name);
-                            if let Some(prefixed_name) = self
-                                .lookup_resolvable_global_var_mapping(
-                                    name,
-                                    &ident,
-                                    &composite_ident,
-                                )
-                            {
+                            if let Some(prefixed_name) = self.lookup_resolvable_global_var_mapping(
+                                name,
+                                &ident,
+                                &composite_ident,
+                            ) {
                                 return format!("unsafe {{ {} }}", prefixed_name);
                             }
                         }
@@ -36637,8 +36659,7 @@ impl AstCodeGen {
                             callee,
                             &func,
                             &node.children[1..],
-                        )
-                        {
+                        ) {
                             return rewritten_call;
                         }
                         if !is_fn_ptr_call && self.is_non_callable_callee_value_expr(callee, &func)
@@ -40105,6 +40126,18 @@ mod tests {
         assert!(
             code.contains("pub fn __constexpr_wmemchr_i32_i32("),
             "preamble should expose __constexpr_wmemchr_i32_i32 helper, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_preamble_emits_fprintf_extern_declaration() {
+        let code = AstCodeGen::new().generate(&make_node(ClangNodeKind::TranslationUnit, vec![]));
+        assert!(
+            code.contains(
+                "pub fn fprintf(stream: *mut std::ffi::c_void, format: *const i8, ...) -> i32;"
+            ),
+            "preamble should expose fprintf extern declaration for C stdio call-shapes, got:\n{}",
             code
         );
     }
@@ -53467,6 +53500,22 @@ employees.back().AddDependent(Dependent::new_3(&Default::default(), 3u32, std::p
         assert!(
             output.contains(".AddDependent(&Dependent::new_3("),
             "serialize normalization should borrow temporary Dependent values for ref params, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rapidjson_strict_baseline_artifacts_normalizes_string_buffer_alias() {
+        let input = "pub fn PutReserve_ref_mut_GenericStringBuffer_UTF8_char__CrtAllocator__(stream: &mut GenericStringBuffer_UTF8_char__CrtAllocator, count: u64) {}";
+        let output = AstCodeGen::normalize_rapidjson_strict_baseline_artifacts(input);
+        assert!(
+            !output.contains("GenericStringBuffer_UTF8_char__CrtAllocator"),
+            "rapidjson normalization should remove allocator-qualified GenericStringBuffer alias artifact, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("GenericStringBuffer_UTF8"),
+            "rapidjson normalization should map allocator-qualified GenericStringBuffer alias to GenericStringBuffer_UTF8, got:\n{}",
             output
         );
     }

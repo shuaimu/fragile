@@ -131,9 +131,7 @@ fn is_integer_size_literal(expr: &str) -> bool {
         s = stripped;
     }
     if s.starts_with("0x") || s.starts_with("0X") {
-        return s[2..]
-            .chars()
-            .all(|c| c.is_ascii_hexdigit() || c == '_');
+        return s[2..].chars().all(|c| c.is_ascii_hexdigit() || c == '_');
     }
     if s.starts_with("0b") || s.starts_with("0B") {
         return s[2..].chars().all(|c| c == '0' || c == '1' || c == '_');
@@ -516,10 +514,18 @@ impl CppType {
                     "tinyxml2::XMLError" | "tinyxml2_XMLError" => "XMLError".to_string(),
                     "tinyxml2::Whitespace" | "tinyxml2_Whitespace" => "Whitespace".to_string(),
                     "tinyxml2::XMLElement::ElementClosingType"
-                    | "tinyxml2_XMLElement_ElementClosingType" => {
-                        "ElementClosingType".to_string()
-                    }
+                    | "tinyxml2_XMLElement_ElementClosingType" => "ElementClosingType".to_string(),
                     "tinyxml2::StrPair::Mode" | "tinyxml2_StrPair_Mode" => "Mode".to_string(),
+                    // RapidJSON helper signatures can surface allocator-qualified StringBuffer
+                    // spellings while placeholder structs are emitted as GenericStringBuffer_UTF8.
+                    "GenericStringBuffer_UTF8_char__CrtAllocator"
+                    | "rapidjson::GenericStringBuffer<rapidjson::UTF8<char>, rapidjson::CrtAllocator>"
+                    | "rapidjson::GenericStringBuffer<struct rapidjson::UTF8<>, class rapidjson::CrtAllocator>"
+                    | "rapidjson::GenericStringBuffer<rapidjson::UTF8<>, rapidjson::CrtAllocator>"
+                    | "rapidjson::GenericStringBuffer<UTF8<char>, CrtAllocator>"
+                    | "rapidjson::GenericStringBuffer<UTF8<>, CrtAllocator>" => {
+                        "GenericStringBuffer_UTF8".to_string()
+                    }
                     // C++11 chars_format (from <charconv>)
                     "std::chars_format" => "u32".to_string(), // Flags enum, treat as u32
                     // iostream base types
@@ -1618,8 +1624,7 @@ mod tests {
             "ElementClosingType"
         );
         assert_eq!(
-            CppType::Named("tinyxml2_XMLElement_ElementClosingType".to_string())
-                .to_rust_type_str(),
+            CppType::Named("tinyxml2_XMLElement_ElementClosingType".to_string()).to_rust_type_str(),
             "ElementClosingType"
         );
         assert_eq!(
@@ -1629,6 +1634,23 @@ mod tests {
         assert_eq!(
             CppType::Named("tinyxml2_StrPair_Mode".to_string()).to_rust_type_str(),
             "Mode"
+        );
+    }
+
+    #[test]
+    fn test_rapidjson_generic_string_buffer_alias_normalization() {
+        assert_eq!(
+            CppType::Named("GenericStringBuffer_UTF8_char__CrtAllocator".to_string())
+                .to_rust_type_str(),
+            "GenericStringBuffer_UTF8"
+        );
+        assert_eq!(
+            CppType::Named(
+                "rapidjson::GenericStringBuffer<struct rapidjson::UTF8<>, class rapidjson::CrtAllocator>"
+                    .to_string()
+            )
+            .to_rust_type_str(),
+            "GenericStringBuffer_UTF8"
         );
     }
 
@@ -1746,10 +1768,7 @@ mod tests {
         let ty = CppType::Pointer {
             pointee: Box::new(CppType::Function {
                 return_type: Box::new(CppType::Int { signed: true }),
-                params: vec![
-                    CppType::Int { signed: true },
-                    CppType::Int { signed: true },
-                ],
+                params: vec![CppType::Int { signed: true }, CppType::Int { signed: true }],
                 is_variadic: false,
             }),
             is_const: false,

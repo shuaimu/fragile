@@ -10,6 +10,7 @@ use std::ffi::{c_char, c_int, CStr, CString};
 use std::io::{Error, ErrorKind};
 use std::path::Path;
 use std::slice;
+use std::sync::{Mutex, OnceLock};
 
 pub mod clang_ast;
 
@@ -119,10 +120,65 @@ pub fn export_ast_cbor_with_options(
         skip_system_headers,
     )?;
 
-    results
-        .into_values()
-        .next()
-        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "No AST data returned"))
+    select_ast_cbor_for_source(file_path, results)
+}
+
+fn select_ast_cbor_for_source(
+    file_path: &Path,
+    mut results: HashMap<String, Vec<u8>>,
+) -> Result<Vec<u8>, Error> {
+    if results.is_empty() {
+        return Err(Error::new(ErrorKind::InvalidData, "No AST data returned"));
+    }
+
+    let requested = file_path.to_string_lossy().to_string();
+    if let Some(bytes) = results.remove(&requested) {
+        return Ok(bytes);
+    }
+
+    if let Ok(canonical) = file_path.canonicalize() {
+        let canonical_key = canonical.to_string_lossy().to_string();
+        if let Some(bytes) = results.remove(&canonical_key) {
+            return Ok(bytes);
+        }
+    }
+
+    let requested_basename = file_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_string();
+    let mut basename_matches: Vec<String> = results
+        .keys()
+        .filter(|key| {
+            Path::new(key.as_str())
+                .file_name()
+                .and_then(|s| s.to_str())
+                .map(|name| name == requested_basename)
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect();
+    if basename_matches.len() == 1 {
+        if let Some(bytes) = results.remove(&basename_matches.pop().unwrap()) {
+            return Ok(bytes);
+        }
+    }
+
+    if results.len() == 1 {
+        return Ok(results.into_values().next().unwrap());
+    }
+
+    let available: Vec<String> = results.keys().cloned().collect();
+    Err(Error::new(
+        ErrorKind::InvalidData,
+        format!(
+            "AST export returned {} files and none matched `{}`; available keys: {}",
+            available.len(),
+            requested,
+            available.join(", ")
+        ),
+    ))
 }
 
 fn get_ast_cbors(
@@ -132,6 +188,12 @@ fn get_ast_cbors(
     debug: bool,
     skip_system_headers: bool,
 ) -> Result<HashMap<String, Vec<u8>>, Error> {
+    static AST_EXPORTER_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let lock = AST_EXPORTER_LOCK.get_or_init(|| Mutex::new(()));
+    let _guard = lock
+        .lock()
+        .map_err(|_| Error::other("AST exporter lock poisoned"))?;
+
     let mut result_code: c_int = 0;
 
     // Build arguments for the AST exporter
@@ -212,11 +274,42 @@ unsafe fn marshal_result(result: *const ffi::ExportResult) -> HashMap<String, Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
 
     #[test]
     fn test_clang_version() {
         let version = get_clang_version();
         assert!(version.is_some());
         println!("Clang version: {:?}", version);
+    }
+
+    #[test]
+    fn test_select_ast_cbor_for_source_prefers_exact_path_match() {
+        let requested = PathBuf::from("/tmp/source.cpp");
+        let mut results = HashMap::new();
+        results.insert("/tmp/other.cpp".to_string(), vec![1, 2, 3]);
+        results.insert("/tmp/source.cpp".to_string(), vec![9, 8, 7]);
+
+        let selected = select_ast_cbor_for_source(&requested, results)
+            .expect("expected exact path match to succeed");
+        assert_eq!(selected, vec![9, 8, 7]);
+    }
+
+    #[test]
+    fn test_select_ast_cbor_for_source_errors_on_ambiguous_basename() {
+        let requested = PathBuf::from("/tmp/source.cpp");
+        let mut results = HashMap::new();
+        results.insert("/a/source.cpp".to_string(), vec![1]);
+        results.insert("/b/source.cpp".to_string(), vec![2]);
+
+        let err = select_ast_cbor_for_source(&requested, results)
+            .expect_err("expected ambiguous basename selection to fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("none matched"),
+            "expected ambiguity failure message, got: {}",
+            msg
+        );
     }
 }
