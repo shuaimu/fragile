@@ -368,6 +368,7 @@ const RAPIDJSON_NIGHTLY_REQUIRED_TEST_NAMES: &[&str] = &[
     "test_real_world_rapidjson_native_no_stl_examples_baseline",
     "test_real_world_rapidjson_fragilec_native_no_stl_examples_baseline",
     "test_real_world_rapidjson_strict_cmake_tests_on_configure_capture",
+    "test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_first_failure",
 ];
 const RAPIDJSON_ORDERED_FAILURE_CLASS_LEDGER_MARKERS: &[&str] = &[
     "1) Parser/AST fidelity mismatch in real RapidJSON headers.",
