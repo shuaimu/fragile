@@ -192,8 +192,12 @@ Verification:
 - Direct strict TU replays for `tutorial.cpp` and `messagereader.cpp` both compile after the Phase 6.8 fixes.
 
 ## Phase 4 [P1]: Hardening for real drop-in behavior
-- [ ] Make CMake compiler-ID/feature checks robust enough for default RapidJSON configure path (without requiring tests-off workaround).
-- [ ] Add CI lane for strict `rapidjson cmake no-tests build + condense/pretty runtime check`.
+- [ ] 4.1) Make CMake compiler-ID/feature checks robust enough for default RapidJSON configure path (without requiring tests-off workaround).
+  - [x] 4.1.a) Add deterministic local fixture coverage for `RAPIDJSON_BUILD_TESTS=ON` configure failures that captures configure logs + failure class for compiler-check breakage. Done 2026-02-28. Evidence: added/passing local fixture replay `test_rapidjson_strict_cmake_tests_on_configure_local_fixture_classifies_compiler_check_failure` plus classifier unit coverage `test_classify_cmake_configure_failure_covers_known_error_families`; fixture persists `configure_failure_class.txt` and manifest under `strict_cmake_tests_on_configure_local_fixture_logs`.
+  - [ ] 4.1.b) Add ignored real-world strict CMake capture lane for default configure path (`RAPIDJSON_BUILD_TESTS=ON`) and persist stable manifest artifacts.
+  - [ ] 4.1.c) Fix strict-driver/compiler-probe behavior so RapidJSON default configure passes without tests-off workaround.
+  - [ ] 4.1.d) Re-run real-world default-configure capture and lock regression assertions (`configure_status=0`, no compiler-check failure class).
+- [ ] 4.2) Add CI lane for strict `rapidjson cmake no-tests build + condense/pretty runtime check`.
 
 ## Phase 5 [P0]: LibTooling-primary parser unification
 Goal: make LibTooling the strict primary AST source with stronger instantiated-template fidelity, so strict codegen uses concrete parser data instead of runtime/preamble fallback stubs wherever possible.

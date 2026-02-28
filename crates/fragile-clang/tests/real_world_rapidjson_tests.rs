@@ -176,6 +176,14 @@ const RAPIDJSON_STRICT_CMAKE_LOCAL_FIXTURE_LOG_FILES: &[&str] = &[
     "first_failing_compile_class.txt",
     "strict_cmake_local_fixture_manifest.txt",
 ];
+const RAPIDJSON_STRICT_CMAKE_TESTS_ON_CONFIGURE_LOCAL_FIXTURE_LOG_FILES: &[&str] = &[
+    "cmake_configure.status",
+    "cmake_configure.stdout",
+    "cmake_configure.stderr",
+    "fragilec_driver.log",
+    "configure_failure_class.txt",
+    "strict_cmake_tests_on_configure_local_fixture_manifest.txt",
+];
 const RAPIDJSON_STRICT_CMAKE_BACKEND_MATRIX_LOCAL_FIXTURE_LOG_FILES: &[&str] = &[
     "strict_cmake_backend_matrix_local_fixture_manifest.txt",
     "backend_libclang/cmake_configure.status",
@@ -1324,6 +1332,32 @@ fn classify_first_failing_compile_stderr(first_stderr: &str) -> &'static str {
         return "other_rustc_error";
     }
     "non_rustc_error"
+}
+
+fn classify_cmake_configure_failure(stdout: &str, stderr: &str) -> &'static str {
+    if stdout.trim().is_empty() && stderr.trim().is_empty() {
+        return "none";
+    }
+    let has_fragment = |needle: &str| stdout.contains(needle) || stderr.contains(needle);
+    if [
+        "CMakeTestCXXCompiler.cmake",
+        "is not able to compile a simple test program",
+        "CXX compiler identification is unknown",
+        "Detecting CXX compiler ABI info - failed",
+        "forced local fixture compiler check failure",
+    ]
+    .iter()
+    .any(|needle| has_fragment(needle))
+    {
+        return "cmake_compiler_check_failed";
+    }
+    if ["No CMAKE_CXX_COMPILER could be found", "Could NOT find"]
+        .iter()
+        .any(|needle| has_fragment(needle))
+    {
+        return "cmake_missing_dependency_or_compiler";
+    }
+    "other_configure_error"
 }
 
 fn count_error_e0425_occurrences(text: &str) -> usize {
@@ -3092,6 +3126,161 @@ fn run_rapidjson_strict_filterkeydom_compile_capture() -> Result<PathBuf, String
     Ok(log_dir)
 }
 
+fn create_local_cmake_tests_on_configure_failure_fixture(
+    base_dir: &Path,
+) -> Result<(PathBuf, PathBuf), String> {
+    let project_dir = base_dir.join("local_tests_on_configure_fixture_project");
+    fs::create_dir_all(project_dir.join("src"))
+        .map_err(|e| format!("failed to create tests-on configure fixture source dir: {}", e))?;
+
+    fs::write(
+        project_dir.join("src/probe.cpp"),
+        "int probe_fixture_function() { return 0; }\n",
+    )
+    .map_err(|e| format!("failed to write probe.cpp for tests-on configure fixture: {}", e))?;
+    fs::write(
+        project_dir.join("CMakeLists.txt"),
+        "cmake_minimum_required(VERSION 3.16)\nproject(LocalTestsOnConfigureFixture CXX)\nadd_library(local_tests_on_configure_fixture STATIC src/probe.cpp)\n",
+    )
+    .map_err(|e| {
+        format!(
+            "failed to write CMakeLists.txt for tests-on configure fixture: {}",
+            e
+        )
+    })?;
+
+    let fake_fragilec = base_dir.join("fake_fragilec_tests_on_configure.sh");
+    fs::write(
+        &fake_fragilec,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+log="${FRAGILEC_LOG:-}"
+if [[ -n "$log" ]]; then
+  printf 'parser_backend=%s\n' "${FRAGILEC_PARSER_BACKEND:-<unset>}" >> "$log"
+  printf 'cwd=%s\n' "$(pwd)" >> "$log"
+  printf 'args=%s\n' "$*" >> "$log"
+fi
+for arg in "$@"; do
+  if [[ "$arg" == *"CMakeCXXCompilerId.cpp"* ]] || [[ "$arg" == *"CMakeCXXCompilerABI.cpp"* ]] || [[ "$arg" == *"testCXXCompiler.cxx"* ]]; then
+    echo "forced local fixture compiler check failure for $arg" >&2
+    exit 43
+  fi
+done
+exec c++ "$@"
+"#,
+    )
+    .map_err(|e| {
+        format!(
+            "failed to write fake fragilec wrapper script for tests-on configure fixture: {}",
+            e
+        )
+    })?;
+    let chmod_output = Command::new("chmod")
+        .arg("+x")
+        .arg(&fake_fragilec)
+        .output()
+        .map_err(|e| {
+            format!(
+                "failed to run chmod on tests-on configure fake fragilec wrapper script: {}",
+                e
+            )
+        })?;
+    if !chmod_output.status.success() {
+        return Err(format!(
+            "chmod failed for tests-on configure fake fragilec wrapper script {}\nstdout:\n{}\nstderr:\n{}",
+            fake_fragilec.display(),
+            String::from_utf8_lossy(&chmod_output.stdout),
+            String::from_utf8_lossy(&chmod_output.stderr)
+        ));
+    }
+
+    Ok((project_dir, fake_fragilec))
+}
+
+fn run_local_strict_cmake_tests_on_configure_failure_capture_fixture(
+    root: &Path,
+) -> Result<PathBuf, String> {
+    let (project_dir, fake_fragilec) =
+        create_local_cmake_tests_on_configure_failure_fixture(root)?;
+    let log_dir = root.join("strict_cmake_tests_on_configure_local_fixture_logs");
+    fs::create_dir_all(&log_dir).map_err(|e| {
+        format!(
+            "failed to create tests-on configure local fixture log dir {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+    let driver_log = log_dir.join("fragilec_driver.log");
+    fs::write(&driver_log, "").map_err(|e| {
+        format!(
+            "failed to initialize tests-on configure local fixture fragilec driver log: {}",
+            e
+        )
+    })?;
+
+    let build_dir = project_dir.join("build");
+    fs::create_dir_all(&build_dir).map_err(|e| {
+        format!(
+            "failed to create tests-on configure local fixture build dir {}: {}",
+            build_dir.display(),
+            e
+        )
+    })?;
+
+    let configure_output = Command::new("cmake")
+        .arg("-DRAPIDJSON_BUILD_TESTS=ON")
+        .arg("..")
+        .current_dir(&build_dir)
+        .env("CXX", fake_fragilec.to_string_lossy().to_string())
+        .env("FRAGILEC_MODE", "strict")
+        .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string())
+        .output()
+        .map_err(|e| {
+            format!(
+                "failed to run tests-on configure local fixture strict cmake configure: {}",
+                e
+            )
+        })?;
+    write_command_capture(&log_dir, "cmake_configure", &configure_output)?;
+
+    let configure_stdout = String::from_utf8_lossy(&configure_output.stdout);
+    let configure_stderr = String::from_utf8_lossy(&configure_output.stderr);
+    let configure_failure_class =
+        classify_cmake_configure_failure(&configure_stdout, &configure_stderr);
+    fs::write(
+        log_dir.join("configure_failure_class.txt"),
+        format!("{configure_failure_class}\n"),
+    )
+    .map_err(|e| {
+        format!(
+            "failed to write configure_failure_class.txt in {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+
+    let manifest = format!(
+        "fixture=local_strict_cmake_tests_on_configure_failure\nsource_dir={}\nfake_fragilec={}\nconfigure_status={}\nconfigure_failure_class_file=configure_failure_class.txt\nconfigure_failure_class={}\n",
+        project_dir.display(),
+        fake_fragilec.display(),
+        status_code(&configure_output),
+        configure_failure_class
+    );
+    fs::write(
+        log_dir.join("strict_cmake_tests_on_configure_local_fixture_manifest.txt"),
+        manifest,
+    )
+    .map_err(|e| {
+        format!(
+            "failed to write strict_cmake_tests_on_configure_local_fixture_manifest.txt in {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+
+    Ok(log_dir)
+}
+
 fn create_local_cmake_first_failure_fixture(base_dir: &Path) -> Result<(PathBuf, PathBuf), String> {
     let project_dir = base_dir.join("local_first_failure_project");
     fs::create_dir_all(project_dir.join("src"))
@@ -4095,6 +4284,26 @@ fn test_classify_first_failing_compile_stderr_covers_known_error_families() {
 }
 
 #[test]
+fn test_classify_cmake_configure_failure_covers_known_error_families() {
+    assert_eq!(
+        classify_cmake_configure_failure(
+            "Configuring incomplete, errors occurred!",
+            "CMake Error at /usr/share/cmake/Modules/CMakeTestCXXCompiler.cmake:67 (message):\nThe C++ compiler\n  \"/tmp/fake_fragilec.sh\"\nis not able to compile a simple test program.",
+        ),
+        "cmake_compiler_check_failed"
+    );
+    assert_eq!(
+        classify_cmake_configure_failure("", "Could NOT find ZLIB (missing: ZLIB_LIBRARY)"),
+        "cmake_missing_dependency_or_compiler"
+    );
+    assert_eq!(
+        classify_cmake_configure_failure("some configure warning", "some configure error"),
+        "other_configure_error"
+    );
+    assert_eq!(classify_cmake_configure_failure("", ""), "none");
+}
+
+#[test]
 fn test_collect_generated_surface_inventory_counts_expected_markers() {
     let generated = r#"
 /// Placeholder for C++ `rapidjson::Reader`
@@ -4157,6 +4366,54 @@ fn test_rapidjson_strict_cmake_local_fixture_replays_first_failure_capture() {
         "non_rustc_error",
         "local fixture forced failure should classify as non-rustc error, got:\n{}",
         first_class
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_rapidjson_strict_cmake_tests_on_configure_local_fixture_classifies_compiler_check_failure() {
+    let root = unique_temp_dir("rapidjson_strict_cmake_tests_on_configure_local_fixture");
+    fs::create_dir_all(&root).expect("failed to create tests-on configure local fixture root");
+
+    let log_dir = run_local_strict_cmake_tests_on_configure_failure_capture_fixture(&root)
+        .expect("failed to run tests-on configure local fixture capture");
+    for rel in RAPIDJSON_STRICT_CMAKE_TESTS_ON_CONFIGURE_LOCAL_FIXTURE_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected tests-on configure local fixture log file {}",
+            log_dir.join(rel).display()
+        );
+    }
+    let configure_status = read_status_file(&log_dir.join("cmake_configure.status"))
+        .expect("failed to read tests-on configure local fixture cmake_configure.status");
+    assert_ne!(
+        configure_status, 0,
+        "tests-on configure local fixture should fail configure to replay compiler-check failure"
+    );
+    let configure_stderr = fs::read_to_string(log_dir.join("cmake_configure.stderr"))
+        .expect("failed to read tests-on configure local fixture cmake_configure.stderr");
+    assert!(
+        configure_stderr.contains("forced local fixture compiler check failure"),
+        "tests-on configure local fixture should capture forced compiler-check failure stderr, got:\n{}",
+        configure_stderr
+    );
+    let configure_failure_class = fs::read_to_string(log_dir.join("configure_failure_class.txt"))
+        .expect("failed to read tests-on configure local fixture configure_failure_class.txt");
+    assert_eq!(
+        configure_failure_class.trim(),
+        "cmake_compiler_check_failed",
+        "tests-on configure local fixture should classify compiler-check failure, got:\n{}",
+        configure_failure_class
+    );
+    let driver_log = fs::read_to_string(log_dir.join("fragilec_driver.log"))
+        .expect("failed to read tests-on configure local fixture fragilec_driver.log");
+    assert!(
+        driver_log.contains("CMakeCXXCompilerId.cpp")
+            || driver_log.contains("CMakeCXXCompilerABI.cpp")
+            || driver_log.contains("testCXXCompiler.cxx"),
+        "tests-on configure local fixture driver log should include compiler-check probe invocation, got:\n{}",
+        driver_log
     );
 
     let _ = fs::remove_dir_all(&root);
