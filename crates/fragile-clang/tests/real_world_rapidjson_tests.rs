@@ -909,11 +909,88 @@ fn parse_fragilec_driver_invocations(driver_log: &str) -> Vec<FragilecDriverInvo
     invocations
 }
 
-fn first_failing_compile_command_from_driver_log(driver_log: &str) -> Option<String> {
+fn canonicalize_failed_source_path(raw: &str) -> String {
+    raw.trim()
+        .trim_matches('"')
+        .trim_end_matches('.')
+        .to_string()
+}
+
+fn first_failed_source_path_from_stream(stream: &str) -> Option<String> {
+    for line in stream.lines() {
+        if let Some(rest) = line.strip_prefix("[fragilec] fragile rustc object compile failed for ")
+        {
+            let path = canonicalize_failed_source_path(rest);
+            if !path.is_empty() {
+                return Some(path);
+            }
+        }
+        if let Some(rest) = line.strip_prefix("Error while processing ") {
+            let path = canonicalize_failed_source_path(rest);
+            if !path.is_empty() {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+fn first_failed_source_path(build_stdout: &str, build_stderr: &str) -> Option<String> {
+    first_failed_source_path_from_stream(build_stderr)
+        .or_else(|| first_failed_source_path_from_stream(build_stdout))
+}
+
+fn first_failing_compile_command_from_driver_log(
+    driver_log: &str,
+    source_path_hint: Option<&str>,
+) -> Option<String> {
     let invocations = parse_fragilec_driver_invocations(driver_log);
+    if let Some(source_path) = source_path_hint {
+        let source_basename = Path::new(source_path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(str::to_string);
+        if let Some(inv) = invocations.iter().find(|inv| {
+            if inv.args.contains(source_path) {
+                return true;
+            }
+            let Some(source_basename) = source_basename.as_deref() else {
+                return false;
+            };
+            inv.args.split_whitespace().any(|token| {
+                let cleaned = token.trim_matches('"');
+                Path::new(cleaned)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .map(|name| name == source_basename)
+                    .unwrap_or(false)
+            })
+        }) {
+            return Some(format!("cwd={}\nargs={}", inv.cwd, inv.args));
+        }
+    }
     invocations
         .last()
         .map(|inv| format!("cwd={}\nargs={}", inv.cwd, inv.args))
+}
+
+fn source_scoped_failure_payload(stream: &str, source_path: &str) -> Option<String> {
+    for marker in [
+        format!(
+            "[fragilec] fragile rustc object compile failed for {}",
+            source_path
+        ),
+        format!("Error while processing {}.", source_path),
+        format!("Error while processing {}", source_path),
+    ] {
+        if let Some(start) = stream.find(marker.as_str()) {
+            let scoped = stream[start..].trim();
+            if !scoped.is_empty() {
+                return Some(scoped.to_string());
+            }
+        }
+    }
+    None
 }
 
 fn select_first_failing_compile_capture(
@@ -926,9 +1003,26 @@ fn select_first_failing_compile_capture(
         return ("<none>".to_string(), "<none>".to_string());
     }
 
-    let command = first_failing_compile_command_from_driver_log(driver_log)
+    let failed_source_path = first_failed_source_path(build_stdout, build_stderr);
+    let command = first_failing_compile_command_from_driver_log(
+        driver_log,
+        failed_source_path.as_deref(),
+    )
         .unwrap_or_else(|| "<unavailable>".to_string());
-    let stderr = if !build_stderr.trim().is_empty() {
+    let stderr = if let Some(source_path) = failed_source_path.as_deref() {
+        source_scoped_failure_payload(build_stderr, source_path)
+            .or_else(|| source_scoped_failure_payload(build_stdout, source_path))
+            .or_else(|| {
+                if !build_stderr.trim().is_empty() {
+                    Some(build_stderr.trim().to_string())
+                } else if !build_stdout.trim().is_empty() {
+                    Some(build_stdout.trim().to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "<none>".to_string())
+    } else if !build_stderr.trim().is_empty() {
         build_stderr.trim().to_string()
     } else if !build_stdout.trim().is_empty() {
         build_stdout.trim().to_string()
@@ -3482,23 +3576,55 @@ fn test_parse_fragilec_driver_invocations_extracts_cwd_and_args_pairs() {
 }
 
 #[test]
-fn test_select_first_failing_compile_capture_uses_last_driver_invocation_and_stderr() {
-    let driver_log = "cwd=/tmp/work\nargs=-std=c++11 -c first.cpp -o first.o \ncwd=/tmp/work\nargs=-std=c++11 -c failing.cpp -o failing.o \n";
+fn test_select_first_failing_compile_capture_prefers_source_matched_invocation() {
+    let driver_log = "cwd=/tmp/work\nargs=-std=c++11 -c first.cpp -o first.o \ncwd=/tmp/work\nargs=-std=c++11 -c failing.cpp -o failing.o \ncwd=/tmp/work\nargs=-std=c++11 -c trailing.cpp -o trailing.o \n";
+    let build_stderr = "[fragilec] fragile rustc object compile failed for /tmp/work/failing.cpp\nerror[E0507]: cannot move out of\ncommand timed out after 1200s: strict cmake backend-matrix build for libtooling\n";
     let (command, stderr) = select_first_failing_compile_capture(
         driver_log,
         true,
         "stdout text",
-        "failing stderr text",
+        build_stderr,
     );
     assert!(
         command.contains("failing.cpp"),
-        "capture should report failing compile invocation, got:\n{}",
+        "capture should report source-matched failing compile invocation (not trailing invocation), got:\n{}",
         command
     );
-    assert_eq!(
-        stderr, "failing stderr text",
-        "capture should prefer build stderr payload on failure"
+    assert!(
+        stderr.starts_with("[fragilec] fragile rustc object compile failed for /tmp/work/failing.cpp"),
+        "capture should scope stderr payload to the source-matched failing unit, got:\n{}",
+        stderr
     );
+}
+
+#[test]
+fn test_select_first_failing_compile_capture_matches_error_while_processing_marker() {
+    let driver_log = "cwd=/tmp/work\nargs=-std=c++11 -c tutorial.cpp -o tutorial.o \ncwd=/tmp/work\nargs=-std=c++11 -c trailing.cpp -o trailing.o \n";
+    let build_stderr = "4 warnings and 1 error generated.\nError while processing /tmp/work/tutorial.cpp.\n[fragilec] failed to transpile /tmp/work/tutorial.cpp with parser backend Libtooling: AST export failed with code 1\n";
+    let (command, stderr) = select_first_failing_compile_capture(driver_log, true, "", build_stderr);
+    assert!(
+        command.contains("tutorial.cpp"),
+        "capture should map `Error while processing` marker to tutorial compile invocation, got:\n{}",
+        command
+    );
+    assert!(
+        stderr.starts_with("Error while processing /tmp/work/tutorial.cpp."),
+        "capture should scope stderr from the tutorial marker, got:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn test_select_first_failing_compile_capture_falls_back_to_last_invocation_without_source_marker() {
+    let driver_log = "cwd=/tmp/work\nargs=-std=c++11 -c first.cpp -o first.o \ncwd=/tmp/work\nargs=-std=c++11 -c last.cpp -o last.o \n";
+    let (command, stderr) =
+        select_first_failing_compile_capture(driver_log, true, "stdout text", "plain stderr text");
+    assert!(
+        command.contains("last.cpp"),
+        "capture should fall back to last invocation when no source marker is present, got:\n{}",
+        command
+    );
+    assert_eq!(stderr, "plain stderr text");
 }
 
 #[test]
