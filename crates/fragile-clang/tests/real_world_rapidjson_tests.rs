@@ -25,6 +25,8 @@ const RAPIDJSON_STRICT_CAPITALIZE_CAPTURE_DIR: &str =
     "/tmp/fragile_real_world_rapidjson_strict_capitalize_capture";
 const RAPIDJSON_STRICT_CAPITALIZE_BACKEND_SURFACE_DELTA_DIR: &str =
     "/tmp/fragile_real_world_rapidjson_strict_capitalize_backend_surface_delta";
+const RAPIDJSON_STRICT_TUTORIAL_BACKEND_SURFACE_DELTA_DIR: &str =
+    "/tmp/fragile_real_world_rapidjson_strict_tutorial_backend_surface_delta";
 const RAPIDJSON_TRANSPILE_STAGE_TIMING_PARSE_FIXTURE_DIR: &str =
     "/tmp/fragile_rapidjson_transpile_stage_timing_parse_fixture";
 const RAPIDJSON_STRICT_FILTERKEYDOM_CAPTURE_DIR: &str =
@@ -277,6 +279,25 @@ const RAPIDJSON_STRICT_CAPITALIZE_BACKEND_SURFACE_DELTA_LOG_FILES: &[&str] = &[
     "backend_libtooling/compile_capitalize.status",
     "backend_libtooling/compile_capitalize.stdout",
     "backend_libtooling/compile_capitalize.stderr",
+    "backend_libtooling/transpile_stage_timing.log",
+    "backend_libtooling/fragilec_driver.log",
+    "backend_libtooling/first_failing_compile_command.txt",
+    "backend_libtooling/first_failing_compile_stderr.txt",
+    "backend_libtooling/first_failing_compile_class.txt",
+];
+const RAPIDJSON_STRICT_TUTORIAL_BACKEND_SURFACE_DELTA_LOG_FILES: &[&str] = &[
+    "strict_tutorial_backend_surface_delta_manifest.txt",
+    "backend_libclang/compile_tutorial.status",
+    "backend_libclang/compile_tutorial.stdout",
+    "backend_libclang/compile_tutorial.stderr",
+    "backend_libclang/transpile_stage_timing.log",
+    "backend_libclang/fragilec_driver.log",
+    "backend_libclang/first_failing_compile_command.txt",
+    "backend_libclang/first_failing_compile_stderr.txt",
+    "backend_libclang/first_failing_compile_class.txt",
+    "backend_libtooling/compile_tutorial.status",
+    "backend_libtooling/compile_tutorial.stdout",
+    "backend_libtooling/compile_tutorial.stderr",
     "backend_libtooling/transpile_stage_timing.log",
     "backend_libtooling/fragilec_driver.log",
     "backend_libtooling/first_failing_compile_command.txt",
@@ -546,9 +567,45 @@ fn strict_cmake_backend_matrix_build_timeout() -> Duration {
     Duration::from_secs(RAPIDJSON_STRICT_CMAKE_BACKEND_MATRIX_BUILD_TIMEOUT_SECS)
 }
 
-fn strict_capitalize_backend_surface_delta_compile_timeout() -> Duration {
+fn strict_backend_surface_delta_compile_timeout() -> Duration {
     Duration::from_secs(RAPIDJSON_STRICT_CAPITALIZE_BACKEND_SURFACE_DELTA_TIMEOUT_SECS)
 }
+
+#[derive(Debug, Clone, Copy)]
+struct StrictSingleTuBackendSurfaceCaptureConfig {
+    run_root_prefix: &'static str,
+    fixture_name: &'static str,
+    log_dir_name: &'static str,
+    source_rel_path: &'static str,
+    output_obj_name: &'static str,
+    compile_step_name: &'static str,
+    manifest_file_name: &'static str,
+    context_label: &'static str,
+}
+
+const STRICT_CAPITALIZE_BACKEND_SURFACE_CAPTURE_CONFIG: StrictSingleTuBackendSurfaceCaptureConfig =
+    StrictSingleTuBackendSurfaceCaptureConfig {
+        run_root_prefix: RAPIDJSON_STRICT_CAPITALIZE_BACKEND_SURFACE_DELTA_DIR,
+        fixture_name: "real_world_strict_capitalize_backend_surface_delta",
+        log_dir_name: "strict_capitalize_backend_surface_delta_logs",
+        source_rel_path: "example/capitalize/capitalize.cpp",
+        output_obj_name: "capitalize.o",
+        compile_step_name: "compile_capitalize",
+        manifest_file_name: "strict_capitalize_backend_surface_delta_manifest.txt",
+        context_label: "strict capitalize backend-surface",
+    };
+
+const STRICT_TUTORIAL_BACKEND_SURFACE_CAPTURE_CONFIG: StrictSingleTuBackendSurfaceCaptureConfig =
+    StrictSingleTuBackendSurfaceCaptureConfig {
+        run_root_prefix: RAPIDJSON_STRICT_TUTORIAL_BACKEND_SURFACE_DELTA_DIR,
+        fixture_name: "real_world_strict_tutorial_backend_surface_delta",
+        log_dir_name: "strict_tutorial_backend_surface_delta_logs",
+        source_rel_path: "example/tutorial/tutorial.cpp",
+        output_obj_name: "tutorial.o",
+        compile_step_name: "compile_tutorial",
+        manifest_file_name: "strict_tutorial_backend_surface_delta_manifest.txt",
+        context_label: "strict tutorial backend-surface",
+    };
 
 fn run_command_with_timeout(
     command: &mut Command,
@@ -2204,10 +2261,11 @@ fn run_rapidjson_strict_cmake_no_tests_backend_matrix_capture(
     Ok((log_dir, results))
 }
 
-fn run_rapidjson_strict_capitalize_backend_surface_delta_capture(
+fn run_rapidjson_strict_single_tu_backend_surface_delta_capture(
+    config: StrictSingleTuBackendSurfaceCaptureConfig,
 ) -> Result<(PathBuf, Vec<StrictCapitalizeBackendSurfaceReplayResult>), String> {
     let checkout_dir = ensure_rapidjson_checkout()?;
-    let baseline_root = unique_prefixed_dir(RAPIDJSON_STRICT_CAPITALIZE_BACKEND_SURFACE_DELTA_DIR);
+    let baseline_root = unique_prefixed_dir(config.run_root_prefix);
     reset_dir(&baseline_root)?;
 
     let worktree_dir = baseline_root.join("worktree");
@@ -2232,18 +2290,19 @@ fn run_rapidjson_strict_capitalize_backend_surface_delta_capture(
         .ok_or_else(|| format!("failed to read HEAD in {}", worktree_dir.display()))?;
     if actual_head != RAPIDJSON_PINNED_COMMIT {
         return Err(format!(
-            "strict capitalize backend-surface worktree expected commit {} but got {}",
+            "{} worktree expected commit {} but got {}",
+            config.context_label,
             RAPIDJSON_PINNED_COMMIT, actual_head
         ));
     }
 
-    let log_dir = baseline_root.join("strict_capitalize_backend_surface_delta_logs");
+    let log_dir = baseline_root.join(config.log_dir_name);
     fs::create_dir_all(&log_dir)
         .map_err(|e| format!("failed to create log dir {}: {}", log_dir.display(), e))?;
     let fragilec = ensure_fragilec_binary()?;
-    let source = worktree_dir.join("example/capitalize/capitalize.cpp");
+    let source = worktree_dir.join(config.source_rel_path);
     let include_dir = worktree_dir.join("include");
-    let compile_timeout = strict_capitalize_backend_surface_delta_compile_timeout();
+    let compile_timeout = strict_backend_surface_delta_compile_timeout();
 
     let backends: [(&str, &str); 2] = [("libclang", "libclang"), ("libtooling", "libtooling")];
     let mut results = Vec::new();
@@ -2251,7 +2310,8 @@ fn run_rapidjson_strict_capitalize_backend_surface_delta_capture(
         let backend_log_dir = log_dir.join(format!("backend_{backend_name}"));
         fs::create_dir_all(&backend_log_dir).map_err(|e| {
             format!(
-                "failed to create strict capitalize backend-surface backend log dir {}: {}",
+                "failed to create {} backend log dir {}: {}",
+                config.context_label,
                 backend_log_dir.display(),
                 e
             )
@@ -2259,13 +2319,14 @@ fn run_rapidjson_strict_capitalize_backend_surface_delta_capture(
         let driver_log = backend_log_dir.join("fragilec_driver.log");
         fs::write(&driver_log, "").map_err(|e| {
             format!(
-                "failed to initialize strict capitalize backend-surface fragilec driver log {}: {}",
+                "failed to initialize {} fragilec driver log {}: {}",
+                config.context_label,
                 driver_log.display(),
                 e
             )
         })?;
 
-        let output_obj = backend_log_dir.join("capitalize.o");
+        let output_obj = backend_log_dir.join(config.output_obj_name);
         let sidecar_path = output_obj.with_extension("fragile.rs");
         let transpile_stage_timing_path = backend_log_dir.join("transpile_stage_timing.log");
 
@@ -2288,7 +2349,8 @@ fn run_rapidjson_strict_capitalize_backend_surface_delta_capture(
             )
             .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string());
         let context = format!(
-            "strict capitalize backend-surface compile for {} in {}",
+            "{} compile for {} in {}",
+            config.context_label,
             backend_name,
             worktree_dir.display()
         );
@@ -2301,7 +2363,7 @@ fn run_rapidjson_strict_capitalize_backend_surface_delta_capture(
         };
         write_command_capture_raw(
             &backend_log_dir,
-            "compile_capitalize",
+            config.compile_step_name,
             compile_status,
             &compile_output.stdout,
             &compile_output.stderr,
@@ -2309,7 +2371,8 @@ fn run_rapidjson_strict_capitalize_backend_surface_delta_capture(
 
         let driver_log_content = fs::read_to_string(&driver_log).map_err(|e| {
             format!(
-                "failed to read strict capitalize backend-surface fragilec driver log {}: {}",
+                "failed to read {} fragilec driver log {}: {}",
+                config.context_label,
                 driver_log.display(),
                 e
             )
@@ -2337,7 +2400,8 @@ fn run_rapidjson_strict_capitalize_backend_surface_delta_capture(
         let generated_surface_inventory = if sidecar_exists {
             let generated_rs = fs::read_to_string(&sidecar_path).map_err(|e| {
                 format!(
-                    "failed to read strict capitalize backend-surface sidecar {}: {}",
+                    "failed to read {} sidecar {}: {}",
+                    config.context_label,
                     sidecar_path.display(),
                     e
                 )
@@ -2366,7 +2430,10 @@ fn run_rapidjson_strict_capitalize_backend_surface_delta_capture(
         .iter()
         .find(|entry| entry.backend_name == "libclang")
         .ok_or_else(|| {
-            "missing strict capitalize backend-surface baseline result for libclang".to_string()
+            format!(
+                "missing {} baseline result for libclang",
+                config.context_label
+            )
         })?;
     let baseline_line_count = baseline
         .generated_surface_inventory
@@ -2395,7 +2462,7 @@ fn run_rapidjson_strict_capitalize_backend_surface_delta_capture(
     let baseline_timing_total_ms = baseline.transpile_stage_timing.total_ms;
 
     let mut manifest = String::new();
-    manifest.push_str("fixture=real_world_strict_capitalize_backend_surface_delta\n");
+    manifest.push_str(&format!("fixture={}\n", config.fixture_name));
     manifest.push_str(&format!("source_dir={}\n", worktree_dir.display()));
     manifest.push_str(&format!("pinned_commit={}\n", RAPIDJSON_PINNED_COMMIT));
     manifest.push_str(&format!("fragilec={}\n", fragilec.display()));
@@ -2520,18 +2587,33 @@ fn run_rapidjson_strict_capitalize_backend_surface_delta_capture(
     }
 
     fs::write(
-        log_dir.join("strict_capitalize_backend_surface_delta_manifest.txt"),
+        log_dir.join(config.manifest_file_name),
         manifest,
     )
     .map_err(|e| {
         format!(
-            "failed to write strict_capitalize_backend_surface_delta_manifest.txt in {}: {}",
+            "failed to write {} in {}: {}",
+            config.manifest_file_name,
             log_dir.display(),
             e
         )
     })?;
 
     Ok((log_dir, results))
+}
+
+fn run_rapidjson_strict_capitalize_backend_surface_delta_capture(
+) -> Result<(PathBuf, Vec<StrictCapitalizeBackendSurfaceReplayResult>), String> {
+    run_rapidjson_strict_single_tu_backend_surface_delta_capture(
+        STRICT_CAPITALIZE_BACKEND_SURFACE_CAPTURE_CONFIG,
+    )
+}
+
+fn run_rapidjson_strict_tutorial_backend_surface_delta_capture(
+) -> Result<(PathBuf, Vec<StrictCapitalizeBackendSurfaceReplayResult>), String> {
+    run_rapidjson_strict_single_tu_backend_surface_delta_capture(
+        STRICT_TUTORIAL_BACKEND_SURFACE_CAPTURE_CONFIG,
+    )
 }
 
 fn run_rapidjson_strict_capitalize_compile_capture() -> Result<PathBuf, String> {
@@ -4486,6 +4568,183 @@ fn test_real_world_rapidjson_strict_capitalize_backend_surface_delta_capture() {
                 line.contains("surface_line_count=na"),
                 "strict capitalize backend-surface manifest line for {} should mark missing sidecar inventory as `na`. line:\n{}",
                 result.backend_name,
+                line
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "real-world external project test (strict tutorial backend surface delta capture with FRAGILEC_KEEP_RS=1)"]
+fn test_real_world_rapidjson_strict_tutorial_backend_surface_delta_capture() {
+    let (log_dir, results) = run_rapidjson_strict_tutorial_backend_surface_delta_capture()
+        .expect("failed to run strict tutorial backend surface-delta capture");
+    let run_root = log_dir
+        .parent()
+        .expect("strict tutorial backend-surface log dir should have a run root");
+    let expected_run_root_prefix = format!("{}_", RAPIDJSON_STRICT_TUTORIAL_BACKEND_SURFACE_DELTA_DIR);
+    assert!(
+        run_root
+            .to_string_lossy()
+            .starts_with(expected_run_root_prefix.as_str()),
+        "expected strict tutorial backend-surface run root to start with {} but got {}",
+        expected_run_root_prefix,
+        run_root.display()
+    );
+
+    for rel in RAPIDJSON_STRICT_TUTORIAL_BACKEND_SURFACE_DELTA_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected strict tutorial backend-surface log file {}",
+            log_dir.join(rel).display()
+        );
+    }
+    assert_eq!(
+        results.len(),
+        2,
+        "strict tutorial backend-surface capture should produce two backend replay results"
+    );
+
+    let baseline = results
+        .iter()
+        .find(|entry| entry.backend_name == "libclang")
+        .expect("missing strict tutorial backend-surface baseline result for libclang");
+    assert!(
+        !baseline.compile_timed_out,
+        "strict tutorial backend-surface baseline should not timeout"
+    );
+    assert_ne!(
+        baseline.compile_status, COMMAND_TIMEOUT_STATUS,
+        "strict tutorial backend-surface baseline should not report timeout sentinel status"
+    );
+    assert!(
+        baseline.sidecar_exists,
+        "strict tutorial backend-surface baseline should emit a generated sidecar"
+    );
+    assert!(
+        baseline.transpile_stage_timing_exists,
+        "strict tutorial backend-surface baseline should persist transpile timing trace"
+    );
+
+    let libtooling = results
+        .iter()
+        .find(|entry| entry.backend_name == "libtooling")
+        .expect("missing strict tutorial backend-surface result for libtooling");
+    assert!(
+        !libtooling.compile_timed_out,
+        "strict tutorial backend-surface libtooling run should isolate a non-timeout blocker"
+    );
+    assert_ne!(
+        libtooling.compile_status, COMMAND_TIMEOUT_STATUS,
+        "strict tutorial backend-surface libtooling run should not report timeout sentinel status"
+    );
+    assert_ne!(
+        libtooling.first_failure_class, "compile_timeout",
+        "strict tutorial backend-surface libtooling run should classify a non-timeout blocker"
+    );
+    assert_ne!(
+        libtooling.first_failure_class, "none",
+        "strict tutorial backend-surface libtooling run should capture an actual blocker classification"
+    );
+    let libtooling_first_stderr =
+        fs::read_to_string(log_dir.join("backend_libtooling/first_failing_compile_stderr.txt"))
+            .expect("failed to read backend_libtooling/first_failing_compile_stderr.txt");
+    assert!(
+        libtooling_first_stderr.contains("AST export failed with code 1"),
+        "strict tutorial backend-surface libtooling first failure should record AST export blocker, got:\n{}",
+        libtooling_first_stderr
+    );
+    assert!(
+        !libtooling.sidecar_exists,
+        "strict tutorial backend-surface libtooling run should not emit sidecar while exporter parse fails"
+    );
+    assert!(
+        libtooling.transpile_stage_timing_exists,
+        "strict tutorial backend-surface libtooling run should persist transpile timing trace"
+    );
+    assert!(
+        libtooling.transpile_stage_timing.last_stage_started.is_some(),
+        "strict tutorial backend-surface libtooling timing trace should capture at least one started stage"
+    );
+
+    let manifest =
+        fs::read_to_string(log_dir.join("strict_tutorial_backend_surface_delta_manifest.txt"))
+            .expect("failed to read strict_tutorial_backend_surface_delta_manifest.txt");
+    assert!(
+        manifest.contains("baseline_backend=libclang"),
+        "strict tutorial backend-surface manifest should include baseline metadata, got:\n{}",
+        manifest
+    );
+    assert!(
+        manifest.contains("compile_timeout_secs="),
+        "strict tutorial backend-surface manifest should include timeout metadata, got:\n{}",
+        manifest
+    );
+    let run_root_marker = format!("run_root={}", run_root.display());
+    assert!(
+        manifest.contains(run_root_marker.as_str()),
+        "strict tutorial backend-surface manifest should include run_root marker `{}`. got:\n{}",
+        run_root_marker,
+        manifest
+    );
+
+    for result in &results {
+        let line = manifest
+            .lines()
+            .find(|entry| entry.starts_with(format!("backend={} ", result.backend_name).as_str()))
+            .unwrap_or_else(|| {
+                panic!(
+                    "strict tutorial backend-surface manifest missing backend line for {}:\n{}",
+                    result.backend_name, manifest
+                )
+            });
+        for marker in [
+            format!("compile_status={}", result.compile_status),
+            format!("compile_timed_out={}", result.compile_timed_out),
+            format!("first_failure_class={}", result.first_failure_class),
+            format!(
+                "first_failure_e0425_count={}",
+                result.first_failure_e0425_count
+            ),
+            format!("sidecar_exists={}", result.sidecar_exists),
+            format!(
+                "transpile_timing_exists={}",
+                result.transpile_stage_timing_exists
+            ),
+            format!(
+                "transpile_timing_path={}",
+                result.transpile_stage_timing_path.display()
+            ),
+            format!(
+                "transpile_parse_ms={}",
+                format_optional_u128(result.transpile_stage_timing.parse_ms)
+            ),
+            format!(
+                "transpile_export_ms={}",
+                format_optional_u128(result.transpile_stage_timing.export_ms)
+            ),
+            format!(
+                "transpile_enrichment_ms={}",
+                format_optional_u128(result.transpile_stage_timing.enrichment_ms)
+            ),
+            format!(
+                "transpile_codegen_ms={}",
+                format_optional_u128(result.transpile_stage_timing.codegen_ms)
+            ),
+            format!(
+                "transpile_total_ms={}",
+                format_optional_u128(result.transpile_stage_timing.total_ms)
+            ),
+            format!(
+                "transpile_status={}",
+                format_optional_str(result.transpile_stage_timing.status.as_deref())
+            ),
+        ] {
+            assert!(
+                line.contains(marker.as_str()),
+                "strict tutorial backend-surface manifest line for {} should contain `{}`. line:\n{}",
+                result.backend_name,
+                marker,
                 line
             );
         }
