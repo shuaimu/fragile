@@ -233,8 +233,10 @@ int mul(int x, int y) {
             include_paths: Vec::new(),
             defines: Vec::new(),
             language: ParserLanguage::Cpp,
+            language_standard: None,
             ignored_error_patterns: Vec::new(),
             backend,
+            libtooling_skip_system_headers: false,
         };
 
         let rust_code =

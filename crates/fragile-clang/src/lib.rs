@@ -51,8 +51,10 @@ pub struct TranspileOptions {
     pub include_paths: Vec<String>,
     pub defines: Vec<String>,
     pub language: ParserLanguage,
+    pub language_standard: Option<String>,
     pub ignored_error_patterns: Vec<String>,
     pub backend: ParserBackend,
+    pub libtooling_skip_system_headers: bool,
 }
 
 impl Default for TranspileOptions {
@@ -61,8 +63,10 @@ impl Default for TranspileOptions {
             include_paths: Vec::new(),
             defines: Vec::new(),
             language: ParserLanguage::Cpp,
+            language_standard: None,
             ignored_error_patterns: Vec::new(),
             backend: ParserBackend::Libclang,
+            libtooling_skip_system_headers: false,
         }
     }
 }
@@ -107,12 +111,22 @@ fn libtooling_parser_for_path(path: &Path, options: &TranspileOptions) -> LibToo
         ParserLanguage::Cpp => {
             extra_args.push("-x".to_string());
             extra_args.push("c++".to_string());
-            extra_args.push("-std=c++20".to_string());
+            let std = options
+                .language_standard
+                .as_deref()
+                .unwrap_or("c++17")
+                .to_string();
+            extra_args.push(format!("-std={std}"));
         }
         ParserLanguage::C => {
             extra_args.push("-x".to_string());
             extra_args.push("c".to_string());
-            extra_args.push("-std=gnu11".to_string());
+            let std = options
+                .language_standard
+                .as_deref()
+                .unwrap_or("gnu11")
+                .to_string();
+            extra_args.push(format!("-std={std}"));
         }
     }
     for include in &options.include_paths {
@@ -126,6 +140,9 @@ fn libtooling_parser_for_path(path: &Path, options: &TranspileOptions) -> LibToo
     if let Some(parent) = path.parent() {
         let compile_dir = parent.to_string_lossy().to_string();
         parser = parser.with_compile_commands_dir(&compile_dir);
+    }
+    if options.libtooling_skip_system_headers {
+        parser = parser.with_skip_system_headers(true);
     }
     parser
 }

@@ -69,6 +69,11 @@ namespace {
 static OptionCategory FragileCategory("fragile-ast-exporter options");
 static opt<bool> DebugMode("debug", desc("Enable debug output"),
                                 cat(FragileCategory));
+static opt<bool> SkipSystemHeaders(
+    "skip-system-headers",
+    desc("Skip declarations originating from system headers"),
+    llvm::cl::init(false),
+    cat(FragileCategory));
 
 // Helper to encode a string to CBOR
 void cbor_encode_string(CborEncoder *encoder, const std::string &str) {
@@ -138,19 +143,26 @@ class ASTExporterVisitor : public RecursiveASTVisitor<ASTExporterVisitor> {
 
     // Debug mode
     bool debug;
+    bool skipSystemHeaders;
 
 public:
-    ASTExporterVisitor(ASTContext &ctx, CborEncoder *enc, bool dbg = false)
-        : Context(ctx), encoder(enc), typeEncoder(ctx, enc, this), debug(dbg) {}
+    ASTExporterVisitor(ASTContext &ctx, CborEncoder *enc, bool dbg = false,
+                       bool skipSysHeaders = false)
+        : Context(ctx), encoder(enc), typeEncoder(ctx, enc, this), debug(dbg),
+          skipSystemHeaders(skipSysHeaders) {}
 
     // Enable visiting template instantiations - THIS IS KEY!
     bool shouldVisitTemplateInstantiations() const { return true; }
 
-    // Visit implicit code (compiler-generated)
-    bool shouldVisitImplicitCode() const { return true; }
+    // Skip compiler-generated implicit code; it massively inflates traversal
+    // on large template-heavy TUs and is not required for current strict replay
+    // parity markers.
+    bool shouldVisitImplicitCode() const { return false; }
 
     // Entry point
     void exportTranslationUnit();
+    bool TraverseDecl(Decl *D);
+    bool TraverseStmt(Stmt *S);
 
     // Declaration visitors
     bool VisitFunctionDecl(FunctionDecl *FD);
@@ -225,6 +237,10 @@ public:
     TypeEncoder &getTypeEncoder() { return typeEncoder; }
 
 private:
+    bool shouldTraverseSourceLocation(SourceLocation Loc) const;
+    bool shouldTraverseStmtTree(const Stmt *S) const;
+    bool shouldSkipDecl(const Decl *D) const;
+
     // Helper to encode source location
     void encodeSourceLocation(SourceLocation Loc, CborEncoder *enc);
     void encodeSourceRange(SourceRange Range, CborEncoder *enc);
@@ -696,6 +712,50 @@ void ASTExporterVisitor::exportTranslationUnit() {
     TraverseDecl(Context.getTranslationUnitDecl());
 }
 
+bool ASTExporterVisitor::shouldSkipDecl(const Decl *D) const {
+    if (!skipSystemHeaders || D == nullptr)
+        return false;
+
+    auto &SM = Context.getSourceManager();
+    auto Loc = SM.getExpansionLoc(D->getLocation());
+    if (Loc.isInvalid())
+        return false;
+
+    return SM.isInSystemHeader(Loc);
+}
+
+bool ASTExporterVisitor::shouldTraverseSourceLocation(SourceLocation Loc) const {
+    if (!skipSystemHeaders)
+        return true;
+    if (Loc.isInvalid())
+        return true;
+
+    auto &SM = Context.getSourceManager();
+    auto ExpLoc = SM.getExpansionLoc(Loc);
+    if (ExpLoc.isInvalid())
+        return true;
+
+    return SM.isWrittenInMainFile(ExpLoc);
+}
+
+bool ASTExporterVisitor::shouldTraverseStmtTree(const Stmt *S) const {
+    if (S == nullptr)
+        return false;
+    return shouldTraverseSourceLocation(S->getBeginLoc());
+}
+
+bool ASTExporterVisitor::TraverseDecl(Decl *D) {
+    if (D && shouldSkipDecl(D))
+        return true;
+    return RecursiveASTVisitor<ASTExporterVisitor>::TraverseDecl(D);
+}
+
+bool ASTExporterVisitor::TraverseStmt(Stmt *S) {
+    if (S && !shouldTraverseStmtTree(S))
+        return true;
+    return RecursiveASTVisitor<ASTExporterVisitor>::TraverseStmt(S);
+}
+
 void ASTExporterVisitor::encodeSourceLocation(SourceLocation Loc, CborEncoder *enc) {
     if (Loc.isInvalid()) {
         cbor_encode_uint(enc, 0);
@@ -810,6 +870,9 @@ void ASTExporterVisitor::encodeEntry(const void *ptr, ASTEntryTag tag,
 // ============================================================================
 
 bool ASTExporterVisitor::VisitFunctionDecl(FunctionDecl *FD) {
+    if (shouldSkipDecl(FD))
+        return true;
+
     // Skip methods - they're handled by VisitCXXMethodDecl
     if (isa<CXXMethodDecl>(FD))
         return true;
@@ -861,7 +924,7 @@ bool ASTExporterVisitor::VisitFunctionDecl(FunctionDecl *FD) {
                 });
 
     // Visit body
-    if (body) {
+    if (body && shouldTraverseStmtTree(body)) {
         visitStmt(body);
     }
 
@@ -869,6 +932,9 @@ bool ASTExporterVisitor::VisitFunctionDecl(FunctionDecl *FD) {
 }
 
 bool ASTExporterVisitor::VisitCXXMethodDecl(CXXMethodDecl *MD) {
+    if (shouldSkipDecl(MD))
+        return true;
+
     // Skip constructors/destructors - handled separately
     if (isa<CXXConstructorDecl>(MD) || isa<CXXDestructorDecl>(MD))
         return true;
@@ -905,7 +971,7 @@ bool ASTExporterVisitor::VisitCXXMethodDecl(CXXMethodDecl *MD) {
                     }
                 });
 
-    if (body) {
+    if (body && shouldTraverseStmtTree(body)) {
         visitStmt(body);
     }
 
@@ -913,6 +979,9 @@ bool ASTExporterVisitor::VisitCXXMethodDecl(CXXMethodDecl *MD) {
 }
 
 bool ASTExporterVisitor::VisitCXXConstructorDecl(CXXConstructorDecl *CD) {
+    if (shouldSkipDecl(CD))
+        return true;
+
     if (!markExported(CD))
         return true;
 
@@ -975,12 +1044,13 @@ bool ASTExporterVisitor::VisitCXXConstructorDecl(CXXConstructorDecl *CD) {
 
     // Visit initializer expressions
     for (auto *init : CD->inits()) {
-        if (auto *initExpr = init->getInit()) {
+        if (auto *initExpr = init->getInit();
+            initExpr && shouldTraverseStmtTree(initExpr)) {
             visitExpr(initExpr);
         }
     }
 
-    if (body) {
+    if (body && shouldTraverseStmtTree(body)) {
         visitStmt(body);
     }
 
@@ -988,6 +1058,9 @@ bool ASTExporterVisitor::VisitCXXConstructorDecl(CXXConstructorDecl *CD) {
 }
 
 bool ASTExporterVisitor::VisitCXXDestructorDecl(CXXDestructorDecl *DD) {
+    if (shouldSkipDecl(DD))
+        return true;
+
     if (!markExported(DD))
         return true;
 
@@ -1012,7 +1085,7 @@ bool ASTExporterVisitor::VisitCXXDestructorDecl(CXXDestructorDecl *DD) {
                     }
                 });
 
-    if (body) {
+    if (body && shouldTraverseStmtTree(body)) {
         visitStmt(body);
     }
 
@@ -1020,6 +1093,9 @@ bool ASTExporterVisitor::VisitCXXDestructorDecl(CXXDestructorDecl *DD) {
 }
 
 bool ASTExporterVisitor::VisitVarDecl(VarDecl *VD) {
+    if (shouldSkipDecl(VD))
+        return true;
+
     // Skip parameters - handled separately
     if (isa<ParmVarDecl>(VD))
         return true;
@@ -1040,7 +1116,7 @@ bool ASTExporterVisitor::VisitVarDecl(VarDecl *VD) {
                     cbor_encode_boolean(enc, VD->hasExternalStorage());
                 });
 
-    if (init) {
+    if (init && shouldTraverseStmtTree(init)) {
         visitExpr(init);
     }
 
@@ -1048,6 +1124,9 @@ bool ASTExporterVisitor::VisitVarDecl(VarDecl *VD) {
 }
 
 bool ASTExporterVisitor::VisitParmVarDecl(ParmVarDecl *PVD) {
+    if (shouldSkipDecl(PVD))
+        return true;
+
     if (!markExported(PVD))
         return true;
 
@@ -1061,7 +1140,7 @@ bool ASTExporterVisitor::VisitParmVarDecl(ParmVarDecl *PVD) {
                     cbor_encode_string(enc, PVD->getNameAsString());
                 });
 
-    if (defaultArg) {
+    if (defaultArg && shouldTraverseStmtTree(defaultArg)) {
         visitExpr(defaultArg);
     }
 
@@ -1069,6 +1148,9 @@ bool ASTExporterVisitor::VisitParmVarDecl(ParmVarDecl *PVD) {
 }
 
 bool ASTExporterVisitor::VisitFieldDecl(FieldDecl *FD) {
+    if (shouldSkipDecl(FD))
+        return true;
+
     if (!markExported(FD))
         return true;
 
@@ -1086,10 +1168,10 @@ bool ASTExporterVisitor::VisitFieldDecl(FieldDecl *FD) {
                     cbor_encode_uint(enc, FD->getAccess());
                 });
 
-    if (init) {
+    if (init && shouldTraverseStmtTree(init)) {
         visitExpr(init);
     }
-    if (bitWidth) {
+    if (bitWidth && shouldTraverseStmtTree(bitWidth)) {
         visitExpr(bitWidth);
     }
 
@@ -1097,6 +1179,9 @@ bool ASTExporterVisitor::VisitFieldDecl(FieldDecl *FD) {
 }
 
 bool ASTExporterVisitor::VisitCXXRecordDecl(CXXRecordDecl *RD) {
+    if (shouldSkipDecl(RD))
+        return true;
+
     // Skip template patterns - we want the specializations
     if (RD->getDescribedClassTemplate())
         return true;
@@ -1163,6 +1248,9 @@ bool ASTExporterVisitor::VisitCXXRecordDecl(CXXRecordDecl *RD) {
 }
 
 bool ASTExporterVisitor::VisitClassTemplateDecl(ClassTemplateDecl *CTD) {
+    if (shouldSkipDecl(CTD))
+        return true;
+
     if (!markExported(CTD))
         return true;
 
@@ -1216,6 +1304,9 @@ bool ASTExporterVisitor::VisitClassTemplateDecl(ClassTemplateDecl *CTD) {
 }
 
 bool ASTExporterVisitor::VisitFunctionTemplateDecl(FunctionTemplateDecl *FTD) {
+    if (shouldSkipDecl(FTD))
+        return true;
+
     if (!markExported(FTD))
         return true;
 
@@ -1257,7 +1348,7 @@ bool ASTExporterVisitor::VisitFunctionTemplateDecl(FunctionTemplateDecl *FTD) {
                     cbor_encode_boolean(enc, isNoexcept);
                 });
 
-    if (body) {
+    if (body && shouldTraverseStmtTree(body)) {
         visitStmt(body);
     }
 
@@ -1265,6 +1356,9 @@ bool ASTExporterVisitor::VisitFunctionTemplateDecl(FunctionTemplateDecl *FTD) {
 }
 
 bool ASTExporterVisitor::VisitTemplateTypeParmDecl(TemplateTypeParmDecl *TTPD) {
+    if (shouldSkipDecl(TTPD))
+        return true;
+
     if (!markExported(TTPD))
         return true;
 
@@ -1282,6 +1376,9 @@ bool ASTExporterVisitor::VisitTemplateTypeParmDecl(TemplateTypeParmDecl *TTPD) {
 }
 
 bool ASTExporterVisitor::VisitNonTypeTemplateParmDecl(NonTypeTemplateParmDecl *NTPD) {
+    if (shouldSkipDecl(NTPD))
+        return true;
+
     if (!markExported(NTPD))
         return true;
 
@@ -1299,6 +1396,9 @@ bool ASTExporterVisitor::VisitNonTypeTemplateParmDecl(NonTypeTemplateParmDecl *N
 }
 
 bool ASTExporterVisitor::VisitTemplateTemplateParmDecl(TemplateTemplateParmDecl *TTPD) {
+    if (shouldSkipDecl(TTPD))
+        return true;
+
     if (!markExported(TTPD))
         return true;
 
@@ -1321,6 +1421,9 @@ bool ASTExporterVisitor::VisitTemplateTemplateParmDecl(TemplateTemplateParmDecl 
 }
 
 bool ASTExporterVisitor::VisitClassTemplateSpecializationDecl(ClassTemplateSpecializationDecl *CTSD) {
+    if (shouldSkipDecl(CTSD))
+        return true;
+
     if (!markExported(CTSD))
         return true;
 
@@ -1458,6 +1561,9 @@ void ASTExporterVisitor::ensureFieldTypeSpecializationsExported(
 }
 
 bool ASTExporterVisitor::VisitNamespaceDecl(NamespaceDecl *ND) {
+    if (shouldSkipDecl(ND))
+        return true;
+
     if (!markExported(ND))
         return true;
 
@@ -1479,6 +1585,9 @@ bool ASTExporterVisitor::VisitNamespaceDecl(NamespaceDecl *ND) {
 }
 
 bool ASTExporterVisitor::VisitTypedefDecl(TypedefDecl *TD) {
+    if (shouldSkipDecl(TD))
+        return true;
+
     if (!markExported(TD))
         return true;
 
@@ -1493,6 +1602,9 @@ bool ASTExporterVisitor::VisitTypedefDecl(TypedefDecl *TD) {
 }
 
 bool ASTExporterVisitor::VisitTypeAliasDecl(TypeAliasDecl *TAD) {
+    if (shouldSkipDecl(TAD))
+        return true;
+
     if (!markExported(TAD))
         return true;
 
@@ -1507,6 +1619,9 @@ bool ASTExporterVisitor::VisitTypeAliasDecl(TypeAliasDecl *TAD) {
 }
 
 bool ASTExporterVisitor::VisitEnumDecl(EnumDecl *ED) {
+    if (shouldSkipDecl(ED))
+        return true;
+
     if (!markExported(ED))
         return true;
 
@@ -1525,6 +1640,9 @@ bool ASTExporterVisitor::VisitEnumDecl(EnumDecl *ED) {
 }
 
 bool ASTExporterVisitor::VisitEnumConstantDecl(EnumConstantDecl *ECD) {
+    if (shouldSkipDecl(ECD))
+        return true;
+
     if (!markExported(ECD))
         return true;
 
@@ -1541,7 +1659,7 @@ bool ASTExporterVisitor::VisitEnumConstantDecl(EnumConstantDecl *ECD) {
                     cbor_encode_int(enc, val.getExtValue());
                 });
 
-    if (init) {
+    if (init && shouldTraverseStmtTree(init)) {
         visitExpr(init);
     }
 
@@ -2422,10 +2540,11 @@ void ASTExporterVisitor::visitLambdaExpr(LambdaExpr *LE) {
 class ASTExporterConsumer : public ASTConsumer {
     std::vector<uint8_t> &output;
     bool debug;
+    bool skipSystemHeaders;
 
 public:
-    ASTExporterConsumer(std::vector<uint8_t> &out, bool dbg)
-        : output(out), debug(dbg) {}
+    ASTExporterConsumer(std::vector<uint8_t> &out, bool dbg, bool skipSysHeaders)
+        : output(out), debug(dbg), skipSystemHeaders(skipSysHeaders) {}
 
     void HandleTranslationUnit(ASTContext &Context) override {
         // Allocate buffer for CBOR output
@@ -2440,7 +2559,7 @@ public:
         cbor_encoder_create_array(&encoder, &topArray, CborIndefiniteLength);
 
         // Export AST
-        ASTExporterVisitor visitor(Context, &topArray, debug);
+        ASTExporterVisitor visitor(Context, &topArray, debug, skipSystemHeaders);
         visitor.exportTranslationUnit();
 
         cbor_encoder_close_container(&encoder, &topArray);
@@ -2454,27 +2573,29 @@ public:
 class ASTExporterAction : public ASTFrontendAction {
     std::vector<uint8_t> &output;
     bool debug;
+    bool skipSystemHeaders;
 
 public:
-    ASTExporterAction(std::vector<uint8_t> &out, bool dbg)
-        : output(out), debug(dbg) {}
+    ASTExporterAction(std::vector<uint8_t> &out, bool dbg, bool skipSysHeaders)
+        : output(out), debug(dbg), skipSystemHeaders(skipSysHeaders) {}
 
     std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
                                                     StringRef file) override {
-        return std::make_unique<ASTExporterConsumer>(output, debug);
+        return std::make_unique<ASTExporterConsumer>(output, debug, skipSystemHeaders);
     }
 };
 
 class ASTExporterActionFactory : public FrontendActionFactory {
     std::vector<uint8_t> &output;
     bool debug;
+    bool skipSystemHeaders;
 
 public:
-    ASTExporterActionFactory(std::vector<uint8_t> &out, bool dbg)
-        : output(out), debug(dbg) {}
+    ASTExporterActionFactory(std::vector<uint8_t> &out, bool dbg, bool skipSysHeaders)
+        : output(out), debug(dbg), skipSystemHeaders(skipSysHeaders) {}
 
     std::unique_ptr<FrontendAction> create() override {
-        return std::make_unique<ASTExporterAction>(output, debug);
+        return std::make_unique<ASTExporterAction>(output, debug, skipSystemHeaders);
     }
 };
 
@@ -2502,7 +2623,7 @@ ExportResult *ast_exporter(int argc, const char **argv, int debug, int *result) 
     std::vector<uint8_t> output;
 
     // Run the tool
-    ASTExporterActionFactory factory(output, debug != 0);
+    ASTExporterActionFactory factory(output, debug != 0, SkipSystemHeaders);
     int ret = tool.run(&factory);
 
     if (ret != 0) {

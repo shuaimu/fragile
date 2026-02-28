@@ -9,7 +9,7 @@
 
 use crate::ast::{AccessSpecifier, ClangNode, ClangNodeKind, SourceLocation};
 use crate::types::CppType;
-use fragile_ast_exporter::{clang_ast::AstContext, export_ast, ASTEntryTag};
+use fragile_ast_exporter::{clang_ast::AstContext, export_ast_with_options, ASTEntryTag};
 use miette::{miette, Result};
 use std::collections::HashMap;
 use std::path::Path;
@@ -20,6 +20,8 @@ pub struct LibToolingParser {
     compile_commands_dir: Option<String>,
     /// Extra compiler arguments
     extra_args: Vec<String>,
+    /// Skip system-header declarations while exporting AST nodes.
+    skip_system_headers: bool,
 }
 
 impl LibToolingParser {
@@ -28,6 +30,7 @@ impl LibToolingParser {
         Self {
             compile_commands_dir: None,
             extra_args: Vec::new(),
+            skip_system_headers: false,
         }
     }
 
@@ -40,6 +43,12 @@ impl LibToolingParser {
     /// Add extra compiler arguments.
     pub fn with_extra_args(mut self, args: Vec<String>) -> Self {
         self.extra_args = args;
+        self
+    }
+
+    /// Skip declarations originating from system headers when exporting AST.
+    pub fn with_skip_system_headers(mut self, skip: bool) -> Self {
+        self.skip_system_headers = skip;
         self
     }
 
@@ -152,8 +161,14 @@ impl LibToolingParser {
 
         let extra_args: Vec<&str> = all_extra_args.iter().map(|s| s.as_str()).collect();
 
-        export_ast(path, &compile_dir, &extra_args, false)
-            .map_err(|e| miette!("LibTooling parse failed: {}", e))
+        export_ast_with_options(
+            path,
+            &compile_dir,
+            &extra_args,
+            false,
+            self.skip_system_headers,
+        )
+        .map_err(|e| miette!("LibTooling parse failed: {}", e))
     }
 
     /// Extract template method instantiations from an AST context.
@@ -1907,7 +1922,9 @@ fn resolve_type(ctx: &AstContext, type_id: u64) -> Option<CppType> {
         }
 
         // Wrapper types that forward to an inner type ID.
-        ASTEntryTag::TagDecayedType | ASTEntryTag::TagAttributedType | ASTEntryTag::TagParenType => {
+        ASTEntryTag::TagDecayedType
+        | ASTEntryTag::TagAttributedType
+        | ASTEntryTag::TagParenType => {
             if let Some(CborValue::Integer(inner_id)) = type_node.extras.first() {
                 let inner_id = *inner_id as u64;
                 resolve_type(ctx, inner_id)
@@ -2021,13 +2038,10 @@ fn resolve_type(ctx: &AstContext, type_id: u64) -> Option<CppType> {
             if let Some(CborValue::Integer(element_id)) = type_node.extras.first() {
                 let element_id = *element_id as u64;
                 let element_type = resolve_type(ctx, element_id).unwrap_or(CppType::Void);
-                let size = type_node
-                    .extras
-                    .get(1)
-                    .and_then(|value| match value {
-                        CborValue::Integer(raw) => Some(*raw as usize),
-                        _ => None,
-                    });
+                let size = type_node.extras.get(1).and_then(|value| match value {
+                    CborValue::Integer(raw) => Some(*raw as usize),
+                    _ => None,
+                });
                 Some(CppType::Array {
                     element: Box::new(element_type),
                     size,
@@ -2283,7 +2297,10 @@ mod tests {
             resolve_type(&ctx, 920),
             Some(CppType::Short { signed: false })
         );
-        assert_eq!(resolve_type(&ctx, 928), Some(CppType::Int { signed: false }));
+        assert_eq!(
+            resolve_type(&ctx, 928),
+            Some(CppType::Int { signed: false })
+        );
         assert_eq!(
             resolve_type(&ctx, 936),
             Some(CppType::Array {
@@ -2306,7 +2323,10 @@ mod tests {
             })
         );
         assert_eq!(resolve_type(&ctx, 960), Some(CppType::Int { signed: true }));
-        assert_eq!(resolve_type(&ctx, 968), Some(CppType::Int { signed: false }));
+        assert_eq!(
+            resolve_type(&ctx, 968),
+            Some(CppType::Int { signed: false })
+        );
     }
 
     #[test]
@@ -2953,9 +2973,7 @@ int use_identity_inst() {
         let converted = convert_to_clang_node(&ctx, inst_decl_node.id)
             .expect("function template-instantiation conversion should succeed");
         match &converted.kind {
-            ClangNodeKind::FunctionTemplateInstantiation {
-                template_args, ..
-            } => {
+            ClangNodeKind::FunctionTemplateInstantiation { template_args, .. } => {
                 assert!(
                     !template_args.is_empty(),
                     "converted template-instantiation should preserve template args"
@@ -3213,13 +3231,13 @@ int use_specializations() {
         assert!(
             extracted
                 .values()
-                .any(|info| info.is_explicit_specialization && info.template_args.iter().any(|arg| arg == "int")),
+                .any(|info| info.is_explicit_specialization
+                    && info.template_args.iter().any(|arg| arg == "int")),
             "expected extracted specialization metadata for explicit Box<int> specialization"
         );
         assert!(
-            extracted
-                .values()
-                .any(|info| info.is_implicit_instantiation && info.template_args.iter().any(|arg| arg == "long")),
+            extracted.values().any(|info| info.is_implicit_instantiation
+                && info.template_args.iter().any(|arg| arg == "long")),
             "expected extracted specialization metadata for implicit Box<long> instantiation"
         );
     }

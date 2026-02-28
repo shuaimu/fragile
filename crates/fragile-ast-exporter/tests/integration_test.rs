@@ -1,5 +1,15 @@
-use fragile_ast_exporter::{export_ast, get_clang_version, ASTEntryTag};
-use std::path::Path;
+use fragile_ast_exporter::{export_ast, export_ast_with_options, get_clang_version, ASTEntryTag};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn unique_temp_dir(prefix: &str) -> PathBuf {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock must be monotonic")
+        .as_nanos();
+    std::env::temp_dir().join(format!("{prefix}_{stamp}"))
+}
 
 #[test]
 fn test_clang_version_exists() {
@@ -111,4 +121,95 @@ fn test_template_instantiation_export() {
             panic!("AST export failed: {}", e);
         }
     }
+}
+
+#[test]
+fn test_export_ast_skip_system_headers_filters_isystem_decls() {
+    let temp_dir = unique_temp_dir("fragile_ast_exporter_skip_system_headers");
+    let sys_dir = temp_dir.join("sys");
+    let include_dir = temp_dir.join("include");
+    fs::create_dir_all(&sys_dir).expect("failed to create system include dir");
+    fs::create_dir_all(&include_dir).expect("failed to create local include dir");
+
+    let sys_header = sys_dir.join("sys_only.hpp");
+    fs::write(
+        &sys_header,
+        r#"
+struct SysOnlyType {
+    int value;
+};
+"#,
+    )
+    .expect("failed to write system header");
+
+    let local_header = include_dir.join("local.hpp");
+    fs::write(
+        &local_header,
+        r#"
+#include <sys_only.hpp>
+
+struct LocalType {
+    SysOnlyType inner;
+};
+"#,
+    )
+    .expect("failed to write local header");
+
+    let source_path = temp_dir.join("main.cpp");
+    fs::write(
+        &source_path,
+        r#"
+#include "local.hpp"
+
+int read_local(const LocalType& v) {
+    return v.inner.value;
+}
+"#,
+    )
+    .expect("failed to write source file");
+
+    let compile_commands = format!(
+        r#"[
+  {{
+    "directory": "{}",
+    "command": "clang++ -std=c++17 -isystem {} -I {} -c {} -o /dev/null",
+    "file": "{}"
+  }}
+]"#,
+        temp_dir.display(),
+        sys_dir.display(),
+        include_dir.display(),
+        source_path.display(),
+        source_path.display()
+    );
+    fs::write(temp_dir.join("compile_commands.json"), compile_commands)
+        .expect("failed to write compile_commands.json");
+
+    let full_ctx = export_ast_with_options(&source_path, &temp_dir, &[], false, false)
+        .expect("unfiltered AST export should succeed");
+    let filtered_ctx = export_ast_with_options(&source_path, &temp_dir, &[], false, true)
+        .expect("filtered AST export should succeed");
+
+    let has_record = |ctx: &fragile_ast_exporter::clang_ast::AstContext, name: &str| {
+        ctx.ast_nodes.values().any(|node| {
+            node.tag == ASTEntryTag::TagCXXRecordDecl && node.get_string(0).unwrap_or("") == name
+        })
+    };
+
+    assert!(
+        has_record(&full_ctx, "SysOnlyType"),
+        "unfiltered export should retain system-header declaration"
+    );
+    assert!(
+        has_record(&full_ctx, "LocalType"),
+        "unfiltered export should retain local declaration"
+    );
+    assert!(
+        has_record(&filtered_ctx, "LocalType"),
+        "filtered export should retain local declaration"
+    );
+    assert!(
+        !has_record(&filtered_ctx, "SysOnlyType"),
+        "filtered export should drop system-header declaration"
+    );
 }

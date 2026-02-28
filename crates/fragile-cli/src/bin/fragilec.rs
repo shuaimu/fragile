@@ -221,6 +221,57 @@ fn source_language(source: &Path) -> ParserLanguage {
     }
 }
 
+fn normalize_language_standard(raw: &str, language: ParserLanguage) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let is_cpp_standard = lower.contains("++");
+    let is_c_standard = !is_cpp_standard && (lower.starts_with('c') || lower.starts_with("gnu"));
+    match language {
+        ParserLanguage::Cpp => {
+            if is_cpp_standard {
+                Some(trimmed.to_string())
+            } else {
+                None
+            }
+        }
+        ParserLanguage::C => {
+            if is_c_standard {
+                Some(trimmed.to_string())
+            } else {
+                None
+            }
+        }
+    }
+}
+
+fn extract_language_standard(args: &[OsString], language: ParserLanguage) -> Option<String> {
+    let mut detected: Option<String> = None;
+    let mut i = 0usize;
+    while i < args.len() {
+        let arg = args[i].to_string_lossy();
+        let token = arg.as_ref();
+        if token == "-std" {
+            if i + 1 < args.len() {
+                let value = args[i + 1].to_string_lossy().to_string();
+                if let Some(normalized) = normalize_language_standard(value.as_str(), language) {
+                    detected = Some(normalized);
+                }
+                i += 2;
+                continue;
+            }
+        } else if let Some(value) = token.strip_prefix("-std=") {
+            if let Some(normalized) = normalize_language_standard(value, language) {
+                detected = Some(normalized);
+            }
+        }
+        i += 1;
+    }
+    detected
+}
+
 fn strict_parser_ignored_error_patterns(language: ParserLanguage) -> Vec<String> {
     let _ = language;
     Vec::new()
@@ -451,12 +502,15 @@ fn strict_compile_source_to_object_with_backend(
     }
 
     let language = source_language(&source);
+    let language_standard = extract_language_standard(args_for_meta, language);
     let transpile_options = TranspileOptions {
         include_paths: includes.to_vec(),
         defines: defines.to_vec(),
         language,
+        language_standard,
         ignored_error_patterns: strict_parser_ignored_error_patterns(language),
         backend: parser_backend,
+        libtooling_skip_system_headers: true,
     };
     let transpiled = fragile_clang::transpile_cpp_to_rust_with_options(&source, &transpile_options)
         .map_err(|e| {
@@ -1103,6 +1157,41 @@ mod tests {
             "error should list supported backend values, got: {}",
             err
         );
+    }
+
+    #[test]
+    fn extract_language_standard_supports_split_and_equals_forms() {
+        let split_form = extract_language_standard(
+            &args(&["-O2", "-std", "c++11", "-c", "unit.cpp"]),
+            ParserLanguage::Cpp,
+        );
+        assert_eq!(split_form.as_deref(), Some("c++11"));
+
+        let equals_form = extract_language_standard(
+            &args(&["-Wall", "-std=gnu++17", "-c", "unit.cpp"]),
+            ParserLanguage::Cpp,
+        );
+        assert_eq!(equals_form.as_deref(), Some("gnu++17"));
+    }
+
+    #[test]
+    fn extract_language_standard_prefers_last_matching_flag() {
+        let detected = extract_language_standard(
+            &args(&["-std=c++11", "-std=gnu++17", "-c", "unit.cpp"]),
+            ParserLanguage::Cpp,
+        );
+        assert_eq!(detected.as_deref(), Some("gnu++17"));
+    }
+
+    #[test]
+    fn extract_language_standard_ignores_mismatched_language_family() {
+        let c_from_cpp =
+            extract_language_standard(&args(&["-std=c++20", "-c", "unit.c"]), ParserLanguage::C);
+        assert_eq!(c_from_cpp, None);
+
+        let cpp_from_c =
+            extract_language_standard(&args(&["-std=c11", "-c", "unit.cpp"]), ParserLanguage::Cpp);
+        assert_eq!(cpp_from_c, None);
     }
 
     #[test]

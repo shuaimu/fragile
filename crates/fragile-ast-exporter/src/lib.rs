@@ -62,7 +62,24 @@ pub fn export_ast(
     extra_args: &[&str],
     debug: bool,
 ) -> Result<clang_ast::AstContext, Error> {
-    let cbor_data = export_ast_cbor(file_path, compile_commands_dir, extra_args, debug)?;
+    export_ast_with_options(file_path, compile_commands_dir, extra_args, debug, false)
+}
+
+/// Export C++ AST from a source file with exporter options.
+pub fn export_ast_with_options(
+    file_path: &Path,
+    compile_commands_dir: &Path,
+    extra_args: &[&str],
+    debug: bool,
+    skip_system_headers: bool,
+) -> Result<clang_ast::AstContext, Error> {
+    let cbor_data = export_ast_cbor_with_options(
+        file_path,
+        compile_commands_dir,
+        extra_args,
+        debug,
+        skip_system_headers,
+    )?;
 
     // Deserialize CBOR
     let items: Value = serde_cbor::from_slice(&cbor_data)
@@ -83,7 +100,24 @@ pub fn export_ast_cbor(
     extra_args: &[&str],
     debug: bool,
 ) -> Result<Vec<u8>, Error> {
-    let results = get_ast_cbors(file_path, compile_commands_dir, extra_args, debug)?;
+    export_ast_cbor_with_options(file_path, compile_commands_dir, extra_args, debug, false)
+}
+
+/// Export C++ AST as raw CBOR bytes with exporter options.
+pub fn export_ast_cbor_with_options(
+    file_path: &Path,
+    compile_commands_dir: &Path,
+    extra_args: &[&str],
+    debug: bool,
+    skip_system_headers: bool,
+) -> Result<Vec<u8>, Error> {
+    let results = get_ast_cbors(
+        file_path,
+        compile_commands_dir,
+        extra_args,
+        debug,
+        skip_system_headers,
+    )?;
 
     results
         .into_values()
@@ -96,6 +130,7 @@ fn get_ast_cbors(
     compile_commands_dir: &Path,
     extra_args: &[&str],
     debug: bool,
+    skip_system_headers: bool,
 ) -> Result<HashMap<String, Vec<u8>>, Error> {
     let mut result_code: c_int = 0;
 
@@ -115,6 +150,9 @@ fn get_ast_cbors(
             })?)
             .unwrap(),
         ];
+    if skip_system_headers {
+        args_owned.push(CString::new("-skip-system-headers").unwrap());
+    }
 
     // Add extra arguments
     for &arg in extra_args {
