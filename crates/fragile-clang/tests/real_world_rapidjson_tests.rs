@@ -217,6 +217,18 @@ const RAPIDJSON_STRICT_CMAKE_BACKEND_MATRIX_LOG_FILES: &[&str] = &[
     "backend_libclang/cmake_build.status",
     "backend_libclang/cmake_build.stdout",
     "backend_libclang/cmake_build.stderr",
+    "backend_libclang/cmake_build_target_condense.status",
+    "backend_libclang/cmake_build_target_condense.stdout",
+    "backend_libclang/cmake_build_target_condense.stderr",
+    "backend_libclang/cmake_build_target_pretty.status",
+    "backend_libclang/cmake_build_target_pretty.stdout",
+    "backend_libclang/cmake_build_target_pretty.stderr",
+    "backend_libclang/run_condense.status",
+    "backend_libclang/run_condense.stdout",
+    "backend_libclang/run_condense.stderr",
+    "backend_libclang/run_pretty.status",
+    "backend_libclang/run_pretty.stdout",
+    "backend_libclang/run_pretty.stderr",
     "backend_libclang/fragilec_driver.log",
     "backend_libclang/first_failing_compile_command.txt",
     "backend_libclang/first_failing_compile_stderr.txt",
@@ -227,6 +239,18 @@ const RAPIDJSON_STRICT_CMAKE_BACKEND_MATRIX_LOG_FILES: &[&str] = &[
     "backend_libtooling/cmake_build.status",
     "backend_libtooling/cmake_build.stdout",
     "backend_libtooling/cmake_build.stderr",
+    "backend_libtooling/cmake_build_target_condense.status",
+    "backend_libtooling/cmake_build_target_condense.stdout",
+    "backend_libtooling/cmake_build_target_condense.stderr",
+    "backend_libtooling/cmake_build_target_pretty.status",
+    "backend_libtooling/cmake_build_target_pretty.stdout",
+    "backend_libtooling/cmake_build_target_pretty.stderr",
+    "backend_libtooling/run_condense.status",
+    "backend_libtooling/run_condense.stdout",
+    "backend_libtooling/run_condense.stderr",
+    "backend_libtooling/run_pretty.status",
+    "backend_libtooling/run_pretty.stdout",
+    "backend_libtooling/run_pretty.stderr",
     "backend_libtooling/fragilec_driver.log",
     "backend_libtooling/first_failing_compile_command.txt",
     "backend_libtooling/first_failing_compile_stderr.txt",
@@ -777,6 +801,18 @@ fn compute_backend_matrix_delta_snapshot(
     }
 }
 
+fn strict_backend_matrix_runtime_parity_vs_baseline(
+    result: &StrictCmakeBackendReplayResult,
+    baseline: &StrictCmakeBackendReplayResult,
+) -> bool {
+    result.condense_run_status == baseline.condense_run_status
+        && result.pretty_run_status == baseline.pretty_run_status
+        && result.condense_stdout_trimmed == baseline.condense_stdout_trimmed
+        && result.pretty_stdout_trimmed == baseline.pretty_stdout_trimmed
+        && (result.condense_stderr_trimmed.is_empty() == baseline.condense_stderr_trimmed.is_empty())
+        && (result.pretty_stderr_trimmed.is_empty() == baseline.pretty_stderr_trimmed.is_empty())
+}
+
 fn ensure_backend_matrix_delta_non_increase(
     current: BackendMatrixDeltaSnapshot,
     baseline: BackendMatrixDeltaSnapshot,
@@ -877,6 +913,133 @@ fn rapidjson_pretty_output_matches_expected(pretty_stdout: &str) -> bool {
         && pretty_stdout.contains("    \"a\": 1")
 }
 
+fn run_strict_backend_matrix_example_with_capture(
+    binary_path: &Path,
+    stdin_payload: &str,
+    log_dir: &Path,
+    step_name: &str,
+    backend_name: &str,
+    example_name: &str,
+) -> Result<(i32, String, String), String> {
+    if !binary_path.exists() {
+        let stderr = format!(
+            "strict backend-matrix runtime replay missing {} binary for backend {} at {}",
+            example_name,
+            backend_name,
+            binary_path.display()
+        );
+        write_command_capture_raw(log_dir, step_name, -1, b"", format!("{}\n", stderr).as_bytes())?;
+        return Ok((-1, String::new(), stderr));
+    }
+
+    match run_example_with_stdin(binary_path, stdin_payload, log_dir, step_name) {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            Ok((status_code(&output), stdout, stderr))
+        }
+        Err(err) => {
+            write_command_capture_raw(log_dir, step_name, -1, b"", format!("{}\n", err).as_bytes())?;
+            Ok((-1, String::new(), err))
+        }
+    }
+}
+
+fn build_strict_backend_matrix_runtime_target(
+    build_dir: &Path,
+    backend_log_dir: &Path,
+    backend_name: &str,
+    backend_env_value: &str,
+    fragilec: &Path,
+    driver_log: &Path,
+    target: &str,
+    step_name: &str,
+) -> Result<(), String> {
+    let output = Command::new("cmake")
+        .arg("--build")
+        .arg(".")
+        .arg("--target")
+        .arg(target)
+        .arg("--verbose")
+        .arg("--")
+        .arg("-j1")
+        .current_dir(build_dir)
+        .env("CXX", fragilec.to_string_lossy().to_string())
+        .env("FRAGILEC_MODE", "strict")
+        .env("FRAGILEC_PARSER_BACKEND", backend_env_value)
+        .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string())
+        .output()
+        .map_err(|e| {
+            format!(
+                "failed to run strict backend-matrix runtime target build for {} target {}: {}",
+                backend_name, target, e
+            )
+        })?;
+    write_command_capture(backend_log_dir, step_name, &output)
+}
+
+fn run_strict_cmake_backend_matrix_runtime_replay(
+    build_dir: &Path,
+    backend_log_dir: &Path,
+    backend_name: &str,
+    backend_env_value: &str,
+    fragilec: &Path,
+    driver_log: &Path,
+) -> Result<(i32, String, String, i32, String, String), String> {
+    build_strict_backend_matrix_runtime_target(
+        build_dir,
+        backend_log_dir,
+        backend_name,
+        backend_env_value,
+        fragilec,
+        driver_log,
+        "condense",
+        "cmake_build_target_condense",
+    )?;
+    build_strict_backend_matrix_runtime_target(
+        build_dir,
+        backend_log_dir,
+        backend_name,
+        backend_env_value,
+        fragilec,
+        driver_log,
+        "pretty",
+        "cmake_build_target_pretty",
+    )?;
+
+    let bin_dir = build_dir.join("bin");
+    let condense_bin = bin_dir.join("condense");
+    let (condense_run_status, condense_stdout_trimmed, condense_stderr_trimmed) =
+        run_strict_backend_matrix_example_with_capture(
+            &condense_bin,
+            RAPIDJSON_SAMPLE_JSON,
+            backend_log_dir,
+            "run_condense",
+            backend_name,
+            "condense",
+        )?;
+
+    let pretty_bin = bin_dir.join("pretty");
+    let (pretty_run_status, pretty_stdout_trimmed, pretty_stderr_trimmed) =
+        run_strict_backend_matrix_example_with_capture(
+            &pretty_bin,
+            RAPIDJSON_SAMPLE_JSON,
+            backend_log_dir,
+            "run_pretty",
+            backend_name,
+            "pretty",
+        )?;
+
+    Ok((
+        condense_run_status,
+        condense_stdout_trimmed,
+        condense_stderr_trimmed,
+        pretty_run_status,
+        pretty_stdout_trimmed,
+        pretty_stderr_trimmed,
+    ))
+}
+
 fn write_command_capture_raw(
     log_dir: &Path,
     step: &str,
@@ -930,6 +1093,12 @@ struct StrictCmakeBackendReplayResult {
     build_timed_out: bool,
     first_failure_class: String,
     first_failure_e0425_count: usize,
+    condense_run_status: i32,
+    condense_stdout_trimmed: String,
+    condense_stderr_trimmed: String,
+    pretty_run_status: i32,
+    pretty_stdout_trimmed: String,
+    pretty_stderr_trimmed: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2233,6 +2402,21 @@ fn run_rapidjson_strict_cmake_no_tests_backend_matrix_capture(
         };
         write_first_failing_compile_class_file(&backend_log_dir, first_failure_class.as_str())?;
         let first_failure_e0425_count = count_error_e0425_occurrences(&first_stderr);
+        let (
+            condense_run_status,
+            condense_stdout_trimmed,
+            condense_stderr_trimmed,
+            pretty_run_status,
+            pretty_stdout_trimmed,
+            pretty_stderr_trimmed,
+        ) = run_strict_cmake_backend_matrix_runtime_replay(
+            &build_dir,
+            &backend_log_dir,
+            backend_name,
+            backend_env_value,
+            &fragilec,
+            &driver_log,
+        )?;
 
         results.push(StrictCmakeBackendReplayResult {
             backend_name,
@@ -2241,6 +2425,12 @@ fn run_rapidjson_strict_cmake_no_tests_backend_matrix_capture(
             build_timed_out,
             first_failure_class,
             first_failure_e0425_count,
+            condense_run_status,
+            condense_stdout_trimmed,
+            condense_stderr_trimmed,
+            pretty_run_status,
+            pretty_stdout_trimmed,
+            pretty_stderr_trimmed,
         });
     }
 
@@ -2255,6 +2445,14 @@ fn run_rapidjson_strict_cmake_no_tests_backend_matrix_capture(
     let baseline_build_timed_out = baseline.build_timed_out;
     let baseline_first_failure_class = baseline.first_failure_class.clone();
     let baseline_first_failure_e0425_count = baseline.first_failure_e0425_count;
+    let baseline_condense_run_status = baseline.condense_run_status;
+    let baseline_pretty_run_status = baseline.pretty_run_status;
+    let baseline_condense_stderr_empty = baseline.condense_stderr_trimmed.is_empty();
+    let baseline_pretty_stderr_empty = baseline.pretty_stderr_trimmed.is_empty();
+    let baseline_condense_output_matches_expected =
+        baseline.condense_stdout_trimmed == RAPIDJSON_EXPECTED_CONDENSE_OUTPUT;
+    let baseline_pretty_output_matches_expected =
+        rapidjson_pretty_output_matches_expected(&baseline.pretty_stdout_trimmed);
 
     let mut manifest = String::new();
     manifest.push_str("fixture=real_world_strict_cmake_backend_matrix_first_failure\n");
@@ -2266,12 +2464,18 @@ fn run_rapidjson_strict_cmake_no_tests_backend_matrix_capture(
     manifest.push_str(&format!("build_timeout_secs={}\n", build_timeout.as_secs()));
     manifest.push_str("backends=libclang,libtooling\n");
     manifest.push_str(&format!(
-        "baseline_backend=libclang baseline_configure_status={} baseline_build_status={} baseline_build_timed_out={} baseline_first_failure_class={} baseline_first_failure_e0425_count={}\n",
+        "baseline_backend=libclang baseline_configure_status={} baseline_build_status={} baseline_build_timed_out={} baseline_first_failure_class={} baseline_first_failure_e0425_count={} baseline_condense_run_status={} baseline_pretty_run_status={} baseline_condense_stderr_empty={} baseline_pretty_stderr_empty={} baseline_condense_output_matches_expected={} baseline_pretty_output_matches_expected={}\n",
         baseline_configure_status,
         baseline_build_status,
         baseline_build_timed_out,
         baseline_first_failure_class,
-        baseline_first_failure_e0425_count
+        baseline_first_failure_e0425_count,
+        baseline_condense_run_status,
+        baseline_pretty_run_status,
+        baseline_condense_stderr_empty,
+        baseline_pretty_stderr_empty,
+        baseline_condense_output_matches_expected,
+        baseline_pretty_output_matches_expected
     ));
     for result in &results {
         let configure_status_delta_vs_baseline =
@@ -2282,19 +2486,46 @@ fn run_rapidjson_strict_cmake_no_tests_backend_matrix_capture(
             result.first_failure_e0425_count as i64 - baseline_first_failure_e0425_count as i64;
         let timeout_incidence_delta_vs_baseline =
             bool_to_i64(result.build_timed_out) - bool_to_i64(baseline_build_timed_out);
+        let condense_run_status_delta_vs_baseline =
+            result.condense_run_status - baseline_condense_run_status;
+        let pretty_run_status_delta_vs_baseline =
+            result.pretty_run_status - baseline_pretty_run_status;
+        let condense_stderr_empty = result.condense_stderr_trimmed.is_empty();
+        let pretty_stderr_empty = result.pretty_stderr_trimmed.is_empty();
+        let condense_output_matches_expected =
+            result.condense_stdout_trimmed == RAPIDJSON_EXPECTED_CONDENSE_OUTPUT;
+        let pretty_output_matches_expected =
+            rapidjson_pretty_output_matches_expected(&result.pretty_stdout_trimmed);
+        let condense_output_matches_baseline =
+            result.condense_stdout_trimmed == baseline.condense_stdout_trimmed;
+        let pretty_output_matches_baseline =
+            result.pretty_stdout_trimmed == baseline.pretty_stdout_trimmed;
+        let runtime_parity_vs_baseline =
+            strict_backend_matrix_runtime_parity_vs_baseline(result, baseline);
         manifest.push_str(&format!(
-            "backend={} configure_status={} build_status={} build_timed_out={} first_failure_class={} first_failure_e0425_count={} configure_status_delta_vs_baseline={} build_status_delta_vs_baseline={} class_delta_vs_baseline={} e0425_delta_vs_baseline={} timeout_incidence_delta_vs_baseline={}\n",
+            "backend={} configure_status={} build_status={} build_timed_out={} first_failure_class={} first_failure_e0425_count={} condense_run_status={} pretty_run_status={} condense_stderr_empty={} pretty_stderr_empty={} condense_output_matches_expected={} pretty_output_matches_expected={} condense_output_matches_baseline={} pretty_output_matches_baseline={} runtime_parity_vs_baseline={} configure_status_delta_vs_baseline={} build_status_delta_vs_baseline={} class_delta_vs_baseline={} e0425_delta_vs_baseline={} timeout_incidence_delta_vs_baseline={} condense_run_status_delta_vs_baseline={} pretty_run_status_delta_vs_baseline={}\n",
             result.backend_name,
             result.configure_status,
             result.build_status,
             result.build_timed_out,
             result.first_failure_class,
             result.first_failure_e0425_count,
+            result.condense_run_status,
+            result.pretty_run_status,
+            condense_stderr_empty,
+            pretty_stderr_empty,
+            condense_output_matches_expected,
+            pretty_output_matches_expected,
+            condense_output_matches_baseline,
+            pretty_output_matches_baseline,
+            runtime_parity_vs_baseline,
             configure_status_delta_vs_baseline,
             build_status_delta_vs_baseline,
             class_delta_vs_baseline,
             e0425_delta_vs_baseline,
-            timeout_incidence_delta_vs_baseline
+            timeout_incidence_delta_vs_baseline,
+            condense_run_status_delta_vs_baseline,
+            pretty_run_status_delta_vs_baseline
         ));
     }
     fs::write(
@@ -4195,6 +4426,62 @@ fn test_ensure_backend_matrix_delta_non_increase_enforces_all_dimensions() {
 }
 
 #[test]
+fn test_strict_backend_matrix_runtime_parity_vs_baseline_checks_status_stdout_and_stderr() {
+    let baseline = StrictCmakeBackendReplayResult {
+        backend_name: "libclang",
+        configure_status: 0,
+        build_status: 2,
+        build_timed_out: false,
+        first_failure_class: "other_rustc_error".to_string(),
+        first_failure_e0425_count: 0,
+        condense_run_status: 0,
+        condense_stdout_trimmed: RAPIDJSON_EXPECTED_CONDENSE_OUTPUT.to_string(),
+        condense_stderr_trimmed: String::new(),
+        pretty_run_status: 0,
+        pretty_stdout_trimmed: "{\n    \"a\": 1,\n    \"b\": [\n        true,\n        false\n    ],\n    \"msg\": \"hi\"\n}".to_string(),
+        pretty_stderr_trimmed: String::new(),
+    };
+    let matching = baseline.clone();
+    assert!(
+        strict_backend_matrix_runtime_parity_vs_baseline(&matching, &baseline),
+        "matching runtime captures should satisfy backend runtime parity gate"
+    );
+
+    let mut baseline_non_empty_stderr = baseline.clone();
+    baseline_non_empty_stderr.condense_stderr_trimmed = "baseline condense failure marker".to_string();
+    let mut matching_non_empty_stderr = baseline_non_empty_stderr.clone();
+    matching_non_empty_stderr.condense_stderr_trimmed = "libtooling condense failure marker".to_string();
+    assert!(
+        strict_backend_matrix_runtime_parity_vs_baseline(
+            &matching_non_empty_stderr,
+            &baseline_non_empty_stderr
+        ),
+        "runtime parity should ignore path/text differences when stderr emptiness parity matches"
+    );
+
+    let mut status_regression = matching.clone();
+    status_regression.condense_run_status = 1;
+    assert!(
+        !strict_backend_matrix_runtime_parity_vs_baseline(&status_regression, &baseline),
+        "condense run-status regression must fail backend runtime parity gate"
+    );
+
+    let mut stdout_regression = matching.clone();
+    stdout_regression.pretty_stdout_trimmed = "{\"msg\":\"different\"}".to_string();
+    assert!(
+        !strict_backend_matrix_runtime_parity_vs_baseline(&stdout_regression, &baseline),
+        "pretty stdout regression must fail backend runtime parity gate"
+    );
+
+    let mut stderr_regression = matching.clone();
+    stderr_regression.pretty_stderr_trimmed = "runtime warning".to_string();
+    assert!(
+        !strict_backend_matrix_runtime_parity_vs_baseline(&stderr_regression, &baseline),
+        "pretty stderr regression must fail backend runtime parity gate"
+    );
+}
+
+#[test]
 fn test_rapidjson_strict_backend_toggle_local_fixture_keeps_e0425_delta_at_baseline() {
     let root = unique_temp_dir("rapidjson_strict_backend_toggle_e0425_delta");
     fs::create_dir_all(&root).expect("failed to create strict backend-toggle fixture root");
@@ -5332,6 +5619,22 @@ fn test_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_capture_first_
             result.first_failure_e0425_count as i64 - baseline.first_failure_e0425_count as i64;
         let timeout_incidence_delta_vs_baseline =
             bool_to_i64(result.build_timed_out) - bool_to_i64(baseline.build_timed_out);
+        let condense_run_status_delta_vs_baseline =
+            result.condense_run_status - baseline.condense_run_status;
+        let pretty_run_status_delta_vs_baseline =
+            result.pretty_run_status - baseline.pretty_run_status;
+        let condense_stderr_empty = result.condense_stderr_trimmed.is_empty();
+        let pretty_stderr_empty = result.pretty_stderr_trimmed.is_empty();
+        let condense_output_matches_expected =
+            result.condense_stdout_trimmed == RAPIDJSON_EXPECTED_CONDENSE_OUTPUT;
+        let pretty_output_matches_expected =
+            rapidjson_pretty_output_matches_expected(&result.pretty_stdout_trimmed);
+        let condense_output_matches_baseline =
+            result.condense_stdout_trimmed == baseline.condense_stdout_trimmed;
+        let pretty_output_matches_baseline =
+            result.pretty_stdout_trimmed == baseline.pretty_stdout_trimmed;
+        let runtime_parity_vs_baseline =
+            strict_backend_matrix_runtime_parity_vs_baseline(result, baseline);
 
         for marker in [
             format!("configure_status={}", result.configure_status),
@@ -5342,6 +5645,27 @@ fn test_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_capture_first_
                 "first_failure_e0425_count={}",
                 result.first_failure_e0425_count
             ),
+            format!("condense_run_status={}", result.condense_run_status),
+            format!("pretty_run_status={}", result.pretty_run_status),
+            format!("condense_stderr_empty={}", condense_stderr_empty),
+            format!("pretty_stderr_empty={}", pretty_stderr_empty),
+            format!(
+                "condense_output_matches_expected={}",
+                condense_output_matches_expected
+            ),
+            format!(
+                "pretty_output_matches_expected={}",
+                pretty_output_matches_expected
+            ),
+            format!(
+                "condense_output_matches_baseline={}",
+                condense_output_matches_baseline
+            ),
+            format!(
+                "pretty_output_matches_baseline={}",
+                pretty_output_matches_baseline
+            ),
+            format!("runtime_parity_vs_baseline={}", runtime_parity_vs_baseline),
             format!(
                 "configure_status_delta_vs_baseline={}",
                 configure_status_delta_vs_baseline
@@ -5355,6 +5679,14 @@ fn test_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_capture_first_
             format!(
                 "timeout_incidence_delta_vs_baseline={}",
                 timeout_incidence_delta_vs_baseline
+            ),
+            format!(
+                "condense_run_status_delta_vs_baseline={}",
+                condense_run_status_delta_vs_baseline
+            ),
+            format!(
+                "pretty_run_status_delta_vs_baseline={}",
+                pretty_run_status_delta_vs_baseline
             ),
         ] {
             assert!(
@@ -5384,6 +5716,41 @@ fn test_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_capture_first_
     assert_ne!(
         libtooling.build_status, COMMAND_TIMEOUT_STATUS,
         "strict cmake backend-matrix libtooling replay must not report timeout sentinel status before closing 5.4.c.ii.3 (logs: {})",
+        log_dir.display()
+    );
+    assert_eq!(
+        libtooling.condense_run_status, baseline.condense_run_status,
+        "strict cmake backend-matrix condense runtime status must match libclang baseline for libtooling before closing 5.4.c.ii.4 (logs: {})",
+        log_dir.display()
+    );
+    assert_eq!(
+        libtooling.pretty_run_status, baseline.pretty_run_status,
+        "strict cmake backend-matrix pretty runtime status must match libclang baseline for libtooling before closing 5.4.c.ii.4 (logs: {})",
+        log_dir.display()
+    );
+    assert_eq!(
+        libtooling.condense_stderr_trimmed.is_empty(), baseline.condense_stderr_trimmed.is_empty(),
+        "strict cmake backend-matrix condense stderr-empty parity must match baseline for libtooling before closing 5.4.c.ii.4 (logs: {})",
+        log_dir.display()
+    );
+    assert_eq!(
+        libtooling.pretty_stderr_trimmed.is_empty(), baseline.pretty_stderr_trimmed.is_empty(),
+        "strict cmake backend-matrix pretty stderr-empty parity must match baseline for libtooling before closing 5.4.c.ii.4 (logs: {})",
+        log_dir.display()
+    );
+    assert!(
+        strict_backend_matrix_runtime_parity_vs_baseline(libtooling, baseline),
+        "strict cmake backend-matrix libtooling runtime parity must match libclang baseline for condense/pretty before closing 5.4.c.ii.4 (logs: {})",
+        log_dir.display()
+    );
+    assert_eq!(
+        libtooling.condense_stdout_trimmed, baseline.condense_stdout_trimmed,
+        "strict cmake backend-matrix condense stdout must match baseline for libtooling before closing 5.4.c.ii.4 (logs: {})",
+        log_dir.display()
+    );
+    assert_eq!(
+        libtooling.pretty_stdout_trimmed, baseline.pretty_stdout_trimmed,
+        "strict cmake backend-matrix pretty stdout must match baseline for libtooling before closing 5.4.c.ii.4 (logs: {})",
         log_dir.display()
     );
     let current_libtooling_delta = compute_backend_matrix_delta_snapshot(libtooling, baseline);
