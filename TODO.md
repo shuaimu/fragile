@@ -132,7 +132,7 @@ Use this as the authoritative clear order after Phase 0 guardrails. Update each 
 - [x] 5.4) Re-run strict `filterkeydom` + strict no-tests CMake captures and require first-failure stderr to be free of item-5 marker set before marking ordered ledger item 5 CLEARED. Done 2026-02-24. Evidence: strengthened replay assertions in `real_world_rapidjson_tests` to check item-5 markers (`non-primitive cast: [i8; 65536] as *mut i8`, `non-primitive cast:`, and `error[E0605]`) and reran ignored tests `test_real_world_rapidjson_strict_filterkeydom_compile_capture` and `test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_first_failure` plus full `cargo test` with all green.
 
 ## Phase 2 [P4]: Must-fix compiler correctness blockers
-- [ ] Fix `main` rollback/drop behavior so real example `main` survives codegen + rustc object emission.
+- [x] Fix `main` rollback/drop behavior so real example `main` survives codegen + rustc object emission. Done 2026-02-28. Evidence: completed `7.1`..`7.7` (main rollback bypass for real `main`, strict compile symbol-export gate, strict no-tests CMake replay assertions removing shim-only diagnostics, and strict fragilec-driver runtime checks for `condense`/`pretty` with expected output).
 - [ ] Fix duplicate emission pipeline (helpers/types/templates) to eliminate `E0428` families.
 - [ ] Fix placeholder degradation for required rapidjson template types (`Reader`, handlers, writers, streams).
 - [ ] Fix libc/libstd type canonicalization (`__FILE`, atomic flag types, void aliases).

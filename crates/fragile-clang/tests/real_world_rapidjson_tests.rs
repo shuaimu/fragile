@@ -379,6 +379,8 @@ const RAPIDJSON_ORDERED_FAILURE_CLASS_LEDGER_MARKERS: &[&str] = &[
     "6) Numeric/sign/enum lowering issues.",
     "7) Entrypoint correctness residual (`main` rollback/drop).",
 ];
+const RAPIDJSON_PHASE2_MAIN_PARENT_CLOSED_MARKER: &str =
+    "- [x] Fix `main` rollback/drop behavior so real example `main` survives codegen + rustc object emission.";
 
 fn workspace_root_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -4961,6 +4963,15 @@ fn test_todo_keeps_ordered_failure_class_clearance_ledger() {
         );
         last_position = position;
     }
+}
+
+#[test]
+fn test_todo_keeps_phase2_main_parent_task_closed() {
+    let todo = read_todo_file().expect("failed to read TODO.md for phase2 main parent closure");
+    assert!(
+        todo.contains(RAPIDJSON_PHASE2_MAIN_PARENT_CLOSED_MARKER),
+        "TODO should keep phase2 main rollback/drop parent task closed after completing 7.x breakdown"
+    );
 }
 
 #[test]
