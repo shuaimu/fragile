@@ -134,7 +134,7 @@ Use this as the authoritative clear order after Phase 0 guardrails. Update each 
 ## Phase 2 [P4]: Must-fix compiler correctness blockers
 - [x] Fix `main` rollback/drop behavior so real example `main` survives codegen + rustc object emission. Done 2026-02-28. Evidence: completed `7.1`..`7.7` (main rollback bypass for real `main`, strict compile symbol-export gate, strict no-tests CMake replay assertions removing shim-only diagnostics, and strict fragilec-driver runtime checks for `condense`/`pretty` with expected output).
 - [x] Fix duplicate emission pipeline (helpers/types/templates) to eliminate `E0428` families. Done 2026-02-28. Evidence: completed `2.1`..`2.7` (preamble/helper/type collision dedupe, helper/template signature dedupe, placeholder-alias collision suppression, and strict replay stream assertions proving `error[E0428]` absence in `capitalize`, `filterkeydom`, and strict no-tests CMake captures).
-- [ ] Fix placeholder degradation for required rapidjson template types (`Reader`, handlers, writers, streams).
+- [x] Fix placeholder degradation for required rapidjson template types (`Reader`, handlers, writers, streams). Done 2026-02-28. Evidence: completed `3.1`..`3.4` (locked placeholder API-hole markers, routed/favored concrete template-instantiation surfaces over opaque placeholders, added AST-codegen regressions for concrete rapidjson document impl emission, and reran strict `filterkeydom` + strict no-tests CMake captures with placeholder-hole marker absence).
 - [ ] Fix libc/libstd type canonicalization (`__FILE`, atomic flag types, void aliases).
 - [ ] Fix array decay and pointer cast lowering (`[T; N]` to pointer forms).
 - [x] Fix numeric/enum/sign normalization for constant tables and arithmetic expressions.
