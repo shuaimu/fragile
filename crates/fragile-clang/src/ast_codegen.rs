@@ -27333,6 +27333,75 @@ impl AstCodeGen {
         }
     }
 
+    fn is_known_c_symbol_name(name: &str) -> bool {
+        matches!(
+            name,
+            "printf"
+                | "fprintf"
+                | "sprintf"
+                | "snprintf"
+                | "vprintf"
+                | "vfprintf"
+                | "vsnprintf"
+                | "puts"
+                | "putchar"
+                | "fputs"
+                | "fopen"
+                | "fclose"
+                | "fread"
+                | "fwrite"
+                | "fseek"
+                | "fseeko"
+                | "ftell"
+                | "ftello"
+                | "fflush"
+                | "feof"
+                | "ferror"
+                | "clearerr"
+                | "fileno"
+                | "fgetc"
+                | "getc"
+                | "getchar"
+                | "fputc"
+                | "putc"
+                | "ungetc"
+                | "fgets"
+                | "malloc"
+                | "calloc"
+                | "realloc"
+                | "free"
+                | "memcpy"
+                | "memmove"
+                | "memset"
+                | "memcmp"
+                | "strlen"
+                | "strcmp"
+                | "strncmp"
+        )
+    }
+
+    fn is_known_callable_symbol_name(&self, symbol: &str) -> bool {
+        let leaf = symbol.rsplit("::").next().unwrap_or(symbol).trim();
+        let stripped = leaf
+            .strip_prefix("__gv_")
+            .or_else(|| leaf.strip_prefix("__fsv_"))
+            .unwrap_or(leaf);
+        let normalized = stripped.strip_prefix("r#").unwrap_or(stripped);
+        let base_name = Self::strip_namespace_and_template(normalized);
+
+        let mut candidates = vec![normalized.to_string(), base_name];
+        candidates.sort();
+        candidates.dedup();
+
+        candidates.into_iter().any(|candidate| {
+            candidate.starts_with("__builtin_")
+                || candidate.starts_with("crate::fragile_runtime::")
+                || self.is_known_function_declref_name(&candidate)
+                || Self::map_runtime_function_name(&candidate).is_some()
+                || Self::is_known_c_symbol_name(&candidate)
+        })
+    }
+
     fn is_non_callable_callee_value_expr(&self, callee: &ClangNode, func_expr: &str) -> bool {
         let mut normalized = func_expr.trim();
         if let Some(inner) = Self::strip_outer_unsafe_block(normalized) {
@@ -27348,6 +27417,9 @@ impl AstCodeGen {
         }
 
         if let Some(symbol) = Self::symbol_like_identifier(normalized) {
+            if self.is_known_callable_symbol_name(&symbol) {
+                return false;
+            }
             if let Some(ty) = self.global_var_types.get(&symbol) {
                 return !matches!(ty, CppType::Function { .. })
                     && !Self::is_function_pointer_type_or_typedef(ty);
@@ -36925,7 +36997,9 @@ impl AstCodeGen {
                         ) {
                             return rewritten_call;
                         }
-                        if !is_fn_ptr_call && self.is_non_callable_callee_value_expr(callee, &func)
+                        if !is_fn_ptr_call
+                            && args.is_empty()
+                            && self.is_non_callable_callee_value_expr(callee, &func)
                         {
                             return func;
                         }
@@ -37590,6 +37664,7 @@ impl AstCodeGen {
                         return rewritten_call;
                     }
                     if !is_fn_ptr_call
+                        && args.is_empty()
                         && self.is_non_callable_callee_value_expr(&node.children[0], &func)
                     {
                         return func;
@@ -52405,6 +52480,132 @@ static mut __gv_ref: &mut i32 = unsafe { std::mem::zeroed() };
                 && !code.contains("unsafe { __gv_counter }()"),
             "non-callable global values should not lower to call syntax, got:\n{}",
             code
+        );
+    }
+
+    #[test]
+    fn test_degraded_printf_callee_with_args_remains_callable() {
+        let int_ty = CppType::Int { signed: true };
+
+        let call_expr = make_node(
+            ClangNodeKind::CallExpr {
+                ty: int_ty.clone(),
+                template_instantiation: None,
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "printf".to_string(),
+                        ty: int_ty.clone(),
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::IntegerLiteral {
+                        value: 1,
+                        cpp_type: Some(int_ty.clone()),
+                    },
+                    vec![],
+                ),
+            ],
+        );
+
+        let lowered = AstCodeGen::new().expr_to_string(&call_expr);
+        assert!(
+            lowered.starts_with("printf(") && lowered.ends_with(')'),
+            "degraded C symbol call should keep call syntax, got:\n{}",
+            lowered
+        );
+    }
+
+    #[test]
+    fn test_degraded_memcpy_callee_with_args_keeps_builtin_lowering() {
+        let int_ty = CppType::Int { signed: true };
+        let char_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: false,
+        };
+        let const_char_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+
+        let call_expr = make_node(
+            ClangNodeKind::CallExpr {
+                ty: char_ptr_ty.clone(),
+                template_instantiation: None,
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "memcpy".to_string(),
+                        ty: int_ty.clone(),
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "dst".to_string(),
+                        ty: char_ptr_ty.clone(),
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "src".to_string(),
+                        ty: const_char_ptr_ty,
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::IntegerLiteral {
+                        value: 4,
+                        cpp_type: Some(int_ty.clone()),
+                    },
+                    vec![],
+                ),
+            ],
+        );
+
+        let mut gen = AstCodeGen::new();
+        gen.local_vars.insert("dst".to_string());
+        gen.local_vars.insert("src".to_string());
+        let lowered = gen.expr_to_string(&call_expr);
+        assert!(
+            lowered.contains("copy_nonoverlapping("),
+            "degraded memcpy callee should still map through builtin lowering, got:\n{}",
+            lowered
+        );
+    }
+
+    #[test]
+    fn test_degraded_pthread_self_callee_without_args_keeps_call_syntax() {
+        let ulong_ty = CppType::Long { signed: false };
+
+        let call_expr = make_node(
+            ClangNodeKind::CallExpr {
+                ty: ulong_ty.clone(),
+                template_instantiation: None,
+            },
+            vec![make_node(
+                ClangNodeKind::DeclRefExpr {
+                    name: "pthread_self".to_string(),
+                    ty: CppType::Int { signed: true },
+                    namespace_path: vec![],
+                },
+                vec![],
+            )],
+        );
+
+        let lowered = AstCodeGen::new().expr_to_string(&call_expr);
+        assert!(
+            lowered.contains("fragile_pthread_self()"),
+            "degraded zero-arg runtime C symbol should remain callable, got:\n{}",
+            lowered
         );
     }
 
