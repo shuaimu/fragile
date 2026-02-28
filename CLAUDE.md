@@ -14,15 +14,18 @@ Pipeline:
 C++ Source -> Clang AST -> Rust Source (unsafe) -> rustc -> Binary
 ```
 
-## Current Status (as of 2026-02-24)
+## Current Status (as of 2026-02-28)
 
 - `fragilec` is **strict-only** (`FRAGILEC_MODE=auto/pass` removed).
-- RapidJSON no-STL strict baseline (`condense`/`pretty`) passes in real-world ignored harness tests.
-- RapidJSON strict CMake build with `RAPIDJSON_BUILD_TESTS=OFF`:
-  - configure passes,
-  - full build with `-k`: 13 of 15 example targets compile, link, and pass regression checks (capitalize, condense, filterkey, filterkeydom, jsonx, messagereader, parsebyparts, pretty, prettyauto, schemavalidator, simpledom, simplereader, simplewriter).
-  - known failing: `serialize` (missing `std::vector<UserType>` stubs for user-defined element types), `tutorial` (methods on raw GenericValue pointers, missing type aliases).
-  - runtime validation: `bin/condense` and `bin/pretty` produce correct JSON output matching native baseline.
+- Phase 5 cutover date: **2026-02-28**.
+  - strict default parser backend is now LibTooling-primary (`FRAGILEC_PARSER_BACKEND` unset/empty -> `libtooling`).
+  - explicit hardening-window escape hatch remains: `FRAGILEC_PARSER_BACKEND=libclang|hybrid`.
+- Latest strict backend-matrix parity evidence (run root: `/tmp/fragile_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_484423_1772259242504942926`):
+  - `backend=libtooling` and baseline both report `configure_status=0`, `build_status=2`, `build_timed_out=false`, `first_failure_class=other_rustc_error`, `first_failure_e0425_count=0`.
+  - runtime parity markers are locked: `runtime_parity_vs_baseline=true`, `condense_run_status_delta_vs_baseline=0`, `pretty_run_status_delta_vs_baseline=0`.
+- Latest strict `capitalize.cpp` sidecar inventory delta evidence (run root: `/tmp/fragile_real_world_rapidjson_strict_capitalize_backend_surface_delta_3476060_1772238977899700230`):
+  - baseline (`libclang`) inventory: `surface_line_count=39146`, `surface_placeholder_count=56`, `surface_rapidjson_placeholder_count=2`, `surface_c_void_alias_count=172`, `surface_parse_unspecific_count=18`.
+  - LibTooling inventory delta vs baseline: `surface_line_count_delta_vs_baseline=-34053`, `surface_placeholder_delta_vs_baseline=-44`, `surface_rapidjson_placeholder_delta_vs_baseline=-2`, `surface_c_void_alias_delta_vs_baseline=0`, `surface_parse_unspecific_delta_vs_baseline=-1`.
 - RapidJSON with `RAPIDJSON_BUILD_TESTS=ON` is not yet supported in strict mode (configure fails during CXX feature detection / gtest `target_compile_features`).
 - Authoritative status and blocker ledger live in `TODO.md` (not `docs/transpiler-status.md`).
 

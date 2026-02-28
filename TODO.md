@@ -1,6 +1,6 @@
 # Fragile TODO (Current)
 
-Last updated: 2026-02-26
+Last updated: 2026-02-28
 Owner focus: Phase 5 LibTooling-primary parser unification with template-instantiation fidelity and fallback-stub burn-down.
 
 ## Scope (active)
@@ -21,6 +21,9 @@ Success criteria:
 - Configure with tests disabled: passes.
 - Full build with tests disabled (`-k` keep-going): all 15 of 15 RapidJSON example targets compile and link (plus aggregate `examples` target). `tutorial` now builds under strict mode.
 - `condense`/`pretty` produce expected JSON output in both CMake build and fragilec-driver no-STL baselines, matching native baseline.
+- Cutover (2026-02-28): strict `fragilec` default parser backend is now LibTooling-primary; explicit hardening-window escape hatch remains via `FRAGILEC_PARSER_BACKEND=libclang|hybrid`.
+- Backend-matrix parity evidence (run root `/tmp/fragile_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_484423_1772259242504942926`): `backend=libtooling` matches baseline on configure/build/class/E0425 deltas (`0`) and runtime parity markers (`runtime_parity_vs_baseline=true`, `condense_run_status_delta_vs_baseline=0`, `pretty_run_status_delta_vs_baseline=0`), with both backends currently at `condense_run_status=-1` / `pretty_run_status=-1`.
+- Latest strict capitalize sidecar fallback-surface inventory delta (run root `/tmp/fragile_real_world_rapidjson_strict_capitalize_backend_surface_delta_3476060_1772238977899700230`): LibTooling vs baseline deltas are `surface_line_count=-34053`, `surface_placeholder_count=-44`, `surface_rapidjson_placeholder_count=-2`, `surface_c_void_alias_count=0`, `surface_parse_unspecific_count=-1`.
 
 ## Known blocker classes (from current logs)
 
@@ -302,12 +305,14 @@ Goal: make LibTooling the strict primary AST source with stronger instantiated-t
           - Evidence: strengthened ignored gate `test_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_capture_first_failure` with explicit `libtooling` assertions (`build_timed_out==false`, `build_status!=124`, `first_failure_class!=compile_timeout`) and reran the ignored replay. Latest run root `/tmp/fragile_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_230969_1772255078158776485` shows `backend=libtooling configure_status=0 build_status=2 build_timed_out=false first_failure_class=other_rustc_error first_failure_e0425_count=0`.
       - [x] 5.4.c.ii.4) Add/lock strict runtime parity assertions for `condense`/`pretty` under backend matrix (`libclang` baseline vs `libtooling`) and require parity before cutover. Done 2026-02-28.
         - Evidence: extended `run_rapidjson_strict_cmake_no_tests_backend_matrix_capture` to capture per-backend runtime-target builds and run artifacts (`cmake_build_target_condense`, `cmake_build_target_pretty`, `run_condense`, `run_pretty`) and added runtime parity manifest markers (`condense_run_status`, `pretty_run_status`, `condense_output_matches_baseline`, `pretty_output_matches_baseline`, `runtime_parity_vs_baseline`, status deltas). Ignored gate `test_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_capture_first_failure` now asserts libtooling runtime parity vs baseline (status/output + stderr-emptiness parity) before cutover. Latest run root `/tmp/fragile_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_484423_1772259242504942926` shows both backends at `condense_run_status=-1` / `pretty_run_status=-1` with `runtime_parity_vs_baseline=true`, `condense_output_matches_baseline=true`, `pretty_output_matches_baseline=true`, and zero runtime status deltas.
-- [ ] 5.5) Cutover and de-risk period (Effort: S, Risk: Medium).
+- [x] 5.5) Cutover and de-risk period (Effort: S, Risk: Medium). Done 2026-02-28.
+  - Evidence: completed `5.5.a`..`5.5.c`; strict default backend cutover to LibTooling is active with explicit `libclang` escape hatch retained, and status snapshots now include concrete backend-parity + fallback-surface inventory deltas from latest strict capture manifests (details in `docs/phase5_cutover_default_backend_leaf_5_5_a.md`, `docs/phase5_cutover_escape_hatch_leaf_5_5_b.md`, `docs/phase5_cutover_status_snapshot_leaf_5_5_c.md`).
   - [x] 5.5.a) Switch strict default backend to LibTooling-primary now that 5.1-5.4 gates are green. Done 2026-02-28.
     - Evidence: `fragilec` strict backend selection now defaults to `ParserBackend::Libtooling` when `FRAGILEC_PARSER_BACKEND` is unset/empty (`strict_parser_backend_from_value`), help text now reports `default: libtooling`, and strict CLI regression `strict_parser_backend_validation_accepts_supported_values` now asserts both default-to-libtooling and explicit `libclang` override parsing (details: `docs/phase5_cutover_default_backend_leaf_5_5_a.md`).
   - [x] 5.5.b) Keep emergency escape hatch to `libclang` for one hardening window; remove only after stable CI/replay history. Done 2026-02-28.
     - Evidence: strict parser backend selector still accepts explicit `libclang` via `FRAGILEC_PARSER_BACKEND`, added/locked strict compile regression `strict_compile_source_with_libclang_backend_exports_main_symbol` in `fragilec` tests, and RapidJSON local fragilec-driver baseline fixture is now pinned to `FRAGILEC_PARSER_BACKEND=libclang` to keep an active escape-hatch replay lane during hardening (details: `docs/phase5_cutover_escape_hatch_leaf_5_5_b.md`).
-  - [ ] 5.5.c) Update `CLAUDE.md` + this `TODO.md` status snapshot with exact cutover date, backend parity evidence, and fallback-stub inventory delta.
+  - [x] 5.5.c) Update `CLAUDE.md` + this `TODO.md` status snapshot with exact cutover date, backend parity evidence, and fallback-stub inventory delta. Done 2026-02-28.
+    - Evidence: updated `CLAUDE.md` current-status section and `TODO.md` current-status snapshot with exact cutover date (`2026-02-28`), strict backend-matrix parity manifest evidence (`/tmp/fragile_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_484423_1772259242504942926`), and strict capitalize sidecar fallback-surface inventory deltas (`/tmp/fragile_real_world_rapidjson_strict_capitalize_backend_surface_delta_3476060_1772238977899700230`); detailed rationale and extracted metrics in `docs/phase5_cutover_status_snapshot_leaf_5_5_c.md`.
 
 ## Phase 6 [P3 completed/archive]: Generic STL container types
 
