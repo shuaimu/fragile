@@ -5,11 +5,11 @@
 
 use fragile_clang::{AstCodeGen, ClangParser};
 use std::fs;
-use std::io::{ErrorKind, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::OnceLock;
-use std::thread::sleep;
+use std::thread::{self, sleep};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const RAPIDJSON_REPO_URL: &str = "https://github.com/Tencent/rapidjson.git";
@@ -614,38 +614,73 @@ fn run_command_with_timeout(
     let mut child = command
         .spawn()
         .map_err(|e| format!("failed to spawn {}: {}", context, e))?;
+    let mut child_stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| format!("failed to capture stdout pipe for {}", context))?;
+    let mut child_stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| format!("failed to capture stderr pipe for {}", context))?;
+    let stdout_thread = thread::spawn(move || -> std::io::Result<Vec<u8>> {
+        let mut stdout = Vec::new();
+        child_stdout.read_to_end(&mut stdout)?;
+        Ok(stdout)
+    });
+    let stderr_thread = thread::spawn(move || -> std::io::Result<Vec<u8>> {
+        let mut stderr = Vec::new();
+        child_stderr.read_to_end(&mut stderr)?;
+        Ok(stderr)
+    });
+
     let start = Instant::now();
-    loop {
-        if let Some(_status) = child
+    let mut timed_out = false;
+    let status = loop {
+        if let Some(status) = child
             .try_wait()
             .map_err(|e| format!("failed waiting for {}: {}", context, e))?
         {
-            let output = child
-                .wait_with_output()
-                .map_err(|e| format!("failed to collect output for {}: {}", context, e))?;
-            return Ok((output, false));
+            break status;
         }
 
         if start.elapsed() >= timeout {
+            timed_out = true;
             let _ = child.kill();
-            let mut output = child.wait_with_output().map_err(|e| {
-                format!("failed to collect timed-out output for {}: {}", context, e)
-            })?;
-            if !output.stderr.is_empty() && !output.stderr.ends_with(b"\n") {
-                output.stderr.push(b'\n');
-            }
-            let timeout_msg = format!(
-                "command timed out after {}s: {}",
-                timeout.as_secs(),
-                context
-            );
-            output.stderr.extend_from_slice(timeout_msg.as_bytes());
-            output.stderr.push(b'\n');
-            return Ok((output, true));
+            break child
+                .wait()
+                .map_err(|e| format!("failed to wait on timed-out {}: {}", context, e))?;
         }
 
         sleep(Duration::from_millis(100));
+    };
+
+    let stdout = stdout_thread
+        .join()
+        .map_err(|_| format!("failed joining stdout capture thread for {}", context))?
+        .map_err(|e| format!("failed reading stdout for {}: {}", context, e))?;
+    let stderr = stderr_thread
+        .join()
+        .map_err(|_| format!("failed joining stderr capture thread for {}", context))?
+        .map_err(|e| format!("failed reading stderr for {}: {}", context, e))?;
+    let mut output = Output {
+        status,
+        stdout,
+        stderr,
+    };
+
+    if timed_out {
+        if !output.stderr.is_empty() && !output.stderr.ends_with(b"\n") {
+            output.stderr.push(b'\n');
+        }
+        let timeout_msg = format!(
+            "command timed out after {}s: {}",
+            timeout.as_secs(),
+            context
+        );
+        output.stderr.extend_from_slice(timeout_msg.as_bytes());
+        output.stderr.push(b'\n');
     }
+    Ok((output, timed_out))
 }
 
 fn read_status_file(path: &Path) -> Result<i32, String> {
@@ -3716,6 +3751,38 @@ fn test_select_first_failing_compile_capture_returns_none_when_build_succeeds() 
 }
 
 #[test]
+fn test_run_command_with_timeout_drains_large_stderr_without_false_timeout() {
+    let mut command = Command::new("bash");
+    command.arg("-lc").arg(
+        "i=0; while [ \"$i\" -lt 8000 ]; do echo \"drain-stderr-line-$i\" 1>&2; i=$((i+1)); done; exit 1",
+    );
+    let (output, timed_out) = run_command_with_timeout(
+        &mut command,
+        Duration::from_secs(10),
+        "large-stderr timeout-drain fixture",
+    )
+    .expect("large-stderr timeout-drain fixture should execute");
+    assert!(
+        !timed_out,
+        "large-stderr command should not be misclassified as timeout when pipes are drained"
+    );
+    assert_eq!(
+        status_code(&output),
+        1,
+        "large-stderr command should preserve exit status when not timed out"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("drain-stderr-line-7999"),
+        "large-stderr fixture should capture full stderr payload without pipe deadlock"
+    );
+    assert!(
+        !stderr.contains("command timed out after"),
+        "large-stderr fixture stderr should not include timeout sentinel when command exits normally"
+    );
+}
+
+#[test]
 fn test_classify_first_failing_compile_stderr_covers_known_error_families() {
     assert_eq!(
         classify_first_failing_compile_stderr(
@@ -4629,16 +4696,16 @@ fn test_real_world_rapidjson_strict_tutorial_backend_surface_delta_capture() {
         .find(|entry| entry.backend_name == "libtooling")
         .expect("missing strict tutorial backend-surface result for libtooling");
     assert!(
-        libtooling.compile_timed_out,
-        "strict tutorial backend-surface libtooling run should currently classify the post-export blocker as timeout-bound rustc failure"
+        !libtooling.compile_timed_out,
+        "strict tutorial backend-surface libtooling run should complete without timeout so first blocker classification is deterministic"
     );
-    assert_eq!(
+    assert_ne!(
         libtooling.compile_status, COMMAND_TIMEOUT_STATUS,
-        "strict tutorial backend-surface libtooling run should report timeout sentinel status while rustc compile remains timeout-bound"
+        "strict tutorial backend-surface libtooling run should not report timeout sentinel status"
     );
     assert_eq!(
-        libtooling.first_failure_class, "compile_timeout",
-        "strict tutorial backend-surface libtooling run should classify timeout after exporter unblocks"
+        libtooling.first_failure_class, "unresolved_name_or_type_e0425",
+        "strict tutorial backend-surface libtooling run should deterministically classify unresolved-name/type blocker after exporter unblocks"
     );
     assert_ne!(
         libtooling.first_failure_class, "none",
@@ -4650,6 +4717,11 @@ fn test_real_world_rapidjson_strict_tutorial_backend_surface_delta_capture() {
     assert!(
         libtooling_first_stderr.contains("[fragilec] fragile rustc object compile failed"),
         "strict tutorial backend-surface libtooling first failure should capture rustc compile blocker after exporter unblocks, got:\n{}",
+        libtooling_first_stderr
+    );
+    assert!(
+        libtooling_first_stderr.contains("error[E0425]"),
+        "strict tutorial backend-surface libtooling first failure should include unresolved-name/type diagnostics for deterministic classification, got:\n{}",
         libtooling_first_stderr
     );
     assert!(
