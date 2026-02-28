@@ -5371,6 +5371,21 @@ fn test_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_capture_first_
         .iter()
         .find(|entry| entry.backend_name == "libtooling")
         .expect("missing strict cmake backend-matrix replay result for libtooling");
+    assert!(
+        !libtooling.build_timed_out,
+        "strict cmake backend-matrix libtooling replay must complete without build timeout before closing 5.4.c.ii.3 (logs: {})",
+        log_dir.display()
+    );
+    assert_ne!(
+        libtooling.first_failure_class, "compile_timeout",
+        "strict cmake backend-matrix libtooling first-failure class must not be compile_timeout before closing 5.4.c.ii.3 (logs: {})",
+        log_dir.display()
+    );
+    assert_ne!(
+        libtooling.build_status, COMMAND_TIMEOUT_STATUS,
+        "strict cmake backend-matrix libtooling replay must not report timeout sentinel status before closing 5.4.c.ii.3 (logs: {})",
+        log_dir.display()
+    );
     let current_libtooling_delta = compute_backend_matrix_delta_snapshot(libtooling, baseline);
     if let Some((baseline_manifest_path, baseline_delta)) = previous_libtooling_delta_baseline {
         ensure_backend_matrix_delta_non_increase(current_libtooling_delta, baseline_delta)
