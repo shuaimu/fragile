@@ -16,6 +16,7 @@ const FRAGILEC_REQUIRE_META_ENV: &str = "FRAGILEC_REQUIRE_META";
 const FRAGILEC_KEEP_RS_ENV: &str = "FRAGILEC_KEEP_RS";
 const FRAGILEC_LINKER_ENV: &str = "FRAGILEC_LINKER";
 const FRAGILEC_PARSER_BACKEND_ENV: &str = "FRAGILEC_PARSER_BACKEND";
+const FRAGILEC_TRANSPILE_STAGE_TIMING_PATH_ENV: &str = "FRAGILEC_TRANSPILE_STAGE_TIMING_PATH";
 
 fn validate_strict_mode_value(mode: &str) -> Result<(), String> {
     match mode.to_ascii_lowercase().as_str() {
@@ -503,6 +504,11 @@ fn strict_compile_source_to_object_with_backend(
 
     let language = source_language(&source);
     let language_standard = extract_language_standard(args_for_meta, language);
+    let stage_timing_trace_path = std::env::var(FRAGILEC_TRANSPILE_STAGE_TIMING_PATH_ENV)
+        .ok()
+        .map(|raw| raw.trim().to_string())
+        .filter(|raw| !raw.is_empty())
+        .map(PathBuf::from);
     let transpile_options = TranspileOptions {
         include_paths: includes.to_vec(),
         defines: defines.to_vec(),
@@ -511,6 +517,7 @@ fn strict_compile_source_to_object_with_backend(
         ignored_error_patterns: strict_parser_ignored_error_patterns(language),
         backend: parser_backend,
         libtooling_skip_system_headers: true,
+        stage_timing_trace_path,
     };
     let transpiled = fragile_clang::transpile_cpp_to_rust_with_options(&source, &transpile_options)
         .map_err(|e| {
@@ -994,6 +1001,8 @@ Environment:
   FRAGILEC_ENFORCE_BUILD_ID=1        Enforce build-id on .o/.a inputs during link
   FRAGILEC_REQUIRE_META=1            Require metadata sidecars for link inputs
   FRAGILEC_KEEP_RS=1                 Keep transpiled Rust sidecar next to output object
+  FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=<path>
+                                     Write transpile stage timing trace (parse/export/enrichment/codegen)
   FRAGILEC_LINKER=<path>             Link-driver executable for strict link (default: c++)
 "
     );

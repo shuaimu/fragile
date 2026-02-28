@@ -25,6 +25,8 @@ const RAPIDJSON_STRICT_CAPITALIZE_CAPTURE_DIR: &str =
     "/tmp/fragile_real_world_rapidjson_strict_capitalize_capture";
 const RAPIDJSON_STRICT_CAPITALIZE_BACKEND_SURFACE_DELTA_DIR: &str =
     "/tmp/fragile_real_world_rapidjson_strict_capitalize_backend_surface_delta";
+const RAPIDJSON_TRANSPILE_STAGE_TIMING_PARSE_FIXTURE_DIR: &str =
+    "/tmp/fragile_rapidjson_transpile_stage_timing_parse_fixture";
 const RAPIDJSON_STRICT_FILTERKEYDOM_CAPTURE_DIR: &str =
     "/tmp/fragile_real_world_rapidjson_strict_filterkeydom_capture";
 const RAPIDJSON_STRICT_CMAKE_NO_TESTS_BUILD_DIR: &str =
@@ -34,6 +36,7 @@ const RAPIDJSON_STRICT_CMAKE_NO_TESTS_BACKEND_MATRIX_DIR: &str =
 const RAPIDJSON_STRICT_CMAKE_BACKEND_MATRIX_BUILD_TIMEOUT_SECS: u64 = 1200;
 const RAPIDJSON_STRICT_CAPITALIZE_BACKEND_SURFACE_DELTA_TIMEOUT_SECS: u64 = 180;
 const COMMAND_TIMEOUT_STATUS: i32 = 124;
+const FRAGILEC_TRANSPILE_STAGE_TIMING_PATH_ENV: &str = "FRAGILEC_TRANSPILE_STAGE_TIMING_PATH";
 const RAPIDJSON_REQUIRED_PATHS: &[&str] = &[
     "include/rapidjson/document.h",
     "example/condense/condense.cpp",
@@ -266,6 +269,7 @@ const RAPIDJSON_STRICT_CAPITALIZE_BACKEND_SURFACE_DELTA_LOG_FILES: &[&str] = &[
     "backend_libclang/compile_capitalize.status",
     "backend_libclang/compile_capitalize.stdout",
     "backend_libclang/compile_capitalize.stderr",
+    "backend_libclang/transpile_stage_timing.log",
     "backend_libclang/fragilec_driver.log",
     "backend_libclang/first_failing_compile_command.txt",
     "backend_libclang/first_failing_compile_stderr.txt",
@@ -273,6 +277,7 @@ const RAPIDJSON_STRICT_CAPITALIZE_BACKEND_SURFACE_DELTA_LOG_FILES: &[&str] = &[
     "backend_libtooling/compile_capitalize.status",
     "backend_libtooling/compile_capitalize.stdout",
     "backend_libtooling/compile_capitalize.stderr",
+    "backend_libtooling/transpile_stage_timing.log",
     "backend_libtooling/fragilec_driver.log",
     "backend_libtooling/first_failing_compile_command.txt",
     "backend_libtooling/first_failing_compile_stderr.txt",
@@ -666,6 +671,18 @@ struct GeneratedSurfaceInventory {
     parse_unspecific_syntax_error_count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct TranspileStageTimingSnapshot {
+    parse_ms: Option<u128>,
+    export_ms: Option<u128>,
+    enrichment_ms: Option<u128>,
+    codegen_ms: Option<u128>,
+    total_ms: Option<u128>,
+    last_stage_started: Option<String>,
+    last_stage_completed: Option<String>,
+    status: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StrictCapitalizeBackendSurfaceReplayResult {
     backend_name: &'static str,
@@ -676,6 +693,9 @@ struct StrictCapitalizeBackendSurfaceReplayResult {
     sidecar_path: PathBuf,
     sidecar_exists: bool,
     generated_surface_inventory: Option<GeneratedSurfaceInventory>,
+    transpile_stage_timing_path: PathBuf,
+    transpile_stage_timing_exists: bool,
+    transpile_stage_timing: TranspileStageTimingSnapshot,
 }
 
 fn parse_fragilec_driver_invocations(driver_log: &str) -> Vec<FragilecDriverInvocation> {
@@ -774,10 +794,98 @@ fn format_optional_usize(value: Option<usize>) -> String {
         .unwrap_or_else(|| "na".to_string())
 }
 
+fn format_optional_u128(value: Option<u128>) -> String {
+    value
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "na".to_string())
+}
+
 fn format_optional_i64(value: Option<i64>) -> String {
     value
         .map(|v| v.to_string())
         .unwrap_or_else(|| "na".to_string())
+}
+
+fn format_optional_str(value: Option<&str>) -> String {
+    value
+        .map(str::to_string)
+        .unwrap_or_else(|| "na".to_string())
+}
+
+fn parse_key_value_token<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    line.split_whitespace()
+        .find_map(|token| token.strip_prefix(format!("{key}=").as_str()))
+}
+
+fn assign_transpile_stage_elapsed(
+    snapshot: &mut TranspileStageTimingSnapshot,
+    stage: &str,
+    elapsed_ms: Option<u128>,
+) {
+    match stage {
+        "parse" => snapshot.parse_ms = elapsed_ms,
+        "export" => snapshot.export_ms = elapsed_ms,
+        "enrichment" => snapshot.enrichment_ms = elapsed_ms,
+        "codegen" => snapshot.codegen_ms = elapsed_ms,
+        _ => {}
+    }
+}
+
+fn parse_transpile_stage_timing_trace(
+    path: &Path,
+) -> Result<(bool, TranspileStageTimingSnapshot), String> {
+    if !path.exists() {
+        return Ok((false, TranspileStageTimingSnapshot::default()));
+    }
+    let content = fs::read_to_string(path).map_err(|e| {
+        format!(
+            "failed to read transpile stage timing trace {}: {}",
+            path.display(),
+            e
+        )
+    })?;
+    let mut snapshot = TranspileStageTimingSnapshot::default();
+
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(status) = line.strip_prefix("status=") {
+            snapshot.status = Some(status.to_string());
+            continue;
+        }
+        if line.starts_with("event=stage_start ") {
+            if let Some(stage) = parse_key_value_token(line, "stage") {
+                snapshot.last_stage_started = Some(stage.to_string());
+            }
+            continue;
+        }
+        if line.starts_with("event=stage_end ") || line.starts_with("event=stage_skip ") {
+            if let Some(stage) = parse_key_value_token(line, "stage") {
+                let elapsed_ms = parse_key_value_token(line, "elapsed_ms")
+                    .and_then(|value| value.parse::<u128>().ok());
+                assign_transpile_stage_elapsed(&mut snapshot, stage, elapsed_ms);
+                snapshot.last_stage_completed = Some(stage.to_string());
+            }
+            continue;
+        }
+        if line.starts_with("summary ") {
+            snapshot.parse_ms = parse_key_value_token(line, "parse_ms")
+                .and_then(|value| value.parse::<u128>().ok());
+            snapshot.export_ms = parse_key_value_token(line, "export_ms")
+                .and_then(|value| value.parse::<u128>().ok());
+            snapshot.enrichment_ms = parse_key_value_token(line, "enrichment_ms")
+                .and_then(|value| value.parse::<u128>().ok());
+            snapshot.codegen_ms = parse_key_value_token(line, "codegen_ms")
+                .and_then(|value| value.parse::<u128>().ok());
+            snapshot.total_ms = parse_key_value_token(line, "total_ms")
+                .and_then(|value| value.parse::<u128>().ok());
+            continue;
+        }
+    }
+
+    Ok((true, snapshot))
 }
 
 fn write_first_failing_compile_capture_files(
@@ -1873,6 +1981,7 @@ fn run_rapidjson_strict_capitalize_backend_surface_delta_capture(
 
         let output_obj = backend_log_dir.join("capitalize.o");
         let sidecar_path = output_obj.with_extension("fragile.rs");
+        let transpile_stage_timing_path = backend_log_dir.join("transpile_stage_timing.log");
 
         let mut compile_cmd = Command::new(&fragilec);
         compile_cmd
@@ -1887,6 +1996,10 @@ fn run_rapidjson_strict_capitalize_backend_surface_delta_capture(
             .env("FRAGILEC_MODE", "strict")
             .env("FRAGILEC_PARSER_BACKEND", backend_env_value)
             .env("FRAGILEC_KEEP_RS", "1")
+            .env(
+                FRAGILEC_TRANSPILE_STAGE_TIMING_PATH_ENV,
+                transpile_stage_timing_path.to_string_lossy().to_string(),
+            )
             .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string());
         let context = format!(
             "strict capitalize backend-surface compile for {} in {}",
@@ -1931,6 +2044,8 @@ fn run_rapidjson_strict_capitalize_backend_surface_delta_capture(
         };
         write_first_failing_compile_class_file(&backend_log_dir, first_failure_class.as_str())?;
         let first_failure_e0425_count = count_error_e0425_occurrences(&first_stderr);
+        let (transpile_stage_timing_exists, transpile_stage_timing) =
+            parse_transpile_stage_timing_trace(&transpile_stage_timing_path)?;
 
         let sidecar_exists = sidecar_path.exists();
         let generated_surface_inventory = if sidecar_exists {
@@ -1955,6 +2070,9 @@ fn run_rapidjson_strict_capitalize_backend_surface_delta_capture(
             sidecar_path,
             sidecar_exists,
             generated_surface_inventory,
+            transpile_stage_timing_path,
+            transpile_stage_timing_exists,
+            transpile_stage_timing,
         });
     }
 
@@ -1984,6 +2102,11 @@ fn run_rapidjson_strict_capitalize_backend_surface_delta_capture(
         .generated_surface_inventory
         .as_ref()
         .map(|inv| inv.parse_unspecific_syntax_error_count);
+    let baseline_timing_parse_ms = baseline.transpile_stage_timing.parse_ms;
+    let baseline_timing_export_ms = baseline.transpile_stage_timing.export_ms;
+    let baseline_timing_enrichment_ms = baseline.transpile_stage_timing.enrichment_ms;
+    let baseline_timing_codegen_ms = baseline.transpile_stage_timing.codegen_ms;
+    let baseline_timing_total_ms = baseline.transpile_stage_timing.total_ms;
 
     let mut manifest = String::new();
     manifest.push_str("fixture=real_world_strict_capitalize_backend_surface_delta\n");
@@ -1998,7 +2121,7 @@ fn run_rapidjson_strict_capitalize_backend_surface_delta_capture(
     ));
     manifest.push_str("backends=libclang,libtooling\n");
     manifest.push_str(&format!(
-        "baseline_backend=libclang baseline_compile_status={} baseline_compile_timed_out={} baseline_first_failure_class={} baseline_first_failure_e0425_count={} baseline_sidecar_exists={} baseline_surface_line_count={} baseline_surface_placeholder_count={} baseline_surface_rapidjson_placeholder_count={} baseline_surface_c_void_alias_count={} baseline_surface_parse_unspecific_count={}\n",
+        "baseline_backend=libclang baseline_compile_status={} baseline_compile_timed_out={} baseline_first_failure_class={} baseline_first_failure_e0425_count={} baseline_sidecar_exists={} baseline_surface_line_count={} baseline_surface_placeholder_count={} baseline_surface_rapidjson_placeholder_count={} baseline_surface_c_void_alias_count={} baseline_surface_parse_unspecific_count={} baseline_transpile_timing_exists={} baseline_transpile_parse_ms={} baseline_transpile_export_ms={} baseline_transpile_enrichment_ms={} baseline_transpile_codegen_ms={} baseline_transpile_total_ms={} baseline_transpile_last_stage_started={} baseline_transpile_last_stage_completed={} baseline_transpile_status={}\n",
         baseline.compile_status,
         baseline.compile_timed_out,
         baseline.first_failure_class,
@@ -2009,6 +2132,15 @@ fn run_rapidjson_strict_capitalize_backend_surface_delta_capture(
         format_optional_usize(baseline_rapidjson_placeholder_count),
         format_optional_usize(baseline_c_void_alias_count),
         format_optional_usize(baseline_parse_unspecific_count),
+        baseline.transpile_stage_timing_exists,
+        format_optional_u128(baseline_timing_parse_ms),
+        format_optional_u128(baseline_timing_export_ms),
+        format_optional_u128(baseline_timing_enrichment_ms),
+        format_optional_u128(baseline_timing_codegen_ms),
+        format_optional_u128(baseline_timing_total_ms),
+        format_optional_str(baseline.transpile_stage_timing.last_stage_started.as_deref()),
+        format_optional_str(baseline.transpile_stage_timing.last_stage_completed.as_deref()),
+        format_optional_str(baseline.transpile_stage_timing.status.as_deref()),
     ));
     for result in &results {
         let line_count = result
@@ -2031,6 +2163,11 @@ fn run_rapidjson_strict_capitalize_backend_surface_delta_capture(
             .generated_surface_inventory
             .as_ref()
             .map(|inv| inv.parse_unspecific_syntax_error_count);
+        let transpile_parse_ms = result.transpile_stage_timing.parse_ms;
+        let transpile_export_ms = result.transpile_stage_timing.export_ms;
+        let transpile_enrichment_ms = result.transpile_stage_timing.enrichment_ms;
+        let transpile_codegen_ms = result.transpile_stage_timing.codegen_ms;
+        let transpile_total_ms = result.transpile_stage_timing.total_ms;
 
         let line_count_delta_vs_baseline = match (line_count, baseline_line_count) {
             (Some(value), Some(base)) => Some(value as i64 - base as i64),
@@ -2057,9 +2194,14 @@ fn run_rapidjson_strict_capitalize_backend_surface_delta_capture(
                 (Some(value), Some(base)) => Some(value as i64 - base as i64),
                 _ => None,
             };
+        let transpile_total_delta_vs_baseline = match (transpile_total_ms, baseline_timing_total_ms)
+        {
+            (Some(value), Some(base)) => Some(value as i64 - base as i64),
+            _ => None,
+        };
 
         manifest.push_str(&format!(
-            "backend={} compile_status={} compile_timed_out={} first_failure_class={} first_failure_e0425_count={} sidecar_exists={} sidecar_path={} surface_line_count={} surface_placeholder_count={} surface_rapidjson_placeholder_count={} surface_c_void_alias_count={} surface_parse_unspecific_count={} surface_line_count_delta_vs_baseline={} surface_placeholder_delta_vs_baseline={} surface_rapidjson_placeholder_delta_vs_baseline={} surface_c_void_alias_delta_vs_baseline={} surface_parse_unspecific_delta_vs_baseline={}\n",
+            "backend={} compile_status={} compile_timed_out={} first_failure_class={} first_failure_e0425_count={} sidecar_exists={} sidecar_path={} transpile_timing_exists={} transpile_timing_path={} transpile_parse_ms={} transpile_export_ms={} transpile_enrichment_ms={} transpile_codegen_ms={} transpile_total_ms={} transpile_total_delta_vs_baseline={} transpile_last_stage_started={} transpile_last_stage_completed={} transpile_status={} surface_line_count={} surface_placeholder_count={} surface_rapidjson_placeholder_count={} surface_c_void_alias_count={} surface_parse_unspecific_count={} surface_line_count_delta_vs_baseline={} surface_placeholder_delta_vs_baseline={} surface_rapidjson_placeholder_delta_vs_baseline={} surface_c_void_alias_delta_vs_baseline={} surface_parse_unspecific_delta_vs_baseline={}\n",
             result.backend_name,
             result.compile_status,
             result.compile_timed_out,
@@ -2067,6 +2209,17 @@ fn run_rapidjson_strict_capitalize_backend_surface_delta_capture(
             result.first_failure_e0425_count,
             result.sidecar_exists,
             result.sidecar_path.display(),
+            result.transpile_stage_timing_exists,
+            result.transpile_stage_timing_path.display(),
+            format_optional_u128(transpile_parse_ms),
+            format_optional_u128(transpile_export_ms),
+            format_optional_u128(transpile_enrichment_ms),
+            format_optional_u128(transpile_codegen_ms),
+            format_optional_u128(transpile_total_ms),
+            format_optional_i64(transpile_total_delta_vs_baseline),
+            format_optional_str(result.transpile_stage_timing.last_stage_started.as_deref()),
+            format_optional_str(result.transpile_stage_timing.last_stage_completed.as_deref()),
+            format_optional_str(result.transpile_stage_timing.status.as_deref()),
             format_optional_usize(line_count),
             format_optional_usize(placeholder_count),
             format_optional_usize(rapidjson_placeholder_count),
@@ -3738,43 +3891,78 @@ fn test_real_world_rapidjson_strict_capitalize_backend_surface_delta_capture() {
         baseline_inventory.placeholder_count > 0 && baseline_inventory.c_void_alias_count > 0,
         "strict capitalize backend-surface baseline inventory should capture fallback markers"
     );
+    assert!(
+        baseline.transpile_stage_timing_exists,
+        "strict capitalize backend-surface baseline should persist transpile timing trace"
+    );
+    assert_eq!(
+        baseline.transpile_stage_timing.status.as_deref(),
+        Some("completed"),
+        "strict capitalize backend-surface baseline transpile timing should complete"
+    );
+    assert!(
+        baseline.transpile_stage_timing.parse_ms.is_some()
+            && baseline.transpile_stage_timing.codegen_ms.is_some()
+            && baseline.transpile_stage_timing.total_ms.is_some(),
+        "strict capitalize backend-surface baseline transpile timing should include parse/codegen/total durations"
+    );
 
     let libtooling = results
         .iter()
         .find(|entry| entry.backend_name == "libtooling")
         .expect("missing strict capitalize backend-surface result for libtooling");
-    assert_eq!(
-        libtooling.compile_status, COMMAND_TIMEOUT_STATUS,
-        "strict capitalize backend-surface libtooling compile should currently time out"
-    );
-    assert!(
-        libtooling.compile_timed_out,
-        "strict capitalize backend-surface libtooling result should mark timeout"
-    );
-    assert_eq!(
-        libtooling.first_failure_class, "compile_timeout",
-        "strict capitalize backend-surface libtooling result should classify timeout"
-    );
-    assert!(
-        !libtooling.sidecar_exists,
-        "strict capitalize backend-surface libtooling result should not emit sidecar while timing out"
-    );
     let libtooling_class =
         fs::read_to_string(log_dir.join("backend_libtooling/first_failing_compile_class.txt"))
             .expect("failed to read backend_libtooling/first_failing_compile_class.txt");
     assert_eq!(
         libtooling_class.trim(),
-        "compile_timeout",
-        "strict capitalize backend-surface libtooling class file should persist compile_timeout"
+        libtooling.first_failure_class,
+        "strict capitalize backend-surface libtooling class file should match captured class"
     );
     let libtooling_stderr =
         fs::read_to_string(log_dir.join("backend_libtooling/compile_capitalize.stderr"))
             .expect("failed to read backend_libtooling/compile_capitalize.stderr");
     assert!(
-        libtooling_stderr.contains("command timed out after"),
-        "strict capitalize backend-surface libtooling stderr should record timeout diagnostic, got:\n{}",
-        libtooling_stderr
+        libtooling.transpile_stage_timing_exists,
+        "strict capitalize backend-surface libtooling run should persist stage timing trace"
     );
+    assert!(
+        libtooling.transpile_stage_timing.last_stage_started.is_some(),
+        "strict capitalize backend-surface libtooling timing trace should capture at least one started stage"
+    );
+    if libtooling.compile_timed_out {
+        assert_eq!(
+            libtooling.compile_status, COMMAND_TIMEOUT_STATUS,
+            "strict capitalize backend-surface libtooling timeout run should use timeout status"
+        );
+        assert_eq!(
+            libtooling.first_failure_class, "compile_timeout",
+            "strict capitalize backend-surface libtooling timeout run should classify compile_timeout"
+        );
+        assert!(
+            !libtooling.sidecar_exists,
+            "strict capitalize backend-surface libtooling timeout run should not emit sidecar"
+        );
+        assert!(
+            libtooling_stderr.contains("command timed out after"),
+            "strict capitalize backend-surface libtooling timeout stderr should record timeout diagnostic, got:\n{}",
+            libtooling_stderr
+        );
+    } else {
+        assert_ne!(
+            libtooling.compile_status, COMMAND_TIMEOUT_STATUS,
+            "strict capitalize backend-surface non-timeout libtooling run should not report timeout status"
+        );
+        assert_ne!(
+            libtooling.first_failure_class, "compile_timeout",
+            "strict capitalize backend-surface non-timeout libtooling run should not classify compile_timeout"
+        );
+        assert_eq!(
+            libtooling.transpile_stage_timing.status.as_deref(),
+            Some("completed"),
+            "strict capitalize backend-surface non-timeout libtooling run should complete timing trace"
+        );
+    }
 
     let manifest =
         fs::read_to_string(log_dir.join("strict_capitalize_backend_surface_delta_manifest.txt"))
@@ -3787,6 +3975,11 @@ fn test_real_world_rapidjson_strict_capitalize_backend_surface_delta_capture() {
     assert!(
         manifest.contains("compile_timeout_secs="),
         "strict capitalize backend-surface manifest should include timeout metadata, got:\n{}",
+        manifest
+    );
+    assert!(
+        manifest.contains("baseline_transpile_timing_exists=true"),
+        "strict capitalize backend-surface manifest should include baseline transpile timing metadata, got:\n{}",
         manifest
     );
     let run_root_marker = format!("run_root={}", run_root.display());
@@ -3816,6 +4009,51 @@ fn test_real_world_rapidjson_strict_capitalize_backend_surface_delta_capture() {
                 result.first_failure_e0425_count
             ),
             format!("sidecar_exists={}", result.sidecar_exists),
+            format!(
+                "transpile_timing_exists={}",
+                result.transpile_stage_timing_exists
+            ),
+            format!(
+                "transpile_timing_path={}",
+                result.transpile_stage_timing_path.display()
+            ),
+            format!(
+                "transpile_parse_ms={}",
+                format_optional_u128(result.transpile_stage_timing.parse_ms)
+            ),
+            format!(
+                "transpile_export_ms={}",
+                format_optional_u128(result.transpile_stage_timing.export_ms)
+            ),
+            format!(
+                "transpile_enrichment_ms={}",
+                format_optional_u128(result.transpile_stage_timing.enrichment_ms)
+            ),
+            format!(
+                "transpile_codegen_ms={}",
+                format_optional_u128(result.transpile_stage_timing.codegen_ms)
+            ),
+            format!(
+                "transpile_total_ms={}",
+                format_optional_u128(result.transpile_stage_timing.total_ms)
+            ),
+            format!(
+                "transpile_last_stage_started={}",
+                format_optional_str(result.transpile_stage_timing.last_stage_started.as_deref())
+            ),
+            format!(
+                "transpile_last_stage_completed={}",
+                format_optional_str(
+                    result
+                        .transpile_stage_timing
+                        .last_stage_completed
+                        .as_deref()
+                )
+            ),
+            format!(
+                "transpile_status={}",
+                format_optional_str(result.transpile_stage_timing.status.as_deref())
+            ),
         ] {
             assert!(
                 line.contains(marker.as_str()),
@@ -4341,6 +4579,61 @@ fn test_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_capture_first_
             );
         }
     }
+}
+
+#[test]
+fn test_parse_transpile_stage_timing_trace_supports_complete_and_partial_logs() {
+    let log_root = unique_prefixed_dir(RAPIDJSON_TRANSPILE_STAGE_TIMING_PARSE_FIXTURE_DIR);
+    fs::create_dir_all(&log_root)
+        .expect("failed to create transpile stage timing parse fixture log dir");
+
+    let complete_trace = log_root.join("complete.log");
+    fs::write(
+        &complete_trace,
+        "source=/tmp/fixture.cpp\nbackend=libclang\nstatus=started\nevent=stage_start stage=parse\nevent=stage_end stage=parse status=ok elapsed_ms=11\nevent=stage_skip stage=export elapsed_ms=0 reason=backend_without_export\nevent=stage_skip stage=enrichment elapsed_ms=0 reason=backend_without_enrichment\nevent=stage_start stage=codegen\nevent=stage_end stage=codegen status=ok elapsed_ms=9\nsummary parse_ms=11 export_ms=0 enrichment_ms=0 codegen_ms=9 total_ms=20\nstatus=completed\n",
+    )
+    .expect("failed to write complete transpile stage timing trace fixture");
+
+    let (complete_exists, complete) = parse_transpile_stage_timing_trace(&complete_trace)
+        .expect("failed to parse complete transpile stage timing trace");
+    assert!(
+        complete_exists,
+        "complete trace should be reported as existing"
+    );
+    assert_eq!(complete.parse_ms, Some(11));
+    assert_eq!(complete.export_ms, Some(0));
+    assert_eq!(complete.enrichment_ms, Some(0));
+    assert_eq!(complete.codegen_ms, Some(9));
+    assert_eq!(complete.total_ms, Some(20));
+    assert_eq!(complete.last_stage_started.as_deref(), Some("codegen"));
+    assert_eq!(complete.last_stage_completed.as_deref(), Some("codegen"));
+    assert_eq!(complete.status.as_deref(), Some("completed"));
+
+    let partial_trace = log_root.join("partial.log");
+    fs::write(
+        &partial_trace,
+        "source=/tmp/fixture.cpp\nbackend=libtooling\nstatus=started\nevent=stage_start stage=export\n",
+    )
+    .expect("failed to write partial transpile stage timing trace fixture");
+    let (partial_exists, partial) = parse_transpile_stage_timing_trace(&partial_trace)
+        .expect("failed to parse partial transpile stage timing trace");
+    assert!(
+        partial_exists,
+        "partial trace should be reported as existing"
+    );
+    assert_eq!(partial.last_stage_started.as_deref(), Some("export"));
+    assert_eq!(partial.last_stage_completed, None);
+    assert_eq!(partial.status.as_deref(), Some("started"));
+    assert_eq!(partial.total_ms, None);
+
+    let missing_trace = log_root.join("missing.log");
+    let (missing_exists, missing) = parse_transpile_stage_timing_trace(&missing_trace)
+        .expect("failed to parse missing transpile stage timing trace");
+    assert!(
+        !missing_exists,
+        "missing trace path should be reported as not existing"
+    );
+    assert_eq!(missing, TranspileStageTimingSnapshot::default());
 }
 
 #[test]

@@ -32,7 +32,10 @@ pub use types::{CppType, TypeProperties, TypeTraitEvaluator, TypeTraitResult};
 
 use fragile_ast_exporter::{clang_ast::AstContext, ASTEntryTag, CborValue};
 use miette::Result;
-use std::path::Path;
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 /// Parser backend selection for transpilation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +58,7 @@ pub struct TranspileOptions {
     pub ignored_error_patterns: Vec<String>,
     pub backend: ParserBackend,
     pub libtooling_skip_system_headers: bool,
+    pub stage_timing_trace_path: Option<PathBuf>,
 }
 
 impl Default for TranspileOptions {
@@ -67,8 +71,166 @@ impl Default for TranspileOptions {
             ignored_error_patterns: Vec::new(),
             backend: ParserBackend::Libclang,
             libtooling_skip_system_headers: false,
+            stage_timing_trace_path: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TranspileStageTimings {
+    pub parse: Duration,
+    pub export: Duration,
+    pub enrichment: Duration,
+    pub codegen: Duration,
+}
+
+impl TranspileStageTimings {
+    fn total(self) -> Duration {
+        self.parse + self.export + self.enrichment + self.codegen
+    }
+}
+
+const TRANSPILE_STAGE_PARSE: &str = "parse";
+const TRANSPILE_STAGE_EXPORT: &str = "export";
+const TRANSPILE_STAGE_ENRICHMENT: &str = "enrichment";
+const TRANSPILE_STAGE_CODEGEN: &str = "codegen";
+
+fn parser_backend_label(backend: ParserBackend) -> &'static str {
+    match backend {
+        ParserBackend::Libclang => "libclang",
+        ParserBackend::Libtooling => "libtooling",
+        ParserBackend::Hybrid => "hybrid",
+    }
+}
+
+fn append_stage_trace_line(trace_path: Option<&Path>, line: &str) {
+    let Some(path) = trace_path else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{line}");
+    }
+}
+
+fn sanitize_stage_trace_message(message: &str) -> String {
+    message.trim().replace('\r', "").replace('\n', "\\n")
+}
+
+fn initialize_stage_trace(trace_path: Option<&Path>, source: &Path, backend: ParserBackend) {
+    let Some(path) = trace_path else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let mut initial = String::new();
+    initial.push_str(&format!("source={}\n", source.display()));
+    initial.push_str(&format!("backend={}\n", parser_backend_label(backend)));
+    initial.push_str("status=started\n");
+    let _ = fs::write(path, initial);
+}
+
+fn stage_start(trace_path: Option<&Path>, stage: &str) {
+    append_stage_trace_line(
+        trace_path,
+        format!("event=stage_start stage={stage}").as_str(),
+    );
+}
+
+fn stage_end(
+    trace_path: Option<&Path>,
+    stage: &str,
+    elapsed: Duration,
+    status: &str,
+    error: Option<&str>,
+) {
+    let mut line = format!(
+        "event=stage_end stage={} status={} elapsed_ms={}",
+        stage,
+        status,
+        elapsed.as_millis()
+    );
+    if let Some(error_message) = error {
+        line.push_str(&format!(
+            " error={}",
+            sanitize_stage_trace_message(error_message)
+        ));
+    }
+    append_stage_trace_line(trace_path, line.as_str());
+}
+
+fn stage_skip(trace_path: Option<&Path>, stage: &str, reason: &str) {
+    append_stage_trace_line(
+        trace_path,
+        format!(
+            "event=stage_skip stage={} elapsed_ms=0 reason={}",
+            stage, reason
+        )
+        .as_str(),
+    );
+}
+
+fn finalize_stage_trace(
+    trace_path: Option<&Path>,
+    timings: &TranspileStageTimings,
+    status: &str,
+    error: Option<&str>,
+) {
+    append_stage_trace_line(
+        trace_path,
+        format!(
+            "summary parse_ms={} export_ms={} enrichment_ms={} codegen_ms={} total_ms={}",
+            timings.parse.as_millis(),
+            timings.export.as_millis(),
+            timings.enrichment.as_millis(),
+            timings.codegen.as_millis(),
+            timings.total().as_millis()
+        )
+        .as_str(),
+    );
+    append_stage_trace_line(trace_path, format!("status={status}").as_str());
+    if let Some(error_message) = error {
+        append_stage_trace_line(
+            trace_path,
+            format!(
+                "status_error={}",
+                sanitize_stage_trace_message(error_message)
+            )
+            .as_str(),
+        );
+    }
+}
+
+fn trace_stage<F, T>(
+    trace_path: Option<&Path>,
+    stage: &str,
+    slot: &mut Duration,
+    action: F,
+) -> Result<T>
+where
+    F: FnOnce() -> Result<T>,
+{
+    stage_start(trace_path, stage);
+    let started = Instant::now();
+    let result = action();
+    let elapsed = started.elapsed();
+    *slot = elapsed;
+    if let Err(err) = &result {
+        let err_message = err.to_string();
+        stage_end(
+            trace_path,
+            stage,
+            elapsed,
+            "error",
+            Some(err_message.as_str()),
+        );
+    } else {
+        stage_end(trace_path, stage, elapsed, "ok", None);
+    }
+    result
 }
 
 fn path_specific_defines(path: &Path) -> Vec<String> {
@@ -245,27 +407,99 @@ pub fn transpile_cpp_to_rust_with_options(
     path: &Path,
     options: &TranspileOptions,
 ) -> Result<String> {
+    let trace_path = options.stage_timing_trace_path.as_deref();
+    initialize_stage_trace(trace_path, path, options.backend);
+    let mut timings = TranspileStageTimings::default();
     let mut codegen = AstCodeGen::new();
-    let translation_unit = match options.backend {
-        ParserBackend::Libclang => {
-            let parser = parser_for_path_with_options(path, options)?;
-            let ast = parser.parse_file(path)?;
-            ast.translation_unit
-        }
-        ParserBackend::Hybrid => {
-            let parser = parser_for_path_with_options(path, options)?;
-            let ast = parser.parse_file(path)?;
-            let ctx = parse_libtooling_context(path, options)?;
-            apply_libtooling_enrichment(&mut codegen, &ctx);
-            ast.translation_unit
-        }
-        ParserBackend::Libtooling => {
-            let ctx = parse_libtooling_context(path, options)?;
-            apply_libtooling_enrichment(&mut codegen, &ctx);
-            translation_unit_from_libtooling_context(&ctx)
-        }
-    };
-    Ok(codegen.generate(&translation_unit))
+    let transpile_result: Result<String> = (|| {
+        let translation_unit = match options.backend {
+            ParserBackend::Libclang => {
+                let ast = trace_stage(
+                    trace_path,
+                    TRANSPILE_STAGE_PARSE,
+                    &mut timings.parse,
+                    || {
+                        let parser = parser_for_path_with_options(path, options)?;
+                        parser.parse_file(path)
+                    },
+                )?;
+                timings.export = Duration::ZERO;
+                stage_skip(trace_path, TRANSPILE_STAGE_EXPORT, "backend_without_export");
+                timings.enrichment = Duration::ZERO;
+                stage_skip(
+                    trace_path,
+                    TRANSPILE_STAGE_ENRICHMENT,
+                    "backend_without_enrichment",
+                );
+                ast.translation_unit
+            }
+            ParserBackend::Hybrid => {
+                let ast = trace_stage(
+                    trace_path,
+                    TRANSPILE_STAGE_PARSE,
+                    &mut timings.parse,
+                    || {
+                        let parser = parser_for_path_with_options(path, options)?;
+                        parser.parse_file(path)
+                    },
+                )?;
+                let ctx = trace_stage(
+                    trace_path,
+                    TRANSPILE_STAGE_EXPORT,
+                    &mut timings.export,
+                    || parse_libtooling_context(path, options),
+                )?;
+                trace_stage(
+                    trace_path,
+                    TRANSPILE_STAGE_ENRICHMENT,
+                    &mut timings.enrichment,
+                    || {
+                        apply_libtooling_enrichment(&mut codegen, &ctx);
+                        Ok(())
+                    },
+                )?;
+                ast.translation_unit
+            }
+            ParserBackend::Libtooling => {
+                let ctx = trace_stage(
+                    trace_path,
+                    TRANSPILE_STAGE_EXPORT,
+                    &mut timings.export,
+                    || parse_libtooling_context(path, options),
+                )?;
+                let translation_unit = trace_stage(
+                    trace_path,
+                    TRANSPILE_STAGE_PARSE,
+                    &mut timings.parse,
+                    || Ok(translation_unit_from_libtooling_context(&ctx)),
+                )?;
+                trace_stage(
+                    trace_path,
+                    TRANSPILE_STAGE_ENRICHMENT,
+                    &mut timings.enrichment,
+                    || {
+                        apply_libtooling_enrichment(&mut codegen, &ctx);
+                        Ok(())
+                    },
+                )?;
+                translation_unit
+            }
+        };
+        trace_stage(
+            trace_path,
+            TRANSPILE_STAGE_CODEGEN,
+            &mut timings.codegen,
+            || Ok(codegen.generate(&translation_unit)),
+        )
+    })();
+
+    if let Err(err) = &transpile_result {
+        let err_message = err.to_string();
+        finalize_stage_trace(trace_path, &timings, "error", Some(err_message.as_str()));
+    } else {
+        finalize_stage_trace(trace_path, &timings, "completed", None);
+    }
+    transpile_result
 }
 
 /// Generate Rust stubs from a C++ source file.

@@ -9,6 +9,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const PARITY_LOG_ROOT_PREFIX: &str = "fragile_parser_backend_parity_local_fixture";
+const TRANSPILE_STAGE_TIMING_LOG_ROOT_PREFIX: &str =
+    "fragile_parser_backend_transpile_stage_timing_fixture";
 const CPP_TYPE_SNAPSHOT_LOG_ROOT_PREFIX: &str = "fragile_parser_backend_cpp_type_snapshot_fixture";
 const CPP_TYPE_QUALIFIER_DECAY_SNAPSHOT_LOG_ROOT_PREFIX: &str =
     "fragile_parser_backend_cpp_type_qualifier_decay_snapshot_fixture";
@@ -237,6 +239,7 @@ int mul(int x, int y) {
             ignored_error_patterns: Vec::new(),
             backend,
             libtooling_skip_system_headers: false,
+            stage_timing_trace_path: None,
         };
 
         let rust_code =
@@ -534,6 +537,157 @@ fn test_parser_backend_parity_local_fixture_replay() {
         "libtooling backend should match libclang marker-set parity for this fixture; logs: {}",
         log_dir.display()
     );
+}
+
+#[test]
+fn test_transpile_stage_timing_trace_contains_expected_stages_for_backends() {
+    let _guard = parser_backend_parity_test_lock()
+        .lock()
+        .expect("parity test lock should not be poisoned");
+    let log_dir = unique_temp_dir(TRANSPILE_STAGE_TIMING_LOG_ROOT_PREFIX);
+    fs::create_dir_all(&log_dir).expect("failed to create transpile-stage timing log dir");
+
+    let source_path = log_dir.join("transpile_stage_timing_fixture.cpp");
+    fs::write(
+        &source_path,
+        r#"
+int add(int a, int b) {
+    return a + b;
+}
+"#,
+    )
+    .expect("failed to write transpile-stage timing fixture source");
+
+    let backends: [(&str, ParserBackend); 3] = [
+        ("libclang", ParserBackend::Libclang),
+        ("hybrid", ParserBackend::Hybrid),
+        ("libtooling", ParserBackend::Libtooling),
+    ];
+    for (backend_name, backend) in backends {
+        let stage_timing_trace_path =
+            log_dir.join(format!("transpile_stage_timing_{backend_name}.log"));
+        let options = TranspileOptions {
+            include_paths: Vec::new(),
+            defines: Vec::new(),
+            language: ParserLanguage::Cpp,
+            language_standard: None,
+            ignored_error_patterns: Vec::new(),
+            backend,
+            libtooling_skip_system_headers: false,
+            stage_timing_trace_path: Some(stage_timing_trace_path.clone()),
+        };
+        let generated =
+            transpile_cpp_to_rust_with_options(&source_path, &options).unwrap_or_else(|e| {
+                panic!(
+                    "backend {} failed to transpile stage timing fixture {}: {}",
+                    backend_name,
+                    source_path.display(),
+                    e
+                )
+            });
+        assert!(
+            generated.contains(MARKER_FN_ADD),
+            "backend {} transpiled output should contain add marker",
+            backend_name
+        );
+
+        let trace = fs::read_to_string(&stage_timing_trace_path).unwrap_or_else(|e| {
+            panic!(
+                "backend {} failed to read stage timing trace {}: {}",
+                backend_name,
+                stage_timing_trace_path.display(),
+                e
+            )
+        });
+        assert!(
+            trace.contains(format!("source={}", source_path.display()).as_str()),
+            "backend {} trace should include source metadata, got:\n{}",
+            backend_name,
+            trace
+        );
+        assert!(
+            trace.contains(format!("backend={backend_name}").as_str()),
+            "backend {} trace should include backend metadata, got:\n{}",
+            backend_name,
+            trace
+        );
+        assert!(
+            trace.contains("event=stage_start stage=parse"),
+            "backend {} trace should include parse start marker, got:\n{}",
+            backend_name,
+            trace
+        );
+        assert!(
+            trace.contains("event=stage_end stage=parse status=ok"),
+            "backend {} trace should include parse completion marker, got:\n{}",
+            backend_name,
+            trace
+        );
+        assert!(
+            trace.contains("event=stage_start stage=codegen"),
+            "backend {} trace should include codegen start marker, got:\n{}",
+            backend_name,
+            trace
+        );
+        assert!(
+            trace.contains("event=stage_end stage=codegen status=ok"),
+            "backend {} trace should include codegen completion marker, got:\n{}",
+            backend_name,
+            trace
+        );
+        assert!(
+            trace.contains("summary parse_ms="),
+            "backend {} trace should include summary marker, got:\n{}",
+            backend_name,
+            trace
+        );
+        assert!(
+            trace.contains("status=completed"),
+            "backend {} trace should include completed status marker, got:\n{}",
+            backend_name,
+            trace
+        );
+
+        if backend_name == "libclang" {
+            assert!(
+                trace.contains(
+                    "event=stage_skip stage=export elapsed_ms=0 reason=backend_without_export"
+                ),
+                "libclang trace should include export skip marker, got:\n{}",
+                trace
+            );
+            assert!(
+                trace.contains("event=stage_skip stage=enrichment elapsed_ms=0 reason=backend_without_enrichment"),
+                "libclang trace should include enrichment skip marker, got:\n{}",
+                trace
+            );
+        } else {
+            assert!(
+                trace.contains("event=stage_start stage=export"),
+                "backend {} trace should include export start marker, got:\n{}",
+                backend_name,
+                trace
+            );
+            assert!(
+                trace.contains("event=stage_end stage=export status=ok"),
+                "backend {} trace should include export completion marker, got:\n{}",
+                backend_name,
+                trace
+            );
+            assert!(
+                trace.contains("event=stage_start stage=enrichment"),
+                "backend {} trace should include enrichment start marker, got:\n{}",
+                backend_name,
+                trace
+            );
+            assert!(
+                trace.contains("event=stage_end stage=enrichment status=ok"),
+                "backend {} trace should include enrichment completion marker, got:\n{}",
+                backend_name,
+                trace
+            );
+        }
+    }
 }
 
 fn parse_translation_unit_for_backend(
