@@ -1065,6 +1065,23 @@ fn first_failing_compile_command_from_driver_log(
 }
 
 fn source_scoped_failure_payload(stream: &str, source_path: &str) -> Option<String> {
+    fn find_next_failure_marker(stream: &str, from: usize) -> Option<usize> {
+        let mut earliest: Option<usize> = None;
+        for marker in [
+            "\n[fragilec] fragile rustc object compile failed for ",
+            "\nError while processing ",
+        ] {
+            if let Some(rel) = stream[from..].find(marker) {
+                let marker_start = from + rel + 1;
+                earliest = Some(match earliest {
+                    Some(current) => current.min(marker_start),
+                    None => marker_start,
+                });
+            }
+        }
+        earliest
+    }
+
     for marker in [
         format!(
             "[fragilec] fragile rustc object compile failed for {}",
@@ -1074,7 +1091,8 @@ fn source_scoped_failure_payload(stream: &str, source_path: &str) -> Option<Stri
         format!("Error while processing {}", source_path),
     ] {
         if let Some(start) = stream.find(marker.as_str()) {
-            let scoped = stream[start..].trim();
+            let end = find_next_failure_marker(stream, start + marker.len()).unwrap_or(stream.len());
+            let scoped = stream[start..end].trim();
             if !scoped.is_empty() {
                 return Some(scoped.to_string());
             }
@@ -3740,6 +3758,44 @@ fn test_select_first_failing_compile_capture_falls_back_to_last_invocation_witho
         command
     );
     assert_eq!(stderr, "plain stderr text");
+}
+
+#[test]
+fn test_select_first_failing_compile_capture_scopes_to_first_source_block_only() {
+    let driver_log = "cwd=/tmp/work\nargs=-std=c++11 -c first.cpp -o first.o \ncwd=/tmp/work\nargs=-std=c++11 -c second.cpp -o second.o \n";
+    let build_stderr = "[fragilec] fragile rustc object compile failed for /tmp/work/first.cpp\nerror[E0121]: placeholder `_` not allowed in item signatures\n[fragilec] fragile rustc object compile failed for /tmp/work/second.cpp\nerror[E0425]: cannot find type `T` in this scope\n";
+    let (command, stderr) =
+        select_first_failing_compile_capture(driver_log, true, "stdout text", build_stderr);
+    assert!(
+        command.contains("first.cpp"),
+        "capture should select first source-matched invocation, got:\n{}",
+        command
+    );
+    assert!(
+        stderr.contains("first.cpp") && stderr.contains("error[E0121]"),
+        "capture should include first source failure block, got:\n{}",
+        stderr
+    );
+    assert!(
+        !stderr.contains("second.cpp"),
+        "capture should exclude later source failure blocks, got:\n{}",
+        stderr
+    );
+    assert!(
+        !stderr.contains("error[E0425]"),
+        "capture should not include later E0425 diagnostics from other TUs, got:\n{}",
+        stderr
+    );
+    assert_eq!(
+        classify_first_failing_compile_stderr(&stderr),
+        "other_rustc_error",
+        "first source block should classify using first TU diagnostics only"
+    );
+    assert_eq!(
+        count_error_e0425_occurrences(&stderr),
+        0,
+        "first source block should not include E0425 count from later TUs"
+    );
 }
 
 #[test]
