@@ -7,7 +7,9 @@
 //! The primary use case is to get the fully instantiated method bodies of
 //! class templates like std::vector<T> with concrete types substituted.
 
-use crate::ast::{AccessSpecifier, ClangNode, ClangNodeKind, SourceLocation};
+use crate::ast::{
+    AccessSpecifier, ClangNode, ClangNodeKind, SourceLocation, TemplateSpecializationKind,
+};
 use crate::types::CppType;
 use fragile_ast_exporter::{clang_ast::AstContext, export_ast_with_options, ASTEntryTag};
 use miette::{miette, Result};
@@ -1187,6 +1189,32 @@ fn convert_class_template_decl_node(
     }
 }
 
+fn decode_template_specialization_kind(
+    node: &fragile_ast_exporter::clang_ast::AstNode,
+) -> TemplateSpecializationKind {
+    if let Some(kind_value) = node.get_u64(5) {
+        return match kind_value {
+            0 => TemplateSpecializationKind::Undeclared,
+            1 => TemplateSpecializationKind::ImplicitInstantiation,
+            2 => TemplateSpecializationKind::ExplicitSpecialization,
+            3 => TemplateSpecializationKind::ExplicitInstantiationDeclaration,
+            4 => TemplateSpecializationKind::ExplicitInstantiationDefinition,
+            _ => TemplateSpecializationKind::Undeclared,
+        };
+    }
+
+    // Backward compatibility for exporter payloads that only included two booleans.
+    let is_implicit_instantiation = node.get_bool(3).unwrap_or(false);
+    let is_explicit_specialization = node.get_bool(4).unwrap_or(false);
+    if is_explicit_specialization {
+        TemplateSpecializationKind::ExplicitSpecialization
+    } else if is_implicit_instantiation {
+        TemplateSpecializationKind::ImplicitInstantiation
+    } else {
+        TemplateSpecializationKind::Undeclared
+    }
+}
+
 fn convert_class_template_specialization_decl_node(
     ctx: &AstContext,
     node: &fragile_ast_exporter::clang_ast::AstNode,
@@ -1250,12 +1278,22 @@ fn convert_class_template_specialization_decl_node(
         }
     }
 
+    let specialization_kind = decode_template_specialization_kind(node);
+
     ClangNodeKind::RecordDecl {
         name,
         // Constrained fallback until class/struct identity is exported directly
         // for template specializations.
         is_class: false,
-        is_definition: has_member_children,
+        is_definition: match specialization_kind {
+            // `extern template` declarations intentionally avoid emitting concrete bodies.
+            TemplateSpecializationKind::ExplicitInstantiationDeclaration => false,
+            // These forms own the concrete specialization.
+            TemplateSpecializationKind::ExplicitSpecialization
+            | TemplateSpecializationKind::ExplicitInstantiationDefinition => true,
+            TemplateSpecializationKind::Undeclared
+            | TemplateSpecializationKind::ImplicitInstantiation => has_member_children,
+        },
         fields,
     }
 }
@@ -1519,9 +1557,13 @@ pub struct SpecializationFieldInfo {
     pub qualified_name: String,
     /// Template arguments as strings (e.g., ["int", "int", "std::less<int>", ...])
     pub template_args: Vec<String>,
+    /// Full specialization kind exported by Clang.
+    pub specialization_kind: TemplateSpecializationKind,
     /// Whether this specialization was emitted as an implicit instantiation.
+    /// Kept for compatibility with existing call sites/tests.
     pub is_implicit_instantiation: bool,
     /// Whether this specialization was emitted as an explicit specialization.
+    /// Kept for compatibility with existing call sites/tests.
     pub is_explicit_specialization: bool,
     /// Map from field name to its resolved C++ type
     pub field_types: HashMap<String, CppType>,
@@ -1550,8 +1592,9 @@ pub fn extract_specialization_field_types(
 
         let type_name = node.get_string(0).unwrap_or("").to_string();
         let qualified_name = node.get_string(1).unwrap_or("").to_string();
-        let is_implicit_instantiation = node.get_bool(3).unwrap_or(false);
-        let is_explicit_specialization = node.get_bool(4).unwrap_or(false);
+        let specialization_kind = decode_template_specialization_kind(node);
+        let is_implicit_instantiation = specialization_kind.is_implicit_instantiation();
+        let is_explicit_specialization = specialization_kind.is_explicit_specialization();
 
         // Extract template arguments from extras[2] (an array of [kind, value] pairs)
         let mut template_args = Vec::new();
@@ -1604,6 +1647,7 @@ pub fn extract_specialization_field_types(
                     type_name,
                     qualified_name: full_name,
                     template_args,
+                    specialization_kind,
                     is_implicit_instantiation,
                     is_explicit_specialization,
                     field_types,
@@ -2474,6 +2518,7 @@ mod tests {
                     ])]),
                     CborValue::Bool(true),
                     CborValue::Bool(false),
+                    CborValue::Integer(1.into()),
                 ],
             ),
         );
@@ -2541,6 +2586,7 @@ mod tests {
                     ])]),
                     CborValue::Bool(true),
                     CborValue::Bool(false),
+                    CborValue::Integer(1.into()),
                 ],
             ),
         );
@@ -2583,6 +2629,10 @@ mod tests {
             .expect("expected one specialization metadata entry");
         assert_eq!(info.type_name, "Box");
         assert_eq!(info.template_args, vec!["int"]);
+        assert_eq!(
+            info.specialization_kind,
+            TemplateSpecializationKind::ImplicitInstantiation
+        );
         assert!(info.is_implicit_instantiation);
         assert!(!info.is_explicit_specialization);
         assert!(
@@ -3211,6 +3261,10 @@ int use_specializations() {
             "expected at least one implicit-instantiation marker"
         );
         assert!(
+            specialization_nodes.iter().all(|node| node.get_u64(5).is_some()),
+            "expected specialization nodes to include full specialization-kind payload"
+        );
+        assert!(
             specialization_nodes.iter().any(|node| {
                 if let Some(CborValue::Array(args)) = node.extras.get(2) {
                     args.iter().any(|arg| {
@@ -3231,13 +3285,17 @@ int use_specializations() {
         assert!(
             extracted
                 .values()
-                .any(|info| info.is_explicit_specialization
-                    && info.template_args.iter().any(|arg| arg == "int")),
+                .any(|info| {
+                    info.specialization_kind == TemplateSpecializationKind::ExplicitSpecialization
+                        && info.template_args.iter().any(|arg| arg == "int")
+                }),
             "expected extracted specialization metadata for explicit Box<int> specialization"
         );
         assert!(
-            extracted.values().any(|info| info.is_implicit_instantiation
-                && info.template_args.iter().any(|arg| arg == "long")),
+            extracted.values().any(|info| {
+                info.specialization_kind == TemplateSpecializationKind::ImplicitInstantiation
+                    && info.template_args.iter().any(|arg| arg == "long")
+            }),
             "expected extracted specialization metadata for implicit Box<long> instantiation"
         );
     }

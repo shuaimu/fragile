@@ -1500,6 +1500,13 @@ bool ASTExporterVisitor::VisitClassTemplateSpecializationDecl(ClassTemplateSpeci
                     // Is explicit specialization
                     cbor_encode_boolean(enc, CTSD->getSpecializationKind() ==
                                                  TSK_ExplicitSpecialization);
+
+                    // Full template-specialization kind:
+                    // 0=undeclared, 1=implicit instantiation, 2=explicit specialization,
+                    // 3=explicit instantiation declaration, 4=explicit instantiation definition.
+                    // Keep this as a numeric payload so downstream Rust can preserve
+                    // declaration-vs-definition semantics for template ownership.
+                    cbor_encode_uint(enc, static_cast<uint64_t>(CTSD->getSpecializationKind()));
                 });
 
     // Recursively ensure field type specializations are exported

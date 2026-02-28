@@ -43,6 +43,32 @@ pub enum AccessSpecifier {
     Protected,
 }
 
+/// Clang template specialization kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TemplateSpecializationKind {
+    /// No specialization-kind metadata was available.
+    #[default]
+    Undeclared,
+    /// Implicit instantiation (e.g. use-site-driven template instantiation).
+    ImplicitInstantiation,
+    /// Explicit specialization (`template<> ...`).
+    ExplicitSpecialization,
+    /// Explicit instantiation declaration (`extern template ...`).
+    ExplicitInstantiationDeclaration,
+    /// Explicit instantiation definition (`template class Foo<int>;`).
+    ExplicitInstantiationDefinition,
+}
+
+impl TemplateSpecializationKind {
+    pub fn is_implicit_instantiation(self) -> bool {
+        matches!(self, Self::ImplicitInstantiation)
+    }
+
+    pub fn is_explicit_specialization(self) -> bool {
+        matches!(self, Self::ExplicitSpecialization)
+    }
+}
+
 /// C++ constructor kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ConstructorKind {

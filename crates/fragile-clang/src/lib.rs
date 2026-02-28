@@ -19,7 +19,7 @@ mod types;
 
 pub use ast::{
     AccessSpecifier, BinaryOp, ClangAst, ClangNode, ClangNodeKind, ConstructorKind, Requirement,
-    TypeTraitKind, UnaryOp,
+    TemplateSpecializationKind, TypeTraitKind, UnaryOp,
 };
 pub use ast_codegen::AstCodeGen;
 pub use libtooling::{
