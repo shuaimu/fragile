@@ -1442,6 +1442,46 @@ mod tests {
     }
 
     #[test]
+    fn strict_compile_source_with_libclang_backend_exports_main_symbol() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock must be monotonic")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("fragilec_libclang_backend_test_{}", stamp));
+        fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
+        let source = temp_dir.join("program.cpp");
+        let out_obj = temp_dir.join("program.o");
+        fs::write(
+            &source,
+            "int helper() { return 1; }\nint main() { return helper() - 1; }\n",
+        )
+        .expect("failed to write source");
+
+        strict_compile_source_to_object_with_backend(
+            &source,
+            &out_obj,
+            &[],
+            &[],
+            &[],
+            ParserBackend::Libclang,
+        )
+        .expect("strict compile should succeed with libclang backend escape hatch");
+        assert!(
+            out_obj.exists(),
+            "expected object output at {}",
+            out_obj.display()
+        );
+        assert!(
+            object_defines_main_symbol(&out_obj).expect("failed to inspect object symbols"),
+            "strict-compiled object should define main symbol when using libclang backend: {}",
+            out_obj.display()
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
     fn strict_compile_degraded_main_shape_still_exports_main_symbol() {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)

@@ -305,7 +305,8 @@ Goal: make LibTooling the strict primary AST source with stronger instantiated-t
 - [ ] 5.5) Cutover and de-risk period (Effort: S, Risk: Medium).
   - [x] 5.5.a) Switch strict default backend to LibTooling-primary now that 5.1-5.4 gates are green. Done 2026-02-28.
     - Evidence: `fragilec` strict backend selection now defaults to `ParserBackend::Libtooling` when `FRAGILEC_PARSER_BACKEND` is unset/empty (`strict_parser_backend_from_value`), help text now reports `default: libtooling`, and strict CLI regression `strict_parser_backend_validation_accepts_supported_values` now asserts both default-to-libtooling and explicit `libclang` override parsing (details: `docs/phase5_cutover_default_backend_leaf_5_5_a.md`).
-  - [ ] 5.5.b) Keep emergency escape hatch to `libclang` for one hardening window; remove only after stable CI/replay history.
+  - [x] 5.5.b) Keep emergency escape hatch to `libclang` for one hardening window; remove only after stable CI/replay history. Done 2026-02-28.
+    - Evidence: strict parser backend selector still accepts explicit `libclang` via `FRAGILEC_PARSER_BACKEND`, added/locked strict compile regression `strict_compile_source_with_libclang_backend_exports_main_symbol` in `fragilec` tests, and RapidJSON local fragilec-driver baseline fixture is now pinned to `FRAGILEC_PARSER_BACKEND=libclang` to keep an active escape-hatch replay lane during hardening (details: `docs/phase5_cutover_escape_hatch_leaf_5_5_b.md`).
   - [ ] 5.5.c) Update `CLAUDE.md` + this `TODO.md` status snapshot with exact cutover date, backend parity evidence, and fallback-stub inventory delta.
 
 ## Phase 6 [P3 completed/archive]: Generic STL container types
