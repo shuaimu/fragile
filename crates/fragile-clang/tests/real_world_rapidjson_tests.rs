@@ -387,6 +387,8 @@ const RAPIDJSON_PHASE2_PLACEHOLDER_PARENT_CLOSED_MARKER: &str =
     "- [x] Fix placeholder degradation for required rapidjson template types (`Reader`, handlers, writers, streams).";
 const RAPIDJSON_PHASE2_TYPE_CANONICALIZATION_PARENT_CLOSED_MARKER: &str =
     "- [x] Fix libc/libstd type canonicalization (`__FILE`, atomic flag types, void aliases).";
+const RAPIDJSON_PHASE2_ARRAY_DECAY_PARENT_CLOSED_MARKER: &str =
+    "- [x] Fix array decay and pointer cast lowering (`[T; N]` to pointer forms).";
 
 fn workspace_root_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -5006,6 +5008,15 @@ fn test_todo_keeps_phase2_type_canonicalization_parent_task_closed() {
     assert!(
         todo.contains(RAPIDJSON_PHASE2_TYPE_CANONICALIZATION_PARENT_CLOSED_MARKER),
         "TODO should keep phase2 type-canonicalization parent task closed after completing 4.x breakdown"
+    );
+}
+
+#[test]
+fn test_todo_keeps_phase2_array_decay_parent_task_closed() {
+    let todo = read_todo_file().expect("failed to read TODO.md for phase2 array-decay closure");
+    assert!(
+        todo.contains(RAPIDJSON_PHASE2_ARRAY_DECAY_PARENT_CLOSED_MARKER),
+        "TODO should keep phase2 array-decay parent task closed after completing 5.x breakdown"
     );
 }
 
