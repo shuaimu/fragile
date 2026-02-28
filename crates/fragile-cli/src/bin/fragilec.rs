@@ -273,6 +273,51 @@ fn extract_language_standard(args: &[OsString], language: ParserLanguage) -> Opt
     detected
 }
 
+fn is_cmake_cxx_probe_source_name(name: &str) -> bool {
+    matches!(
+        name,
+        "CMakeCXXCompilerId.cpp" | "CMakeCXXCompilerABI.cpp" | "testCXXCompiler.cxx"
+    )
+}
+
+fn is_cmake_probe_working_dir(cwd: &Path) -> bool {
+    let cwd = cwd.to_string_lossy();
+    (cwd.contains("/CMakeFiles/") && cwd.contains("/CompilerIdCXX"))
+        || cwd.contains("/CMakeFiles/CMakeScratch/TryCompile-")
+}
+
+fn should_passthrough_cmake_compiler_probe(
+    parsed: &ParsedInvocation,
+    args: &[OsString],
+    cwd: &Path,
+) -> bool {
+    if is_cmake_probe_working_dir(cwd) {
+        return true;
+    }
+
+    for source in &parsed.sources {
+        if let Some(name) = source.file_name().and_then(|s| s.to_str()) {
+            if is_cmake_cxx_probe_source_name(name) {
+                return true;
+            }
+        }
+    }
+
+    for arg in args {
+        let token = arg.to_string_lossy();
+        if token.starts_with('-') {
+            continue;
+        }
+        if let Some(name) = Path::new(token.as_ref()).file_name().and_then(|s| s.to_str()) {
+            if is_cmake_cxx_probe_source_name(name) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 fn strict_parser_ignored_error_patterns(language: ParserLanguage) -> Vec<String> {
     let _ = language;
     Vec::new()
@@ -1025,6 +1070,28 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     }
 
+    let cwd = match std::env::current_dir() {
+        Ok(dir) => dir,
+        Err(err) => {
+            eprintln!("[fragilec] failed to read cwd: {}", err);
+            return ExitCode::from(1);
+        }
+    };
+    if should_passthrough_cmake_compiler_probe(&parsed, &args, &cwd) {
+        let status = Command::new("c++").args(&args).status();
+        return match status {
+            Ok(status) if status.success() => ExitCode::SUCCESS,
+            Ok(_) => ExitCode::from(1),
+            Err(err) => {
+                eprintln!(
+                    "[fragilec] failed to run cmake compiler-probe passthrough via `c++`: {}",
+                    err
+                );
+                ExitCode::from(1)
+            }
+        };
+    }
+
     // Enforce link-input metadata only when we are delegating a link command.
     if !parsed.compile_only {
         if let Err(err) = enforce_build_id_for_link_inputs(&parsed.args) {
@@ -1729,5 +1796,60 @@ int main() { return 0; }
         );
 
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn cmake_probe_passthrough_detects_probe_source_names() {
+        let parsed = ParsedInvocation::parse(args(&["CMakeCXXCompilerId.cpp"]));
+        assert!(
+            should_passthrough_cmake_compiler_probe(&parsed, &parsed.args, Path::new("/tmp/work")),
+            "compiler-id source file should trigger cmake-probe passthrough"
+        );
+
+        let parsed = ParsedInvocation::parse(args(&["/usr/share/cmake/Modules/CMakeCXXCompilerABI.cpp"]));
+        assert!(
+            should_passthrough_cmake_compiler_probe(&parsed, &parsed.args, Path::new("/tmp/work")),
+            "compiler-abi source file should trigger cmake-probe passthrough"
+        );
+    }
+
+    #[test]
+    fn cmake_probe_passthrough_detects_trycompile_working_dir_without_source_tokens() {
+        let parsed =
+            ParsedInvocation::parse(args(&["CMakeFiles/cmTC_123.dir/testCXXCompiler.cxx.o", "-o", "cmTC_123"]));
+        assert!(
+            should_passthrough_cmake_compiler_probe(
+                &parsed,
+                &parsed.args,
+                Path::new("/tmp/build/CMakeFiles/CMakeScratch/TryCompile-abc123")
+            ),
+            "try-compile working dir should trigger cmake-probe passthrough even when invocation has no source token"
+        );
+    }
+
+    #[test]
+    fn cmake_probe_passthrough_detects_compiler_id_working_dir_for_empty_invocation() {
+        let parsed = ParsedInvocation::parse(Vec::new());
+        assert!(
+            should_passthrough_cmake_compiler_probe(
+                &parsed,
+                &parsed.args,
+                Path::new("/tmp/build/CMakeFiles/3.31.6/CompilerIdCXX")
+            ),
+            "compiler-id working dir should trigger cmake-probe passthrough for empty probe invocations"
+        );
+    }
+
+    #[test]
+    fn cmake_probe_passthrough_ignores_regular_project_compilation() {
+        let parsed = ParsedInvocation::parse(args(&["-c", "src/main.cpp", "-o", "main.o"]));
+        assert!(
+            !should_passthrough_cmake_compiler_probe(
+                &parsed,
+                &parsed.args,
+                Path::new("/tmp/build/example/CMakeFiles/condense.dir")
+            ),
+            "regular project compile invocations should remain on strict fragile path"
+        );
     }
 }
