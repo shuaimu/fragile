@@ -33,6 +33,8 @@ const RAPIDJSON_STRICT_FILTERKEYDOM_CAPTURE_DIR: &str =
     "/tmp/fragile_real_world_rapidjson_strict_filterkeydom_capture";
 const RAPIDJSON_STRICT_CMAKE_NO_TESTS_BUILD_DIR: &str =
     "/tmp/fragile_real_world_rapidjson_strict_cmake_no_tests_build";
+const RAPIDJSON_STRICT_CMAKE_TESTS_ON_CONFIGURE_DIR: &str =
+    "/tmp/fragile_real_world_rapidjson_strict_cmake_tests_on_configure";
 const RAPIDJSON_STRICT_CMAKE_NO_TESTS_BACKEND_MATRIX_DIR: &str =
     "/tmp/fragile_real_world_rapidjson_strict_cmake_no_tests_backend_matrix";
 const RAPIDJSON_STRICT_CMAKE_BACKEND_MATRIX_BUILD_TIMEOUT_SECS: u64 = 1200;
@@ -162,6 +164,14 @@ const RAPIDJSON_STRICT_CMAKE_NO_TESTS_LOG_FILES: &[&str] = &[
     "first_failing_compile_stderr.txt",
     "first_failing_compile_class.txt",
     "strict_cmake_no_tests_manifest.txt",
+];
+const RAPIDJSON_STRICT_CMAKE_TESTS_ON_CONFIGURE_LOG_FILES: &[&str] = &[
+    "cmake_configure.status",
+    "cmake_configure.stdout",
+    "cmake_configure.stderr",
+    "fragilec_driver.log",
+    "configure_failure_class.txt",
+    "strict_cmake_tests_on_configure_manifest.txt",
 ];
 const RAPIDJSON_STRICT_CMAKE_LOCAL_FIXTURE_LOG_FILES: &[&str] = &[
     "cmake_configure.status",
@@ -357,6 +367,7 @@ const RAPIDJSON_NIGHTLY_REQUIRED_TEST_NAMES: &[&str] = &[
     "test_real_world_rapidjson_no_stl_command_plan_generation",
     "test_real_world_rapidjson_native_no_stl_examples_baseline",
     "test_real_world_rapidjson_fragilec_native_no_stl_examples_baseline",
+    "test_real_world_rapidjson_strict_cmake_tests_on_configure_capture",
 ];
 const RAPIDJSON_ORDERED_FAILURE_CLASS_LEDGER_MARKERS: &[&str] = &[
     "1) Parser/AST fidelity mismatch in real RapidJSON headers.",
@@ -2243,6 +2254,108 @@ fn run_rapidjson_strict_cmake_no_tests_full_build_capture() -> Result<(PathBuf, 
     })?;
 
     Ok((log_dir, build_dir))
+}
+
+fn run_rapidjson_strict_cmake_tests_on_configure_capture() -> Result<PathBuf, String> {
+    let checkout_dir = ensure_rapidjson_checkout()?;
+    let baseline_root = PathBuf::from(RAPIDJSON_STRICT_CMAKE_TESTS_ON_CONFIGURE_DIR);
+    reset_dir(&baseline_root)?;
+
+    let worktree_dir = baseline_root.join("worktree");
+    let checkout_dir_str = checkout_dir.to_string_lossy().to_string();
+    let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
+    run_git(
+        &[
+            "clone",
+            "--no-tags",
+            "--local",
+            checkout_dir_str.as_str(),
+            worktree_dir_str.as_str(),
+        ],
+        None,
+    )?;
+    run_git(
+        &["checkout", "--detach", RAPIDJSON_PINNED_COMMIT],
+        Some(&worktree_dir),
+    )?;
+
+    let actual_head = read_head(&worktree_dir)
+        .ok_or_else(|| format!("failed to read HEAD in {}", worktree_dir.display()))?;
+    if actual_head != RAPIDJSON_PINNED_COMMIT {
+        return Err(format!(
+            "strict cmake tests-on configure worktree expected commit {} but got {}",
+            RAPIDJSON_PINNED_COMMIT, actual_head
+        ));
+    }
+
+    let log_dir = baseline_root.join("strict_cmake_tests_on_configure_logs");
+    fs::create_dir_all(&log_dir)
+        .map_err(|e| format!("failed to create log dir {}: {}", log_dir.display(), e))?;
+    let fragilec = ensure_fragilec_binary()?;
+    let driver_log = log_dir.join("fragilec_driver.log");
+    fs::write(&driver_log, "")
+        .map_err(|e| format!("failed to initialize fragilec driver log: {}", e))?;
+
+    let build_dir = worktree_dir.join("build_fragilec_strict_tests_on");
+    fs::create_dir_all(&build_dir)
+        .map_err(|e| format!("failed to create build dir {}: {}", build_dir.display(), e))?;
+
+    let configure_output = Command::new("cmake")
+        .arg("-DRAPIDJSON_BUILD_TESTS=ON")
+        .arg("..")
+        .current_dir(&build_dir)
+        .env("CXX", fragilec.to_string_lossy().to_string())
+        .env("FRAGILEC_MODE", "strict")
+        .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string())
+        .output()
+        .map_err(|e| {
+            format!(
+                "failed to run rapidjson strict cmake tests-on configure capture: {}",
+                e
+            )
+        })?;
+    write_command_capture(&log_dir, "cmake_configure", &configure_output)?;
+
+    let configure_stdout = String::from_utf8_lossy(&configure_output.stdout);
+    let configure_stderr = String::from_utf8_lossy(&configure_output.stderr);
+    let configure_failure_class = if configure_output.status.success() {
+        "none"
+    } else {
+        classify_cmake_configure_failure(&configure_stdout, &configure_stderr)
+    };
+    fs::write(
+        log_dir.join("configure_failure_class.txt"),
+        format!("{configure_failure_class}\n"),
+    )
+    .map_err(|e| {
+        format!(
+            "failed to write configure_failure_class.txt in {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+
+    let manifest = format!(
+        "source_dir={}\npinned_commit={}\nfragilec={}\nmode=strict\nbuild_tests=ON\nconfigure_status={}\nconfigure_failure_class_file=configure_failure_class.txt\nconfigure_failure_class={}\n",
+        worktree_dir.display(),
+        RAPIDJSON_PINNED_COMMIT,
+        fragilec.display(),
+        status_code(&configure_output),
+        configure_failure_class
+    );
+    fs::write(
+        log_dir.join("strict_cmake_tests_on_configure_manifest.txt"),
+        manifest,
+    )
+    .map_err(|e| {
+        format!(
+            "failed to write strict_cmake_tests_on_configure_manifest.txt in {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+
+    Ok(log_dir)
 }
 
 fn run_rapidjson_strict_cmake_no_tests_backend_matrix_capture(
@@ -5547,6 +5660,64 @@ fn test_real_world_rapidjson_strict_filterkeydom_compile_capture() {
             "strict filterkeydom replay should not emit opaque GenericDocument_UTF8_ placeholder"
         );
     }
+}
+
+#[test]
+#[ignore = "real-world external project test (rapidjson strict cmake default-configure capture with RAPIDJSON_BUILD_TESTS=ON)"]
+fn test_real_world_rapidjson_strict_cmake_tests_on_configure_capture() {
+    let log_dir = run_rapidjson_strict_cmake_tests_on_configure_capture()
+        .expect("failed to run rapidjson strict cmake tests-on configure capture");
+
+    for rel in RAPIDJSON_STRICT_CMAKE_TESTS_ON_CONFIGURE_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected strict cmake tests-on configure capture log file {}",
+            log_dir.join(rel).display()
+        );
+    }
+
+    let configure_status = read_status_file(&log_dir.join("cmake_configure.status"))
+        .expect("failed to read cmake_configure.status");
+    let configure_stdout = fs::read_to_string(log_dir.join("cmake_configure.stdout"))
+        .expect("failed to read cmake_configure.stdout");
+    let configure_stderr = fs::read_to_string(log_dir.join("cmake_configure.stderr"))
+        .expect("failed to read cmake_configure.stderr");
+    let configure_failure_class = fs::read_to_string(log_dir.join("configure_failure_class.txt"))
+        .expect("failed to read configure_failure_class.txt");
+    let configure_failure_class = configure_failure_class.trim();
+    let expected_class = if configure_status == 0 {
+        "none"
+    } else {
+        classify_cmake_configure_failure(&configure_stdout, &configure_stderr)
+    };
+    assert_eq!(
+        configure_failure_class, expected_class,
+        "strict cmake tests-on configure capture should keep class/status coherence"
+    );
+    if configure_status != 0 {
+        assert_ne!(
+            configure_failure_class, "none",
+            "non-zero strict cmake tests-on configure status must not classify as none"
+        );
+    }
+
+    let manifest = fs::read_to_string(log_dir.join("strict_cmake_tests_on_configure_manifest.txt"))
+        .expect("failed to read strict_cmake_tests_on_configure_manifest.txt");
+    assert!(
+        manifest.contains("build_tests=ON"),
+        "strict cmake tests-on configure manifest should record build_tests=ON, got:\n{}",
+        manifest
+    );
+    assert!(
+        manifest.contains(format!("configure_status={}", configure_status).as_str()),
+        "strict cmake tests-on configure manifest should record configure status, got:\n{}",
+        manifest
+    );
+    assert!(
+        manifest.contains(format!("configure_failure_class={}", configure_failure_class).as_str()),
+        "strict cmake tests-on configure manifest should record failure class, got:\n{}",
+        manifest
+    );
 }
 
 #[test]
