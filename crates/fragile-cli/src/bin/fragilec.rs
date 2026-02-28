@@ -1536,6 +1536,63 @@ int main() { return 0; }
     }
 
     #[test]
+    fn strict_compile_libtooling_ignores_rapidjson_const_assignment_parser_diagnostic() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock must be monotonic")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!(
+            "fragilec_rapidjson_const_assign_diag_libtooling_test_{}",
+            stamp
+        ));
+        fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
+        let include_dir = temp_dir.join("include/rapidjson");
+        fs::create_dir_all(&include_dir).expect("failed to create include dir");
+        let header = include_dir.join("document.h");
+        let source = temp_dir.join("rapidjson_like.cpp");
+        let out_obj = temp_dir.join("rapidjson_like.o");
+        fs::write(
+            &header,
+            r#"
+typedef unsigned int SizeType;
+template<typename CharType>
+struct GenericStringRef {
+    const CharType* const s;
+    const SizeType length;
+    GenericStringRef(const CharType* str, SizeType len) : s(str), length(len) {}
+    GenericStringRef& operator=(const GenericStringRef& rhs) { s = rhs.s; length = rhs.length; return *this; }
+};
+"#,
+        )
+        .expect("failed to write header");
+        fs::write(
+            &source,
+            r#"
+#include "rapidjson/document.h"
+int main() { return 0; }
+"#,
+        )
+        .expect("failed to write source");
+
+        strict_compile_source_to_object_with_backend(
+            &source,
+            &out_obj,
+            &[temp_dir.join("include").to_string_lossy().to_string()],
+            &[],
+            &[],
+            ParserBackend::Libtooling,
+        )
+        .expect("strict compile should tolerate known rapidjson diagnostic in libtooling mode");
+        assert!(
+            out_obj.exists(),
+            "expected object output at {}",
+            out_obj.display()
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
     fn strict_compile_does_not_ignore_non_rapidjson_const_assignment_diagnostic() {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1569,6 +1626,53 @@ int main() { return 0; }
         assert!(
             err.contains("cannot assign to non-static data member 'length'"),
             "expected const-member assignment parse diagnostic, got:\n{}",
+            err
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn strict_compile_libtooling_does_not_ignore_non_rapidjson_const_assignment_diagnostic() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock must be monotonic")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!(
+            "fragilec_non_rapidjson_const_assign_diag_libtooling_test_{}",
+            stamp
+        ));
+        fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
+        let source = temp_dir.join("rapidjson_like.cpp");
+        let out_obj = temp_dir.join("rapidjson_like.o");
+        fs::write(
+            &source,
+            r#"
+typedef unsigned int SizeType;
+template<typename CharType>
+struct GenericStringRef {
+    const CharType* const s;
+    const SizeType length;
+    GenericStringRef(const CharType* str, SizeType len) : s(str), length(len) {}
+    GenericStringRef& operator=(const GenericStringRef& rhs) { s = rhs.s; length = rhs.length; return *this; }
+};
+int main() { return 0; }
+"#,
+        )
+        .expect("failed to write source");
+
+        let err = strict_compile_source_to_object_with_backend(
+            &source,
+            &out_obj,
+            &[],
+            &[],
+            &[],
+            ParserBackend::Libtooling,
+        )
+        .expect_err("non-rapidjson diagnostic should still fail in libtooling mode");
+        assert!(
+            err.contains("cannot assign to non-static data member 'length'"),
+            "expected const-member assignment diagnostic to remain fatal, got:\n{}",
             err
         );
 

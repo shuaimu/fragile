@@ -351,23 +351,21 @@ fn ensure_fragilec_binary() -> Result<PathBuf, String> {
 
     let workspace_root = workspace_root_dir();
     let fragilec = workspace_root.join("target/debug/fragilec");
-    if !fragilec.exists() {
-        let output = Command::new("cargo")
-            .arg("build")
-            .arg("-p")
-            .arg("fragile-cli")
-            .arg("--bin")
-            .arg("fragilec")
-            .current_dir(&workspace_root)
-            .output()
-            .map_err(|e| format!("failed to build fragilec binary: {}", e))?;
-        if !output.status.success() {
-            return Err(format!(
-                "failed to build fragilec binary\nstdout:\n{}\nstderr:\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
+    let output = Command::new("cargo")
+        .arg("build")
+        .arg("-p")
+        .arg("fragile-cli")
+        .arg("--bin")
+        .arg("fragilec")
+        .current_dir(&workspace_root)
+        .output()
+        .map_err(|e| format!("failed to build fragilec binary: {}", e))?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed to build fragilec binary\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
     }
 
     let _ = BIN.set(fragilec.clone());
@@ -4631,16 +4629,16 @@ fn test_real_world_rapidjson_strict_tutorial_backend_surface_delta_capture() {
         .find(|entry| entry.backend_name == "libtooling")
         .expect("missing strict tutorial backend-surface result for libtooling");
     assert!(
-        !libtooling.compile_timed_out,
-        "strict tutorial backend-surface libtooling run should isolate a non-timeout blocker"
+        libtooling.compile_timed_out,
+        "strict tutorial backend-surface libtooling run should currently classify the post-export blocker as timeout-bound rustc failure"
     );
-    assert_ne!(
+    assert_eq!(
         libtooling.compile_status, COMMAND_TIMEOUT_STATUS,
-        "strict tutorial backend-surface libtooling run should not report timeout sentinel status"
+        "strict tutorial backend-surface libtooling run should report timeout sentinel status while rustc compile remains timeout-bound"
     );
-    assert_ne!(
+    assert_eq!(
         libtooling.first_failure_class, "compile_timeout",
-        "strict tutorial backend-surface libtooling run should classify a non-timeout blocker"
+        "strict tutorial backend-surface libtooling run should classify timeout after exporter unblocks"
     );
     assert_ne!(
         libtooling.first_failure_class, "none",
@@ -4650,13 +4648,18 @@ fn test_real_world_rapidjson_strict_tutorial_backend_surface_delta_capture() {
         fs::read_to_string(log_dir.join("backend_libtooling/first_failing_compile_stderr.txt"))
             .expect("failed to read backend_libtooling/first_failing_compile_stderr.txt");
     assert!(
-        libtooling_first_stderr.contains("AST export failed with code 1"),
-        "strict tutorial backend-surface libtooling first failure should record AST export blocker, got:\n{}",
+        libtooling_first_stderr.contains("[fragilec] fragile rustc object compile failed"),
+        "strict tutorial backend-surface libtooling first failure should capture rustc compile blocker after exporter unblocks, got:\n{}",
         libtooling_first_stderr
     );
     assert!(
-        !libtooling.sidecar_exists,
-        "strict tutorial backend-surface libtooling run should not emit sidecar while exporter parse fails"
+        !libtooling_first_stderr.contains("AST export failed with code 1"),
+        "strict tutorial backend-surface libtooling first failure should no longer report AST export blocker, got:\n{}",
+        libtooling_first_stderr
+    );
+    assert!(
+        libtooling.sidecar_exists,
+        "strict tutorial backend-surface libtooling run should emit a generated sidecar after exporter unblock"
     );
     assert!(
         libtooling.transpile_stage_timing_exists,

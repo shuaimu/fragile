@@ -279,6 +279,10 @@ fn libtooling_parser_for_path(path: &Path, options: &TranspileOptions) -> LibToo
                 .unwrap_or("c++17")
                 .to_string();
             extra_args.push(format!("-std={std}"));
+            // Keep LibTooling aligned with libclang's tolerant template parsing for
+            // known upstream headers (e.g. RapidJSON GenericStringRef assignment form)
+            // that are semantically diagnosed only when eagerly parsing template bodies.
+            extra_args.push("-fdelayed-template-parsing".to_string());
         }
         ParserLanguage::C => {
             extra_args.push("-x".to_string());
@@ -310,6 +314,11 @@ fn libtooling_parser_for_path(path: &Path, options: &TranspileOptions) -> LibToo
 }
 
 fn parse_libtooling_context(path: &Path, options: &TranspileOptions) -> Result<AstContext> {
+    // Preserve strict diagnostic semantics from the libclang parser
+    // (including scoped RapidJSON const-member assignment tolerance)
+    // before consuming the richer LibTooling AST export.
+    let _ = parser_for_path_with_options(path, options)?.parse_file(path)?;
+
     let parser = libtooling_parser_for_path(path, options);
     parser.parse_file(path)
 }
