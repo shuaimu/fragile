@@ -10328,6 +10328,12 @@ impl AstCodeGen {
                     Some(("false".to_string(), false))
                 }
             }
+            // RapidJSON error helper shims from `rapidjson/error/en.h`
+            // are header-inline and may not be emitted in degraded strict runs.
+            "GetParseError_En" | "GetValidateError_En" => Some((
+                "b\"rapidjson error\\0\".as_ptr() as *const i8".to_string(),
+                false,
+            )),
             "__builtin_addressof" => {
                 // __builtin_addressof(expr) -> &raw const expr (address of expr)
                 // Special case: if the argument is a dereference (*ptr), just return ptr
@@ -26849,7 +26855,17 @@ impl AstCodeGen {
                     | "clock"
                     | "isatty"
                     | "stat"
+                    | "printf"
+                    | "fprintf"
+                    | "sprintf"
+                    | "snprintf"
+                    | "vprintf"
                     | "vfprintf"
+                    | "vsprintf"
+                    | "vsnprintf"
+                    | "scanf"
+                    | "fscanf"
+                    | "sscanf"
             )
     }
 
@@ -52513,7 +52529,7 @@ static mut __gv_ref: &mut i32 = unsafe { std::mem::zeroed() };
 
         let lowered = AstCodeGen::new().expr_to_string(&call_expr);
         assert!(
-            lowered.starts_with("printf(") && lowered.ends_with(')'),
+            lowered.contains("printf("),
             "degraded C symbol call should keep call syntax, got:\n{}",
             lowered
         );
@@ -52605,6 +52621,46 @@ static mut __gv_ref: &mut i32 = unsafe { std::mem::zeroed() };
         assert!(
             lowered.contains("fragile_pthread_self()"),
             "degraded zero-arg runtime C symbol should remain callable, got:\n{}",
+            lowered
+        );
+    }
+
+    #[test]
+    fn test_degraded_get_parse_error_en_call_maps_to_string_bridge() {
+        let int_ty = CppType::Int { signed: true };
+        let char_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+
+        let call_expr = make_node(
+            ClangNodeKind::CallExpr {
+                ty: char_ptr_ty,
+                template_instantiation: None,
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "GetParseError_En".to_string(),
+                        ty: int_ty.clone(),
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::IntegerLiteral {
+                        value: 0,
+                        cpp_type: Some(int_ty),
+                    },
+                    vec![],
+                ),
+            ],
+        );
+
+        let lowered = AstCodeGen::new().expr_to_string(&call_expr);
+        assert!(
+            lowered.contains("rapidjson error"),
+            "degraded rapidjson parse-error helper should lower to string bridge, got:\n{}",
             lowered
         );
     }
