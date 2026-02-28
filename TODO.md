@@ -303,9 +303,10 @@ Goal: make LibTooling the strict primary AST source with stronger instantiated-t
       - [x] 5.4.c.ii.4) Add/lock strict runtime parity assertions for `condense`/`pretty` under backend matrix (`libclang` baseline vs `libtooling`) and require parity before cutover. Done 2026-02-28.
         - Evidence: extended `run_rapidjson_strict_cmake_no_tests_backend_matrix_capture` to capture per-backend runtime-target builds and run artifacts (`cmake_build_target_condense`, `cmake_build_target_pretty`, `run_condense`, `run_pretty`) and added runtime parity manifest markers (`condense_run_status`, `pretty_run_status`, `condense_output_matches_baseline`, `pretty_output_matches_baseline`, `runtime_parity_vs_baseline`, status deltas). Ignored gate `test_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_capture_first_failure` now asserts libtooling runtime parity vs baseline (status/output + stderr-emptiness parity) before cutover. Latest run root `/tmp/fragile_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_484423_1772259242504942926` shows both backends at `condense_run_status=-1` / `pretty_run_status=-1` with `runtime_parity_vs_baseline=true`, `condense_output_matches_baseline=true`, `pretty_output_matches_baseline=true`, and zero runtime status deltas.
 - [ ] 5.5) Cutover and de-risk period (Effort: S, Risk: Medium).
-  - Switch strict default backend to LibTooling-primary only after 5.1-5.4 gates are green.
-  - Keep emergency escape hatch to `libclang` for one hardening window; remove only after stable CI/replay history.
-  - Update `CLAUDE.md` + this `TODO.md` status snapshot with exact cutover date, backend parity evidence, and fallback-stub inventory delta.
+  - [x] 5.5.a) Switch strict default backend to LibTooling-primary now that 5.1-5.4 gates are green. Done 2026-02-28.
+    - Evidence: `fragilec` strict backend selection now defaults to `ParserBackend::Libtooling` when `FRAGILEC_PARSER_BACKEND` is unset/empty (`strict_parser_backend_from_value`), help text now reports `default: libtooling`, and strict CLI regression `strict_parser_backend_validation_accepts_supported_values` now asserts both default-to-libtooling and explicit `libclang` override parsing (details: `docs/phase5_cutover_default_backend_leaf_5_5_a.md`).
+  - [ ] 5.5.b) Keep emergency escape hatch to `libclang` for one hardening window; remove only after stable CI/replay history.
+  - [ ] 5.5.c) Update `CLAUDE.md` + this `TODO.md` status snapshot with exact cutover date, backend parity evidence, and fallback-stub inventory delta.
 
 ## Phase 6 [P3 completed/archive]: Generic STL container types
 

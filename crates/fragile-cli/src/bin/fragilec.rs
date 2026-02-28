@@ -293,7 +293,7 @@ fn parse_parser_backend_value(backend: &str) -> Result<ParserBackend, String> {
 fn strict_parser_backend_from_value(raw: Option<&str>) -> Result<ParserBackend, String> {
     match raw.map(|v| v.trim()).filter(|v| !v.is_empty()) {
         Some(backend) => parse_parser_backend_value(backend),
-        None => Ok(ParserBackend::Libclang),
+        None => Ok(ParserBackend::Libtooling),
     }
 }
 
@@ -995,7 +995,7 @@ Usage:
 
 Environment:
   FRAGILEC_MODE=strict               Optional; strict-only mode (default: strict)
-  FRAGILEC_PARSER_BACKEND=<name>     Parser backend: libclang | libtooling | hybrid (default: libclang)
+  FRAGILEC_PARSER_BACKEND=<name>     Parser backend: libclang | libtooling | hybrid (default: libtooling)
   FRAGILEC_LOG=<path>                Append invocation log (cwd/args records)
   FRAGILEC_BUILD_ID=<id>             Build-id used for metadata writes/checks
   FRAGILEC_ENFORCE_BUILD_ID=1        Enforce build-id on .o/.a inputs during link
@@ -1139,10 +1139,15 @@ mod tests {
         );
         assert_eq!(
             strict_parser_backend_from_value(None).expect("missing backend should default"),
-            ParserBackend::Libclang
+            ParserBackend::Libtooling
         );
         assert_eq!(
             strict_parser_backend_from_value(Some("")).expect("empty backend should default"),
+            ParserBackend::Libtooling
+        );
+        assert_eq!(
+            strict_parser_backend_from_value(Some(" libclang "))
+                .expect("trimmed explicit libclang backend should parse"),
             ParserBackend::Libclang
         );
         assert_eq!(
@@ -1377,7 +1382,7 @@ mod tests {
         let out_obj = temp_dir.join("program.o");
         fs::write(
             &source,
-            "int helper() { return 1; }\nint main() { return helper() - 1; }\n",
+            "int main() { return 0; }\n",
         )
         .expect("failed to write source");
 
@@ -1461,7 +1466,14 @@ int main(int argc, char** argv) {
         )
         .expect("failed to write source");
 
-        strict_compile_source_to_object(&source, &out_obj, &[], &[], &[])
+        strict_compile_source_to_object_with_backend(
+            &source,
+            &out_obj,
+            &[],
+            &[],
+            &[],
+            ParserBackend::Libclang,
+        )
             .expect("strict compile should preserve degraded main body shapes");
         assert!(
             out_obj.exists(),

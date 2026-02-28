@@ -1725,6 +1725,8 @@ fn compile_example_with_cxx_env(
         .env("SRC", source_arg.to_string_lossy().to_string())
         .env("OUT", output_path.to_string_lossy().to_string())
         .env("FRAGILEC_MODE", "strict")
+        // Keep this helper pinned to the strict escape-hatch baseline lane.
+        .env("FRAGILEC_PARSER_BACKEND", "libclang")
         .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string())
         .output()
         .map_err(|e| {
