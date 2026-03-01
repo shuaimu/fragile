@@ -11,7 +11,10 @@ use crate::ast::{
     AccessSpecifier, ClangNode, ClangNodeKind, SourceLocation, TemplateSpecializationKind,
 };
 use crate::types::CppType;
-use fragile_ast_exporter::{clang_ast::AstContext, export_ast_with_options, ASTEntryTag};
+use fragile_ast_exporter::{
+    clang_ast::{AstContext, AstNode},
+    export_ast_with_options, ASTEntryTag, CborValue,
+};
 use miette::{miette, Result};
 use std::collections::HashMap;
 use std::path::Path;
@@ -413,6 +416,88 @@ pub fn convert_to_clang_node(ctx: &AstContext, root_id: u64) -> Option<ClangNode
     convert_node_with_depth(ctx, root_id, 0, MAX_DEPTH)
 }
 
+fn extract_string_array_extra(node: &AstNode, index: usize) -> Vec<String> {
+    match node.extras.get(index) {
+        Some(CborValue::Array(values)) => values
+            .iter()
+            .filter_map(|v| match v {
+                CborValue::Text(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn function_decl_identity_key(node: &AstNode) -> Option<String> {
+    if node.tag != ASTEntryTag::TagFunctionDecl {
+        return None;
+    }
+
+    if let Some(canonical) = node.get_u64(9).filter(|id| *id != 0) {
+        return Some(format!("canon:{canonical}"));
+    }
+    if let Some(mangled) = node.get_string(6).filter(|s| !s.is_empty()) {
+        return Some(format!("mangled:{mangled}"));
+    }
+
+    let name = node.get_string(0).unwrap_or("");
+    if name.is_empty() {
+        return None;
+    }
+    Some(format!("name:{name}:type:{}", node.type_id.unwrap_or(0)))
+}
+
+fn function_decl_has_body(node: &AstNode, ctx: &AstContext) -> bool {
+    node.children.iter().flatten().any(|child_id| {
+        ctx.ast_nodes
+            .get(child_id)
+            .is_some_and(|child| child.tag == ASTEntryTag::TagCompoundStmt)
+    })
+}
+
+fn dedup_function_decl_child_ids(ctx: &AstContext, parent: &AstNode) -> Vec<u64> {
+    let mut deduped: Vec<u64> = Vec::new();
+    let mut key_to_index: HashMap<String, usize> = HashMap::new();
+
+    for child_id in parent.children.iter().filter_map(|child| *child) {
+        let Some(child_node) = ctx.ast_nodes.get(&child_id) else {
+            continue;
+        };
+        if child_node.tag != ASTEntryTag::TagFunctionDecl {
+            deduped.push(child_id);
+            continue;
+        }
+
+        let Some(key) = function_decl_identity_key(child_node) else {
+            deduped.push(child_id);
+            continue;
+        };
+
+        if let Some(existing_index) = key_to_index.get(&key).copied() {
+            let Some(existing_node_id) = deduped.get(existing_index).copied() else {
+                continue;
+            };
+            let Some(existing_node) = ctx.ast_nodes.get(&existing_node_id) else {
+                deduped[existing_index] = child_id;
+                continue;
+            };
+
+            let existing_has_body = function_decl_has_body(existing_node, ctx);
+            let child_has_body = function_decl_has_body(child_node, ctx);
+            if child_has_body && !existing_has_body {
+                deduped[existing_index] = child_id;
+            }
+            continue;
+        }
+
+        key_to_index.insert(key, deduped.len());
+        deduped.push(child_id);
+    }
+
+    deduped
+}
+
 fn convert_node_with_depth(
     ctx: &AstContext,
     node_id: u64,
@@ -459,10 +544,11 @@ fn convert_node_with_depth(
         ASTEntryTag::TagDeclRefExpr => {
             let name = node.get_string(0).unwrap_or("").to_string();
             let ty = extract_type_from_node(ctx, node);
+            let namespace_path = extract_string_array_extra(node, 2);
             ClangNodeKind::DeclRefExpr {
                 name,
                 ty,
-                namespace_path: vec![],
+                namespace_path,
             }
         }
 
@@ -504,12 +590,14 @@ fn convert_node_with_depth(
             let name = node.get_string(0).unwrap_or("").to_string();
             let ty = extract_type_from_node(ctx, node);
             let has_init = node.children.iter().any(|c| c.is_some());
+            let is_static = node.get_bool(4).unwrap_or(false);
+            let is_extern = node.get_bool(5).unwrap_or(false);
             ClangNodeKind::VarDecl {
                 name,
                 ty,
                 has_init,
-                is_static: false,
-                is_extern: false,
+                is_static,
+                is_extern,
             }
         }
 
@@ -824,13 +912,21 @@ fn convert_node_with_depth(
         }
     };
 
-    // Convert children with depth tracking
-    let children: Vec<ClangNode> = node
-        .children
+    // Convert children with depth tracking.
+    // Namespace/linkage containers can carry repeated declarations for the same
+    // canonical function symbol (redecls + reopened scopes). Dedup here so
+    // codegen sees one declaration surface per symbol.
+    let child_ids: Vec<u64> = match node.tag {
+        ASTEntryTag::TagNamespaceDecl => dedup_function_decl_child_ids(ctx, node),
+        _ => node
+            .children
+            .iter()
+            .filter_map(|child_id| *child_id)
+            .collect(),
+    };
+    let children: Vec<ClangNode> = child_ids
         .iter()
-        .filter_map(|child_id| {
-            child_id.and_then(|id| convert_node_with_depth(ctx, id, current_depth + 1, max_depth))
-        })
+        .filter_map(|id| convert_node_with_depth(ctx, *id, current_depth + 1, max_depth))
         .collect();
 
     Some(ClangNode {
@@ -851,6 +947,11 @@ fn convert_function_decl_node(
         raw_name
     };
     let is_static = node.get_bool(3).unwrap_or(false);
+    let mangled_name = node
+        .get_string(6)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| name.clone());
 
     let (return_type_opt, fn_param_types, is_variadic) = if let Some(type_id) = node.type_id {
         resolve_function_proto_type(ctx, type_id)
@@ -907,7 +1008,7 @@ fn convert_function_decl_node(
     if (is_template_instantiation || !template_args.is_empty()) && !template_args.is_empty() {
         return ClangNodeKind::FunctionTemplateInstantiation {
             name: name.clone(),
-            mangled_name: name,
+            mangled_name: mangled_name.clone(),
             return_type,
             params,
             template_args,
@@ -917,7 +1018,7 @@ fn convert_function_decl_node(
 
     ClangNodeKind::FunctionDecl {
         name: name.clone(),
-        mangled_name: name,
+        mangled_name,
         is_static,
         return_type,
         params,
@@ -1433,7 +1534,8 @@ fn extract_type_from_node(
             return resolved;
         }
 
-        let unqualified_type_id = fragile_ast_exporter::clang_ast::TypeNode::unqualified_id(type_id);
+        let unqualified_type_id =
+            fragile_ast_exporter::clang_ast::TypeNode::unqualified_id(type_id);
         if let Some(type_node) = ctx.type_nodes.get(&unqualified_type_id) {
             // Convert type node tag to a proper CppType
             use fragile_ast_exporter::ASTEntryTag;
@@ -3268,7 +3370,9 @@ int use_specializations() {
             "expected at least one implicit-instantiation marker"
         );
         assert!(
-            specialization_nodes.iter().all(|node| node.get_u64(5).is_some()),
+            specialization_nodes
+                .iter()
+                .all(|node| node.get_u64(5).is_some()),
             "expected specialization nodes to include full specialization-kind payload"
         );
         assert!(
@@ -3290,12 +3394,10 @@ int use_specializations() {
 
         let extracted = extract_specialization_field_types(&ctx);
         assert!(
-            extracted
-                .values()
-                .any(|info| {
-                    info.specialization_kind == TemplateSpecializationKind::ExplicitSpecialization
-                        && info.template_args.iter().any(|arg| arg == "int")
-                }),
+            extracted.values().any(|info| {
+                info.specialization_kind == TemplateSpecializationKind::ExplicitSpecialization
+                    && info.template_args.iter().any(|arg| arg == "int")
+            }),
             "expected extracted specialization metadata for explicit Box<int> specialization"
         );
         assert!(

@@ -32,6 +32,7 @@ pub use types::{CppType, TypeProperties, TypeTraitEvaluator, TypeTraitResult};
 
 use fragile_ast_exporter::{clang_ast::AstContext, ASTEntryTag};
 use miette::Result;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -294,23 +295,146 @@ fn parse_libtooling_context(path: &Path, options: &TranspileOptions) -> Result<A
     parser.parse_file(path)
 }
 
-fn translation_unit_from_libtooling_context(ctx: &AstContext) -> ClangNode {
-    let mut root_ids = ctx.top_nodes.clone();
-    let mut seen_roots: std::collections::HashSet<u64> = root_ids.iter().copied().collect();
+fn function_param_count(
+    node: &fragile_ast_exporter::clang_ast::AstNode,
+    ctx: &AstContext,
+) -> usize {
+    node.children
+        .iter()
+        .flatten()
+        .filter(|child_id| {
+            ctx.ast_nodes
+                .get(child_id)
+                .is_some_and(|child| child.tag == ASTEntryTag::TagParmVarDecl)
+        })
+        .count()
+}
 
-    // Promote body-bearing free functions that can be nested in the exported graph
-    // and therefore omitted from computed top nodes.
-    for node in ctx.ast_nodes.values() {
-        if node.tag != ASTEntryTag::TagFunctionDecl || seen_roots.contains(&node.id) {
+fn function_has_body(node: &fragile_ast_exporter::clang_ast::AstNode, ctx: &AstContext) -> bool {
+    node.children.iter().flatten().any(|child_id| {
+        ctx.ast_nodes
+            .get(child_id)
+            .is_some_and(|child| child.tag == ASTEntryTag::TagCompoundStmt)
+    })
+}
+
+fn function_identity_key(
+    node: &fragile_ast_exporter::clang_ast::AstNode,
+    ctx: &AstContext,
+) -> Option<String> {
+    if node.tag != ASTEntryTag::TagFunctionDecl {
+        return None;
+    }
+
+    if let Some(canonical) = node.get_u64(9).filter(|id| *id != 0) {
+        return Some(format!("fn:canon:{canonical}"));
+    }
+
+    if let Some(mangled) = node.get_string(6).filter(|s| !s.is_empty()) {
+        return Some(format!("fn:mangled:{mangled}"));
+    }
+
+    let arity = function_param_count(node, ctx);
+    if let Some(qualified) = node.get_string(7).filter(|s| !s.is_empty()) {
+        return Some(format!("fn:qualified:{qualified}:{arity}"));
+    }
+
+    let name = node.get_string(0).unwrap_or("");
+    if name.is_empty() {
+        None
+    } else {
+        Some(format!("fn:name:{name}:{arity}"))
+    }
+}
+
+fn should_replace_function_candidate(
+    current: &fragile_ast_exporter::clang_ast::AstNode,
+    candidate: &fragile_ast_exporter::clang_ast::AstNode,
+    ctx: &AstContext,
+) -> bool {
+    let current_has_body = function_has_body(current, ctx);
+    let candidate_has_body = function_has_body(candidate, ctx);
+    if current_has_body != candidate_has_body {
+        return candidate_has_body;
+    }
+
+    let current_has_mangled = current
+        .get_string(6)
+        .is_some_and(|s| !s.is_empty() && s != current.get_string(0).unwrap_or(""));
+    let candidate_has_mangled = candidate
+        .get_string(6)
+        .is_some_and(|s| !s.is_empty() && s != candidate.get_string(0).unwrap_or(""));
+    if current_has_mangled != candidate_has_mangled {
+        return candidate_has_mangled;
+    }
+
+    false
+}
+
+fn dedup_function_roots(ctx: &AstContext, root_ids: Vec<u64>) -> Vec<u64> {
+    let mut deduped: Vec<u64> = Vec::new();
+    let mut key_to_index: HashMap<String, usize> = HashMap::new();
+
+    for id in root_ids {
+        let Some(node) = ctx.ast_nodes.get(&id) else {
+            continue;
+        };
+        if node.tag != ASTEntryTag::TagFunctionDecl {
+            deduped.push(id);
             continue;
         }
 
-        let has_body = node.children.iter().flatten().any(|child_id| {
-            ctx.ast_nodes
-                .get(child_id)
-                .is_some_and(|child| child.tag == ASTEntryTag::TagCompoundStmt)
-        });
-        if !has_body {
+        let Some(key) = function_identity_key(node, ctx) else {
+            deduped.push(id);
+            continue;
+        };
+
+        if let Some(existing_index) = key_to_index.get(&key).copied() {
+            let Some(existing_node) = ctx.ast_nodes.get(&deduped[existing_index]) else {
+                deduped[existing_index] = id;
+                continue;
+            };
+            if should_replace_function_candidate(existing_node, node, ctx) {
+                deduped[existing_index] = id;
+            }
+            continue;
+        }
+
+        key_to_index.insert(key, deduped.len());
+        deduped.push(id);
+    }
+
+    deduped
+}
+
+fn translation_unit_from_libtooling_context(ctx: &AstContext) -> ClangNode {
+    let mut root_ids = ctx.top_nodes.clone();
+    let mut seen_roots: HashSet<u64> = root_ids.iter().copied().collect();
+    let all_children: HashSet<u64> = ctx
+        .ast_nodes
+        .values()
+        .flat_map(|n| n.children.iter().filter_map(|child| *child))
+        .collect();
+
+    // Promote body-bearing free functions that can be nested in the exported graph
+    // and therefore omitted from computed top nodes.
+    let mut function_ids: Vec<u64> = ctx
+        .ast_nodes
+        .iter()
+        .filter_map(|(id, node)| (node.tag == ASTEntryTag::TagFunctionDecl).then_some(*id))
+        .collect();
+    function_ids.sort_unstable();
+
+    for function_id in function_ids {
+        let Some(node) = ctx.ast_nodes.get(&function_id) else {
+            continue;
+        };
+
+        if seen_roots.contains(&node.id) || all_children.contains(&node.id) {
+            continue;
+        }
+
+        if !function_has_body(node, ctx) {
             continue;
         }
 
@@ -322,6 +446,8 @@ fn translation_unit_from_libtooling_context(ctx: &AstContext) -> ClangNode {
         root_ids.push(node.id);
         seen_roots.insert(node.id);
     }
+
+    root_ids = dedup_function_roots(ctx, root_ids);
 
     let children = root_ids
         .iter()

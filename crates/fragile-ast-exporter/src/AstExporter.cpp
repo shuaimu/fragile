@@ -20,6 +20,7 @@
 
 // LLVM headers
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 
 // Clang headers
@@ -29,6 +30,7 @@
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
+#include "clang/AST/Mangle.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/Stmt.h"
 #include "clang/AST/StmtCXX.h"
@@ -77,7 +79,102 @@ static opt<bool> SkipSystemHeaders(
 
 // Helper to encode a string to CBOR
 void cbor_encode_string(CborEncoder *encoder, const std::string &str) {
-    cbor_encode_text_string(encoder, str.data(), str.size());
+    llvm::StringRef text(str);
+    std::string owned;
+    if (!llvm::json::isUTF8(text)) {
+        owned = llvm::json::fixUTF8(text);
+        text = owned;
+    }
+    cbor_encode_text_string(encoder, text.data(), text.size());
+}
+
+void cbor_encode_string_array(CborEncoder *encoder,
+                              const std::vector<std::string> &values) {
+    CborEncoder arr;
+    cbor_encoder_create_array(encoder, &arr, values.size());
+    for (const auto &value : values) {
+        cbor_encode_string(&arr, value);
+    }
+    cbor_encoder_close_container(encoder, &arr);
+}
+
+std::vector<std::string> collect_decl_context_path(const DeclContext *dc,
+                                                   bool include_record_context) {
+    std::vector<std::string> path;
+    const DeclContext *current = dc;
+    while (current && !current->isTranslationUnit()) {
+        if (const auto *ns = dyn_cast<NamespaceDecl>(current)) {
+            if (!ns->isAnonymousNamespace()) {
+                auto name = ns->getNameAsString();
+                if (!name.empty()) {
+                    path.push_back(name);
+                }
+            }
+        } else if (const auto *en = dyn_cast<EnumDecl>(current)) {
+            auto name = en->getNameAsString();
+            if (!name.empty()) {
+                path.push_back(name);
+            }
+        } else if (include_record_context) {
+            if (const auto *record = dyn_cast<RecordDecl>(current)) {
+                auto name = record->getNameAsString();
+                if (!name.empty()) {
+                    path.push_back(name);
+                }
+            }
+        }
+        current = current->getParent();
+    }
+    std::reverse(path.begin(), path.end());
+    return path;
+}
+
+std::string qualified_name_for_decl(const Decl *decl) {
+    if (const auto *named = dyn_cast_or_null<NamedDecl>(decl)) {
+        return named->getQualifiedNameAsString();
+    }
+    return {};
+}
+
+uint64_t canonical_decl_id(const Decl *decl) {
+    if (!decl) {
+        return 0;
+    }
+    return reinterpret_cast<uint64_t>(decl->getCanonicalDecl());
+}
+
+std::string function_link_name(ASTContext &ctx, const FunctionDecl *fd) {
+    if (!fd) {
+        return {};
+    }
+    if (fd->isExternC()) {
+        return fd->getNameAsString();
+    }
+
+    auto fallback_name = fd->getNameAsString();
+    if (fallback_name.empty()) {
+        return fallback_name;
+    }
+
+    std::string mangled;
+    llvm::raw_string_ostream os(mangled);
+    std::unique_ptr<MangleContext> mangle_ctx(ctx.createMangleContext());
+    if (!mangle_ctx || !mangle_ctx->shouldMangleDeclName(fd)) {
+        return fallback_name;
+    }
+    mangle_ctx->mangleName(fd, os);
+    os.flush();
+    return mangled.empty() ? fallback_name : mangled;
+}
+
+bool decl_ref_should_include_record_context(const ValueDecl *decl) {
+    if (const auto *method = dyn_cast_or_null<CXXMethodDecl>(decl)) {
+        return method->isStatic();
+    }
+    if (const auto *var = dyn_cast_or_null<VarDecl>(decl)) {
+        return var->isStaticDataMember();
+    }
+    return false;
 }
 
 // Forward declarations
@@ -897,6 +994,10 @@ bool ASTExporterVisitor::VisitFunctionDecl(FunctionDecl *FD) {
     bool hasTemplateSpecializationArgs = templateArgs && templateArgs->size() > 0;
     bool isTemplateInstantiation = FD->isTemplateInstantiation() || hasTemplateSpecializationArgs;
     std::vector<std::string> templateArgStrings;
+    auto mangledName = function_link_name(Context, FD);
+    auto qualifiedName = qualified_name_for_decl(FD);
+    auto namespacePath = collect_decl_context_path(FD->getDeclContext(), false);
+    auto canonicalId = canonical_decl_id(FD);
     if (templateArgs) {
         templateArgStrings.reserve(templateArgs->size());
         for (unsigned i = 0; i < templateArgs->size(); ++i) {
@@ -908,7 +1009,9 @@ bool ASTExporterVisitor::VisitFunctionDecl(FunctionDecl *FD) {
     }
 
     encodeEntry(FD, TagFunctionDecl, FD->getSourceRange(), children,
-                FD->getType(), [FD, isTemplateInstantiation, templateArgStrings](CborEncoder *enc) {
+                FD->getType(),
+                [FD, isTemplateInstantiation, templateArgStrings, mangledName,
+                 qualifiedName, namespacePath, canonicalId](CborEncoder *enc) {
                     cbor_encode_string(enc, FD->getNameAsString());
                     cbor_encode_boolean(enc, FD->isGlobal());
                     cbor_encode_boolean(enc, FD->isInlineSpecified());
@@ -921,6 +1024,12 @@ bool ASTExporterVisitor::VisitFunctionDecl(FunctionDecl *FD) {
                         cbor_encode_string(&templateArgArray, arg);
                     }
                     cbor_encoder_close_container(enc, &templateArgArray);
+
+                    cbor_encode_string(enc, mangledName);
+                    cbor_encode_string(enc, qualifiedName);
+                    cbor_encode_string_array(enc, namespacePath);
+                    cbor_encode_uint(enc, canonicalId);
+                    cbor_encode_boolean(enc, FD->isExternC());
                 });
 
     // Visit body
@@ -1107,13 +1216,27 @@ bool ASTExporterVisitor::VisitVarDecl(VarDecl *VD) {
 
     std::vector<const void *> children;
     children.push_back(init);
+    bool isStaticStorage =
+        VD->getStorageClass() == SC_Static || VD->isStaticDataMember();
+    bool isExternStorage =
+        VD->getStorageClass() == SC_Extern || VD->hasExternalStorage();
+    auto qualifiedName = qualified_name_for_decl(VD);
+    auto namespacePath = collect_decl_context_path(VD->getDeclContext(), false);
+    auto canonicalId = canonical_decl_id(VD);
 
     encodeEntry(VD, TagVarDecl, VD->getSourceRange(), children,
-                VD->getType(), [VD](CborEncoder *enc) {
+                VD->getType(),
+                [VD, isStaticStorage, isExternStorage, qualifiedName, namespacePath,
+                 canonicalId](CborEncoder *enc) {
                     cbor_encode_string(enc, VD->getNameAsString());
                     cbor_encode_boolean(enc, VD->isStaticLocal());
                     cbor_encode_boolean(enc, VD->isConstexpr());
                     cbor_encode_boolean(enc, VD->hasExternalStorage());
+                    cbor_encode_boolean(enc, isStaticStorage);
+                    cbor_encode_boolean(enc, isExternStorage);
+                    cbor_encode_string(enc, qualifiedName);
+                    cbor_encode_string_array(enc, namespacePath);
+                    cbor_encode_uint(enc, canonicalId);
                 });
 
     if (init && shouldTraverseStmtTree(init)) {
@@ -2090,10 +2213,19 @@ void ASTExporterVisitor::visitDeclRefExpr(DeclRefExpr *DRE) {
 
     std::vector<const void *> children;
     children.push_back(DRE->getDecl());
+    const auto *decl = dyn_cast<ValueDecl>(DRE->getDecl());
+    auto qualifiedName = qualified_name_for_decl(DRE->getDecl());
+    auto namespacePath = collect_decl_context_path(
+        DRE->getDecl() ? DRE->getDecl()->getDeclContext() : nullptr,
+        decl_ref_should_include_record_context(decl));
+    auto canonicalId = canonical_decl_id(DRE->getDecl());
 
     encodeEntry(DRE, TagDeclRefExpr, DRE->getSourceRange(), children, DRE->getType(),
-                [DRE](CborEncoder *enc) {
+                [DRE, qualifiedName, namespacePath, canonicalId](CborEncoder *enc) {
                     cbor_encode_string(enc, DRE->getDecl()->getNameAsString());
+                    cbor_encode_string(enc, qualifiedName);
+                    cbor_encode_string_array(enc, namespacePath);
+                    cbor_encode_uint(enc, canonicalId);
                 });
 }
 
