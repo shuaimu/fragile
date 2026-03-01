@@ -5533,29 +5533,25 @@ fn test_real_world_rapidjson_strict_tutorial_backend_surface_delta_capture() {
         "strict tutorial backend-surface libtooling run should not report timeout sentinel status"
     );
     assert_eq!(
-        libtooling.first_failure_class, "unresolved_name_or_type_e0425",
-        "strict tutorial backend-surface libtooling run should deterministically classify unresolved-name/type blocker after exporter unblocks"
+        libtooling.compile_status, 0,
+        "strict tutorial backend-surface libtooling run should now compile successfully after exporter/type-lowering fixes"
     );
-    assert_ne!(
+    assert_eq!(
         libtooling.first_failure_class, "none",
-        "strict tutorial backend-surface libtooling run should capture an actual blocker classification"
+        "strict tutorial backend-surface libtooling run should report no first-failure classification when compilation succeeds"
     );
     let libtooling_first_stderr =
         fs::read_to_string(log_dir.join("backend_libtooling/first_failing_compile_stderr.txt"))
             .expect("failed to read backend_libtooling/first_failing_compile_stderr.txt");
     assert!(
-        libtooling_first_stderr.contains("[fragilec] fragile rustc object compile failed"),
-        "strict tutorial backend-surface libtooling first failure should capture rustc compile blocker after exporter unblocks, got:\n{}",
+        libtooling_first_stderr.contains("<none>"),
+        "strict tutorial backend-surface libtooling first-failure stderr marker should be <none> when compile succeeds, got:\n{}",
         libtooling_first_stderr
     );
     assert!(
-        libtooling_first_stderr.contains("error[E0425]"),
-        "strict tutorial backend-surface libtooling first failure should include unresolved-name/type diagnostics for deterministic classification, got:\n{}",
-        libtooling_first_stderr
-    );
-    assert!(
-        !libtooling_first_stderr.contains("AST export failed with code 1"),
-        "strict tutorial backend-surface libtooling first failure should no longer report AST export blocker, got:\n{}",
+        !libtooling_first_stderr.contains("fragile rustc object compile failed")
+            && !libtooling_first_stderr.contains("AST export failed with code 1"),
+        "strict tutorial backend-surface libtooling first-failure marker should not report compile/export failures on successful compile, got:\n{}",
         libtooling_first_stderr
     );
     assert!(

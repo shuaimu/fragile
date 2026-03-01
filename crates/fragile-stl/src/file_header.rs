@@ -147,7 +147,9 @@ unsafe extern "C" {
     pub fn strerror(errnum: i32) -> *const i8;
     pub fn clock() -> i64;
     pub fn isatty(fd: i32) -> i32;
+    pub fn printf(format: *const i8, ...) -> i32;
     pub fn fprintf(stream: *mut std::ffi::c_void, format: *const i8, ...) -> i32;
+    pub fn sprintf(buffer: *mut i8, format: *const i8, ...) -> i32;
     pub fn vfprintf(
         stream: *mut std::ffi::c_void,
         format: *const i8,
