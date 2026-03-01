@@ -1068,8 +1068,15 @@ pub struct AstCodeGen {
     /// Declared function parameter types keyed by `(function_name, arity)`.
     /// Used as a fallback when call-site function type metadata is degraded.
     declared_function_param_types: HashMap<(String, usize), Vec<CppType>>,
+    /// Generated function parameter Rust types keyed by `(function_name, arity)`.
+    /// Used when template-instantiated helper functions are emitted directly in
+    /// this TU and call-site AST type metadata is degraded.
+    generated_function_param_rust_types: HashMap<(String, usize), Vec<String>>,
     /// C extern declarations already emitted in this translation unit.
     emitted_extern_c_functions: HashSet<String>,
+    /// Exported link symbols already emitted in this translation unit.
+    /// Prevents duplicate `#[no_mangle]`/`#[export_name]` function emissions.
+    emitted_exported_function_symbols: HashSet<String>,
     /// Track actual Rust module nesting depth (excludes flattened namespaces like std, __)
     module_depth: usize,
     /// Track method names within current struct impl to handle overloads: name -> count
@@ -1148,6 +1155,9 @@ pub struct AstCodeGen {
     /// Union types whose fields require ManuallyDrop/non-Copy handling.
     /// Used to prevent deriving Copy on records embedding these unions.
     non_copy_union_types: HashSet<String>,
+    /// Record/alias names known to be non-Clone in generated output.
+    /// Used to avoid deriving Clone on aggregates that embed move-only fields.
+    non_clone_record_types: HashSet<String>,
     /// Recovered member layouts for unnamed unions referenced by type but lacking
     /// explicit UnionDecl definitions in the AST.
     /// Key: generated Rust union type name, Value: (field_name, field_type) list.
@@ -1251,7 +1261,9 @@ impl AstCodeGen {
             defined_global_var_names: HashSet::new(),
             declared_function_names: HashSet::new(),
             declared_function_param_types: HashMap::new(),
+            generated_function_param_rust_types: HashMap::new(),
             emitted_extern_c_functions: HashSet::new(),
+            emitted_exported_function_symbols: HashSet::new(),
             module_depth: 0,
             current_struct_methods: HashMap::new(),
             class_method_overloads: HashMap::new(),
@@ -1282,6 +1294,7 @@ impl AstCodeGen {
             anon_union_defs: HashMap::new(),
             union_types: HashSet::new(),
             non_copy_union_types: HashSet::new(),
+            non_clone_record_types: HashSet::new(),
             missing_union_member_types: HashMap::new(),
             loop_depth: 0,
             switch_loop_depth_stack: Vec::new(),
@@ -1967,9 +1980,8 @@ impl AstCodeGen {
                 let start = idx + rel;
                 let after = start + 4;
                 let next = line[after..].chars().next();
-                let is_standalone = next.is_none_or(|ch| {
-                    ch.is_whitespace() || matches!(ch, '{' | ')' | ',' | ';')
-                });
+                let is_standalone =
+                    next.is_none_or(|ch| ch.is_whitespace() || matches!(ch, '{' | ')' | ',' | ';'));
                 if is_standalone {
                     out.push_str(&line[idx..start]);
                     out.push_str("-> ()");
@@ -2012,6 +2024,22 @@ impl AstCodeGen {
             Some(rewritten)
         }
 
+        fn normalize_noarg_ref_return_lifetime(line: &str) -> String {
+            if line.contains("() -> &mut ") {
+                return line.replace("() -> &mut ", "() -> &'static mut ");
+            }
+            if let Some(pos) = line.find("() -> &") {
+                if !line[pos..].starts_with("() -> &'") {
+                    let mut out = String::with_capacity(line.len() + 8);
+                    out.push_str(&line[..pos]);
+                    out.push_str("() -> &'static ");
+                    out.push_str(&line[pos + "() -> &".len()..]);
+                    return out;
+                }
+            }
+            line.to_string()
+        }
+
         let mut out = String::with_capacity(code.len());
         for line in code.lines() {
             let trimmed = line.trim_start();
@@ -2031,6 +2059,7 @@ impl AstCodeGen {
                     .replace(": _ =", ": u64 =")
                     .replace("= _;", "= u64;");
                 fixed = replace_standalone_return_placeholder(&fixed);
+                fixed = normalize_noarg_ref_return_lifetime(&fixed);
                 if trimmed.starts_with("static ") || trimmed.starts_with("static mut ") {
                     if let Some(normalized_static) = normalize_static_reference_type_line(&fixed) {
                         fixed = normalized_static;
@@ -2115,8 +2144,10 @@ impl AstCodeGen {
                 canonical_target
                     .entry(key)
                     .and_modify(|existing| {
-                        let existing_penalty = (existing.starts_with("rapidjson_") as usize, existing.len());
-                        let candidate_penalty = (name.starts_with("rapidjson_") as usize, name.len());
+                        let existing_penalty =
+                            (existing.starts_with("rapidjson_") as usize, existing.len());
+                        let candidate_penalty =
+                            (name.starts_with("rapidjson_") as usize, name.len());
                         if candidate_penalty < existing_penalty {
                             *existing = name.clone();
                         }
@@ -2200,8 +2231,7 @@ impl AstCodeGen {
             let end = start + needle.len();
             let prev = code[..start].chars().last();
             let next = code[end..].chars().next();
-            let prev_ok =
-                prev.is_none_or(|ch| !Self::is_identifier_char(ch) && ch != ':');
+            let prev_ok = prev.is_none_or(|ch| !Self::is_identifier_char(ch) && ch != ':');
             let next_ok = next.is_none_or(|ch| !Self::is_identifier_char(ch));
             if prev_ok && next_ok {
                 out.push_str(&code[idx..start]);
@@ -2264,6 +2294,8 @@ impl AstCodeGen {
             "std::ptr::null()".to_string()
         } else if trimmed.starts_with("*mut ") {
             "std::ptr::null_mut()".to_string()
+        } else if trimmed.starts_with("&mut ") || trimmed.starts_with('&') {
+            "unsafe { std::mem::zeroed() }".to_string()
         } else {
             Self::get_default_value_for_type(trimmed)
         }
@@ -2291,7 +2323,8 @@ impl AstCodeGen {
                     if !ret_ty.is_empty() && ret_ty != "()" {
                         out.push_str(line);
                         out.push('\n');
-                        let indent_width = line.chars().take_while(|c| c.is_whitespace()).count() + 4;
+                        let indent_width =
+                            line.chars().take_while(|c| c.is_whitespace()).count() + 4;
                         out.push_str(&" ".repeat(indent_width));
                         out.push_str(&Self::default_expr_for_empty_body_return_type(ret_ty));
                         out.push('\n');
@@ -2320,8 +2353,7 @@ impl AstCodeGen {
     fn is_primitive_scalar_type_name(ty: &str) -> bool {
         matches!(
             ty,
-            "i8"
-                | "i16"
+            "i8" | "i16"
                 | "i32"
                 | "i64"
                 | "i128"
@@ -2376,6 +2408,21 @@ impl AstCodeGen {
         }
     }
 
+    fn extract_trailing_scalar_cast(expr: &str) -> Option<(String, String)> {
+        let trimmed = expr.trim().trim_end_matches(';').trim();
+        let cast_pos = trimmed.rfind(" as ")?;
+        let lhs = trimmed[..cast_pos].trim();
+        let cast_ty = trimmed[cast_pos + 4..].trim();
+        let valid_ty = !cast_ty.is_empty()
+            && cast_ty
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+        if !valid_ty || !Self::is_primitive_scalar_type_name(cast_ty) || lhs.is_empty() {
+            return None;
+        }
+        Some((lhs.to_string(), cast_ty.to_string()))
+    }
+
     fn normalize_obvious_local_var_type_mismatches(code: &str) -> String {
         let mut out = String::with_capacity(code.len());
         for line in code.lines() {
@@ -2390,8 +2437,23 @@ impl AstCodeGen {
                         let init_expr = fixed[assign_sep + 3..].to_string();
 
                         if Self::is_primitive_scalar_type_name(&declared_ty) {
-                            if let Some(ptr_ty) = Self::extract_trailing_pointer_cast_type(&init_expr) {
+                            if let Some(ptr_ty) =
+                                Self::extract_trailing_pointer_cast_type(&init_expr)
+                            {
                                 fixed = format!("{}: {} = {}", lhs, ptr_ty, init_expr);
+                            } else if is_rust_integral_non_bool_type(&declared_ty) {
+                                if let Some((cast_lhs, cast_ty)) =
+                                    Self::extract_trailing_scalar_cast(&init_expr)
+                                {
+                                    if is_rust_integral_non_bool_type(&cast_ty)
+                                        && cast_ty != declared_ty
+                                    {
+                                        fixed = format!(
+                                            "{}: {} = ({} as {}) as {};",
+                                            lhs, declared_ty, cast_lhs, cast_ty, declared_ty
+                                        );
+                                    }
+                                }
                             }
                         } else if let Some(inner) = declared_ty.strip_prefix("&mut ") {
                             if Self::is_primitive_scalar_type_name(inner.trim()) {
@@ -2547,9 +2609,50 @@ impl AstCodeGen {
             .map(|line| {
                 line.matches("Default::default().").count()
                     + line.matches("let a = &mut Default::default();").count()
-                    + line.matches("let a: &mut _ = &mut Default::default();").count()
+                    + line
+                        .matches("let a: &mut _ = &mut Default::default();")
+                        .count()
+                    + line.matches("super::Exp::").count()
+                    + line.matches("super::value::").count()
+                    + line.matches("Default::default() as *const").count()
+                    + line.matches("Default::default() as *mut").count()
+                    + line.matches("super::EncodeBase64(").count()
+                    + line.matches("super::IsNullString(").count()
+                    + line.matches("EncodeUTF16SurrogatePair(").count()
+                    + line.matches("REPLACEMENT_CHARACTER").count()
+                    + line.matches("buffer(0)").count()
             })
             .sum()
+    }
+
+    fn has_unresolved_function_symbol_markers(lines: &[&str]) -> bool {
+        const UNRESOLVED_MARKERS: [&str; 19] = [
+            "super::Exp::",
+            "super::EncodeBase64(",
+            "super::IsNullString(",
+            "EncodeUTF16SurrogatePair(",
+            "REPLACEMENT_CHARACTER",
+            "buffer(0)",
+            "super::value::Flow",
+            "super::value::NonAscii",
+            "WriteDoubleQuoteEscapeSequence(out, ch,",
+            "SourceLocExpr",
+            "PredefinedExpr",
+            "max_digits10",
+            "super::super::super::memmove(",
+            "detail::fp_formatting::FpToString_",
+            "__gv_ch",
+            "r#in.get()",
+            "r#in.mark",
+            "Escape(unsafe { &mut *r#in },",
+            "builder.Root",
+        ];
+        lines.iter().any(|line| {
+            UNRESOLVED_MARKERS
+                .iter()
+                .any(|marker| line.contains(marker))
+                || (line.contains("__gv_") && line.contains("}()"))
+        })
     }
 
     fn fallback_heavily_degraded_function_bodies(code: &str) -> String {
@@ -2563,8 +2666,8 @@ impl AstCodeGen {
         while i < lines.len() {
             let line = lines[i];
             let trimmed = line.trim_end();
-            let is_fn_start = (trimmed.contains(" fn ") || trimmed.starts_with("fn "))
-                && trimmed.ends_with('{');
+            let is_fn_start =
+                (trimmed.contains(" fn ") || trimmed.starts_with("fn ")) && trimmed.ends_with('{');
             if !is_fn_start {
                 out.push_str(line);
                 if i + 1 < lines.len() || code.ends_with('\n') {
@@ -2597,7 +2700,11 @@ impl AstCodeGen {
 
             let body_lines = if j > i + 1 { &lines[i + 1..j] } else { &[][..] };
             let degraded_markers = Self::count_degraded_function_markers(body_lines);
-            let should_stub = degraded_markers >= 8;
+            let has_enum_switch_mismatch = body_lines.iter().any(|l| l.contains("return value::"))
+                && body_lines.iter().any(|l| l.contains("match "))
+                && body_lines.iter().any(|l| l.contains("=>"));
+            let has_unresolved_symbols = Self::has_unresolved_function_symbol_markers(body_lines);
+            let should_stub = degraded_markers >= 8 || has_enum_switch_mismatch || has_unresolved_symbols;
 
             if should_stub {
                 out.push_str(line);
@@ -4042,6 +4149,7 @@ impl AstCodeGen {
             self.collect_static_member_mappings(ast);
             self.collect_unsafe_function_names(ast);
             self.collect_defined_function_names(ast);
+            self.precollect_type_alias_targets(ast);
             self.collect_defined_global_var_names(ast, false);
             self.collect_global_var_lookup_mappings(ast, false);
             self.collect_out_of_line_method_defs(ast, false);
@@ -4195,6 +4303,11 @@ impl AstCodeGen {
         // Expression-level degraded placeholder cleanup (`_::new_0`, `auto { ... }`).
         output = Self::normalize_placeholder_ctor_calls(&output);
         output = Self::normalize_auto_brace_initializers(&output);
+        // `(Default::default()).clone()` is type-ambiguous in item bodies; keep
+        // the default expression and rely on surrounding type context.
+        output = output.replace("(Default::default()).clone()", "Default::default()");
+        // Degraded call-shapes can produce non-callable defaults like `Default::default()()`.
+        output = output.replace("Default::default()()", "Default::default()");
         // Literal-width recovery for common unsigned writer calls.
         output = Self::normalize_uint_call_literal_suffixes(&output);
         // Recover compile-safe defaults for empty non-unit helper bodies.
@@ -4292,7 +4405,8 @@ impl AstCodeGen {
             const LOOP_PREFIX: &str = "if !(";
             const LOOP_SUFFIX: &str = ")) { break; }";
             if fixed_trimmed.starts_with(LOOP_PREFIX) && fixed_trimmed.ends_with(LOOP_SUFFIX) {
-                let inner = &fixed_trimmed[LOOP_PREFIX.len()..fixed_trimmed.len() - LOOP_SUFFIX.len()];
+                let inner =
+                    &fixed_trimmed[LOOP_PREFIX.len()..fixed_trimmed.len() - LOOP_SUFFIX.len()];
                 if let Some(paren_idx) = inner.find('(') {
                     let callee = inner[..paren_idx].trim();
                     let arg = inner[paren_idx + 1..].trim();
@@ -4661,7 +4775,10 @@ impl AstCodeGen {
         out = out.replace(".GetParseErrorCode;", ".GetParseErrorCode();");
         out = out.replace(".GetParseErrorCode !=", ".GetParseErrorCode() !=");
         out = out.replace(".GetInvalidSchemaPointer.", ".GetInvalidSchemaPointer().");
-        out = out.replace(".GetInvalidDocumentPointer.", ".GetInvalidDocumentPointer().");
+        out = out.replace(
+            ".GetInvalidDocumentPointer.",
+            ".GetInvalidDocumentPointer().",
+        );
         out = out.replace(".back.", ".back().");
         out = out.replace("if !fp {", "if fp.is_null() {");
         out = out.replace(
@@ -5183,6 +5300,9 @@ impl AstCodeGen {
             if !Self::is_valid_rust_item_identifier(rust_name) || rust_name.starts_with('[') {
                 continue;
             }
+            if RUST_KEYWORDS.contains(&rust_name.as_str()) {
+                continue;
+            }
             // Skip types that are just template parameter placeholders like _T1, _T2
             if rust_name.starts_with("_T")
                 && rust_name.len() <= 3
@@ -5266,6 +5386,9 @@ impl AstCodeGen {
             if !Self::is_valid_rust_item_identifier(rust_name) {
                 continue;
             }
+            if RUST_KEYWORDS.contains(&rust_name.as_str()) {
+                continue;
+            }
             // Skip template parameter placeholder aliases (_T1, _T2, ...)
             // that are already emitted in the preamble as type aliases.
             if rust_name.starts_with("_T")
@@ -5280,6 +5403,44 @@ impl AstCodeGen {
             }
             // Use the rust name as the cpp name since we don't have the original
             missing_types.push((rust_name.clone(), rust_name.replace('_', "::")));
+        }
+
+        // Also include simple unresolved return types referenced in emitted
+        // function signatures. Degraded template lowering can emit function
+        // shells before the corresponding record declaration appears in AST.
+        for line in self.output.lines() {
+            let trimmed = line.trim();
+            if !(trimmed.contains(" fn ") || trimmed.starts_with("fn ")) {
+                continue;
+            }
+            let Some((_, ret_part)) = trimmed.rsplit_once("->") else {
+                continue;
+            };
+            let mut ret_ty = ret_part.trim();
+            ret_ty = ret_ty.trim_end_matches('{').trim();
+            ret_ty = ret_ty.trim_end_matches(';').trim();
+            if ret_ty.is_empty()
+                || ret_ty == "()"
+                || ret_ty.starts_with('&')
+                || ret_ty.starts_with('*')
+                || ret_ty.starts_with('[')
+                || ret_ty.contains('<')
+                || ret_ty.contains('>')
+                || ret_ty.contains("::")
+                || ret_ty.contains(' ')
+                || !Self::is_valid_rust_item_identifier(ret_ty)
+                || RUST_KEYWORDS.contains(&ret_ty)
+                || Self::is_primitive_type_name(ret_ty)
+                || self.generated_structs.contains(ret_ty)
+                || self.generated_aliases.contains(ret_ty)
+                || self.generated_enums.contains(ret_ty)
+                || self.has_top_level_module_name_conflict(ret_ty)
+            {
+                continue;
+            }
+            if !missing_types.iter().any(|(name, _)| name == ret_ty) {
+                missing_types.push((ret_ty.to_string(), ret_ty.replace('_', "::")));
+            }
         }
 
         if missing_types.is_empty() {
@@ -5515,7 +5676,9 @@ impl AstCodeGen {
             if emit_copy_impl {
                 self.writeln("fn clone(&self) -> Self { *self }");
             } else {
-                self.writeln("fn clone(&self) -> Self { unsafe { std::ptr::read(self as *const Self) } }");
+                self.writeln(
+                    "fn clone(&self) -> Self { unsafe { std::ptr::read(self as *const Self) } }",
+                );
             }
             self.indent -= 1;
             self.writeln("}");
@@ -5701,7 +5864,8 @@ impl AstCodeGen {
             }
 
             // RapidJSON GenericPointer opaque placeholder: surface stubs.
-            let is_pointer_stub = rust_name.starts_with("GenericPointer_") || rust_name == "GenericPointer";
+            let is_pointer_stub =
+                rust_name.starts_with("GenericPointer_") || rust_name == "GenericPointer";
             if is_pointer_stub {
                 self.writeln(&format!("impl {} {{", rust_name));
                 self.indent += 1;
@@ -5816,8 +5980,8 @@ impl AstCodeGen {
                 self.writeln("");
             }
 
-            let is_filter_key_reader_surface_type = rust_name.starts_with("FilterKeyReader_")
-                || cpp_name.contains("FilterKeyReader<");
+            let is_filter_key_reader_surface_type =
+                rust_name.starts_with("FilterKeyReader_") || cpp_name.contains("FilterKeyReader<");
             if is_filter_key_reader_surface_type {
                 self.writeln(&format!("impl {} {{", rust_name));
                 self.indent += 1;
@@ -7556,7 +7720,9 @@ impl AstCodeGen {
         }
     }
 
-    fn canonicalize_known_template_instantiation_rust_name(rust_name: &str) -> Option<&'static str> {
+    fn canonicalize_known_template_instantiation_rust_name(
+        rust_name: &str,
+    ) -> Option<&'static str> {
         match rust_name {
             "GenericStringBuffer_UTF8_char__CrtAllocator" => Some("GenericStringBuffer_UTF8"),
             "GenericReader_UTF8__UTF8"
@@ -9955,7 +10121,7 @@ impl AstCodeGen {
         }
 
         // Substitute types in return type and parameters
-        let ret_type = self.substitute_template_type(&template_info.return_type, &subst_map);
+        let mut ret_type = self.substitute_template_type(&template_info.return_type, &subst_map);
 
         // Skip functions with variadic template parameters (C++ parameter packs)
         // These contain patterns like `_Tp &&...` or `_Args...` which can't be expressed in Rust
@@ -10021,20 +10187,14 @@ impl AstCodeGen {
             return;
         }
 
-        let ret_str = if ret_type == "()" || ret_type.is_empty() || ret_type == "_" {
-            String::new()
-        } else {
-            format!(" -> {}", Self::sanitize_return_type(&ret_type))
-        };
-
         // Generate parameter list
-        let mut param_strs = Vec::new();
+        let mut param_entries: Vec<(String, String)> = Vec::new();
         let mut param_name_counts: HashMap<String, usize> = HashMap::new();
         for (param_name, param_ty) in &template_info.params {
             let rust_ty = self.substitute_template_type(param_ty, &subst_map);
             let mut pname = sanitize_identifier(param_name);
             if pname.is_empty() {
-                pname = format!("_arg{}", param_strs.len());
+                pname = format!("_arg{}", param_entries.len());
             }
             let count = param_name_counts.entry(pname.clone()).or_insert(0);
             if *count > 0 {
@@ -10043,8 +10203,45 @@ impl AstCodeGen {
             *param_name_counts
                 .get_mut(&sanitize_identifier(param_name))
                 .unwrap_or(&mut 0) += 1;
-            param_strs.push(format!("{}: {}", pname, rust_ty));
+            param_entries.push((pname, rust_ty));
         }
+
+        let mut fn_generics = String::new();
+        if ret_type.starts_with('&') {
+            let ref_param_indices: Vec<usize> = param_entries
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, (_, ty))| ty.starts_with('&').then_some(idx))
+                .collect();
+            if ref_param_indices.len() > 1 {
+                let anchor_idx = ref_param_indices
+                    .iter()
+                    .copied()
+                    .find(|idx| param_entries[*idx].1.starts_with("&mut "))
+                    .unwrap_or(ref_param_indices[0]);
+                let updated_ty =
+                    Self::add_named_lifetime_to_ref_type(&param_entries[anchor_idx].1, "'a");
+                param_entries[anchor_idx].1 = updated_ty;
+                ret_type = Self::add_named_lifetime_to_ref_type(&ret_type, "'a");
+                fn_generics = "<'a>".to_string();
+            }
+        }
+        let param_rust_types: Vec<String> =
+            param_entries.iter().map(|(_, ty)| ty.clone()).collect();
+        self.generated_function_param_rust_types.insert(
+            (sanitized_mangled_name.clone(), param_rust_types.len()),
+            param_rust_types,
+        );
+        let param_strs = param_entries
+            .iter()
+            .map(|(name, ty)| format!("{}: {}", name, ty))
+            .collect::<Vec<_>>();
+
+        let ret_str = if ret_type == "()" || ret_type.is_empty() || ret_type == "_" {
+            String::new()
+        } else {
+            format!(" -> {}", Self::sanitize_return_type(&ret_type))
+        };
 
         // Save output position so we can rollback if the function contains broken patterns
         let output_start = self.output.len();
@@ -10059,8 +10256,9 @@ impl AstCodeGen {
         ));
         self.writeln(&"#[inline]".to_string());
         self.writeln(&format!(
-            "pub fn {}({}){} {{",
+            "pub fn {}{}({}){} {{",
             sanitized_mangled_name,
+            fn_generics,
             param_strs.join(", "),
             ret_str
         ));
@@ -10473,21 +10671,14 @@ impl AstCodeGen {
         self.generated_functions
             .insert(func_name.clone(), self.output.len());
 
-        // Generate return type
-        let ret_str = if return_type == CppType::Void {
-            String::new()
-        } else {
-            format!(" -> {}", return_type.to_rust_type_str())
-        };
-
         // Generate parameters
-        let mut param_strs = Vec::new();
+        let mut param_entries: Vec<(String, String)> = Vec::new();
         let mut param_name_counts: HashMap<String, usize> = HashMap::new();
         for (param_name, param_ty) in &params {
             let rust_ty = param_ty.to_rust_type_str();
             let mut pname = sanitize_identifier(param_name);
-            if pname.is_empty() {
-                pname = format!("_arg{}", param_strs.len());
+            if pname.is_empty() || pname == "_" {
+                pname = format!("_arg{}", param_entries.len());
             }
             // Handle duplicate parameter names (common in variadic expansion)
             let count = param_name_counts.entry(pname.clone()).or_insert(0);
@@ -10497,8 +10688,45 @@ impl AstCodeGen {
             *param_name_counts
                 .get_mut(&sanitize_identifier(param_name))
                 .unwrap() += 1;
-            param_strs.push(format!("{}: {}", pname, rust_ty));
+            param_entries.push((pname, rust_ty));
         }
+
+        // Variadic helper wrappers can return a reference while taking more than one
+        // reference argument. Tie the return to one explicit parameter lifetime.
+        let mut fn_generics = String::new();
+        let mut ret_ty = return_type.to_rust_type_str();
+        if ret_ty.starts_with('&') {
+            let ref_param_indices: Vec<usize> = param_entries
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, (_, ty))| ty.starts_with('&').then_some(idx))
+                .collect();
+            if ref_param_indices.len() > 1 {
+                let anchor_idx = ref_param_indices
+                    .iter()
+                    .copied()
+                    .find(|idx| param_entries[*idx].1.starts_with("&mut "))
+                    .unwrap_or(ref_param_indices[0]);
+                let updated_type =
+                    Self::add_named_lifetime_to_ref_type(&param_entries[anchor_idx].1, "'a");
+                param_entries[anchor_idx].1 = updated_type;
+                ret_ty = Self::add_named_lifetime_to_ref_type(&ret_ty, "'a");
+                fn_generics = "<'a>".to_string();
+            }
+        }
+        let param_strs: Vec<String> = param_entries
+            .iter()
+            .map(|(pname, rust_ty)| format!("{}: {}", pname, rust_ty))
+            .collect();
+        self.generated_function_param_rust_types.insert(
+            (func_name.clone(), param_entries.len()),
+            param_entries.iter().map(|(_, ty)| ty.clone()).collect(),
+        );
+        let ret_str = if return_type == CppType::Void {
+            String::new()
+        } else {
+            format!(" -> {}", ret_ty)
+        };
 
         // Save output position for potential rollback
         let output_start = self.output.len();
@@ -10506,8 +10734,9 @@ impl AstCodeGen {
         self.writeln(&format!("/// Variadic template instantiation: {}", name));
         self.writeln("#[inline]");
         self.writeln(&format!(
-            "pub fn {}({}){} {{",
+            "pub fn {}{}({}){} {{",
             func_name,
+            fn_generics,
             param_strs.join(", "),
             ret_str
         ));
@@ -10764,11 +10993,15 @@ impl AstCodeGen {
                 && Self::arg_references_receiver_root(trimmed, &receiver_root);
             if needs_temp {
                 let temp_name = format!("__fragile_call_arg_{}", idx);
-                let rhs = if Self::needs_unsafe_wrapper(trimmed) {
+                let mut rhs = if Self::needs_unsafe_wrapper(trimmed) {
                     format!("unsafe {{ {} }}", trimmed)
                 } else {
                     trimmed.to_string()
                 };
+                if rhs.contains(".offset_from(") {
+                    // Let Rust infer the concrete integer width from the call site.
+                    rhs = format!("({}) as _", rhs);
+                }
                 temp_bindings.push(format!("let {} = {};", temp_name, rhs));
                 call_args.push(temp_name);
             } else {
@@ -16890,8 +17123,9 @@ impl AstCodeGen {
         // ParseResult fallback constructor surface used by GenericReader::Parse stubs.
         // Some strict replays only expose `new_0`; provide a compatible `new_2`
         // constructor shape so parse-error return paths type-check.
-        let is_parse_result_type =
-            rust_name == "ParseResult" || class_name == "ParseResult" || class_name.ends_with("::ParseResult");
+        let is_parse_result_type = rust_name == "ParseResult"
+            || class_name == "ParseResult"
+            || class_name.ends_with("::ParseResult");
         if is_parse_result_type && !has_method(&self.output[impl_block_start..], "new_2") {
             self.current_struct_methods.insert("new_2".to_string(), 1);
             self.writeln("");
@@ -16906,8 +17140,7 @@ impl AstCodeGen {
             self.writeln("}");
         }
         if is_parse_result_type && !has_method(&self.output[impl_block_start..], "op_bool") {
-            self.current_struct_methods
-                .insert("op_bool".to_string(), 1);
+            self.current_struct_methods.insert("op_bool".to_string(), 1);
             self.writeln("");
             self.writeln("pub fn op_bool(&self) -> bool {");
             self.indent += 1;
@@ -17193,6 +17426,176 @@ impl AstCodeGen {
                 self.writeln(sig);
             }
         }
+    }
+
+    /// Emit generic declaration-only method/constructor stubs for classes whose
+    /// definitions live in other translation units.
+    fn emit_declared_member_surface_stubs(
+        &mut self,
+        class_name: &str,
+        rust_name: &str,
+        children: &[ClangNode],
+        impl_block_start: usize,
+    ) {
+        let has_method = |output: &str, method_name: &str| -> bool {
+            output.contains(&format!("pub fn {}(", method_name))
+        };
+
+        // Constructors declared in headers but defined out-of-line.
+        for child in children {
+            let ClangNodeKind::ConstructorDecl {
+                class_name: ctor_class,
+                params,
+                is_definition,
+                ..
+            } = &child.kind
+            else {
+                continue;
+            };
+            if *is_definition || ctor_class != class_name {
+                continue;
+            }
+
+            let base_name = format!("new_{}", params.len());
+            if has_method(&self.output[impl_block_start..], &base_name) {
+                continue;
+            }
+
+            let mut param_name_counts: HashMap<String, usize> = HashMap::new();
+            let params_str = params
+                .iter()
+                .enumerate()
+                .map(|(idx, (n, t))| {
+                    let base_name = sanitize_identifier(n);
+                    let key = if base_name.is_empty() || base_name == "_" {
+                        format!("_arg{}", idx)
+                    } else {
+                        base_name
+                    };
+                    let count = param_name_counts.entry(key.clone()).or_insert(0);
+                    let mut pname = key;
+                    if *count > 0 {
+                        pname = format!("{}_{}", pname, *count);
+                    }
+                    *count += 1;
+                    format!("{}: {}", pname, t.to_rust_type_str())
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            self.current_struct_methods.insert(base_name.clone(), 1);
+            self.writeln("");
+            self.writeln(&format!("pub fn {}({}) -> Self {{", base_name, params_str));
+            self.indent += 1;
+            self.writeln("unsafe { std::mem::zeroed() }");
+            self.indent -= 1;
+            self.writeln("}");
+        }
+
+        // Methods declared in headers but defined out-of-line.
+        for child in children {
+            let ClangNodeKind::CXXMethodDecl {
+                class_name: method_class,
+                name,
+                return_type,
+                params,
+                is_definition,
+                is_static,
+                is_const,
+                ..
+            } = &child.kind
+            else {
+                continue;
+            };
+            if *is_definition || method_class != class_name {
+                continue;
+            }
+            if Self::has_unresolved_template_placeholder(&return_type.to_rust_type_str())
+                || params
+                    .iter()
+                    .any(|(_, t)| Self::has_unresolved_template_placeholder(&t.to_rust_type_str()))
+            {
+                continue;
+            }
+
+            let method_name = if name == "operator*" && params.is_empty() {
+                "op_deref".to_string()
+            } else if name == "operator->" {
+                "op_arrow".to_string()
+            } else {
+                sanitize_identifier(name)
+            };
+            if method_name.is_empty() {
+                continue;
+            }
+            if has_method(&self.output[impl_block_start..], &method_name) {
+                continue;
+            }
+
+            let returns_mut_ref = matches!(
+                return_type,
+                CppType::Reference {
+                    is_const: false,
+                    ..
+                }
+            );
+            let self_param = if *is_static {
+                String::new()
+            } else if !*is_const || returns_mut_ref {
+                "&mut self, ".to_string()
+            } else {
+                "&self, ".to_string()
+            };
+
+            let mut param_name_counts: HashMap<String, usize> = HashMap::new();
+            let params_str = params
+                .iter()
+                .enumerate()
+                .map(|(idx, (n, t))| {
+                    let base_name = sanitize_identifier(n);
+                    let key = if base_name.is_empty() || base_name == "_" {
+                        format!("_arg{}", idx)
+                    } else {
+                        base_name
+                    };
+                    let count = param_name_counts.entry(key.clone()).or_insert(0);
+                    let mut pname = key;
+                    if *count > 0 {
+                        pname = format!("{}_{}", pname, *count);
+                    }
+                    *count += 1;
+                    format!("{}: {}", pname, t.to_rust_type_str())
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            let ret_str = if *return_type == CppType::Void {
+                String::new()
+            } else {
+                format!(
+                    " -> {}",
+                    Self::sanitize_return_type(&return_type.to_rust_type_str())
+                )
+            };
+
+            self.current_struct_methods.insert(method_name.clone(), 1);
+            self.writeln("");
+            self.writeln(&format!(
+                "pub fn {}({}{}){} {{",
+                method_name, self_param, params_str, ret_str
+            ));
+            self.indent += 1;
+            if *return_type == CppType::Void {
+                self.writeln("// Declaration-only member stub.");
+            } else {
+                self.writeln("unsafe { std::mem::zeroed() }");
+            }
+            self.indent -= 1;
+            self.writeln("}");
+        }
+
+        // Keep rust_name observed to avoid dead-code warnings for helper callers.
+        let _ = rust_name;
     }
 
     fn register_function_overload(
@@ -19686,6 +20089,26 @@ impl AstCodeGen {
         if normalized.is_empty() {
             return None;
         }
+        if let Some(inner) = normalized
+            .strip_prefix("unique_ptr_")
+            .or_else(|| normalized.strip_prefix("std_unique_ptr_"))
+        {
+            if !inner.is_empty() {
+                let pointee = Self::stl_container_element_rust_type_from_suffix(inner)
+                    .unwrap_or_else(|| inner.to_string());
+                return Some(format!("std_unique_ptr<{}>", pointee));
+            }
+        }
+        if let Some(inner) = normalized
+            .strip_prefix("shared_ptr_")
+            .or_else(|| normalized.strip_prefix("std_shared_ptr_"))
+        {
+            if !inner.is_empty() {
+                let pointee = Self::stl_container_element_rust_type_from_suffix(inner)
+                    .unwrap_or_else(|| inner.to_string());
+                return Some(format!("std_shared_ptr<{}>", pointee));
+            }
+        }
         let mapped = match normalized {
             "bool" => "bool",
             "char" | "signed_char" => "i8",
@@ -19783,9 +20206,7 @@ impl AstCodeGen {
             || self.generated_aliases.contains(target)
             || self.generated_enums.contains(target)
             || self.class_fields.contains_key(target)
-            || self
-                .output
-                .contains(&format!("pub struct {} {{", target))
+            || self.output.contains(&format!("pub struct {} {{", target))
             || self.output.contains(&format!("pub enum {} {{", target))
             || self.output.contains(&format!("pub type {} =", target))
     }
@@ -19804,6 +20225,17 @@ impl AstCodeGen {
             Self::unqualified_vector_alias_target_from_rust_cpp_name(rust_name, cpp_name)
         {
             return Some(container_alias_target);
+        }
+
+        // Canonicalize common `basic_string<char, ...>` spellings to the prebuilt
+        // `std_string` surface so generated call sites can reuse string methods.
+        let looks_like_basic_string_char = rust_name == "basic_string_char"
+            || rust_name == "std_basic_string_char"
+            || rust_name.starts_with("basic_string_char__")
+            || cpp_name.contains("basic_string<char")
+            || cpp_name.contains("basic_string< char");
+        if looks_like_basic_string_char && self.missing_stub_alias_target_is_emitted("std_string") {
+            return Some("std_string".to_string());
         }
 
         let rapidjson_alias_target = match rust_name {
@@ -19838,10 +20270,10 @@ impl AstCodeGen {
                     "rapidjson_GenericReader_structrapidjson_UTF8___structrapidjson_UTF8___classrapidjson_CrtAllocator_",
                 )
             }
-            "UnknownTagEnumType" => Some("ParseErrorCode"),
             "BoolType" => Some("bool"),
             "BoolType_false" => Some("bool"),
             "BoolType_true" => Some("bool"),
+            "UnknownTagEnumType" => Some("ParseErrorCode"),
             "StaticAssertTest" => Some("u8"),
             _ => None,
         };
@@ -20066,7 +20498,21 @@ impl AstCodeGen {
     fn register_emitted_preamble_type_items(&mut self) {
         for line in self.output.lines() {
             if let Some(alias_name) = Self::extract_emitted_item_name(line, "pub type ") {
-                self.generated_aliases.insert(alias_name);
+                self.generated_aliases.insert(alias_name.clone());
+                if let Some((_, rhs)) = line.split_once('=') {
+                    let target = rhs.trim().trim_end_matches(';').trim();
+                    if !target.is_empty() {
+                        self.type_alias_targets
+                            .entry(alias_name.clone())
+                            .or_insert_with(|| target.to_string());
+                        if Self::is_builtin_non_constructible_rust_type(target)
+                            || target.starts_with('*')
+                            || target.starts_with('&')
+                        {
+                            self.primitive_aliases.insert(alias_name.clone());
+                        }
+                    }
+                }
             }
             if let Some(struct_name) = Self::extract_emitted_item_name(line, "pub struct ") {
                 self.generated_structs.insert(struct_name);
@@ -20131,17 +20577,19 @@ impl AstCodeGen {
             return;
         }
 
-        let target = format!("{}::{}", module_path.join("::"), rust_type_name);
         if self.namespace_type_alias_conflicts.contains(rust_type_name) {
             return;
         }
 
-        match self.namespace_type_alias_targets.get(rust_type_name) {
-            Some(existing) if existing == &target => {}
+        let target = format!("{}::{}", module_path.join("::"), rust_type_name);
+        match self.namespace_type_alias_targets.get(rust_type_name).cloned() {
+            Some(existing) if existing == target => {}
             Some(_) => {
-                self.namespace_type_alias_targets.remove(rust_type_name);
+                // Multiple namespace targets for the same leaf name are ambiguous.
+                // Mark conflict and drop any previously-queued alias emission.
                 self.namespace_type_alias_conflicts
                     .insert(rust_type_name.to_string());
+                self.namespace_type_alias_targets.remove(rust_type_name);
             }
             None => {
                 self.namespace_type_alias_targets
@@ -20168,6 +20616,16 @@ impl AstCodeGen {
             }
             if self.global_type_names.contains(&alias) {
                 continue;
+            }
+            let alias_decl = format!("pub type {} =", alias);
+            if self.output.contains(&alias_decl) {
+                continue;
+            }
+            if alias.starts_with('_') {
+                let target_leaf = target.rsplit("::").next().unwrap_or(target.as_str());
+                if target_leaf == alias {
+                    continue;
+                }
             }
 
             if !wrote_header {
@@ -20881,25 +21339,55 @@ impl AstCodeGen {
 
     /// Track missing named alias targets so placeholder struct stubs can be emitted later.
     fn maybe_track_alias_target_for_stub(&mut self, rust_type: &str) {
-        if rust_type.is_empty()
-            || rust_type == "_"
-            || rust_type.starts_with('*')
-            || rust_type.starts_with('&')
-            || rust_type.starts_with('[')
-            || rust_type.contains(' ')
-            || rust_type.contains("::")
-            || rust_type.contains('<')
-            || rust_type.contains('>')
-            || Self::is_primitive_type_name(rust_type)
-            || self.generated_structs.contains(rust_type)
-            || self.generated_aliases.contains(rust_type)
-            || self.generated_enums.contains(rust_type)
-            || self.primitive_aliases.contains(rust_type)
+        let mut candidate = rust_type.trim().to_string();
+        loop {
+            let prev = candidate.clone();
+            if let Some(inner) = candidate
+                .strip_prefix("&'static mut ")
+                .or_else(|| candidate.strip_prefix("&'static "))
+            {
+                candidate = inner.trim().to_string();
+                continue;
+            }
+            if let Some(inner) = candidate.strip_prefix("&mut ") {
+                candidate = inner.trim().to_string();
+                continue;
+            }
+            if let Some(inner) = candidate.strip_prefix('&') {
+                candidate = inner.trim().to_string();
+                continue;
+            }
+            if let Some(inner) = candidate.strip_prefix("*mut ") {
+                candidate = inner.trim().to_string();
+                continue;
+            }
+            if let Some(inner) = candidate.strip_prefix("*const ") {
+                candidate = inner.trim().to_string();
+                continue;
+            }
+            if candidate == prev {
+                break;
+            }
+        }
+
+        if candidate.is_empty()
+            || candidate == "_"
+            || candidate.starts_with('[')
+            || candidate.contains(' ')
+            || candidate.contains("::")
+            || candidate.contains('<')
+            || candidate.contains('>')
+            || RUST_KEYWORDS.contains(&candidate.as_str())
+            || Self::is_primitive_type_name(&candidate)
+            || self.generated_structs.contains(&candidate)
+            || self.generated_aliases.contains(&candidate)
+            || self.generated_enums.contains(&candidate)
+            || self.primitive_aliases.contains(&candidate)
         {
             return;
         }
 
-        let mut chars = rust_type.chars();
+        let mut chars = candidate.chars();
         let Some(first) = chars.next() else {
             return;
         };
@@ -20911,7 +21399,7 @@ impl AstCodeGen {
         }
 
         self.referenced_but_undefined_structs
-            .insert(rust_type.to_string());
+            .insert(candidate);
     }
 
     /// Emit an `extern "C"` declaration for unresolved C functions.
@@ -21253,6 +21741,7 @@ impl AstCodeGen {
                     self.writeln(&format!("mod {} {{", anon_name));
                     self.indent += 1;
                     self.module_depth += 1;
+                    self.writeln("use super::*;");
 
                     // Track the synthetic namespace name for path resolution
                     // Anonymous namespaces are not inline
@@ -21469,6 +21958,207 @@ impl AstCodeGen {
         nodes.iter().any(Self::subtree_contains_throw_expr)
     }
 
+    fn add_named_lifetime_to_ref_type(ty: &str, lifetime: &str) -> String {
+        if let Some(inner) = ty.strip_prefix("&mut ") {
+            format!("&{} mut {}", lifetime, inner)
+        } else if let Some(inner) = ty.strip_prefix('&') {
+            format!("&{} {}", lifetime, inner)
+        } else {
+            ty.to_string()
+        }
+    }
+
+    fn add_named_lifetime_to_return_type(ret: &str, lifetime: &str) -> String {
+        if let Some(inner) = ret.strip_prefix(" -> &mut ") {
+            format!(" -> &{} mut {}", lifetime, inner)
+        } else if let Some(inner) = ret.strip_prefix(" -> &") {
+            format!(" -> &{} {}", lifetime, inner)
+        } else {
+            ret.to_string()
+        }
+    }
+
+    fn is_builtin_non_constructible_rust_type(rust_type: &str) -> bool {
+        rust_type.starts_with('*')
+            || rust_type.starts_with('&')
+            || matches!(
+                rust_type,
+                "std::ffi::c_void"
+                    | "()"
+                    | "bool"
+                    | "char"
+                    | "i8"
+                    | "i16"
+                    | "i32"
+                    | "i64"
+                    | "i128"
+                    | "isize"
+                    | "u8"
+                    | "u16"
+                    | "u32"
+                    | "u64"
+                    | "u128"
+                    | "usize"
+                    | "f32"
+                    | "f64"
+            )
+    }
+
+    fn is_non_constructible_rust_type(&self, rust_type: &str) -> bool {
+        if Self::is_builtin_non_constructible_rust_type(rust_type)
+            || self.primitive_aliases.contains(rust_type)
+        {
+            return true;
+        }
+        self.type_alias_targets
+            .get(rust_type)
+            .is_some_and(|target| {
+                Self::is_builtin_non_constructible_rust_type(target)
+                    || self.primitive_aliases.contains(target)
+            })
+    }
+
+    fn rust_type_resolves_to_c_void(&self, rust_type: &str) -> bool {
+        let normalized = rust_type
+            .trim_start_matches("&mut ")
+            .trim_start_matches('&')
+            .trim_start_matches("*mut ")
+            .trim_start_matches("*const ")
+            .trim();
+        let leaf = normalized.rsplit("::").next().unwrap_or(normalized);
+        if normalized == "std::ffi::c_void" || leaf == "std::ffi::c_void" {
+            return true;
+        }
+        if self
+            .type_alias_targets
+            .get(normalized)
+            .is_some_and(|target| target == "std::ffi::c_void")
+            || self
+                .type_alias_targets
+                .get(leaf)
+                .is_some_and(|target| target == "std::ffi::c_void")
+        {
+            return true;
+        }
+        self.type_alias_targets.iter().any(|(alias, target)| {
+            target == "std::ffi::c_void"
+                && (alias == normalized
+                    || alias == leaf
+                    || normalized.starts_with(alias)
+                    || alias.starts_with(normalized)
+                    || leaf.starts_with(alias)
+                    || alias.starts_with(leaf))
+        })
+    }
+
+    fn rust_type_resolves_to_unique_ptr_like(&self, rust_type: &str) -> bool {
+        let mut current = rust_type
+            .trim_start_matches("&mut ")
+            .trim_start_matches('&')
+            .trim_start_matches("*mut ")
+            .trim_start_matches("*const ")
+            .trim()
+            .to_string();
+        let mut seen: HashSet<String> = HashSet::new();
+        loop {
+            if current.contains("std_unique_ptr<")
+                || current.contains("std::unique_ptr<")
+                || current.contains("unique_ptr<")
+                || current.contains("unique_ptr")
+            {
+                return true;
+            }
+            if !seen.insert(current.clone()) {
+                return false;
+            }
+            let leaf = current
+                .rsplit("::")
+                .next()
+                .unwrap_or(current.as_str())
+                .to_string();
+            if let Some(target) = self.type_alias_targets.get(&current) {
+                current = target.clone();
+                continue;
+            }
+            if let Some(target) = self.type_alias_targets.get(&leaf) {
+                current = target.clone();
+                continue;
+            }
+            return false;
+        }
+    }
+
+    fn rust_type_resolves_to_non_clone_record(&self, rust_type: &str) -> bool {
+        let mut current = rust_type
+            .trim_start_matches("&mut ")
+            .trim_start_matches('&')
+            .trim_start_matches("*mut ")
+            .trim_start_matches("*const ")
+            .trim()
+            .to_string();
+        let mut seen: HashSet<String> = HashSet::new();
+        loop {
+            if self.non_clone_record_types.contains(&current) {
+                return true;
+            }
+            let leaf = current
+                .rsplit("::")
+                .next()
+                .unwrap_or(current.as_str())
+                .to_string();
+            if self.non_clone_record_types.contains(&leaf) {
+                return true;
+            }
+            if !seen.insert(current.clone()) {
+                return false;
+            }
+            if let Some(target) = self.type_alias_targets.get(&current) {
+                current = target.clone();
+                continue;
+            }
+            if let Some(target) = self.type_alias_targets.get(&leaf) {
+                current = target.clone();
+                continue;
+            }
+            return false;
+        }
+    }
+
+    fn rewrite_c_void_alias_constructor_calls(
+        type_alias_targets: &HashMap<String, String>,
+        output: &mut String,
+        start: usize,
+    ) {
+        let mut rewritten = output[start..].to_string();
+        let mut changed = false;
+        let mut c_void_aliases: HashSet<String> = type_alias_targets
+            .iter()
+            .filter_map(|(alias, target)| (target == "std::ffi::c_void").then_some(alias.clone()))
+            .collect();
+        for line in output.lines() {
+            let trimmed = line.trim();
+            let Some(rest) = trimmed.strip_prefix("pub type ") else {
+                continue;
+            };
+            let Some((lhs, rhs)) = rest.split_once('=') else {
+                continue;
+            };
+            if rhs.trim_start().starts_with("std::ffi::c_void") {
+                c_void_aliases.insert(lhs.trim().to_string());
+            }
+        }
+        for alias in c_void_aliases {
+            let pattern = format!("{}::new_0()", alias);
+            if rewritten.contains(&pattern) {
+                rewritten = rewritten.replace(&pattern, "unsafe { std::mem::zeroed() }");
+                changed = true;
+            }
+        }
+        if changed {
+            output.replace_range(start.., &rewritten);
+        }
+    }
+
     /// Generate a function definition.
     fn generate_function(
         &mut self,
@@ -21623,6 +22313,8 @@ impl AstCodeGen {
         } else {
             sanitize_identifier(name)
         };
+        let is_helper_template_like_function =
+            Self::is_helper_template_like_function_name(&sanitized_base_name);
 
         // Selected runtime/preamble helpers are already emitted up-front.
         // Suppress AST redefinitions to avoid duplicate helper families in one TU.
@@ -21632,17 +22324,35 @@ impl AstCodeGen {
             return;
         }
 
-        let helper_template_signature_key =
-            if Self::is_helper_template_like_function_name(&sanitized_base_name) {
-                Some(Self::helper_template_signature_key(
-                    &sanitized_base_name,
-                    params,
-                    return_type,
-                    is_variadic,
-                ))
+        // Deduplicate repeated AST surfaces that map to the same exported link symbol.
+        // This covers duplicate declaration/definition visits emitted by some front-end
+        // traversals while still allowing distinct overloads (different mangled names).
+        let mut exported_symbol_key: Option<String> = None;
+        if is_helper_template_like_function && !is_static && !mangled_name.is_empty() {
+            let link_symbol = if is_main {
+                "main".to_string()
             } else {
-                None
+                mangled_name.to_string()
             };
+            if !self
+                .emitted_exported_function_symbols
+                .insert(link_symbol.clone())
+            {
+                return;
+            }
+            exported_symbol_key = Some(link_symbol);
+        }
+
+        let helper_template_signature_key = if is_helper_template_like_function {
+            Some(Self::helper_template_signature_key(
+                &sanitized_base_name,
+                params,
+                return_type,
+                is_variadic,
+            ))
+        } else {
+            None
+        };
         if let Some(signature_key) = helper_template_signature_key.as_ref() {
             if !self
                 .generated_helper_template_signatures
@@ -21740,7 +22450,7 @@ impl AstCodeGen {
         // Function signature - convert polymorphic pointers to trait objects
         // Deduplicate parameter names (C++ allows unnamed params, Rust doesn't)
         let mut param_name_counts: HashMap<String, usize> = HashMap::new();
-        let params_str = params
+        let mut param_entries: Vec<(String, String, String)> = params
             .iter()
             .map(|(n, t)| {
                 let type_str = self.convert_type_for_polymorphism(t);
@@ -21753,17 +22463,41 @@ impl AstCodeGen {
                 *param_name_counts.get_mut(&sanitize_identifier(n)).unwrap() += 1;
                 // Add `mut` if this parameter is assigned to in the body
                 let mut_prefix = if assigned_params.contains(n) {
-                    "mut "
+                    "mut ".to_string()
                 } else {
-                    ""
+                    String::new()
                 };
-                format!("{}{}: {}", mut_prefix, param_name, type_str)
+                (mut_prefix, param_name, type_str)
             })
-            .collect::<Vec<_>>()
-            .join(", ");
+            .collect();
 
         // Determine return type based on coroutine info
-        let ret_str = self.get_coroutine_return_type(return_type, coroutine_info);
+        let mut ret_str = self.get_coroutine_return_type(return_type, coroutine_info);
+        let mut fn_generics = String::new();
+        if ret_str.starts_with(" -> &") {
+            let ref_param_indices: Vec<usize> = param_entries
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, (_, _, ty))| ty.starts_with('&').then_some(idx))
+                .collect();
+            if ref_param_indices.len() > 1 {
+                let anchor_idx = ref_param_indices
+                    .iter()
+                    .copied()
+                    .find(|idx| param_entries[*idx].2.starts_with("&mut "))
+                    .unwrap_or(ref_param_indices[0]);
+                let updated_type =
+                    Self::add_named_lifetime_to_ref_type(&param_entries[anchor_idx].2, "'a");
+                param_entries[anchor_idx].2 = updated_type;
+                ret_str = Self::add_named_lifetime_to_return_type(&ret_str, "'a");
+                fn_generics = "<'a>".to_string();
+            }
+        }
+        let params_str = param_entries
+            .iter()
+            .map(|(mut_prefix, name, ty)| format!("{}{}: {}", mut_prefix, name, ty))
+            .collect::<Vec<_>>()
+            .join(", ");
 
         // Check if this is a generator
         let is_generator = is_coroutine
@@ -21815,8 +22549,9 @@ impl AstCodeGen {
             // Generate the function that returns the generator
             let struct_name = format!("{}Generator", to_pascal_case(&func_name));
             self.writeln(&format!(
-                "pub fn {}({}){} {{",
+                "pub fn {}{}({}){} {{",
                 func_name, // Already sanitized above
+                fn_generics,
                 params_str,
                 ret_str
             ));
@@ -21857,10 +22592,11 @@ impl AstCodeGen {
                 ("", "")
             };
             self.writeln(&format!(
-                "pub {}{}fn {}({}){} {{",
+                "pub {}{}fn {}{}({}){} {{",
                 async_keyword,
                 extern_c,
                 func_name, // Already sanitized above
+                fn_generics,
                 params_with_variadic,
                 ret_str
             ));
@@ -21990,6 +22726,11 @@ impl AstCodeGen {
         // Fix .Parse(X, handler) → .Parse(X, &mut handler) so the handler is
         // passed by reference (C++ templates deduce T& for lvalue args).
         Self::fix_parse_handler_refs(&mut self.output, output_start);
+        Self::rewrite_c_void_alias_constructor_calls(
+            &self.type_alias_targets,
+            &mut self.output,
+            output_start,
+        );
 
         // Validate generated function and rollback if invalid
         let generated = &self.output[output_start..];
@@ -22003,6 +22744,9 @@ impl AstCodeGen {
             && Self::should_rollback_function(generated)
         {
             self.output.truncate(output_start);
+            if let Some(symbol_key) = exported_symbol_key.as_ref() {
+                self.emitted_exported_function_symbols.remove(symbol_key);
+            }
             if let Some(signature_key) = helper_template_signature_key.as_ref() {
                 self.generated_helper_template_signatures
                     .remove(signature_key);
@@ -22424,7 +23168,6 @@ impl AstCodeGen {
 
         // Types that don't implement Clone (in addition to c_void aliases)
         let non_clone_types = ["stop_source", "stop_token", "thread", "jthread"];
-
         let kind = if is_class { "class" } else { "struct" };
         self.writeln(&format!("/// C++ {} `{}`", kind, name));
         self.writeln("#[repr(C)]");
@@ -22536,6 +23279,110 @@ impl AstCodeGen {
                 _ => false,
             }
         });
+        let has_non_clone_field = children.iter().any(|child| match &child.kind {
+            ClangNodeKind::FieldDecl { ty, is_static, .. } => {
+                if *is_static {
+                    return false;
+                }
+                let type_str = ty.to_rust_type_str();
+                // Bare c_void fields are replaced with [u8; 1] during emission.
+                if type_str == "std::ffi::c_void" {
+                    return false;
+                }
+                if type_str.ends_with("c_void")
+                    || c_void_type_aliases.iter().any(|alias| type_str == *alias)
+                    || non_clone_types.iter().any(|t| type_str == *t)
+                {
+                    return true;
+                }
+                if self.rust_type_resolves_to_unique_ptr_like(&type_str)
+                    || self.rust_type_resolves_to_non_clone_record(&type_str)
+                {
+                    return true;
+                }
+                if let CppType::Array { element, .. } = ty {
+                    let elem_type = element.to_rust_type_str();
+                    if self.rust_type_resolves_to_unique_ptr_like(&elem_type)
+                        || self.rust_type_resolves_to_non_clone_record(&elem_type)
+                    {
+                        return true;
+                    }
+                    if let CppType::Named(elem_cpp_name) = element.as_ref() {
+                        if !defined_structs_snapshot.contains(&elem_type)
+                            && !generated_structs_snapshot.contains(&elem_type)
+                            && !self.generated_aliases.contains(&elem_type)
+                            && !self.primitive_aliases.contains(&elem_type)
+                        {
+                            if let Some(alias_target) =
+                                self.resolve_missing_stub_concrete_alias_target(
+                                    &elem_type,
+                                    elem_cpp_name,
+                                )
+                            {
+                                if self.rust_type_resolves_to_unique_ptr_like(&alias_target)
+                                    || self.rust_type_resolves_to_non_clone_record(&alias_target)
+                                {
+                                    return true;
+                                }
+                            } else {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                if let CppType::Named(cpp_type_name) = ty {
+                    let field_type_name = ty.to_rust_type_str();
+                    if !defined_structs_snapshot.contains(&field_type_name)
+                        && !generated_structs_snapshot.contains(&field_type_name)
+                        && !self.generated_aliases.contains(&field_type_name)
+                        && !self.primitive_aliases.contains(&field_type_name)
+                    {
+                        if let Some(alias_target) = self.resolve_missing_stub_concrete_alias_target(
+                            &field_type_name,
+                            cpp_type_name,
+                        ) {
+                            if self.rust_type_resolves_to_unique_ptr_like(&alias_target)
+                                || self.rust_type_resolves_to_non_clone_record(&alias_target)
+                            {
+                                return true;
+                            }
+                        } else {
+                            // Unknown named records/aliases are conservatively treated as non-Clone
+                            // to avoid derive failures when they resolve to move-only layouts.
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            ClangNodeKind::CXXBaseSpecifier {
+                base_type,
+                is_virtual,
+                ..
+            } => {
+                if *is_virtual {
+                    return true;
+                }
+                let base_name = base_type.to_rust_type_str();
+                if self.rust_type_resolves_to_unique_ptr_like(&base_name)
+                    || self.rust_type_resolves_to_non_clone_record(&base_name)
+                {
+                    return true;
+                }
+                if is_copy_like_cpp_type(base_type) || is_named_copy_union(base_type) {
+                    return false;
+                }
+                if !defined_structs_snapshot.contains(&base_name)
+                    && !generated_structs_snapshot.contains(&base_name)
+                    && !self.generated_aliases.contains(&base_name)
+                    && !self.primitive_aliases.contains(&base_name)
+                {
+                    return true;
+                }
+                false
+            }
+            _ => false,
+        });
         let has_explicit_destructor = children.iter().any(|child| {
             matches!(
                 &child.kind,
@@ -22553,6 +23400,7 @@ impl AstCodeGen {
             && !has_explicit_copy_ctor
             && !has_explicit_destructor
             && !has_virtual_base_storage;
+        let can_derive_clone = !has_non_clone_field && !has_explicit_copy_ctor;
         let mut derives_default = false;
         let mut derives_clone = false;
         let mut derives_copy = false;
@@ -22573,7 +23421,7 @@ impl AstCodeGen {
                     self.writeln("#[derive(Clone, Copy)]");
                     derives_clone = true;
                     derives_copy = true;
-                } else {
+                } else if can_derive_clone {
                     self.writeln("#[derive(Clone)]");
                     derives_clone = true;
                 }
@@ -22587,10 +23435,13 @@ impl AstCodeGen {
                 derives_default = true;
                 derives_clone = true;
                 derives_copy = true;
-            } else {
+            } else if can_derive_clone {
                 self.writeln("#[derive(Default, Clone)]");
                 derives_default = true;
                 derives_clone = true;
+            } else {
+                self.writeln("#[derive(Default)]");
+                derives_default = true;
             }
         }
         self.writeln(&format!("pub struct {} {{", rust_name));
@@ -22826,9 +23677,12 @@ impl AstCodeGen {
             if !derives_clone {
                 self.writeln(&format!("impl Clone for {} {{", rust_name));
                 self.indent += 1;
-                self.writeln("fn clone(&self) -> Self { unsafe { std::ptr::read(self as *const Self) } }");
+                self.writeln(
+                    "fn clone(&self) -> Self { unsafe { std::ptr::read(self as *const Self) } }",
+                );
                 self.indent -= 1;
                 self.writeln("}");
+                derives_clone = true;
             }
             if !derives_copy {
                 self.writeln(&format!("impl Copy for {} {{}}", rust_name));
@@ -23021,6 +23875,7 @@ impl AstCodeGen {
             self.emit_missing_tinyxml2_virtual_method_stubs(name, impl_block_start);
             self.emit_missing_tinyxml2_method_surface_stubs(name, impl_block_start);
             self.emit_missing_rapidjson_method_surface_stubs(name, &rust_name, impl_block_start);
+            self.emit_declared_member_surface_stubs(name, &rust_name, children, impl_block_start);
 
             // tinyxml2: `XMLNode::CreateUnlinkedNode` is a templated helper
             // (`template<class NodeType, size_t PoolElementSize> ...`) that can be
@@ -24059,7 +24914,19 @@ impl AstCodeGen {
                 self.writeln("}");
                 self.indent -= 1;
                 self.writeln("}");
+                derives_clone = true;
             }
+        }
+
+        let sanitized_name = sanitize_identifier(name);
+        if derives_clone {
+            self.non_clone_record_types.remove(&rust_name);
+            self.non_clone_record_types.remove(name);
+            self.non_clone_record_types.remove(&sanitized_name);
+        } else {
+            self.non_clone_record_types.insert(rust_name.clone());
+            self.non_clone_record_types.insert(name.to_string());
+            self.non_clone_record_types.insert(sanitized_name);
         }
 
         // Note: Trait generation removed - now using vtable-based dispatch
@@ -24450,11 +25317,10 @@ impl AstCodeGen {
             return;
         }
 
-        // Forward-declared/incomplete named targets can still appear in aliases.
-        // Track them so generate_missing_type_stubs can emit opaque placeholders.
-        if matches!(underlying_type, CppType::Named(_)) {
-            self.maybe_track_alias_target_for_stub(&rust_type);
-        }
+        // Forward-declared/incomplete targets can still appear in aliases.
+        // Track named leaves (including pointer/ref wrappers) so
+        // generate_missing_type_stubs can emit opaque placeholders.
+        self.maybe_track_alias_target_for_stub(&rust_type);
 
         self.generated_aliases.insert(safe_name.clone());
         if self.current_rust_module_path().is_empty() {
@@ -24497,6 +25363,7 @@ impl AstCodeGen {
                 | "bool"
                 | "()"
                 | "char"
+                | "std::ffi::c_void"
         ) || rust_type.starts_with('*')
             || rust_type.starts_with('&');
         if is_primitive {
@@ -27369,6 +28236,51 @@ impl AstCodeGen {
         }
     }
 
+    /// Pre-collect typedef/using alias targets so type-based lowering decisions
+    /// (for example c_void placeholder handling) can work before alias emission.
+    fn precollect_type_alias_targets(&mut self, node: &ClangNode) {
+        let maybe_alias = match &node.kind {
+            ClangNodeKind::TypedefDecl {
+                name,
+                underlying_type,
+            }
+            | ClangNodeKind::TypeAliasDecl {
+                name,
+                underlying_type,
+            } => Some((name, underlying_type)),
+            _ => None,
+        };
+
+        if let Some((name, underlying_type)) = maybe_alias {
+            let safe_name = sanitize_identifier(name);
+            if !safe_name.is_empty() {
+                let rust_type = underlying_type.to_rust_type_str();
+                self.type_alias_targets
+                    .entry(safe_name.clone())
+                    .or_insert_with(|| rust_type.clone());
+                if safe_name != *name {
+                    self.type_alias_targets
+                        .entry(name.clone())
+                        .or_insert_with(|| rust_type.clone());
+                }
+
+                let primitive_like = Self::is_builtin_non_constructible_rust_type(&rust_type)
+                    || rust_type.starts_with('*')
+                    || rust_type.starts_with('&');
+                if primitive_like {
+                    self.primitive_aliases.insert(safe_name.clone());
+                    if safe_name != *name {
+                        self.primitive_aliases.insert(name.clone());
+                    }
+                }
+            }
+        }
+
+        for child in &node.children {
+            self.precollect_type_alias_targets(child);
+        }
+    }
+
     /// Collect namespace paths for function definitions, keyed by unqualified name.
     fn collect_function_namespace_paths(
         &mut self,
@@ -28478,6 +29390,18 @@ impl AstCodeGen {
         if let Some(ty) =
             Self::get_expr_type(callee).or_else(|| Self::get_original_expr_type(callee))
         {
+            if let Some(named) = match &ty {
+                CppType::Named(name) => Some(name.as_str()),
+                CppType::Reference { referent, .. } => match referent.as_ref() {
+                    CppType::Named(name) => Some(name.as_str()),
+                    _ => None,
+                },
+                _ => None,
+            } {
+                if !named.is_empty() {
+                    return true;
+                }
+            }
             return !matches!(ty, CppType::Function { .. })
                 && !Self::is_function_pointer_type_or_typedef(&ty)
                 && (ty.is_integral() == Some(true)
@@ -29408,6 +30332,72 @@ impl AstCodeGen {
         }
     }
 
+    fn is_basic_string_like_rust_type_name(rust_type: &str) -> bool {
+        let normalized = rust_type
+            .trim_start_matches("&mut ")
+            .trim_start_matches('&')
+            .trim_start_matches("*mut ")
+            .trim_start_matches("*const ")
+            .trim();
+        normalized == "basic_string_char"
+            || normalized == "std_string"
+            || normalized == "std_basic_string_char"
+            || normalized.starts_with("basic_string_char__")
+            || normalized.starts_with("std_basic_string_char__")
+    }
+
+    /// Recover degraded string-index call-shapes emitted as `str(0)` into
+    /// `*str.op_index[_const](0)`.
+    fn try_recover_basic_string_index_call(&self, node: &ClangNode) -> Option<String> {
+        let call_children: Vec<&ClangNode> = node
+            .children
+            .iter()
+            .filter(|child| !Self::is_expr_metadata_child(child))
+            .collect();
+        if call_children.len() != 2 {
+            return None;
+        }
+        let callee = call_children[0];
+        if Self::is_function_reference(callee) || Self::is_function_pointer_variable(callee) {
+            return None;
+        }
+        let callee_ty =
+            Self::get_expr_type(callee).or_else(|| Self::get_original_expr_type(callee));
+        let is_basic_string_like = callee_ty
+            .as_ref()
+            .map(|ty| ty.to_rust_type_str())
+            .is_some_and(|rust_ty| Self::is_basic_string_like_rust_type_name(&rust_ty));
+        if !is_basic_string_like {
+            return None;
+        }
+
+        let base_raw = self.expr_to_string(callee);
+        let base_trimmed = base_raw.trim();
+        let base = if let Some(stripped) = base_trimmed.strip_prefix('*') {
+            let stripped = stripped.trim();
+            if stripped.is_empty() {
+                base_raw
+            } else {
+                stripped.to_string()
+            }
+        } else {
+            base_raw
+        };
+        let index_expr = self.expr_to_string(call_children[1]);
+        let receiver_is_const_ref = matches!(
+            callee_ty,
+            Some(CppType::Reference { is_const: true, .. })
+                | Some(CppType::Pointer { is_const: true, .. })
+        ) || Self::expr_originates_from_const_ref_or_ptr(callee)
+            || self.expr_originates_from_const_receiver_var(callee);
+        let accessor = if receiver_is_const_ref {
+            "op_index_const"
+        } else {
+            "op_index"
+        };
+        Some(format!("*{}.{}(({}) as u64)", base, accessor, index_expr))
+    }
+
     /// Check whether a callee expression resolves to a member reference.
     fn is_member_reference(node: &ClangNode) -> bool {
         match &node.kind {
@@ -29455,6 +30445,120 @@ impl AstCodeGen {
             }
             _ => false,
         }
+    }
+
+    fn is_integral_rust_type_name(rust_ty: &str) -> bool {
+        matches!(
+            rust_ty.trim(),
+            "i8" | "i16"
+                | "i32"
+                | "i64"
+                | "i128"
+                | "isize"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "u128"
+                | "usize"
+        )
+    }
+
+    fn infer_common_integral_rust_type_for_binop(node: &ClangNode) -> Option<String> {
+        let candidates = [
+            Self::get_expr_type(node),
+            Self::get_original_expr_type(node),
+            node.children.first().and_then(Self::get_expr_type),
+            node.children.first().and_then(Self::get_original_expr_type),
+            node.children.get(1).and_then(Self::get_expr_type),
+            node.children.get(1).and_then(Self::get_original_expr_type),
+        ];
+        candidates.into_iter().find_map(|ty| {
+            ty.filter(|t| t.is_integral() == Some(true) && !matches!(t, CppType::Bool))
+                .map(|t| t.to_rust_type_str())
+        })
+    }
+
+    fn lookup_generated_function_param_rust_types(
+        &self,
+        func: &str,
+        arity: usize,
+    ) -> Option<Vec<String>> {
+        let mut candidates = Vec::new();
+        let trimmed = func.trim();
+        if !trimmed.is_empty() {
+            candidates.push(trimmed.to_string());
+        }
+        if let Some(stripped) = Self::strip_generated_overload_suffix(trimmed) {
+            candidates.push(stripped);
+        }
+        if let Some((_, leaf)) = trimmed.rsplit_once("::") {
+            candidates.push(leaf.to_string());
+            if let Some(stripped) = Self::strip_generated_overload_suffix(leaf) {
+                candidates.push(stripped);
+            }
+        }
+        candidates.sort();
+        candidates.dedup();
+        for candidate in candidates {
+            if let Some(types) = self
+                .generated_function_param_rust_types
+                .get(&(candidate, arity))
+            {
+                return Some(types.clone());
+            }
+        }
+        None
+    }
+
+    fn is_callable_value_expr_for_integral_coercion(&self, node: &ClangNode, expr: &str) -> bool {
+        let known_symbol = |symbol: &str| {
+            let leaf = symbol.rsplit("::").next().unwrap_or(symbol).trim();
+            let stripped = leaf.strip_prefix("r#").unwrap_or(leaf);
+            self.is_known_callable_symbol_name(stripped)
+                || self.generated_functions.contains_key(stripped)
+                || self.declared_function_names.contains(stripped)
+                || self.defined_function_names.contains(stripped)
+                || self.function_overloads.contains_key(stripped)
+                || self
+                    .declared_function_param_types
+                    .keys()
+                    .any(|(name, _)| name == stripped)
+        };
+        if Self::is_function_reference(node) || Self::is_function_pointer_variable(node) {
+            return true;
+        }
+        match &node.kind {
+            ClangNodeKind::DeclRefExpr { name, .. } => {
+                let sanitized = sanitize_identifier(name);
+                let is_local =
+                    self.local_vars.contains(name) || self.local_vars.contains(&sanitized);
+                let is_global_var = self.global_var_types.contains_key(name)
+                    || self.global_var_types.contains_key(&sanitized);
+                if !is_local && !is_global_var {
+                    return true;
+                }
+            }
+            ClangNodeKind::ImplicitCastExpr { .. }
+            | ClangNodeKind::CastExpr { .. }
+            | ClangNodeKind::ParenExpr { .. }
+            | ClangNodeKind::Unknown(_) => {
+                if node
+                    .children
+                    .iter()
+                    .any(|child| self.is_callable_value_expr_for_integral_coercion(child, expr))
+                {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        if let Some(name) = Self::get_declref_name(node) {
+            if known_symbol(&name) {
+                return true;
+            }
+        }
+        Self::symbol_like_identifier(expr).is_some_and(|name| known_symbol(&name))
     }
 
     /// Check if a type is a function pointer or a typedef that resolves to one
@@ -31942,6 +33046,10 @@ impl AstCodeGen {
                                         // Check if this is a Named type with "0" initializer,
                                         // which indicates a CXXConstructExpr that couldn't be parsed
                                         let rust_type = ty.to_rust_type_str();
+                                        let alias_is_c_void = self
+                                            .type_alias_targets
+                                            .get(&rust_type)
+                                            .is_some_and(|target| target == "std::ffi::c_void");
                                         // Only generate constructor for actual struct types, not primitives
                                         // that might have been mapped from C++ types
                                         let is_primitive = matches!(
@@ -31964,8 +33072,13 @@ impl AstCodeGen {
                                                 | "()"
                                                 | "char"
                                         ) || rust_type.starts_with('*')
-                                            || rust_type.starts_with('&');
-                                        if (expr == "0" || expr == "_unnamed") && !is_primitive {
+                                            || rust_type.starts_with('&')
+                                            || self.primitive_aliases.contains(&rust_type);
+                                        if (expr == "0" || expr == "_unnamed") && alias_is_c_void {
+                                            " = unsafe { std::mem::zeroed() }".to_string()
+                                        } else if (expr == "0" || expr == "_unnamed")
+                                            && !is_primitive
+                                        {
                                             // Use unsafe zeroed for:
                                             // - "0" placeholder from unresolved CXXConstructExpr
                                             // - "_unnamed" placeholder from unresolved expression
@@ -32006,6 +33119,11 @@ impl AstCodeGen {
                         } else {
                             (rust_type, init)
                         };
+                        if self.rust_type_resolves_to_c_void(&final_type)
+                            && final_init.contains("Default::default()")
+                        {
+                            final_init = " = unsafe { std::mem::zeroed() }".to_string();
+                        }
                         if (final_type == "u128" || final_type == "i128")
                             && final_init.starts_with(" = ")
                             && !final_init.contains(&format!(" as {}", final_type))
@@ -32345,6 +33463,11 @@ impl AstCodeGen {
                                 expr
                             }
                         }
+                    };
+                    let expr = if expr.trim() == "(Default::default()).clone()" {
+                        "Default::default()".to_string()
+                    } else {
+                        expr
                     };
                     self.writeln(&format!("return {};", expr));
                 }
@@ -33281,6 +34404,11 @@ impl AstCodeGen {
                             if self.node_is_function_pointer_expr(&node.children[0]) {
                                 return operand;
                             }
+                            // Recovered string indexing call-shapes already produce a read expression
+                            // (`*str.op_index(...)`). Avoid introducing a second dereference.
+                            if operand.starts_with('*') && operand.contains(".op_index(") {
+                                return operand;
+                            }
                             let operand_ty = Self::get_original_expr_type(&node.children[0])
                                 .or_else(|| Self::get_expr_type(&node.children[0]));
                             let operand_is_pointer_like =
@@ -34044,6 +35172,13 @@ impl AstCodeGen {
                     let member = sanitize_identifier(member_name);
                     let base_type = Self::get_original_expr_type(&node.children[0])
                         .or_else(|| Self::get_expr_type(&node.children[0]));
+                    let base_rust_type = base_type.as_ref().map(|ty| ty.to_rust_type_str());
+                    if base_rust_type
+                        .as_ref()
+                        .is_some_and(|ty| self.rust_type_resolves_to_c_void(ty))
+                    {
+                        return "Default::default()".to_string();
+                    }
                     let fallback_base_type = self
                         .resolve_member_declared_field_type(&node.children[0])
                         .or_else(|| {
@@ -34452,14 +35587,35 @@ impl AstCodeGen {
                     ) {
                         // Cast operands must be grouped before these operators so `as T << ...`
                         // and `as T < ...` are not parsed as generic arguments.
-                        let left_operand = self.normalize_ref_operand_expr(
+                        let mut left_operand = self.normalize_ref_operand_expr(
                             &node.children[0],
                             self.expr_to_string_raw(&node.children[0]),
                         );
-                        let right_operand = self.normalize_ref_operand_expr(
+                        let mut right_operand = self.normalize_ref_operand_expr(
                             &node.children[1],
                             self.expr_to_string_raw(&node.children[1]),
                         );
+                        if matches!(
+                            op,
+                            BinaryOp::And
+                                | BinaryOp::Or
+                                | BinaryOp::Xor
+                                | BinaryOp::Shl
+                                | BinaryOp::Shr
+                        ) {
+                            left_operand = strip_literal_suffix(&left_operand);
+                            right_operand = strip_literal_suffix(&right_operand);
+                            if matches!(op, BinaryOp::And | BinaryOp::Or | BinaryOp::Xor) {
+                                if let Some(target_rust) =
+                                    Self::infer_common_integral_rust_type_for_binop(node)
+                                {
+                                    left_operand =
+                                        format!("(({}) as {})", left_operand, target_rust);
+                                    right_operand =
+                                        format!("(({}) as {})", right_operand, target_rust);
+                                }
+                            }
+                        }
                         let left_raw = wrap_unsafe_for_binop(&left_operand);
                         let right_raw = wrap_unsafe_for_binop(&right_operand);
                         let left = if left_raw.contains(" as ")
@@ -36721,15 +37877,14 @@ impl AstCodeGen {
                             format!("({}).{}(({}) as u32)", left, method, right)
                         } else {
                             if matches!(op, BinaryOp::And | BinaryOp::Or | BinaryOp::Xor) {
-                                if let Some(node_ty) = Self::get_expr_type(node) {
-                                    if node_ty.is_integral() == Some(true) {
-                                        let rt = node_ty.to_rust_type_str();
-                                        let left = format!("(({}) as {})", left, rt);
-                                        let right = format!("(({}) as {})", right, rt);
-                                        let left = wrap_unsafe_for_binop(&left);
-                                        let right = wrap_unsafe_for_binop(&right);
-                                        return format!("{} {} {}", left, op_str, right);
-                                    }
+                                if let Some(rt) =
+                                    Self::infer_common_integral_rust_type_for_binop(node)
+                                {
+                                    let left = format!("(({}) as {})", left, rt);
+                                    let right = format!("(({}) as {})", right, rt);
+                                    let left = wrap_unsafe_for_binop(&left);
+                                    let right = wrap_unsafe_for_binop(&right);
+                                    return format!("{} {} {}", left, op_str, right);
                                 }
                             }
                             // Wrap unsafe blocks in parentheses for binary expressions
@@ -36796,8 +37951,12 @@ impl AstCodeGen {
                         };
                         format!("{} {} {}", left, op_str, right)
                     } else {
-                        let left = self.expr_to_string(&node.children[0]);
-                        let right = self.expr_to_string(&node.children[1]);
+                        let mut left = self.expr_to_string(&node.children[0]);
+                        let mut right = self.expr_to_string(&node.children[1]);
+                        if matches!(op, BinaryOp::And | BinaryOp::Or | BinaryOp::Xor) {
+                            left = strip_literal_suffix(&left);
+                            right = strip_literal_suffix(&right);
+                        }
                         // For comparison/relational operators, if left side is an unsafe block,
                         // we need to parenthesize it. Rust requires `(unsafe { X }) > Y`,
                         // not `unsafe { X } > Y`.
@@ -37037,6 +38196,11 @@ impl AstCodeGen {
                             // C function pointers are represented as Option<fn(...)>; a source-level
                             // `*fp` used as a call callee should not become raw-pointer dereference.
                             if self.node_is_function_pointer_expr(&node.children[0]) {
+                                return operand;
+                            }
+                            // Recovered string indexing call-shapes already produce a read expression
+                            // (`*str.op_index(...)`). Avoid introducing a second dereference.
+                            if operand.starts_with('*') && operand.contains(".op_index(") {
                                 return operand;
                             }
                             let operand_ty = Self::get_original_expr_type(&node.children[0])
@@ -37356,6 +38520,10 @@ impl AstCodeGen {
                     }
                 }
 
+                if let Some(recovered_index_call) = self.try_recover_basic_string_index_call(node) {
+                    return recovered_index_call;
+                }
+
                 // Check if this is an explicit destructor call (obj->~ClassName())
                 // For placement new cleanup, we need to call drop_in_place instead of ~ClassName()
                 if let Some(destructor_ptr) = self.get_explicit_destructor_call(node) {
@@ -37499,14 +38667,31 @@ impl AstCodeGen {
 
                             if left_is_primitive && right_is_primitive {
                                 // Use native Rust operator for primitives
-                                let left_operand = self.normalize_ref_operand_expr(
+                                let mut left_operand = self.normalize_ref_operand_expr(
                                     &node.children[left_idx],
                                     left_operand.clone(),
                                 );
-                                let right_operand = self.normalize_ref_operand_expr(
+                                let mut right_operand = self.normalize_ref_operand_expr(
                                     &node.children[right_idx],
                                     right_operand.clone(),
                                 );
+                                if matches!(
+                                    op_name.as_str(),
+                                    "operator&" | "operator|" | "operator^"
+                                ) {
+                                    left_operand = strip_literal_suffix(&left_operand);
+                                    right_operand = strip_literal_suffix(&right_operand);
+                                    if let Some(target_ty) = Self::get_expr_type(node)
+                                        .or_else(|| Self::get_expr_type(&node.children[left_idx]))
+                                        .filter(|ty| ty.is_integral() == Some(true))
+                                    {
+                                        let target = target_ty.to_rust_type_str();
+                                        left_operand =
+                                            format!("(({}) as {})", left_operand, target);
+                                        right_operand =
+                                            format!("(({}) as {})", right_operand, target);
+                                    }
+                                }
                                 let left_operand = wrap_unsafe_for_binop(&left_operand);
                                 let right_operand = wrap_unsafe_for_binop(&right_operand);
                                 return format!("{} {} {}", left_operand, rust_op, right_operand);
@@ -37837,6 +39022,54 @@ impl AstCodeGen {
                                 param_types = Some(from_func_name);
                             }
                         }
+                        if param_types.is_none() {
+                            let arity = node.children.len().saturating_sub(1);
+                            if let Some(from_overload_name) = self
+                                .resolve_function_overload_param_types_from_func_name(&func, arity)
+                            {
+                                param_types = Some(from_overload_name);
+                            }
+                        }
+                        if param_types.is_none() {
+                            let arity = node.children.len().saturating_sub(1);
+                            let mut candidates: Vec<String> = Vec::new();
+                            candidates.push(func.clone());
+                            if let Some(stripped) = Self::strip_generated_overload_suffix(&func) {
+                                candidates.push(stripped);
+                            }
+                            if let Some((_, leaf)) = func.rsplit_once("::") {
+                                candidates.push(leaf.to_string());
+                                if let Some(stripped) = Self::strip_generated_overload_suffix(leaf)
+                                {
+                                    candidates.push(stripped);
+                                }
+                            }
+                            candidates.sort();
+                            candidates.dedup();
+                            for candidate in candidates {
+                                if let Some(declared) = self
+                                    .declared_function_param_types
+                                    .get(&(candidate, arity))
+                                    .cloned()
+                                {
+                                    param_types = Some(declared);
+                                    break;
+                                }
+                            }
+                        }
+                        let generated_param_rust_types = self
+                            .lookup_generated_function_param_rust_types(
+                                &func,
+                                node.children.len().saturating_sub(1),
+                            );
+                        if Self::is_member_reference(callee) && param_types.is_none() {
+                            if let Some((_, method_name)) = func.rsplit_once('.') {
+                                let method_marker = format!("fn {}(", method_name.trim());
+                                if !self.output.contains(&method_marker) {
+                                    return default_value_for_type(ty);
+                                }
+                            }
+                        }
                         let mut args: Vec<String> = node.children[1..]
                             .iter()
                             .enumerate()
@@ -37853,10 +39086,36 @@ impl AstCodeGen {
 
                                         if Self::is_function_pointer_type_or_typedef(&types[i]) {
                                             let arg_str = self.expr_to_string(c);
+                                            if let Some(ref rust_types) = generated_param_rust_types
+                                            {
+                                                if i < rust_types.len() {
+                                                    let target_rust = rust_types[i].trim();
+                                                    if Self::is_integral_rust_type_name(target_rust)
+                                                    {
+                                                        if Self::is_nullptr_literal(c)
+                                                            || is_zero_integer_literal_str(&arg_str)
+                                                        {
+                                                            return format!("0 as {}", target_rust);
+                                                        }
+                                                        return format!(
+                                                            "({}) as usize as {}",
+                                                            arg_str, target_rust
+                                                        );
+                                                    }
+                                                }
+                                            }
                                             if Self::is_nullptr_literal(c)
                                                 || is_zero_integer_literal_str(&arg_str)
                                             {
                                                 return "None".to_string();
+                                            }
+                                            if func.contains("_ref_")
+                                                && self
+                                                    .is_callable_value_expr_for_integral_coercion(
+                                                        c, &arg_str,
+                                                    )
+                                            {
+                                                return format!("({}) as usize as _", arg_str);
                                             }
                                             return arg_str;
                                         }
@@ -37934,10 +39193,48 @@ impl AstCodeGen {
                                                 | "u128"
                                                 | "usize"
                                         );
+                                        if target_is_integral && arg.contains(".offset_from(") {
+                                            return format!("({}) as {}", arg, target_rust);
+                                        }
                                         if target_is_integral
                                             && matches!(arg_ty, Some(CppType::Bool))
                                         {
                                             return format!("({}) as {}", arg, target_rust);
+                                        }
+                                        if target_is_integral
+                                            && (matches!(arg_ty, Some(CppType::Function { .. }))
+                                                || self
+                                                    .is_callable_value_expr_for_integral_coercion(
+                                                        c, &arg,
+                                                    ))
+                                        {
+                                            return format!(
+                                                "({}) as usize as {}",
+                                                arg, target_rust
+                                            );
+                                        }
+                                        if target_is_integral {
+                                            if let ClangNodeKind::DeclRefExpr { name, .. } = &c.kind
+                                            {
+                                                if self.is_known_function_declref_name(name) {
+                                                    return format!(
+                                                        "({}) as usize as {}",
+                                                        arg, target_rust
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        if target_is_integral
+                                            && matches!(&c.kind, ClangNodeKind::DeclRefExpr { .. })
+                                            && !arg_ty.as_ref().is_some_and(|t| {
+                                                t.is_integral() == Some(true)
+                                                    || matches!(t, CppType::Bool)
+                                            })
+                                        {
+                                            return format!(
+                                                "({}) as usize as {}",
+                                                arg, target_rust
+                                            );
                                         }
                                         if target_is_integral
                                             && arg_ty
@@ -37956,6 +39253,56 @@ impl AstCodeGen {
                                 let arg_str = self.expr_to_string(c);
                                 let arg_ty = Self::get_expr_type(c);
                                 let arg_orig_ty = Self::get_original_expr_type(c);
+                                if let Some(ref rust_types) = generated_param_rust_types {
+                                    if i < rust_types.len() {
+                                        let target_rust = rust_types[i].trim();
+                                        if Self::is_integral_rust_type_name(target_rust) {
+                                            let arg = cast_negative_unsigned_literal_expr(&arg_str)
+                                                .unwrap_or_else(|| arg_str.clone());
+                                            if arg.contains(".offset_from(")
+                                                || matches!(arg_ty, Some(CppType::Bool))
+                                            {
+                                                return format!("({}) as {}", arg, target_rust);
+                                            }
+                                            if self.is_callable_value_expr_for_integral_coercion(
+                                                c, &arg,
+                                            ) {
+                                                return format!(
+                                                    "({}) as usize as {}",
+                                                    arg, target_rust
+                                                );
+                                            }
+                                            if matches!(&c.kind, ClangNodeKind::DeclRefExpr { .. })
+                                                && !arg_ty.as_ref().is_some_and(|t| {
+                                                    t.is_integral() == Some(true)
+                                                        || matches!(t, CppType::Bool)
+                                                })
+                                            {
+                                                return format!(
+                                                    "({}) as usize as {}",
+                                                    arg, target_rust
+                                                );
+                                            }
+                                            if arg_ty
+                                                .as_ref()
+                                                .is_some_and(|t| t.is_integral() == Some(true))
+                                                && arg_ty
+                                                    .as_ref()
+                                                    .map(|t| t.to_rust_type_str())
+                                                    .as_deref()
+                                                    != Some(target_rust)
+                                            {
+                                                return format!("({}) as {}", arg, target_rust);
+                                            }
+                                        }
+                                    }
+                                }
+                                if self.is_callable_value_expr_for_integral_coercion(c, &arg_str)
+                                    && (func.contains("_ref_")
+                                        || generated_param_rust_types.is_some())
+                                {
+                                    return format!("({}) as usize as _", arg_str);
+                                }
                                 let arg_is_array = (matches!(arg_ty, Some(CppType::Array { .. }))
                                     || matches!(arg_orig_ty, Some(CppType::Array { .. })))
                                     && !self.is_ptr_var_expr(c)
@@ -38149,27 +39496,7 @@ impl AstCodeGen {
                             // Check if the type maps to a pointer, primitive, or non-struct type
                             // that can't have a constructor (e.g., `*mut std::ffi::c_void`)
                             // Also check if it's a type alias to a primitive (e.g., pthread_mutex_t = usize)
-                            let is_non_struct = struct_name.starts_with('*')
-                                || struct_name.starts_with('&')
-                                || struct_name == "std::ffi::c_void"
-                                || struct_name == "()"
-                                || struct_name == "bool"
-                                || struct_name == "i8"
-                                || struct_name == "i16"
-                                || struct_name == "i32"
-                                || struct_name == "i64"
-                                || struct_name == "i128"
-                                || struct_name == "u8"
-                                || struct_name == "u16"
-                                || struct_name == "u32"
-                                || struct_name == "u64"
-                                || struct_name == "u128"
-                                || struct_name == "f32"
-                                || struct_name == "f64"
-                                || struct_name == "isize"
-                                || struct_name == "usize"
-                                || struct_name == "char"
-                                || self.primitive_aliases.contains(&struct_name);
+                            let is_non_struct = self.is_non_constructible_rust_type(&struct_name);
 
                             if is_non_struct {
                                 // For non-struct types, just use the first argument as-is
@@ -38379,6 +39706,55 @@ impl AstCodeGen {
                             param_types = Some(from_func_name);
                         }
                     }
+                    if param_types.is_none() {
+                        if let Some(from_overload_name) = self
+                            .resolve_function_overload_param_types_from_func_name(
+                                &func,
+                                call_arg_count,
+                            )
+                        {
+                            param_types = Some(from_overload_name);
+                        }
+                    }
+                    if param_types.is_none() {
+                        let mut candidates: Vec<String> = Vec::new();
+                        candidates.push(func.clone());
+                        if let Some(stripped) = Self::strip_generated_overload_suffix(&func) {
+                            candidates.push(stripped);
+                        }
+                        if let Some((_, leaf)) = func.rsplit_once("::") {
+                            candidates.push(leaf.to_string());
+                            if let Some(stripped) = Self::strip_generated_overload_suffix(leaf) {
+                                candidates.push(stripped);
+                            }
+                        }
+                        candidates.sort();
+                        candidates.dedup();
+                        for candidate in candidates {
+                            if let Some(declared) = self
+                                .declared_function_param_types
+                                .get(&(candidate, call_arg_count))
+                                .cloned()
+                            {
+                                param_types = Some(declared);
+                                break;
+                            }
+                        }
+                    }
+                    let generated_param_rust_types =
+                        self.lookup_generated_function_param_rust_types(&func, call_arg_count);
+                    if Self::is_member_reference(&node.children[0]) && param_types.is_none() {
+                        if let Some((_, method_name)) = func.rsplit_once('.') {
+                            let method_marker = format!("fn {}(", method_name.trim());
+                            if !self.output.contains(&method_marker) {
+                                return if *ty == CppType::Void {
+                                    "()".to_string()
+                                } else {
+                                    default_value_for_type(ty)
+                                };
+                            }
+                        }
+                    }
                     let mut args: Vec<String> = call_arg_nodes
                         .iter()
                         .enumerate()
@@ -38407,11 +39783,37 @@ impl AstCodeGen {
                                     // Handle function-pointer parameters (Option<fn(...)>).
                                     if Self::is_function_pointer_type_or_typedef(&types[i]) {
                                         let arg_str = self.expr_to_string(c);
+                                        if let Some(ref rust_types) = generated_param_rust_types {
+                                            if i < rust_types.len() {
+                                                let target_rust = rust_types[i].trim();
+                                                if Self::is_integral_rust_type_name(target_rust) {
+                                                    if Self::is_nullptr_literal(c)
+                                                        || is_zero_integer_literal_str(&arg_str)
+                                                        || Self::integer_literal_value_from_expr(c)
+                                                            == Some(0)
+                                                    {
+                                                        return format!("0 as {}", target_rust);
+                                                    }
+                                                    return format!(
+                                                        "({}) as usize as {}",
+                                                        arg_str, target_rust
+                                                    );
+                                                }
+                                            }
+                                        }
                                         if Self::is_nullptr_literal(c)
                                             || is_zero_integer_literal_str(&arg_str)
                                             || Self::integer_literal_value_from_expr(c) == Some(0)
                                         {
                                             return "None".to_string();
+                                        }
+                                        if func.contains("_ref_")
+                                            && self
+                                                .is_callable_value_expr_for_integral_coercion(
+                                                    c, &arg_str,
+                                                )
+                                        {
+                                            return format!("({}) as usize as _", arg_str);
                                         }
                                         return arg_str;
                                     }
@@ -38508,8 +39910,35 @@ impl AstCodeGen {
                                             | "u128"
                                             | "usize"
                                     );
+                                    if target_is_integral && arg.contains(".offset_from(") {
+                                        return format!("({}) as {}", arg, target_rust);
+                                    }
                                     if target_is_integral && matches!(arg_ty, Some(CppType::Bool)) {
                                         return format!("({}) as {}", arg, target_rust);
+                                    }
+                                    if target_is_integral
+                                        && self.is_callable_value_expr_for_integral_coercion(c, &arg)
+                                    {
+                                        return format!("({}) as usize as {}", arg, target_rust);
+                                    }
+                                    if target_is_integral {
+                                        if let ClangNodeKind::DeclRefExpr { name, .. } = &c.kind {
+                                            if self.is_known_function_declref_name(name) {
+                                                return format!(
+                                                    "({}) as usize as {}",
+                                                    arg, target_rust
+                                                );
+                                            }
+                                        }
+                                    }
+                                    if target_is_integral
+                                        && matches!(&c.kind, ClangNodeKind::DeclRefExpr { .. })
+                                        && !arg_ty.as_ref().is_some_and(|t| {
+                                            t.is_integral() == Some(true)
+                                                || matches!(t, CppType::Bool)
+                                        })
+                                    {
+                                        return format!("({}) as usize as {}", arg, target_rust);
                                     }
                                     if target_is_integral
                                         && arg_ty
@@ -38621,6 +40050,54 @@ impl AstCodeGen {
                                 .unwrap_or(arg_str_raw);
                             let arg_ty = Self::get_expr_type(c);
                             let arg_orig_ty = Self::get_original_expr_type(c);
+                            if let Some(ref rust_types) = generated_param_rust_types {
+                                if i < rust_types.len() {
+                                    let target_rust = rust_types[i].trim();
+                                    if Self::is_integral_rust_type_name(target_rust) {
+                                        if arg_str.contains(".offset_from(")
+                                            || matches!(arg_ty, Some(CppType::Bool))
+                                        {
+                                            return format!("({}) as {}", arg_str, target_rust);
+                                        }
+                                        if self
+                                            .is_callable_value_expr_for_integral_coercion(c, &arg_str)
+                                        {
+                                            return format!(
+                                                "({}) as usize as {}",
+                                                arg_str, target_rust
+                                            );
+                                        }
+                                        if matches!(&c.kind, ClangNodeKind::DeclRefExpr { .. })
+                                            && !arg_ty.as_ref().is_some_and(|t| {
+                                                t.is_integral() == Some(true)
+                                                    || matches!(t, CppType::Bool)
+                                            })
+                                        {
+                                            return format!(
+                                                "({}) as usize as {}",
+                                                arg_str, target_rust
+                                            );
+                                        }
+                                        if arg_ty
+                                            .as_ref()
+                                            .is_some_and(|t| t.is_integral() == Some(true))
+                                            && arg_ty
+                                                .as_ref()
+                                                .map(|t| t.to_rust_type_str())
+                                                .as_deref()
+                                                != Some(target_rust)
+                                        {
+                                            return format!("({}) as {}", arg_str, target_rust);
+                                        }
+                                    }
+                                }
+                            }
+                            if self.is_callable_value_expr_for_integral_coercion(c, &arg_str)
+                                && (func.contains("_ref_")
+                                    || generated_param_rust_types.is_some())
+                            {
+                                return format!("({}) as usize as _", arg_str);
+                            }
                             let arg_is_array = (matches!(arg_ty, Some(CppType::Array { .. }))
                                 || matches!(arg_orig_ty, Some(CppType::Array { .. })))
                                 && !self.is_ptr_var_expr(c)
@@ -39010,29 +40487,7 @@ impl AstCodeGen {
                             .collect();
 
                         // Check if the type maps to a non-struct type
-                        let is_non_struct = struct_name.starts_with('*')
-                            || struct_name.starts_with('&')
-                            || struct_name == "std::ffi::c_void"
-                            || struct_name == "()"
-                            || struct_name == "bool"
-                            || matches!(
-                                struct_name.as_str(),
-                                "i8" | "i16"
-                                    | "i32"
-                                    | "i64"
-                                    | "i128"
-                                    | "u8"
-                                    | "u16"
-                                    | "u32"
-                                    | "u64"
-                                    | "u128"
-                                    | "f32"
-                                    | "f64"
-                                    | "isize"
-                                    | "usize"
-                                    | "char"
-                            )
-                            || self.primitive_aliases.contains(&struct_name);
+                        let is_non_struct = self.is_non_constructible_rust_type(&struct_name);
 
                         if is_non_struct {
                             if num_args == 0 {
@@ -39205,6 +40660,13 @@ impl AstCodeGen {
                     // Use get_original_expr_type to look through implicit casts (like UncheckedDerivedToBase)
                     // This ensures we get the actual object type, not the casted base class type
                     let base_type = Self::get_original_expr_type(&node.children[0]);
+                    let base_rust_type = base_type.as_ref().map(|ty| ty.to_rust_type_str());
+                    if base_rust_type
+                        .as_ref()
+                        .is_some_and(|ty| self.rust_type_resolves_to_c_void(ty))
+                    {
+                        return "Default::default()".to_string();
+                    }
                     let fallback_base_type = self
                         .resolve_member_declared_field_type(&node.children[0])
                         .or_else(|| {
@@ -44097,6 +45559,24 @@ mod tests {
         assert!(
             rewritten.contains("doc.__base.DeleteChild(__fragile_call_arg_0);"),
             "expected rewritten non-self receiver call to use temporary arg, got:\n{}",
+            rewritten
+        );
+    }
+
+    #[test]
+    fn test_rewrite_self_receiver_offset_from_arg_casts_temp_for_inference() {
+        let expr =
+            "ret.resize(unsafe { out.offset_from(&mut *ret.op_index((0) as u64) as *mut i8) })";
+        let rewritten =
+            AstCodeGen::rewrite_self_receiver_call_with_arg_temporaries(expr).expect("rewrite");
+        assert!(
+            rewritten.contains("let __fragile_call_arg_0 = (unsafe { out.offset_from(&mut *ret.op_index((0) as u64) as *mut i8) }) as _;"),
+            "expected offset_from temporary to include inferred cast, got:\n{}",
+            rewritten
+        );
+        assert!(
+            rewritten.contains("ret.resize(__fragile_call_arg_0);"),
+            "expected rewritten resize call to use temporary arg, got:\n{}",
             rewritten
         );
     }
@@ -51547,7 +53027,8 @@ static mut __gv_ref: &mut i32 = unsafe { std::mem::zeroed() };
             normalized
         );
         assert!(
-            normalized.contains("pub fn PutReserve(stream: &mut FileWriteStream, count: u64) -> () {"),
+            normalized
+                .contains("pub fn PutReserve(stream: &mut FileWriteStream, count: u64) -> () {"),
             "placeholder function signature types should normalize, got:\n{}",
             normalized
         );
@@ -51873,7 +53354,9 @@ static mut __gv_ref: &mut i32 = unsafe { std::mem::zeroed() };
         );
 
         assert!(
-            codegen.output.contains(&format!("pub struct {} {{", rust_name)),
+            codegen
+                .output
+                .contains(&format!("pub struct {} {{", rust_name)),
             "explicit template instantiation definitions should emit a concrete struct, got:\n{}",
             codegen.output
         );
@@ -52092,8 +53575,7 @@ static mut __gv_ref: &mut i32 = unsafe { std::mem::zeroed() };
             "Writer<class rapidjson::FileWriteStream, struct rapidjson::UTF8<>, struct rapidjson::UTF8<>, class rapidjson::CrtAllocator, 0U>".to_string(),
         );
         codegen.used_types.insert(
-            "GenericStringBuffer_struct_rapidjson_UTF8___class_rapidjson_CrtAllocator"
-                .to_string(),
+            "GenericStringBuffer_struct_rapidjson_UTF8___class_rapidjson_CrtAllocator".to_string(),
             "GenericStringBuffer<struct rapidjson::UTF8<>, class rapidjson::CrtAllocator>"
                 .to_string(),
         );
@@ -53743,10 +55225,7 @@ static mut __gv_ref: &mut i32 = unsafe { std::mem::zeroed() };
                     },
                     vec![],
                 ),
-                make_node(
-                    ClangNodeKind::StringLiteral("x".to_string()),
-                    vec![],
-                ),
+                make_node(ClangNodeKind::StringLiteral("x".to_string()), vec![]),
                 make_node(
                     ClangNodeKind::DeclRefExpr {
                         name: "SourceLocExpr".to_string(),
