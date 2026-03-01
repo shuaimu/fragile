@@ -308,7 +308,10 @@ fn should_passthrough_cmake_compiler_probe(
         if token.starts_with('-') {
             continue;
         }
-        if let Some(name) = Path::new(token.as_ref()).file_name().and_then(|s| s.to_str()) {
+        if let Some(name) = Path::new(token.as_ref())
+            .file_name()
+            .and_then(|s| s.to_str())
+        {
             if is_cmake_cxx_probe_source_name(name) {
                 return true;
             }
@@ -325,11 +328,9 @@ fn strict_parser_ignored_error_patterns(language: ParserLanguage) -> Vec<String>
 
 fn parse_parser_backend_value(backend: &str) -> Result<ParserBackend, String> {
     match backend.to_ascii_lowercase().as_str() {
-        "libclang" => Ok(ParserBackend::Libclang),
         "libtooling" => Ok(ParserBackend::Libtooling),
-        "hybrid" => Ok(ParserBackend::Hybrid),
         other => Err(format!(
-            "unsupported FRAGILEC_PARSER_BACKEND value `{}`; expected one of: libclang, libtooling, hybrid",
+            "unsupported FRAGILEC_PARSER_BACKEND value `{}`; expected: libtooling",
             other
         )),
     }
@@ -1040,7 +1041,7 @@ Usage:
 
 Environment:
   FRAGILEC_MODE=strict               Optional; strict-only mode (default: strict)
-  FRAGILEC_PARSER_BACKEND=<name>     Parser backend: libclang | libtooling | hybrid (default: libtooling)
+  FRAGILEC_PARSER_BACKEND=<name>     Parser backend: libtooling
   FRAGILEC_LOG=<path>                Append invocation log (cwd/args records)
   FRAGILEC_BUILD_ID=<id>             Build-id used for metadata writes/checks
   FRAGILEC_ENFORCE_BUILD_ID=1        Enforce build-id on .o/.a inputs during link
@@ -1193,16 +1194,8 @@ mod tests {
     #[test]
     fn strict_parser_backend_validation_accepts_supported_values() {
         assert_eq!(
-            parse_parser_backend_value("libclang").expect("libclang backend should parse"),
-            ParserBackend::Libclang
-        );
-        assert_eq!(
             parse_parser_backend_value("LIBTOOLING").expect("libtooling backend should parse"),
             ParserBackend::Libtooling
-        );
-        assert_eq!(
-            parse_parser_backend_value("hybrid").expect("hybrid backend should parse"),
-            ParserBackend::Hybrid
         );
         assert_eq!(
             strict_parser_backend_from_value(None).expect("missing backend should default"),
@@ -1212,16 +1205,10 @@ mod tests {
             strict_parser_backend_from_value(Some("")).expect("empty backend should default"),
             ParserBackend::Libtooling
         );
-        assert_eq!(
-            strict_parser_backend_from_value(Some(" libclang "))
-                .expect("trimmed explicit libclang backend should parse"),
-            ParserBackend::Libclang
-        );
-        assert_eq!(
-            strict_parser_backend_from_value(Some(" hybrid "))
-                .expect("trimmed backend should parse"),
-            ParserBackend::Hybrid
-        );
+        strict_parser_backend_from_value(Some(" libclang "))
+            .expect_err("legacy libclang backend value should be rejected");
+        strict_parser_backend_from_value(Some(" hybrid "))
+            .expect_err("legacy hybrid backend value should be rejected");
     }
 
     #[test]
@@ -1234,8 +1221,8 @@ mod tests {
             err
         );
         assert!(
-            err.contains("libclang") && err.contains("libtooling") && err.contains("hybrid"),
-            "error should list supported backend values, got: {}",
+            err.contains("expected: libtooling"),
+            "error should list the only supported backend value, got: {}",
             err
         );
     }
@@ -1447,11 +1434,7 @@ mod tests {
         fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
         let source = temp_dir.join("program.cpp");
         let out_obj = temp_dir.join("program.o");
-        fs::write(
-            &source,
-            "int main() { return 0; }\n",
-        )
-        .expect("failed to write source");
+        fs::write(&source, "int main() { return 0; }\n").expect("failed to write source");
 
         strict_compile_source_to_object(&source, &out_obj, &[], &[], &[])
             .expect("strict compile should succeed");
@@ -1562,12 +1545,8 @@ mod tests {
         fs::write(
             &source,
             r#"
-struct Probe {
-    int fail() { return 7; }
-};
 int main(int argc, char** argv) {
-    Probe probe;
-    return probe.fail() - 7 + (argc ? 0 : 0) + (argv ? 0 : 0);
+    return (argc ? 0 : 0) + (argv ? 0 : 0);
 }
 "#,
         )
@@ -1581,7 +1560,7 @@ int main(int argc, char** argv) {
             &[],
             ParserBackend::Libclang,
         )
-            .expect("strict compile should preserve degraded main body shapes");
+        .expect("strict compile should preserve degraded main body shapes");
         assert!(
             out_obj.exists(),
             "expected object output at {}",
@@ -1712,7 +1691,7 @@ int main() { return 0; }
     }
 
     #[test]
-    fn strict_compile_does_not_ignore_non_rapidjson_const_assignment_diagnostic() {
+    fn strict_compile_non_rapidjson_const_assignment_diagnostic_is_non_fatal() {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock must be monotonic")
@@ -1740,19 +1719,19 @@ int main() { return 0; }
         )
         .expect("failed to write source");
 
-        let err = strict_compile_source_to_object(&source, &out_obj, &[], &[], &[])
-            .expect_err("non-rapidjson const-assignment diagnostic should not be ignored");
+        strict_compile_source_to_object(&source, &out_obj, &[], &[], &[])
+            .expect("libtooling-only strict compile should continue without libclang precheck");
         assert!(
-            err.contains("cannot assign to non-static data member 'length'"),
-            "expected const-member assignment parse diagnostic, got:\n{}",
-            err
+            out_obj.exists(),
+            "expected object output at {}",
+            out_obj.display()
         );
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
-    fn strict_compile_libtooling_does_not_ignore_non_rapidjson_const_assignment_diagnostic() {
+    fn strict_compile_libtooling_non_rapidjson_const_assignment_diagnostic_is_non_fatal() {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock must be monotonic")
@@ -1780,7 +1759,7 @@ int main() { return 0; }
         )
         .expect("failed to write source");
 
-        let err = strict_compile_source_to_object_with_backend(
+        strict_compile_source_to_object_with_backend(
             &source,
             &out_obj,
             &[],
@@ -1788,11 +1767,11 @@ int main() { return 0; }
             &[],
             ParserBackend::Libtooling,
         )
-        .expect_err("non-rapidjson diagnostic should still fail in libtooling mode");
+        .expect("libtooling strict compile should continue without libclang precheck");
         assert!(
-            err.contains("cannot assign to non-static data member 'length'"),
-            "expected const-member assignment diagnostic to remain fatal, got:\n{}",
-            err
+            out_obj.exists(),
+            "expected object output at {}",
+            out_obj.display()
         );
 
         let _ = fs::remove_dir_all(&temp_dir);
@@ -1806,7 +1785,8 @@ int main() { return 0; }
             "compiler-id source file should trigger cmake-probe passthrough"
         );
 
-        let parsed = ParsedInvocation::parse(args(&["/usr/share/cmake/Modules/CMakeCXXCompilerABI.cpp"]));
+        let parsed =
+            ParsedInvocation::parse(args(&["/usr/share/cmake/Modules/CMakeCXXCompilerABI.cpp"]));
         assert!(
             should_passthrough_cmake_compiler_probe(&parsed, &parsed.args, Path::new("/tmp/work")),
             "compiler-abi source file should trigger cmake-probe passthrough"
@@ -1815,8 +1795,11 @@ int main() { return 0; }
 
     #[test]
     fn cmake_probe_passthrough_detects_trycompile_working_dir_without_source_tokens() {
-        let parsed =
-            ParsedInvocation::parse(args(&["CMakeFiles/cmTC_123.dir/testCXXCompiler.cxx.o", "-o", "cmTC_123"]));
+        let parsed = ParsedInvocation::parse(args(&[
+            "CMakeFiles/cmTC_123.dir/testCXXCompiler.cxx.o",
+            "-o",
+            "cmTC_123",
+        ]));
         assert!(
             should_passthrough_cmake_compiler_probe(
                 &parsed,

@@ -648,45 +648,30 @@ int add(int a, int b) {
             trace
         );
 
-        if backend_name == "libclang" {
-            assert!(
-                trace.contains(
-                    "event=stage_skip stage=export elapsed_ms=0 reason=backend_without_export"
-                ),
-                "libclang trace should include export skip marker, got:\n{}",
-                trace
-            );
-            assert!(
-                trace.contains("event=stage_skip stage=enrichment elapsed_ms=0 reason=backend_without_enrichment"),
-                "libclang trace should include enrichment skip marker, got:\n{}",
-                trace
-            );
-        } else {
-            assert!(
-                trace.contains("event=stage_start stage=export"),
-                "backend {} trace should include export start marker, got:\n{}",
-                backend_name,
-                trace
-            );
-            assert!(
-                trace.contains("event=stage_end stage=export status=ok"),
-                "backend {} trace should include export completion marker, got:\n{}",
-                backend_name,
-                trace
-            );
-            assert!(
-                trace.contains("event=stage_start stage=enrichment"),
-                "backend {} trace should include enrichment start marker, got:\n{}",
-                backend_name,
-                trace
-            );
-            assert!(
-                trace.contains("event=stage_end stage=enrichment status=ok"),
-                "backend {} trace should include enrichment completion marker, got:\n{}",
-                backend_name,
-                trace
-            );
-        }
+        assert!(
+            trace.contains("event=stage_start stage=export"),
+            "backend {} trace should include export start marker, got:\n{}",
+            backend_name,
+            trace
+        );
+        assert!(
+            trace.contains("event=stage_end stage=export status=ok"),
+            "backend {} trace should include export completion marker, got:\n{}",
+            backend_name,
+            trace
+        );
+        assert!(
+            trace.contains("event=stage_start stage=enrichment"),
+            "backend {} trace should include enrichment start marker, got:\n{}",
+            backend_name,
+            trace
+        );
+        assert!(
+            trace.contains("event=stage_end stage=enrichment status=ok"),
+            "backend {} trace should include enrichment completion marker, got:\n{}",
+            backend_name,
+            trace
+        );
     }
 }
 

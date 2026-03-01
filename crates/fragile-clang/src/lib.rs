@@ -1,14 +1,14 @@
 //! Clang AST parsing and Rust code generation for the Fragile polyglot compiler.
 //!
 //! This crate provides:
-//! - C++ source parsing via libclang
+//! - C++ source parsing via LibTooling AST export
 //! - Clang AST traversal and extraction
 //! - Direct AST-to-Rust source code generation
 //!
 //! # Architecture
 //!
 //! ```text
-//! C++ Source → libclang → Clang AST → Rust Source (via AstCodeGen)
+//! C++ Source → LibTooling AST export → Clang AST model → Rust Source (via AstCodeGen)
 //! ```
 
 mod ast;
@@ -30,7 +30,7 @@ pub use libtooling::{
 pub use parse::{ClangParser, ParserLanguage};
 pub use types::{CppType, TypeProperties, TypeTraitEvaluator, TypeTraitResult};
 
-use fragile_ast_exporter::{clang_ast::AstContext, ASTEntryTag, CborValue};
+use fragile_ast_exporter::{clang_ast::AstContext, ASTEntryTag};
 use miette::Result;
 use std::fs;
 use std::io::Write;
@@ -40,11 +40,11 @@ use std::time::{Duration, Instant};
 /// Parser backend selection for transpilation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParserBackend {
-    /// Parse translation unit with libclang only.
+    /// Legacy alias retained for compatibility; transpilation uses LibTooling.
     Libclang,
     /// Parse translation unit with LibTooling conversion only.
     Libtooling,
-    /// Parse translation unit with libclang and enrich template/specialization data with LibTooling.
+    /// Legacy alias retained for compatibility; transpilation uses LibTooling.
     Hybrid,
 }
 
@@ -69,7 +69,7 @@ impl Default for TranspileOptions {
             language: ParserLanguage::Cpp,
             language_standard: None,
             ignored_error_patterns: Vec::new(),
-            backend: ParserBackend::Libclang,
+            backend: ParserBackend::Libtooling,
             libtooling_skip_system_headers: false,
             stage_timing_trace_path: None,
         }
@@ -162,17 +162,6 @@ fn stage_end(
     append_stage_trace_line(trace_path, line.as_str());
 }
 
-fn stage_skip(trace_path: Option<&Path>, stage: &str, reason: &str) {
-    append_stage_trace_line(
-        trace_path,
-        format!(
-            "event=stage_skip stage={} elapsed_ms=0 reason={}",
-            stage, reason
-        )
-        .as_str(),
-    );
-}
-
 fn finalize_stage_trace(
     trace_path: Option<&Path>,
     timings: &TranspileStageTimings,
@@ -254,19 +243,6 @@ fn merged_defines(path: &Path, defines: &[String]) -> Vec<String> {
     merged
 }
 
-fn parser_for_path_with_options(path: &Path, options: &TranspileOptions) -> Result<ClangParser> {
-    ClangParser::with_paths_defines_language_and_ignored_errors(
-        options.include_paths.clone(),
-        merged_defines(path, &options.defines),
-        options.language,
-        options.ignored_error_patterns.clone(),
-    )
-}
-
-fn parser_for_path(path: &Path) -> Result<ClangParser> {
-    parser_for_path_with_options(path, &TranspileOptions::default())
-}
-
 fn libtooling_parser_for_path(path: &Path, options: &TranspileOptions) -> LibToolingParser {
     let mut extra_args = Vec::new();
     match options.language {
@@ -314,11 +290,6 @@ fn libtooling_parser_for_path(path: &Path, options: &TranspileOptions) -> LibToo
 }
 
 fn parse_libtooling_context(path: &Path, options: &TranspileOptions) -> Result<AstContext> {
-    // Preserve strict diagnostic semantics from the libclang parser
-    // (including scoped RapidJSON const-member assignment tolerance)
-    // before consuming the richer LibTooling AST export.
-    let _ = parser_for_path_with_options(path, options)?.parse_file(path)?;
-
     let parser = libtooling_parser_for_path(path, options);
     parser.parse_file(path)
 }
@@ -327,8 +298,8 @@ fn translation_unit_from_libtooling_context(ctx: &AstContext) -> ClangNode {
     let mut root_ids = ctx.top_nodes.clone();
     let mut seen_roots: std::collections::HashSet<u64> = root_ids.iter().copied().collect();
 
-    // Promote concrete function-template instantiation decls that can be nested
-    // in the exported graph and therefore omitted from computed top nodes.
+    // Promote body-bearing free functions that can be nested in the exported graph
+    // and therefore omitted from computed top nodes.
     for node in ctx.ast_nodes.values() {
         if node.tag != ASTEntryTag::TagFunctionDecl || seen_roots.contains(&node.id) {
             continue;
@@ -340,14 +311,6 @@ fn translation_unit_from_libtooling_context(ctx: &AstContext) -> ClangNode {
                 .is_some_and(|child| child.tag == ASTEntryTag::TagCompoundStmt)
         });
         if !has_body {
-            continue;
-        }
-
-        let has_template_args = node
-            .extras
-            .get(5)
-            .is_some_and(|extra| matches!(extra, CborValue::Array(args) if !args.is_empty()));
-        if !node.get_bool(4).unwrap_or(false) && !has_template_args {
             continue;
         }
 
@@ -399,7 +362,7 @@ fn apply_libtooling_enrichment(codegen: &mut AstCodeGen, ctx: &AstContext) {
 /// println!("{}", rust_code);
 /// ```
 pub fn transpile_cpp_to_rust(path: &Path) -> Result<String> {
-    transpile_cpp_to_rust_with_backend(path, ParserBackend::Libclang)
+    transpile_cpp_to_rust_with_backend(path, ParserBackend::Libtooling)
 }
 
 /// Parse a C++ source file and transpile to Rust source code with the selected parser backend.
@@ -421,79 +384,27 @@ pub fn transpile_cpp_to_rust_with_options(
     let mut timings = TranspileStageTimings::default();
     let mut codegen = AstCodeGen::new();
     let transpile_result: Result<String> = (|| {
-        let translation_unit = match options.backend {
-            ParserBackend::Libclang => {
-                let ast = trace_stage(
-                    trace_path,
-                    TRANSPILE_STAGE_PARSE,
-                    &mut timings.parse,
-                    || {
-                        let parser = parser_for_path_with_options(path, options)?;
-                        parser.parse_file(path)
-                    },
-                )?;
-                timings.export = Duration::ZERO;
-                stage_skip(trace_path, TRANSPILE_STAGE_EXPORT, "backend_without_export");
-                timings.enrichment = Duration::ZERO;
-                stage_skip(
-                    trace_path,
-                    TRANSPILE_STAGE_ENRICHMENT,
-                    "backend_without_enrichment",
-                );
-                ast.translation_unit
-            }
-            ParserBackend::Hybrid => {
-                let ast = trace_stage(
-                    trace_path,
-                    TRANSPILE_STAGE_PARSE,
-                    &mut timings.parse,
-                    || {
-                        let parser = parser_for_path_with_options(path, options)?;
-                        parser.parse_file(path)
-                    },
-                )?;
-                let ctx = trace_stage(
-                    trace_path,
-                    TRANSPILE_STAGE_EXPORT,
-                    &mut timings.export,
-                    || parse_libtooling_context(path, options),
-                )?;
-                trace_stage(
-                    trace_path,
-                    TRANSPILE_STAGE_ENRICHMENT,
-                    &mut timings.enrichment,
-                    || {
-                        apply_libtooling_enrichment(&mut codegen, &ctx);
-                        Ok(())
-                    },
-                )?;
-                ast.translation_unit
-            }
-            ParserBackend::Libtooling => {
-                let ctx = trace_stage(
-                    trace_path,
-                    TRANSPILE_STAGE_EXPORT,
-                    &mut timings.export,
-                    || parse_libtooling_context(path, options),
-                )?;
-                let translation_unit = trace_stage(
-                    trace_path,
-                    TRANSPILE_STAGE_PARSE,
-                    &mut timings.parse,
-                    || Ok(translation_unit_from_libtooling_context(&ctx)),
-                )?;
-                trace_stage(
-                    trace_path,
-                    TRANSPILE_STAGE_ENRICHMENT,
-                    &mut timings.enrichment,
-                    || {
-                        apply_libtooling_enrichment(&mut codegen, &ctx);
-                        Ok(())
-                    },
-                )?;
-                translation_unit
-            }
-        };
+        let ctx = trace_stage(
+            trace_path,
+            TRANSPILE_STAGE_EXPORT,
+            &mut timings.export,
+            || parse_libtooling_context(path, options),
+        )?;
+        let translation_unit = trace_stage(
+            trace_path,
+            TRANSPILE_STAGE_PARSE,
+            &mut timings.parse,
+            || Ok(translation_unit_from_libtooling_context(&ctx)),
+        )?;
+        trace_stage(
+            trace_path,
+            TRANSPILE_STAGE_ENRICHMENT,
+            &mut timings.enrichment,
+            || {
+                apply_libtooling_enrichment(&mut codegen, &ctx);
+                Ok(())
+            },
+        )?;
         trace_stage(
             trace_path,
             TRANSPILE_STAGE_CODEGEN,
@@ -516,15 +427,13 @@ pub fn transpile_cpp_to_rust_with_options(
 /// Stubs are function signatures with placeholder bodies,
 /// useful for FFI declarations.
 pub fn generate_stubs(path: &Path) -> Result<String> {
-    let parser = parser_for_path(path)?;
-    let ast = parser.parse_file(path)?;
-    Ok(AstCodeGen::new().generate_stubs(&ast.translation_unit))
+    let options = TranspileOptions::default();
+    let ctx = parse_libtooling_context(path, &options)?;
+    let translation_unit = translation_unit_from_libtooling_context(&ctx);
+    Ok(AstCodeGen::new().generate_stubs(&translation_unit))
 }
 
-/// Parse a C++ source file and transpile to Rust source code with hybrid LibTooling enrichment.
-///
-/// This version uses LibTooling to get template method bodies and specialization details
-/// while keeping libclang as the primary AST source.
+/// Parse a C++ source file and transpile to Rust source code with LibTooling.
 pub fn transpile_cpp_to_rust_with_libtooling(path: &Path) -> Result<String> {
-    transpile_cpp_to_rust_with_backend(path, ParserBackend::Hybrid)
+    transpile_cpp_to_rust_with_backend(path, ParserBackend::Libtooling)
 }
