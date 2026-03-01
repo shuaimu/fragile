@@ -1427,7 +1427,14 @@ fn extract_type_from_node(
     node: &fragile_ast_exporter::clang_ast::AstNode,
 ) -> CppType {
     if let Some(type_id) = node.type_id {
-        if let Some(type_node) = ctx.type_nodes.get(&type_id) {
+        // Prefer the full resolver so wrappers/typedefs/template substitutions
+        // don't degrade to `auto` placeholders in downstream codegen.
+        if let Some(resolved) = resolve_type(ctx, type_id) {
+            return resolved;
+        }
+
+        let unqualified_type_id = fragile_ast_exporter::clang_ast::TypeNode::unqualified_id(type_id);
+        if let Some(type_node) = ctx.type_nodes.get(&unqualified_type_id) {
             // Convert type node tag to a proper CppType
             use fragile_ast_exporter::ASTEntryTag;
             match type_node.tag {
