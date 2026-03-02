@@ -176,6 +176,15 @@ impl LibToolingParser {
             }
         }
 
+        // Keep parser behavior compatible with GCC-based builds for legacy
+        // varargs call patterns that Clang diagnoses as hard errors.
+        if !all_extra_args
+            .iter()
+            .any(|arg| arg == "-Wno-non-pod-varargs")
+        {
+            all_extra_args.push("-Wno-non-pod-varargs".to_string());
+        }
+
         let extra_args: Vec<&str> = all_extra_args.iter().map(|s| s.as_str()).collect();
 
         let parse_result = export_ast_with_options(
@@ -3116,6 +3125,48 @@ int use_identity() {
                 .iter()
                 .any(|child| matches!(child.kind, ClangNodeKind::CompoundStmt)),
             "converted function template should include body child nodes"
+        );
+    }
+
+    #[test]
+    fn test_parse_file_tolerates_non_pod_varargs_for_gcc_compat() {
+        let _guard = libtooling_parse_test_lock()
+            .lock()
+            .expect("parse-test lock should not be poisoned");
+        let log_dir = unique_temp_dir("fragile_libtooling_nonpod_varargs");
+        fs::create_dir_all(&log_dir).expect("failed to create temp dir");
+        let source_path = log_dir.join("nonpod_varargs_fixture.cpp");
+        fs::write(
+            &source_path,
+            r#"
+struct NonPod {
+    NonPod();
+    ~NonPod();
+    int value;
+};
+
+extern "C" int printf(const char*, ...);
+
+int use_nonpod_varargs() {
+    NonPod value{};
+    return printf("%p", value);
+}
+"#,
+        )
+        .expect("failed to write fixture source");
+
+        let parser = LibToolingParser::new().with_compile_commands_dir(
+            log_dir
+                .to_str()
+                .expect("temp dir path should be valid UTF-8"),
+        );
+        let ctx = parser
+            .parse_file(&source_path)
+            .expect("libtooling parse should tolerate non-pod varargs pattern");
+
+        assert!(
+            !ctx.top_nodes.is_empty(),
+            "expected exported AST to include top-level declarations"
         );
     }
 

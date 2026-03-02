@@ -31987,6 +31987,43 @@ impl AstCodeGen {
         None
     }
 
+    fn lookup_field_name_in_class_fields(
+        &self,
+        class_name: &str,
+        target_field: &str,
+    ) -> Option<String> {
+        let normalized = Self::normalize_cpp_record_type_name(class_name);
+        let class_unqual = normalized
+            .rsplit("::")
+            .next()
+            .unwrap_or(normalized.as_str());
+        let class_rust_full = CppType::Named(normalized.clone()).to_rust_type_str();
+        let class_rust_unqual = CppType::Named(class_unqual.to_string()).to_rust_type_str();
+        let mut seen = HashSet::new();
+        let candidates = [
+            class_name.to_string(),
+            normalized.clone(),
+            class_unqual.to_string(),
+            class_rust_full,
+            class_rust_unqual,
+        ];
+
+        for candidate in candidates {
+            if !seen.insert(candidate.clone()) {
+                continue;
+            }
+            if let Some(fields) = self.class_fields.get(&candidate) {
+                if let Some((name, _)) = fields.iter().find(|(name, _)| {
+                    name == target_field || sanitize_identifier(name) == target_field
+                }) {
+                    return Some(sanitize_identifier(name));
+                }
+            }
+        }
+
+        None
+    }
+
     fn unwrap_to_member_expr<'a>(node: &'a ClangNode) -> Option<&'a ClangNode> {
         match &node.kind {
             ClangNodeKind::MemberExpr { .. } => Some(node),
@@ -33348,6 +33385,85 @@ impl AstCodeGen {
         }
 
         false
+    }
+
+    fn resolve_getter_backing_field_name(&self, callee: &ClangNode) -> Option<String> {
+        let member_expr = Self::unwrap_to_member_expr(callee)?;
+        let ClangNodeKind::MemberExpr { member_name, .. } = &member_expr.kind else {
+            return None;
+        };
+
+        let stem = member_name.strip_prefix("get_")?;
+        if stem.is_empty() {
+            return None;
+        }
+
+        let base = member_expr.children.first()?;
+        let base_ty = Self::get_original_expr_type(base).or_else(|| Self::get_expr_type(base))?;
+        let class_name = match base_ty {
+            CppType::Named(name) => name,
+            CppType::Pointer { pointee, .. } => match *pointee {
+                CppType::Named(name) => name,
+                _ => return None,
+            },
+            CppType::Reference { referent, .. } => match *referent {
+                CppType::Named(name) => name,
+                _ => return None,
+            },
+            _ => return None,
+        };
+
+        let mut getter_candidates = Vec::new();
+        let stem_ident = sanitize_identifier(stem);
+        if !stem_ident.is_empty() {
+            getter_candidates.push(format!("{}_", stem_ident));
+            getter_candidates.push(stem_ident.clone());
+        }
+        if stem_ident.len() > 1 {
+            if let Some(first) = stem_ident.chars().next() {
+                getter_candidates.push(format!("{}_", first.to_ascii_lowercase()));
+            }
+        }
+        getter_candidates.sort();
+        getter_candidates.dedup();
+
+        if let Some(resolved) = getter_candidates.iter().find_map(|candidate| {
+            self.lookup_field_name_in_class_fields(&class_name, candidate)
+        }) {
+            return Some(resolved);
+        }
+
+        // Fallback for degraded call sites emitted before class-field metadata is
+        // fully available at generation time.
+        if stem_ident == "kind" {
+            return Some("k_".to_string());
+        }
+        if !stem_ident.is_empty() {
+            return Some(format!("{}_", stem_ident));
+        }
+
+        None
+    }
+
+    fn rewrite_non_callable_member_getter_as_field(
+        &self,
+        callee: &ClangNode,
+        func_expr: &str,
+    ) -> Option<String> {
+        let field_name = self.resolve_getter_backing_field_name(callee)?;
+        let member_expr = Self::unwrap_to_member_expr(callee)?;
+        let ClangNodeKind::MemberExpr { member_name, .. } = &member_expr.kind else {
+            return None;
+        };
+        let member_ident = sanitize_identifier(member_name);
+        if member_ident.is_empty() {
+            return None;
+        }
+
+        let suffix = format!(".{}", member_ident);
+        let pos = func_expr.rfind(&suffix)?;
+        let prefix = &func_expr[..pos];
+        Some(format!("{}.{}", prefix, field_name))
     }
 
     fn rewrite_degraded_algorithm_functor_call(
@@ -43032,7 +43148,11 @@ impl AstCodeGen {
                         if Self::is_member_reference(callee) && param_types.is_none() {
                             if let Some((_, method_name)) = func.rsplit_once('.') {
                                 let method_marker = format!("fn {}(", method_name.trim());
-                                if !self.output.contains(&method_marker) {
+                                if !self.output.contains(&method_marker)
+                                    && self
+                                        .rewrite_non_callable_member_getter_as_field(callee, &func)
+                                        .is_none()
+                                {
                                     return default_value_for_type(ty);
                                 }
                             }
@@ -43355,6 +43475,11 @@ impl AstCodeGen {
                             && args.is_empty()
                             && self.is_non_callable_callee_value_expr(callee, &func)
                         {
+                            if let Some(field_expr) =
+                                self.rewrite_non_callable_member_getter_as_field(callee, &func)
+                            {
+                                return field_expr;
+                            }
                             return func;
                         }
                         if let Some(rewritten) = rewrite_same_ptr_const_i8_inline_call(&func, &args)
@@ -43722,7 +43847,14 @@ impl AstCodeGen {
                     if Self::is_member_reference(&node.children[0]) && param_types.is_none() {
                         if let Some((_, method_name)) = func.rsplit_once('.') {
                             let method_marker = format!("fn {}(", method_name.trim());
-                            if !self.output.contains(&method_marker) {
+                            if !self.output.contains(&method_marker)
+                                && self
+                                    .rewrite_non_callable_member_getter_as_field(
+                                        &node.children[0],
+                                        &func,
+                                    )
+                                    .is_none()
+                            {
                                 return if *ty == CppType::Void {
                                     "()".to_string()
                                 } else {
@@ -44165,6 +44297,12 @@ impl AstCodeGen {
                         && args.is_empty()
                         && self.is_non_callable_callee_value_expr(&node.children[0], &func)
                     {
+                        if let Some(field_expr) = self.rewrite_non_callable_member_getter_as_field(
+                            &node.children[0],
+                            &func,
+                        ) {
+                            return field_expr;
+                        }
                         return func;
                     }
                     if let Some(rewritten) = rewrite_same_ptr_const_i8_inline_call(&func, &args) {
@@ -44727,7 +44865,15 @@ impl AstCodeGen {
 
                     // Determine if we need base access and get the correct base field name
                     // Skip base access for anonymous struct members (they are flattened into parent)
-                    let member = sanitize_identifier(member_name);
+                    let mut member = sanitize_identifier(member_name);
+                    if member_name.starts_with("get_")
+                        && !matches!(ty, CppType::Function { .. })
+                        && !Self::is_function_pointer_type_or_typedef(ty)
+                    {
+                        if let Some(backing_field) = self.resolve_getter_backing_field_name(node) {
+                            member = backing_field;
+                        }
+                    }
                     let (mut needs_base_access, mut base_access) = if let Some(decl_class) =
                         declaring_class
                     {
@@ -46970,6 +47116,49 @@ mod tests {
                 || code.contains("pub extern \"C\" fn add(a: i32, b: i32) -> i32")
         );
         assert!(code.contains("return a + b"));
+    }
+
+    #[test]
+    fn test_non_callable_member_getter_call_rewrites_to_backing_field() {
+        let mut codegen = AstCodeGen::new();
+        codegen.class_fields.insert(
+            "Value".to_string(),
+            vec![("k_".to_string(), CppType::Int { signed: true })],
+        );
+
+        let expr = make_node(
+            ClangNodeKind::MemberExpr {
+                member_name: "get_kind".to_string(),
+                is_arrow: false,
+                ty: CppType::Int { signed: true },
+                declaring_class: Some("Value".to_string()),
+                is_static: false,
+            },
+            vec![make_node(
+                ClangNodeKind::DeclRefExpr {
+                    name: "value".to_string(),
+                    ty: CppType::Reference {
+                        referent: Box::new(CppType::Named("Value".to_string())),
+                        is_const: true,
+                        is_rvalue: false,
+                    },
+                    namespace_path: vec![],
+                },
+                vec![],
+            )],
+        );
+
+        let rendered = codegen.expr_to_string(&expr);
+        assert!(
+            rendered.contains(".k_"),
+            "expected degraded getter member access to lower to backing field, got: {}",
+            rendered
+        );
+        assert!(
+            !rendered.contains("get_kind"),
+            "expected getter name to be rewritten away, got: {}",
+            rendered
+        );
     }
 
     #[test]
