@@ -8,7 +8,13 @@
 // Each module file is included via include!() so all types share a flat namespace,
 // matching how they appear when inlined into generated code.
 
-#![allow(dead_code, unused_variables, unused_mut, unused_imports, unused_assignments)]
+#![allow(
+    dead_code,
+    unused_variables,
+    unused_mut,
+    unused_imports,
+    unused_assignments
+)]
 #![allow(non_camel_case_types, non_snake_case, non_upper_case_globals)]
 #![allow(unused_parens, unused_unsafe)]
 #![allow(clippy::all)]
@@ -21,6 +27,7 @@ include!("file_header.rs");
 include!("array_helpers.rs");
 include!("comparison.rs");
 include!("vector.rs");
+include!("container_adapters.rs");
 include!("string.rs");
 include!("smart_ptr.rs");
 include!("algorithm.rs");

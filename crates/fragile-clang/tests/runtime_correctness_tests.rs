@@ -66,7 +66,8 @@ fn compile_and_run(cpp_code: &str, test_name: &str) -> Option<i32> {
     fs::write(&rs_path, &rust_code).expect("Failed to write Rust source");
 
     // Compile as binary
-    let compile_output = Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
+    let compile_output = Command::new("rustc")
+        .env("RUSTC_BOOTSTRAP", "1")
         .arg("--edition")
         .arg("2021")
         .arg("-A")
@@ -266,7 +267,8 @@ int main() {
     let rs_path = temp_dir.join("test.rs");
     fs::write(&rs_path, &rust_code).expect("Failed to write Rust source");
 
-    let compile_output = Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
+    let compile_output = Command::new("rustc")
+        .env("RUSTC_BOOTSTRAP", "1")
         .arg("--edition")
         .arg("2021")
         .arg("-A")
@@ -414,7 +416,8 @@ int main() {
     let rs_path = temp_dir.join("test.rs");
     fs::write(&rs_path, &rust_code).expect("Failed to write Rust source");
 
-    let compile_output = Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
+    let compile_output = Command::new("rustc")
+        .env("RUSTC_BOOTSTRAP", "1")
         .arg("--edition")
         .arg("2021")
         .arg("-A")

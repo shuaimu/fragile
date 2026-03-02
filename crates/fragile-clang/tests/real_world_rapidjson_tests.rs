@@ -752,13 +752,21 @@ fn read_status_file(path: &Path) -> Result<i32, String> {
 }
 
 fn bool_to_i64(value: bool) -> i64 {
-    if value { 1 } else { 0 }
+    if value {
+        1
+    } else {
+        0
+    }
 }
 
 fn manifest_line_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     line.split_whitespace().find_map(|part| {
         let (k, v) = part.split_once('=')?;
-        if k == key { Some(v) } else { None }
+        if k == key {
+            Some(v)
+        } else {
+            None
+        }
     })
 }
 
@@ -845,7 +853,8 @@ fn strict_backend_matrix_runtime_parity_vs_baseline(
         && result.pretty_run_status == baseline.pretty_run_status
         && result.condense_stdout_trimmed == baseline.condense_stdout_trimmed
         && result.pretty_stdout_trimmed == baseline.pretty_stdout_trimmed
-        && (result.condense_stderr_trimmed.is_empty() == baseline.condense_stderr_trimmed.is_empty())
+        && (result.condense_stderr_trimmed.is_empty()
+            == baseline.condense_stderr_trimmed.is_empty())
         && (result.pretty_stderr_trimmed.is_empty() == baseline.pretty_stderr_trimmed.is_empty())
 }
 
@@ -964,7 +973,13 @@ fn run_strict_backend_matrix_example_with_capture(
             backend_name,
             binary_path.display()
         );
-        write_command_capture_raw(log_dir, step_name, -1, b"", format!("{}\n", stderr).as_bytes())?;
+        write_command_capture_raw(
+            log_dir,
+            step_name,
+            -1,
+            b"",
+            format!("{}\n", stderr).as_bytes(),
+        )?;
         return Ok((-1, String::new(), stderr));
     }
 
@@ -975,7 +990,13 @@ fn run_strict_backend_matrix_example_with_capture(
             Ok((status_code(&output), stdout, stderr))
         }
         Err(err) => {
-            write_command_capture_raw(log_dir, step_name, -1, b"", format!("{}\n", err).as_bytes())?;
+            write_command_capture_raw(
+                log_dir,
+                step_name,
+                -1,
+                b"",
+                format!("{}\n", err).as_bytes(),
+            )?;
             Ok((-1, String::new(), err))
         }
     }
@@ -1297,7 +1318,8 @@ fn source_scoped_failure_payload(stream: &str, source_path: &str) -> Option<Stri
         format!("Error while processing {}", source_path),
     ] {
         if let Some(start) = stream.find(marker.as_str()) {
-            let end = find_next_failure_marker(stream, start + marker.len()).unwrap_or(stream.len());
+            let end =
+                find_next_failure_marker(stream, start + marker.len()).unwrap_or(stream.len());
             let scoped = stream[start..end].trim();
             if !scoped.is_empty() {
                 return Some(scoped.to_string());
@@ -1318,11 +1340,9 @@ fn select_first_failing_compile_capture(
     }
 
     let failed_source_path = first_failed_source_path(build_stdout, build_stderr);
-    let command = first_failing_compile_command_from_driver_log(
-        driver_log,
-        failed_source_path.as_deref(),
-    )
-        .unwrap_or_else(|| "<unavailable>".to_string());
+    let command =
+        first_failing_compile_command_from_driver_log(driver_log, failed_source_path.as_deref())
+            .unwrap_or_else(|| "<unavailable>".to_string());
     let stderr = if let Some(source_path) = failed_source_path.as_deref() {
         source_scoped_failure_payload(build_stderr, source_path)
             .or_else(|| source_scoped_failure_payload(build_stdout, source_path))
@@ -1794,8 +1814,8 @@ fn compile_example_with_cxx_env(
         .env("SRC", source_arg.to_string_lossy().to_string())
         .env("OUT", output_path.to_string_lossy().to_string())
         .env("FRAGILEC_MODE", "strict")
-        // Keep this helper pinned to the strict escape-hatch baseline lane.
-        .env("FRAGILEC_PARSER_BACKEND", "libclang")
+        // Keep this helper pinned to the currently supported strict backend lane.
+        .env("FRAGILEC_PARSER_BACKEND", "libtooling")
         .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string())
         .output()
         .map_err(|e| {
@@ -2746,8 +2766,7 @@ fn run_rapidjson_strict_single_tu_backend_surface_delta_capture(
     if actual_head != RAPIDJSON_PINNED_COMMIT {
         return Err(format!(
             "{} worktree expected commit {} but got {}",
-            config.context_label,
-            RAPIDJSON_PINNED_COMMIT, actual_head
+            config.context_label, RAPIDJSON_PINNED_COMMIT, actual_head
         ));
     }
 
@@ -3011,14 +3030,13 @@ fn run_rapidjson_strict_single_tu_backend_surface_delta_capture(
                 (Some(value), Some(base)) => Some(value as i64 - base as i64),
                 _ => None,
             };
-        let parse_runtime_bridge_call_delta_vs_baseline =
-            match (
-                parse_runtime_bridge_call_count,
-                baseline_parse_runtime_bridge_call_count,
-            ) {
-                (Some(value), Some(base)) => Some(value as i64 - base as i64),
-                _ => None,
-            };
+        let parse_runtime_bridge_call_delta_vs_baseline = match (
+            parse_runtime_bridge_call_count,
+            baseline_parse_runtime_bridge_call_count,
+        ) {
+            (Some(value), Some(base)) => Some(value as i64 - base as i64),
+            _ => None,
+        };
         let transpile_total_delta_vs_baseline = match (transpile_total_ms, baseline_timing_total_ms)
         {
             (Some(value), Some(base)) => Some(value as i64 - base as i64),
@@ -3060,11 +3078,7 @@ fn run_rapidjson_strict_single_tu_backend_surface_delta_capture(
         ));
     }
 
-    fs::write(
-        log_dir.join(config.manifest_file_name),
-        manifest,
-    )
-    .map_err(|e| {
+    fs::write(log_dir.join(config.manifest_file_name), manifest).map_err(|e| {
         format!(
             "failed to write {} in {}: {}",
             config.manifest_file_name,
@@ -3286,14 +3300,23 @@ fn create_local_cmake_tests_on_configure_failure_fixture(
     base_dir: &Path,
 ) -> Result<(PathBuf, PathBuf), String> {
     let project_dir = base_dir.join("local_tests_on_configure_fixture_project");
-    fs::create_dir_all(project_dir.join("src"))
-        .map_err(|e| format!("failed to create tests-on configure fixture source dir: {}", e))?;
+    fs::create_dir_all(project_dir.join("src")).map_err(|e| {
+        format!(
+            "failed to create tests-on configure fixture source dir: {}",
+            e
+        )
+    })?;
 
     fs::write(
         project_dir.join("src/probe.cpp"),
         "int probe_fixture_function() { return 0; }\n",
     )
-    .map_err(|e| format!("failed to write probe.cpp for tests-on configure fixture: {}", e))?;
+    .map_err(|e| {
+        format!(
+            "failed to write probe.cpp for tests-on configure fixture: {}",
+            e
+        )
+    })?;
     fs::write(
         project_dir.join("CMakeLists.txt"),
         "cmake_minimum_required(VERSION 3.16)\nproject(LocalTestsOnConfigureFixture CXX)\nadd_library(local_tests_on_configure_fixture STATIC src/probe.cpp)\n",
@@ -3356,8 +3379,7 @@ exec c++ "$@"
 fn run_local_strict_cmake_tests_on_configure_failure_capture_fixture(
     root: &Path,
 ) -> Result<PathBuf, String> {
-    let (project_dir, fake_fragilec) =
-        create_local_cmake_tests_on_configure_failure_fixture(root)?;
+    let (project_dir, fake_fragilec) = create_local_cmake_tests_on_configure_failure_fixture(root)?;
     let log_dir = root.join("strict_cmake_tests_on_configure_local_fixture_logs");
     fs::create_dir_all(&log_dir).map_err(|e| {
         format!(
@@ -4290,19 +4312,17 @@ fn test_parse_fragilec_driver_invocations_extracts_cwd_and_args_pairs() {
 fn test_select_first_failing_compile_capture_prefers_source_matched_invocation() {
     let driver_log = "cwd=/tmp/work\nargs=-std=c++11 -c first.cpp -o first.o \ncwd=/tmp/work\nargs=-std=c++11 -c failing.cpp -o failing.o \ncwd=/tmp/work\nargs=-std=c++11 -c trailing.cpp -o trailing.o \n";
     let build_stderr = "[fragilec] fragile rustc object compile failed for /tmp/work/failing.cpp\nerror[E0507]: cannot move out of\ncommand timed out after 1200s: strict cmake backend-matrix build for libtooling\n";
-    let (command, stderr) = select_first_failing_compile_capture(
-        driver_log,
-        true,
-        "stdout text",
-        build_stderr,
-    );
+    let (command, stderr) =
+        select_first_failing_compile_capture(driver_log, true, "stdout text", build_stderr);
     assert!(
         command.contains("failing.cpp"),
         "capture should report source-matched failing compile invocation (not trailing invocation), got:\n{}",
         command
     );
     assert!(
-        stderr.starts_with("[fragilec] fragile rustc object compile failed for /tmp/work/failing.cpp"),
+        stderr.starts_with(
+            "[fragilec] fragile rustc object compile failed for /tmp/work/failing.cpp"
+        ),
         "capture should scope stderr payload to the source-matched failing unit, got:\n{}",
         stderr
     );
@@ -4312,7 +4332,8 @@ fn test_select_first_failing_compile_capture_prefers_source_matched_invocation()
 fn test_select_first_failing_compile_capture_matches_error_while_processing_marker() {
     let driver_log = "cwd=/tmp/work\nargs=-std=c++11 -c tutorial.cpp -o tutorial.o \ncwd=/tmp/work\nargs=-std=c++11 -c trailing.cpp -o trailing.o \n";
     let build_stderr = "4 warnings and 1 error generated.\nError while processing /tmp/work/tutorial.cpp.\n[fragilec] failed to transpile /tmp/work/tutorial.cpp with parser backend Libtooling: AST export failed with code 1\n";
-    let (command, stderr) = select_first_failing_compile_capture(driver_log, true, "", build_stderr);
+    let (command, stderr) =
+        select_first_failing_compile_capture(driver_log, true, "", build_stderr);
     assert!(
         command.contains("tutorial.cpp"),
         "capture should map `Error while processing` marker to tutorial compile invocation, got:\n{}",
@@ -4531,7 +4552,8 @@ fn test_rapidjson_strict_cmake_local_fixture_replays_first_failure_capture() {
 }
 
 #[test]
-fn test_rapidjson_strict_cmake_tests_on_configure_local_fixture_classifies_compiler_check_failure() {
+fn test_rapidjson_strict_cmake_tests_on_configure_local_fixture_classifies_compiler_check_failure()
+{
     let root = unique_temp_dir("rapidjson_strict_cmake_tests_on_configure_local_fixture");
     fs::create_dir_all(&root).expect("failed to create tests-on configure local fixture root");
 
@@ -4866,9 +4888,11 @@ fn test_strict_backend_matrix_runtime_parity_vs_baseline_checks_status_stdout_an
     );
 
     let mut baseline_non_empty_stderr = baseline.clone();
-    baseline_non_empty_stderr.condense_stderr_trimmed = "baseline condense failure marker".to_string();
+    baseline_non_empty_stderr.condense_stderr_trimmed =
+        "baseline condense failure marker".to_string();
     let mut matching_non_empty_stderr = baseline_non_empty_stderr.clone();
-    matching_non_empty_stderr.condense_stderr_trimmed = "libtooling condense failure marker".to_string();
+    matching_non_empty_stderr.condense_stderr_trimmed =
+        "libtooling condense failure marker".to_string();
     assert!(
         strict_backend_matrix_runtime_parity_vs_baseline(
             &matching_non_empty_stderr,
@@ -5476,7 +5500,8 @@ fn test_real_world_rapidjson_strict_tutorial_backend_surface_delta_capture() {
     let run_root = log_dir
         .parent()
         .expect("strict tutorial backend-surface log dir should have a run root");
-    let expected_run_root_prefix = format!("{}_", RAPIDJSON_STRICT_TUTORIAL_BACKEND_SURFACE_DELTA_DIR);
+    let expected_run_root_prefix =
+        format!("{}_", RAPIDJSON_STRICT_TUTORIAL_BACKEND_SURFACE_DELTA_DIR);
     assert!(
         run_root
             .to_string_lossy()

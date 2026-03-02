@@ -1,4 +1,6 @@
-use fragile_clang::{ParserBackend, ParserLanguage, TranspileOptions};
+use fragile_clang::{
+    IncludeDirective, IncludeDirectiveKind, ParserBackend, ParserLanguage, TranspileOptions,
+};
 use std::collections::hash_map::DefaultHasher;
 use std::ffi::OsString;
 use std::fs;
@@ -46,7 +48,7 @@ struct ParsedInvocation {
     output: Option<PathBuf>,
     sources: Vec<PathBuf>,
     source_indices: Vec<usize>,
-    includes: Vec<String>,
+    includes: Vec<IncludeDirective>,
     defines: Vec<String>,
 }
 
@@ -84,22 +86,61 @@ impl ParsedInvocation {
             }
             if cur == "-I" {
                 if i + 1 < args.len() {
-                    includes.push(args[i + 1].to_string_lossy().to_string());
+                    includes.push(IncludeDirective {
+                        kind: IncludeDirectiveKind::Include,
+                        path: args[i + 1].to_string_lossy().to_string(),
+                    });
                     i += 2;
                     continue;
                 }
             }
             if let Some(stripped) = cur.strip_prefix("-I") {
                 if !stripped.is_empty() {
-                    includes.push(stripped.to_string());
+                    includes.push(IncludeDirective {
+                        kind: IncludeDirectiveKind::Include,
+                        path: stripped.to_string(),
+                    });
                     i += 1;
                     continue;
                 }
             }
-            if cur == "-isystem" || cur == "-iquote" {
+            if cur == "-isystem" {
                 if i + 1 < args.len() {
-                    includes.push(args[i + 1].to_string_lossy().to_string());
+                    includes.push(IncludeDirective {
+                        kind: IncludeDirectiveKind::System,
+                        path: args[i + 1].to_string_lossy().to_string(),
+                    });
                     i += 2;
+                    continue;
+                }
+            }
+            if let Some(stripped) = cur.strip_prefix("-isystem") {
+                if !stripped.is_empty() {
+                    includes.push(IncludeDirective {
+                        kind: IncludeDirectiveKind::System,
+                        path: stripped.to_string(),
+                    });
+                    i += 1;
+                    continue;
+                }
+            }
+            if cur == "-iquote" {
+                if i + 1 < args.len() {
+                    includes.push(IncludeDirective {
+                        kind: IncludeDirectiveKind::Quote,
+                        path: args[i + 1].to_string_lossy().to_string(),
+                    });
+                    i += 2;
+                    continue;
+                }
+            }
+            if let Some(stripped) = cur.strip_prefix("-iquote") {
+                if !stripped.is_empty() {
+                    includes.push(IncludeDirective {
+                        kind: IncludeDirectiveKind::Quote,
+                        path: stripped.to_string(),
+                    });
+                    i += 1;
                     continue;
                 }
             }
@@ -199,6 +240,279 @@ fn resolve_path(path: &Path, cwd: &Path) -> PathBuf {
     } else {
         cwd.join(path)
     }
+}
+
+fn resolve_include_directives(
+    include_directives: &[IncludeDirective],
+    cwd: &Path,
+) -> Vec<IncludeDirective> {
+    include_directives
+        .iter()
+        .map(|directive| {
+            let include_path = Path::new(directive.path.as_str());
+            let resolved_path = if include_path.is_absolute() {
+                include_path.to_path_buf()
+            } else {
+                let joined = cwd.join(include_path);
+                if joined.exists() {
+                    joined.canonicalize().unwrap_or(joined)
+                } else {
+                    joined
+                }
+            };
+            IncludeDirective {
+                kind: directive.kind,
+                path: resolved_path.to_string_lossy().to_string(),
+            }
+        })
+        .collect()
+}
+
+fn resolve_frontend_path_value(raw: &str, cwd: &Path) -> String {
+    let path = Path::new(raw);
+    if path.is_absolute() {
+        return path.to_string_lossy().to_string();
+    }
+    let joined = cwd.join(path);
+    if joined.exists() {
+        joined
+            .canonicalize()
+            .unwrap_or(joined)
+            .to_string_lossy()
+            .to_string()
+    } else {
+        joined.to_string_lossy().to_string()
+    }
+}
+
+fn resolve_forced_include_value(raw: &str, cwd: &Path) -> String {
+    let path = Path::new(raw);
+    if path.is_absolute() {
+        return path.to_string_lossy().to_string();
+    }
+
+    let joined = cwd.join(path);
+    if joined.exists() {
+        joined
+            .canonicalize()
+            .unwrap_or(joined)
+            .to_string_lossy()
+            .to_string()
+    } else {
+        // Keep unresolved include-like paths relative so Clang can still apply
+        // normal header-search rules (-I/-isystem/etc.) instead of forcing an
+        // absolute path anchored at the current working directory.
+        raw.to_string()
+    }
+}
+
+fn split_joined_path_flag<'a>(token: &'a str, flag: &str) -> Option<&'a str> {
+    token.strip_prefix(flag).and_then(|rest| {
+        if rest.is_empty() || rest.starts_with('-') {
+            None
+        } else {
+            Some(rest)
+        }
+    })
+}
+
+fn collect_resolved_frontend_args(args: &[OsString], cwd: &Path) -> Vec<String> {
+    let mut collected = Vec::new();
+    let mut i = 0usize;
+
+    while i < args.len() {
+        let token = args[i].to_string_lossy();
+        let cur = token.as_ref();
+
+        if matches!(
+            cur,
+            "-I" | "-isystem"
+                | "-iquote"
+                | "-idirafter"
+                | "-F"
+                | "-iframework"
+                | "-iframeworkwithsysroot"
+                | "-iprefix"
+                | "-iwithprefix"
+                | "-iwithprefixbefore"
+                | "-isysroot"
+                | "--sysroot"
+                | "-resource-dir"
+                | "-include"
+                | "-imacros"
+                | "-include-pch"
+                | "-ivfsoverlay"
+        ) {
+            if i + 1 < args.len() {
+                collected.push(cur.to_string());
+                let value = args[i + 1].to_string_lossy();
+                if matches!(cur, "-include" | "-imacros" | "-include-pch") {
+                    collected.push(resolve_forced_include_value(value.as_ref(), cwd));
+                } else {
+                    collected.push(resolve_frontend_path_value(value.as_ref(), cwd));
+                }
+                i += 2;
+                continue;
+            }
+        }
+
+        if cur == "-D" {
+            if i + 1 < args.len() {
+                collected.push("-D".to_string());
+                collected.push(args[i + 1].to_string_lossy().to_string());
+                i += 2;
+                continue;
+            }
+        }
+        if let Some(rest) = cur.strip_prefix("-D") {
+            if !rest.is_empty() {
+                collected.push(cur.to_string());
+                i += 1;
+                continue;
+            }
+        }
+
+        if cur == "-stdlib" {
+            if i + 1 < args.len() {
+                collected.push("-stdlib".to_string());
+                collected.push(args[i + 1].to_string_lossy().to_string());
+                i += 2;
+                continue;
+            }
+        }
+        if cur.starts_with("-stdlib=") {
+            collected.push(cur.to_string());
+            i += 1;
+            continue;
+        }
+
+        if matches!(cur, "-nostdinc" | "-nostdinc++" | "-nostdlibinc") {
+            collected.push(cur.to_string());
+            i += 1;
+            continue;
+        }
+
+        if let Some(rest) = split_joined_path_flag(cur, "-iwithprefixbefore") {
+            collected.push("-iwithprefixbefore".to_string());
+            collected.push(resolve_frontend_path_value(rest, cwd));
+            i += 1;
+            continue;
+        }
+        if let Some(rest) = split_joined_path_flag(cur, "-iwithprefix") {
+            collected.push("-iwithprefix".to_string());
+            collected.push(resolve_frontend_path_value(rest, cwd));
+            i += 1;
+            continue;
+        }
+        if let Some(rest) = split_joined_path_flag(cur, "-iframeworkwithsysroot") {
+            collected.push("-iframeworkwithsysroot".to_string());
+            collected.push(resolve_frontend_path_value(rest, cwd));
+            i += 1;
+            continue;
+        }
+        if let Some(rest) = split_joined_path_flag(cur, "-iframework") {
+            collected.push("-iframework".to_string());
+            collected.push(resolve_frontend_path_value(rest, cwd));
+            i += 1;
+            continue;
+        }
+        if let Some(rest) = split_joined_path_flag(cur, "-idirafter") {
+            collected.push("-idirafter".to_string());
+            collected.push(resolve_frontend_path_value(rest, cwd));
+            i += 1;
+            continue;
+        }
+        if let Some(rest) = split_joined_path_flag(cur, "-ivfsoverlay") {
+            collected.push("-ivfsoverlay".to_string());
+            collected.push(resolve_frontend_path_value(rest, cwd));
+            i += 1;
+            continue;
+        }
+        if let Some(rest) = split_joined_path_flag(cur, "-include-pch") {
+            collected.push("-include-pch".to_string());
+            collected.push(resolve_forced_include_value(rest, cwd));
+            i += 1;
+            continue;
+        }
+        if let Some(rest) = split_joined_path_flag(cur, "-imacros") {
+            collected.push("-imacros".to_string());
+            collected.push(resolve_forced_include_value(rest, cwd));
+            i += 1;
+            continue;
+        }
+        if let Some(rest) = split_joined_path_flag(cur, "-include") {
+            collected.push("-include".to_string());
+            collected.push(resolve_forced_include_value(rest, cwd));
+            i += 1;
+            continue;
+        }
+        if let Some(rest) = cur.strip_prefix("--sysroot=") {
+            if !rest.is_empty() {
+                collected.push(format!(
+                    "--sysroot={}",
+                    resolve_frontend_path_value(rest, cwd)
+                ));
+                i += 1;
+                continue;
+            }
+        }
+        if let Some(rest) = split_joined_path_flag(cur, "-isysroot") {
+            collected.push("-isysroot".to_string());
+            collected.push(resolve_frontend_path_value(rest, cwd));
+            i += 1;
+            continue;
+        }
+        if let Some(rest) = cur.strip_prefix("-resource-dir=") {
+            if !rest.is_empty() {
+                collected.push(format!(
+                    "-resource-dir={}",
+                    resolve_frontend_path_value(rest, cwd)
+                ));
+                i += 1;
+                continue;
+            }
+        }
+        if let Some(rest) = split_joined_path_flag(cur, "-resource-dir") {
+            collected.push("-resource-dir".to_string());
+            collected.push(resolve_frontend_path_value(rest, cwd));
+            i += 1;
+            continue;
+        }
+        if let Some(rest) = split_joined_path_flag(cur, "-iprefix") {
+            collected.push("-iprefix".to_string());
+            collected.push(resolve_frontend_path_value(rest, cwd));
+            i += 1;
+            continue;
+        }
+        if let Some(rest) = split_joined_path_flag(cur, "-F") {
+            collected.push("-F".to_string());
+            collected.push(resolve_frontend_path_value(rest, cwd));
+            i += 1;
+            continue;
+        }
+        if let Some(rest) = split_joined_path_flag(cur, "-isystem") {
+            collected.push("-isystem".to_string());
+            collected.push(resolve_frontend_path_value(rest, cwd));
+            i += 1;
+            continue;
+        }
+        if let Some(rest) = split_joined_path_flag(cur, "-iquote") {
+            collected.push("-iquote".to_string());
+            collected.push(resolve_frontend_path_value(rest, cwd));
+            i += 1;
+            continue;
+        }
+        if let Some(rest) = split_joined_path_flag(cur, "-I") {
+            collected.push("-I".to_string());
+            collected.push(resolve_frontend_path_value(rest, cwd));
+            i += 1;
+            continue;
+        }
+
+        i += 1;
+    }
+
+    collected
 }
 
 fn default_object_output(source_arg: &Path, cwd: &Path) -> Result<PathBuf, String> {
@@ -506,29 +820,52 @@ fn crate_name_for_unit(source: &Path, out_obj: &Path) -> String {
     format!("{}_{}", base, format!("{suffix:08x}"))
 }
 
+#[allow(dead_code)]
 fn strict_compile_source_to_object(
     source_arg: &Path,
     out_obj: &Path,
-    includes: &[String],
+    includes: &[IncludeDirective],
     defines: &[String],
     args_for_meta: &[OsString],
 ) -> Result<(), String> {
     let parser_backend = strict_parser_backend_from_env()?;
-    strict_compile_source_to_object_with_backend(
+    strict_compile_source_to_object_with_frontend_args_and_backend(
         source_arg,
         out_obj,
         includes,
         defines,
+        &[],
         args_for_meta,
         parser_backend,
     )
 }
 
+#[allow(dead_code)]
 fn strict_compile_source_to_object_with_backend(
     source_arg: &Path,
     out_obj: &Path,
-    includes: &[String],
+    includes: &[IncludeDirective],
     defines: &[String],
+    args_for_meta: &[OsString],
+    parser_backend: ParserBackend,
+) -> Result<(), String> {
+    strict_compile_source_to_object_with_frontend_args_and_backend(
+        source_arg,
+        out_obj,
+        includes,
+        defines,
+        &[],
+        args_for_meta,
+        parser_backend,
+    )
+}
+
+fn strict_compile_source_to_object_with_frontend_args_and_backend(
+    source_arg: &Path,
+    out_obj: &Path,
+    includes: &[IncludeDirective],
+    defines: &[String],
+    frontend_args: &[String],
     args_for_meta: &[OsString],
     parser_backend: ParserBackend,
 ) -> Result<(), String> {
@@ -556,7 +893,9 @@ fn strict_compile_source_to_object_with_backend(
         .filter(|raw| !raw.is_empty())
         .map(PathBuf::from);
     let transpile_options = TranspileOptions {
-        include_paths: includes.to_vec(),
+        include_paths: Vec::new(),
+        include_directives: includes.to_vec(),
+        frontend_args: frontend_args.to_vec(),
         defines: defines.to_vec(),
         language,
         language_standard,
@@ -575,6 +914,7 @@ fn strict_compile_source_to_object_with_backend(
             )
         })?;
     let transpiled = normalize_transpiled_main_entry(transpiled);
+    enforce_unresolved_type_invariant(&source, &transpiled)?;
 
     let keep_rs = std::env::var(FRAGILEC_KEEP_RS_ENV)
         .map(|v| v == "1")
@@ -663,6 +1003,24 @@ fn normalize_transpiled_main_entry(transpiled: String) -> String {
     )
 }
 
+fn enforce_unresolved_type_invariant(source: &Path, transpiled: &str) -> Result<(), String> {
+    let unresolved = fragile_clang::AstCodeGen::unresolved_named_type_references(transpiled);
+    if unresolved.is_empty() {
+        return Ok(());
+    }
+
+    let preview: Vec<String> = unresolved.iter().take(8).cloned().collect();
+    let mut detail = preview.join(", ");
+    if unresolved.len() > preview.len() {
+        detail.push_str(&format!(" (and {} more)", unresolved.len() - preview.len()));
+    }
+    Err(format!(
+        "fragile unresolved-type invariant failed for {}: {}",
+        source.display(),
+        detail
+    ))
+}
+
 fn run_fragile_compile(parsed: &ParsedInvocation) -> Result<(), String> {
     if !parsed.compile_only {
         return Err("fragile compile mode only supports `-c` invocations".to_string());
@@ -678,6 +1036,9 @@ fn run_fragile_compile(parsed: &ParsedInvocation) -> Result<(), String> {
     }
 
     let cwd = std::env::current_dir().map_err(|e| format!("failed to read cwd: {}", e))?;
+    let resolved_includes = resolve_include_directives(&parsed.includes, &cwd);
+    let resolved_frontend_args = collect_resolved_frontend_args(&parsed.args, &cwd);
+    let parser_backend = strict_parser_backend_from_env()?;
     for source_arg in &parsed.sources {
         let out_obj = if parsed.sources.len() == 1 {
             match &parsed.output {
@@ -688,12 +1049,14 @@ fn run_fragile_compile(parsed: &ParsedInvocation) -> Result<(), String> {
             default_object_output(source_arg, &cwd)?
         };
 
-        strict_compile_source_to_object(
+        strict_compile_source_to_object_with_frontend_args_and_backend(
             source_arg,
             &out_obj,
-            &parsed.includes,
+            &resolved_includes,
             &parsed.defines,
+            &resolved_frontend_args,
             &parsed.args,
+            parser_backend,
         )?;
     }
 
@@ -961,18 +1324,23 @@ fn run_fragile_link(parsed: &ParsedInvocation) -> Result<(), String> {
     })?;
 
     let mut compiled_positions: Vec<(usize, PathBuf)> = Vec::with_capacity(parsed.sources.len());
+    let resolved_includes = resolve_include_directives(&parsed.includes, &cwd);
+    let resolved_frontend_args = collect_resolved_frontend_args(&parsed.args, &cwd);
+    let parser_backend = strict_parser_backend_from_env()?;
     for (idx, source_arg) in parsed.sources.iter().enumerate() {
         let stem = source_arg
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("unit");
         let out_obj = temp_root.join(format!("{idx}_{stem}.o"));
-        strict_compile_source_to_object(
+        strict_compile_source_to_object_with_frontend_args_and_backend(
             source_arg,
             &out_obj,
-            &parsed.includes,
+            &resolved_includes,
             &parsed.defines,
+            &resolved_frontend_args,
             &parsed.args,
+            parser_backend,
         )?;
         let source_pos = parsed
             .source_indices
@@ -1138,19 +1506,179 @@ mod tests {
         assert!(parsed.compile_only);
         assert_eq!(parsed.sources, vec![PathBuf::from("src/main.cpp")]);
         assert_eq!(parsed.source_indices, vec![5usize]);
-        assert_eq!(parsed.includes, vec!["include".to_string()]);
+        assert_eq!(
+            parsed.includes,
+            vec![IncludeDirective {
+                kind: IncludeDirectiveKind::Include,
+                path: "include".to_string(),
+            }]
+        );
         assert_eq!(parsed.defines, vec!["FOO=1".to_string()]);
         assert_eq!(parsed.output, Some(PathBuf::from("main.o")));
     }
 
     #[test]
     fn parse_handles_combined_flag_forms() {
-        let parsed =
-            ParsedInvocation::parse(args(&["-Iinc", "-DBAR=1", "-c", "unit.c", "-omain.o"]));
-        assert_eq!(parsed.includes, vec!["inc".to_string()]);
+        let parsed = ParsedInvocation::parse(args(&[
+            "-Iinc",
+            "-isystemsys",
+            "-iquotequote",
+            "-DBAR=1",
+            "-c",
+            "unit.c",
+            "-omain.o",
+        ]));
+        assert_eq!(
+            parsed.includes,
+            vec![
+                IncludeDirective {
+                    kind: IncludeDirectiveKind::Include,
+                    path: "inc".to_string(),
+                },
+                IncludeDirective {
+                    kind: IncludeDirectiveKind::System,
+                    path: "sys".to_string(),
+                },
+                IncludeDirective {
+                    kind: IncludeDirectiveKind::Quote,
+                    path: "quote".to_string(),
+                },
+            ]
+        );
         assert_eq!(parsed.defines, vec!["BAR=1".to_string()]);
         assert_eq!(parsed.output, Some(PathBuf::from("main.o")));
-        assert_eq!(parsed.source_indices, vec![3usize]);
+        assert_eq!(parsed.source_indices, vec![5usize]);
+    }
+
+    #[test]
+    fn parse_preserves_include_directive_order_and_kinds() {
+        let parsed = ParsedInvocation::parse(args(&[
+            "-I", "inc1", "-isystem", "sys1", "-iquote", "quote1", "-Iinc2", "unit.cpp",
+        ]));
+        assert_eq!(
+            parsed.includes,
+            vec![
+                IncludeDirective {
+                    kind: IncludeDirectiveKind::Include,
+                    path: "inc1".to_string(),
+                },
+                IncludeDirective {
+                    kind: IncludeDirectiveKind::System,
+                    path: "sys1".to_string(),
+                },
+                IncludeDirective {
+                    kind: IncludeDirectiveKind::Quote,
+                    path: "quote1".to_string(),
+                },
+                IncludeDirective {
+                    kind: IncludeDirectiveKind::Include,
+                    path: "inc2".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn resolve_include_directives_interprets_relative_paths_from_invocation_cwd() {
+        let cwd = Path::new("/tmp/fragilec_include_resolution_base");
+        let resolved = resolve_include_directives(
+            &[IncludeDirective {
+                kind: IncludeDirectiveKind::Include,
+                path: "../relative/include".to_string(),
+            }],
+            cwd,
+        );
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].kind, IncludeDirectiveKind::Include);
+        assert_eq!(
+            resolved[0].path,
+            cwd.join("../relative/include")
+                .to_string_lossy()
+                .to_string()
+        );
+    }
+
+    #[test]
+    fn collect_resolved_frontend_args_preserves_order_and_resolves_supported_flags() {
+        let cwd = Path::new("/tmp/fragilec_frontend_arg_resolution_base");
+        let collected = collect_resolved_frontend_args(
+            &args(&[
+                "-Iinc",
+                "-isystem",
+                "sys",
+                "-iquotequote",
+                "-idirafter",
+                "after",
+                "-Ffw",
+                "-iframework",
+                "ifw",
+                "--sysroot=rootfs",
+                "-isysroot",
+                "sdk",
+                "-resource-dir",
+                "resource",
+                "-nostdinc",
+                "-nostdinc++",
+                "-stdlib=libstdc++",
+                "-include",
+                "force/config.hpp",
+                "-D",
+                "FOO=1",
+                "-DBAR=2",
+                "unit.cpp",
+            ]),
+            cwd,
+        );
+
+        assert_eq!(
+            collected,
+            vec![
+                "-I".to_string(),
+                cwd.join("inc").to_string_lossy().to_string(),
+                "-isystem".to_string(),
+                cwd.join("sys").to_string_lossy().to_string(),
+                "-iquote".to_string(),
+                cwd.join("quote").to_string_lossy().to_string(),
+                "-idirafter".to_string(),
+                cwd.join("after").to_string_lossy().to_string(),
+                "-F".to_string(),
+                cwd.join("fw").to_string_lossy().to_string(),
+                "-iframework".to_string(),
+                cwd.join("ifw").to_string_lossy().to_string(),
+                format!("--sysroot={}", cwd.join("rootfs").to_string_lossy()),
+                "-isysroot".to_string(),
+                cwd.join("sdk").to_string_lossy().to_string(),
+                "-resource-dir".to_string(),
+                cwd.join("resource").to_string_lossy().to_string(),
+                "-nostdinc".to_string(),
+                "-nostdinc++".to_string(),
+                "-stdlib=libstdc++".to_string(),
+                "-include".to_string(),
+                "force/config.hpp".to_string(),
+                "-D".to_string(),
+                "FOO=1".to_string(),
+                "-DBAR=2".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn collect_resolved_frontend_args_ignores_unrelated_flags() {
+        let cwd = Path::new("/tmp/fragilec_frontend_arg_ignore_base");
+        let collected = collect_resolved_frontend_args(
+            &args(&[
+                "-Winvalid-pch",
+                "-Winvalid-offsetof",
+                "-Wl,-rpath,/tmp/lib",
+                "unit.cpp",
+            ]),
+            cwd,
+        );
+        assert!(
+            collected.is_empty(),
+            "unexpected passthrough flags collected: {:?}",
+            collected
+        );
     }
 
     #[test]
@@ -1453,38 +1981,48 @@ mod tests {
     }
 
     #[test]
-    fn strict_compile_source_with_hybrid_backend_exports_main_symbol() {
+    fn strict_compile_via_driver_resolves_relative_include_paths_from_invocation_cwd() {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock must be monotonic")
             .as_nanos();
-        let temp_dir = std::env::temp_dir().join(format!("fragilec_hybrid_backend_test_{}", stamp));
-        fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
-        let source = temp_dir.join("program.cpp");
+        let cwd = std::env::current_dir().expect("failed to read current directory");
+        let project_rel = PathBuf::from("target")
+            .join(format!("fragilec_relative_include_resolution_test_{stamp}"));
+        let temp_dir = cwd.join(&project_rel);
+        let include_dir = temp_dir.join("include");
+        let source_dir = temp_dir.join("src");
+        let source = source_dir.join("program.cpp");
         let out_obj = temp_dir.join("program.o");
+
+        fs::create_dir_all(&include_dir).expect("failed to create include dir");
+        fs::create_dir_all(&source_dir).expect("failed to create source dir");
+        fs::write(
+            include_dir.join("foo.h"),
+            "#pragma once\n#define FOO_VALUE 0\n",
+        )
+        .expect("failed to write header");
         fs::write(
             &source,
-            "int helper() { return 1; }\nint main() { return helper() - 1; }\n",
+            "#include \"foo.h\"\nint main() { return FOO_VALUE; }\n",
         )
         .expect("failed to write source");
 
-        strict_compile_source_to_object_with_backend(
-            &source,
-            &out_obj,
-            &[],
-            &[],
-            &[],
-            ParserBackend::Hybrid,
-        )
-        .expect("strict compile should succeed with hybrid backend");
+        let include_rel = project_rel.join("include");
+        let parsed = ParsedInvocation::parse(vec![
+            OsString::from("-c"),
+            OsString::from(source.to_string_lossy().to_string()),
+            OsString::from("-I"),
+            OsString::from(include_rel.to_string_lossy().to_string()),
+            OsString::from("-o"),
+            OsString::from(out_obj.to_string_lossy().to_string()),
+        ]);
+
+        run_fragile_compile(&parsed)
+            .expect("strict driver compile should resolve relative -I against invocation cwd");
         assert!(
             out_obj.exists(),
             "expected object output at {}",
-            out_obj.display()
-        );
-        assert!(
-            object_defines_main_symbol(&out_obj).expect("failed to inspect object symbols"),
-            "strict-compiled object should define main symbol when using hybrid backend: {}",
             out_obj.display()
         );
 
@@ -1492,21 +2030,67 @@ mod tests {
     }
 
     #[test]
-    fn strict_compile_source_with_libclang_backend_exports_main_symbol() {
+    fn strict_compile_via_driver_resolves_relative_forced_include_paths_from_invocation_cwd() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock must be monotonic")
+            .as_nanos();
+        let cwd = std::env::current_dir().expect("failed to read current directory");
+        let project_rel =
+            PathBuf::from("target").join(format!("fragilec_relative_forced_include_test_{stamp}"));
+        let temp_dir = cwd.join(&project_rel);
+        let force_dir = temp_dir.join("force");
+        let source_dir = temp_dir.join("src");
+        let source = source_dir.join("program.cpp");
+        let out_obj = temp_dir.join("program.o");
+
+        fs::create_dir_all(&force_dir).expect("failed to create force include dir");
+        fs::create_dir_all(&source_dir).expect("failed to create source dir");
+        fs::write(
+            force_dir.join("config.hpp"),
+            "#pragma once\n#define FORCED_VALUE 7\n",
+        )
+        .expect("failed to write forced include header");
+        fs::write(
+            &source,
+            "int main() { return FORCED_VALUE == 7 ? 0 : 1; }\n",
+        )
+        .expect("failed to write source");
+
+        let forced_include_rel = project_rel.join("force/config.hpp");
+        let parsed = ParsedInvocation::parse(vec![
+            OsString::from("-c"),
+            OsString::from(source.to_string_lossy().to_string()),
+            OsString::from("-include"),
+            OsString::from(forced_include_rel.to_string_lossy().to_string()),
+            OsString::from("-o"),
+            OsString::from(out_obj.to_string_lossy().to_string()),
+        ]);
+
+        run_fragile_compile(&parsed).expect(
+            "strict driver compile should resolve relative -include against invocation cwd",
+        );
+        assert!(
+            out_obj.exists(),
+            "expected object output at {}",
+            out_obj.display()
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn strict_compile_source_with_explicit_libtooling_backend_exports_main_symbol() {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock must be monotonic")
             .as_nanos();
         let temp_dir =
-            std::env::temp_dir().join(format!("fragilec_libclang_backend_test_{}", stamp));
+            std::env::temp_dir().join(format!("fragilec_libtooling_backend_test_{}", stamp));
         fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
         let source = temp_dir.join("program.cpp");
         let out_obj = temp_dir.join("program.o");
-        fs::write(
-            &source,
-            "int helper() { return 1; }\nint main() { return helper() - 1; }\n",
-        )
-        .expect("failed to write source");
+        fs::write(&source, "int main() { return 0; }\n").expect("failed to write source");
 
         strict_compile_source_to_object_with_backend(
             &source,
@@ -1514,9 +2098,9 @@ mod tests {
             &[],
             &[],
             &[],
-            ParserBackend::Libclang,
+            ParserBackend::Libtooling,
         )
-        .expect("strict compile should succeed with libclang backend escape hatch");
+        .expect("strict compile should succeed with explicit libtooling backend");
         assert!(
             out_obj.exists(),
             "expected object output at {}",
@@ -1524,7 +2108,44 @@ mod tests {
         );
         assert!(
             object_defines_main_symbol(&out_obj).expect("failed to inspect object symbols"),
-            "strict-compiled object should define main symbol when using libclang backend: {}",
+            "strict-compiled object should define main symbol when using explicit libtooling backend: {}",
+            out_obj.display()
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn strict_compile_source_with_explicit_libtooling_backend_repeated_compile_exports_main_symbol()
+    {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock must be monotonic")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("fragilec_libtooling_backend_repeat_test_{}", stamp));
+        fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
+        let source = temp_dir.join("program.cpp");
+        let out_obj = temp_dir.join("program.o");
+        fs::write(&source, "int main() { return 0; }\n").expect("failed to write source");
+
+        strict_compile_source_to_object_with_backend(
+            &source,
+            &out_obj,
+            &[],
+            &[],
+            &[],
+            ParserBackend::Libtooling,
+        )
+        .expect("strict compile should succeed with explicit libtooling backend");
+        assert!(
+            out_obj.exists(),
+            "expected object output at {}",
+            out_obj.display()
+        );
+        assert!(
+            object_defines_main_symbol(&out_obj).expect("failed to inspect object symbols"),
+            "strict-compiled object should define main symbol when using explicit libtooling backend: {}",
             out_obj.display()
         );
 
@@ -1558,7 +2179,7 @@ int main(int argc, char** argv) {
             &[],
             &[],
             &[],
-            ParserBackend::Libclang,
+            ParserBackend::Libtooling,
         )
         .expect("strict compile should preserve degraded main body shapes");
         assert!(
@@ -1617,7 +2238,10 @@ int main() { return 0; }
         strict_compile_source_to_object(
             &source,
             &out_obj,
-            &[temp_dir.join("include").to_string_lossy().to_string()],
+            &[IncludeDirective {
+                kind: IncludeDirectiveKind::Include,
+                path: temp_dir.join("include").to_string_lossy().to_string(),
+            }],
             &[],
             &[],
         )
@@ -1675,7 +2299,10 @@ int main() { return 0; }
         strict_compile_source_to_object_with_backend(
             &source,
             &out_obj,
-            &[temp_dir.join("include").to_string_lossy().to_string()],
+            &[IncludeDirective {
+                kind: IncludeDirectiveKind::Include,
+                path: temp_dir.join("include").to_string_lossy().to_string(),
+            }],
             &[],
             &[],
             ParserBackend::Libtooling,

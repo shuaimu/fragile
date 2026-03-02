@@ -13,7 +13,9 @@ fn workspace_root() -> PathBuf {
 }
 
 fn repro_script_path() -> PathBuf {
-    workspace_root().join("scripts").join("repro_zlib_failure.sh")
+    workspace_root()
+        .join("scripts")
+        .join("repro_zlib_failure.sh")
 }
 
 #[test]

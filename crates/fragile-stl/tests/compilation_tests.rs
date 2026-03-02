@@ -126,7 +126,9 @@ fn locale_facet_types_compile() {
 
 #[test]
 fn tree_types_compile() {
-    let _end = __tree_end_node { __left_: std::ptr::null_mut() };
+    let _end = __tree_end_node {
+        __left_: std::ptr::null_mut(),
+    };
     let _result = __tree_emplace_result::default();
     assert!(!_result.__second);
 }
@@ -146,4 +148,52 @@ fn generic_container_aliases_compile() {
     let s_alias: std_shared_ptr_int = std_shared_ptr_int::new_0();
     assert!(u_alias.get().is_null());
     assert!(s_alias.get().is_null());
+}
+
+#[test]
+fn generic_container_adapter_aliases_compile() {
+    let mut d_alias: std_deque_int = std_deque_int::new_0();
+    d_alias.push_back(4);
+    d_alias.push_front(3);
+    assert_eq!(d_alias.size(), 2);
+    assert_eq!(*d_alias.front(), 3);
+
+    let mut q_alias: std_queue_int = std_queue_int::new_0();
+    q_alias.push(1);
+    q_alias.push(2);
+    assert_eq!(q_alias.size(), 2);
+    assert_eq!(*q_alias.front(), 1);
+    q_alias.pop();
+    assert_eq!(*q_alias.front(), 2);
+
+    let mut s_alias: std_stack_int = std_stack_int::new_0();
+    s_alias.push(7);
+    s_alias.push(9);
+    assert_eq!(s_alias.size(), 2);
+    assert_eq!(*s_alias.top(), 9);
+    s_alias.pop();
+    assert_eq!(*s_alias.top(), 7);
+}
+
+#[test]
+fn generic_containers_accept_ref_values_without_clone_bound() {
+    struct NonClone(i32);
+
+    let mut v: std_vector<NonClone> = std_vector::new_0();
+    let v_item = NonClone(1);
+    v.push_back(&v_item);
+    assert_eq!(v.size(), 1);
+    assert_eq!(v.front().0, 1);
+
+    let mut q: std_queue<NonClone> = std_queue::new_0();
+    let q_item = NonClone(2);
+    q.push(&q_item);
+    assert_eq!(q.size(), 1);
+    assert_eq!(q.front().0, 2);
+
+    let mut s: std_stack<NonClone> = std_stack::new_0();
+    let s_item = NonClone(3);
+    s.push(&s_item);
+    assert_eq!(s.size(), 1);
+    assert_eq!(s.top().0, 3);
 }

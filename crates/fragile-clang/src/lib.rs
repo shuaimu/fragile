@@ -49,10 +49,32 @@ pub enum ParserBackend {
     Hybrid,
 }
 
+/// Header search directive kinds supported by transpile options.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IncludeDirectiveKind {
+    Include,
+    System,
+    Quote,
+}
+
+/// Ordered include directive forwarded to the parser frontend.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IncludeDirective {
+    pub kind: IncludeDirectiveKind,
+    pub path: String,
+}
+
 /// Transpile configuration.
 #[derive(Debug, Clone)]
 pub struct TranspileOptions {
+    /// Legacy include-path list interpreted as `-I`.
+    /// Prefer `include_directives` when preserving include-kind semantics matters.
     pub include_paths: Vec<String>,
+    /// Ordered include directives preserving `-I` / `-isystem` / `-iquote`.
+    pub include_directives: Vec<IncludeDirective>,
+    /// Ordered frontend flags forwarded verbatim to Clang/LibTooling.
+    /// When non-empty, these are used instead of include/directive/define legacy fields.
+    pub frontend_args: Vec<String>,
     pub defines: Vec<String>,
     pub language: ParserLanguage,
     pub language_standard: Option<String>,
@@ -66,6 +88,8 @@ impl Default for TranspileOptions {
     fn default() -> Self {
         Self {
             include_paths: Vec::new(),
+            include_directives: Vec::new(),
+            frontend_args: Vec::new(),
             defines: Vec::new(),
             language: ParserLanguage::Cpp,
             language_standard: None,
@@ -244,6 +268,27 @@ fn merged_defines(path: &Path, defines: &[String]) -> Vec<String> {
     merged
 }
 
+fn frontend_args_contains_define(frontend_args: &[String], define: &str) -> bool {
+    let mut i = 0usize;
+    while i < frontend_args.len() {
+        let arg = frontend_args[i].as_str();
+        if arg == "-D" {
+            if i + 1 < frontend_args.len() && frontend_args[i + 1] == define {
+                return true;
+            }
+            i += 2;
+            continue;
+        }
+        if let Some(rest) = arg.strip_prefix("-D") {
+            if !rest.is_empty() && rest == define {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
 fn libtooling_parser_for_path(path: &Path, options: &TranspileOptions) -> LibToolingParser {
     let mut extra_args = Vec::new();
     match options.language {
@@ -272,17 +317,44 @@ fn libtooling_parser_for_path(path: &Path, options: &TranspileOptions) -> LibToo
             extra_args.push(format!("-std={std}"));
         }
     }
-    for include in &options.include_paths {
-        extra_args.push(format!("-I{}", include));
-    }
-    for define in merged_defines(path, &options.defines) {
-        extra_args.push(format!("-D{}", define));
+    if options.frontend_args.is_empty() {
+        for include in &options.include_directives {
+            match include.kind {
+                IncludeDirectiveKind::Include => {
+                    extra_args.push("-I".to_string());
+                    extra_args.push(include.path.clone());
+                }
+                IncludeDirectiveKind::System => {
+                    extra_args.push("-isystem".to_string());
+                    extra_args.push(include.path.clone());
+                }
+                IncludeDirectiveKind::Quote => {
+                    extra_args.push("-iquote".to_string());
+                    extra_args.push(include.path.clone());
+                }
+            }
+        }
+        for include in &options.include_paths {
+            extra_args.push("-I".to_string());
+            extra_args.push(include.clone());
+        }
+        for define in merged_defines(path, &options.defines) {
+            extra_args.push(format!("-D{}", define));
+        }
+    } else {
+        extra_args.extend(options.frontend_args.iter().cloned());
+        for define in path_specific_defines(path) {
+            if !frontend_args_contains_define(&options.frontend_args, &define) {
+                extra_args.push(format!("-D{}", define));
+            }
+        }
     }
 
     let mut parser = LibToolingParser::new().with_extra_args(extra_args);
-    if let Some(parent) = path.parent() {
-        let compile_dir = parent.to_string_lossy().to_string();
-        parser = parser.with_compile_commands_dir(&compile_dir);
+    if let Ok(cwd) = std::env::current_dir() {
+        parser = parser.with_compile_commands_dir(&cwd.to_string_lossy());
+    } else if let Some(parent) = path.parent() {
+        parser = parser.with_compile_commands_dir(&parent.to_string_lossy());
     }
     if options.libtooling_skip_system_headers {
         parser = parser.with_skip_system_headers(true);

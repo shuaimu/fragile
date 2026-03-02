@@ -369,6 +369,7 @@ impl CppType {
                     .trim();
                 // Handle special C++ types that don't map directly to Rust
                 match normalized_name {
+                    "void" => "std::ffi::c_void".to_string(),
                     "float" => "f32".to_string(),
                     "double" | "long double" => "f64".to_string(), // Rust doesn't have long double
                     "bool" => "bool".to_string(),
@@ -1705,6 +1706,22 @@ mod tests {
             }
             .to_rust_type_str(),
             "*const std::ffi::c_void"
+        );
+    }
+
+    #[test]
+    fn test_named_void_lowers_to_opaque_c_void() {
+        assert_eq!(
+            CppType::Named("void".to_string()).to_rust_type_str(),
+            "std::ffi::c_void"
+        );
+        assert_eq!(
+            CppType::Pointer {
+                pointee: Box::new(CppType::Named("void".to_string())),
+                is_const: false,
+            }
+            .to_rust_type_str(),
+            "*mut std::ffi::c_void"
         );
     }
 

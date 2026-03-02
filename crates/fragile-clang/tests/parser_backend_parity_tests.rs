@@ -233,6 +233,8 @@ int mul(int x, int y) {
     for (backend_name, backend) in backends {
         let options = TranspileOptions {
             include_paths: Vec::new(),
+            include_directives: Vec::new(),
+            frontend_args: Vec::new(),
             defines: Vec::new(),
             language: ParserLanguage::Cpp,
             language_standard: None,
@@ -568,6 +570,8 @@ int add(int a, int b) {
             log_dir.join(format!("transpile_stage_timing_{backend_name}.log"));
         let options = TranspileOptions {
             include_paths: Vec::new(),
+            include_directives: Vec::new(),
+            frontend_args: Vec::new(),
             defines: Vec::new(),
             language: ParserLanguage::Cpp,
             language_standard: None,

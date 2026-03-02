@@ -228,12 +228,12 @@ fn find_fragile_runtime_link_info() -> Option<FragileRuntimeLinkInfo> {
                             .filter_map(|entry| entry.ok())
                             .map(|entry| entry.path())
                             .filter(|path| {
-                                path.file_name()
-                                    .and_then(|name| name.to_str())
-                                    .is_some_and(|name| {
+                                path.file_name().and_then(|name| name.to_str()).is_some_and(
+                                    |name| {
                                         name.starts_with("libfragile_runtime-")
                                             && name.ends_with(".rlib")
-                                    })
+                                    },
+                                )
                             })
                             .map(|path| {
                                 let modified = fs::metadata(&path)
@@ -291,7 +291,8 @@ fn transpile_compile_run(
 
     // Compile with rustc
     let binary_path = temp_dir.join(filename.replace(".cpp", ""));
-    let compile_output = Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
+    let compile_output = Command::new("rustc")
+        .env("RUSTC_BOOTSTRAP", "1")
         .arg(&rs_path)
         .arg("-o")
         .arg(&binary_path)
@@ -350,7 +351,8 @@ fn transpile_compile_run_with_runtime(
 
     // Compile with rustc, linking against fragile-runtime
     let binary_path = temp_dir.join(filename.replace(".cpp", ""));
-    let compile_output = Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
+    let compile_output = Command::new("rustc")
+        .env("RUSTC_BOOTSTRAP", "1")
         .arg(&rs_path)
         .arg("-o")
         .arg(&binary_path)
@@ -360,7 +362,10 @@ fn transpile_compile_run_with_runtime(
         .arg("-L")
         .arg(&runtime_link.deps_dir)
         .arg("--extern")
-        .arg(format!("fragile_runtime={}", runtime_link.rlib_path.display()))
+        .arg(format!(
+            "fragile_runtime={}",
+            runtime_link.rlib_path.display()
+        ))
         .output()
         .map_err(|e| format!("Failed to run rustc: {}", e))?;
 
@@ -1791,7 +1796,8 @@ fn main() {
 
     // Compile with rustc
     let binary_path = temp_dir.join("e2e_std_string_stub");
-    let compile_output = Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
+    let compile_output = Command::new("rustc")
+        .env("RUSTC_BOOTSTRAP", "1")
         .arg(&rs_path)
         .arg("-o")
         .arg(&binary_path)
@@ -1954,7 +1960,8 @@ fn main() {
 
     // Compile with rustc
     let binary_path = temp_dir.join("e2e_std_unordered_map_stub");
-    let compile_output = Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
+    let compile_output = Command::new("rustc")
+        .env("RUSTC_BOOTSTRAP", "1")
         .arg(&rs_path)
         .arg("-o")
         .arg(&binary_path)
@@ -2189,7 +2196,8 @@ fn main() {
 
     // Compile with rustc
     let binary_path = temp_dir.join("e2e_smart_ptr_stub");
-    let compile_output = Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
+    let compile_output = Command::new("rustc")
+        .env("RUSTC_BOOTSTRAP", "1")
         .arg(&rs_path)
         .arg("-o")
         .arg(&binary_path)
@@ -2422,7 +2430,8 @@ fn main() {
 
     // Compile with rustc
     let binary_path = temp_dir.join("e2e_stl_algorithm_stub");
-    let compile_output = Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
+    let compile_output = Command::new("rustc")
+        .env("RUSTC_BOOTSTRAP", "1")
         .arg(&rs_path)
         .arg("-o")
         .arg(&binary_path)
@@ -3764,7 +3773,8 @@ fn transpile_and_compile_with_vendored_libcxx(
 
     // Compile with rustc
     let binary_path = temp_dir.join(filename.replace(".cpp", ""));
-    let compile_output = match Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
+    let compile_output = match Command::new("rustc")
+        .env("RUSTC_BOOTSTRAP", "1")
         .arg(&rs_path)
         .arg("-o")
         .arg(&binary_path)
@@ -4107,7 +4117,8 @@ fn test_libcxx_cstddef_compilation() {
     let rs_path = temp_dir.join("cstddef_test.rs");
     fs::write(&rs_path, &rust_code).expect("Failed to write Rust source");
 
-    let compile_output = Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
+    let compile_output = Command::new("rustc")
+        .env("RUSTC_BOOTSTRAP", "1")
         .arg(&rs_path)
         .arg("-o")
         .arg(temp_dir.join("cstddef_test"))
@@ -4227,7 +4238,8 @@ fn main() {
 
     // Compile with rustc, linking against fragile-runtime
     let binary_path = temp_dir.join("runtime_file_io");
-    let compile_output = Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
+    let compile_output = Command::new("rustc")
+        .env("RUSTC_BOOTSTRAP", "1")
         .arg(&rs_path)
         .arg("-o")
         .arg(&binary_path)
@@ -4353,7 +4365,8 @@ fn main() {
 
     // Compile with rustc, linking against fragile-runtime
     let binary_path = temp_dir.join("runtime_pthread");
-    let compile_output = Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
+    let compile_output = Command::new("rustc")
+        .env("RUSTC_BOOTSTRAP", "1")
         .arg(&rs_path)
         .arg("-o")
         .arg(&binary_path)

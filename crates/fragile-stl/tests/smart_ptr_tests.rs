@@ -31,7 +31,9 @@ fn unique_ptr_release() {
     assert_eq!(released, raw);
     assert!(p.get().is_null());
     // Clean up manually since release transfers ownership
-    unsafe { drop(Box::from_raw(released)); }
+    unsafe {
+        drop(Box::from_raw(released));
+    }
 }
 
 #[test]

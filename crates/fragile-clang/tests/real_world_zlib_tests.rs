@@ -1963,7 +1963,7 @@ fn parse_native_static_libs_from_rustc_stderr(stderr: &str) -> Result<Vec<String
             .collect();
         if libs.is_empty() {
             return Err(
-                "rustc reported native-static-libs but no link flags were parsed".to_string()
+                "rustc reported native-static-libs but no link flags were parsed".to_string(),
             );
         }
         return Ok(libs);
@@ -1986,7 +1986,8 @@ fn build_rust_runtime_support_inputs(log_dir: &Path) -> Result<RustRuntimeSuppor
     })?;
 
     let archive_path = log_dir.join("libfragile_runtime_support.a");
-    let rustc_output = Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
+    let rustc_output = Command::new("rustc")
+        .env("RUSTC_BOOTSTRAP", "1")
         .arg("--edition")
         .arg("2021")
         .arg("--crate-type")
@@ -2995,7 +2996,8 @@ fn compile_rust_source_to_object(
             )
         })?;
     }
-    Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
+    Command::new("rustc")
+        .env("RUSTC_BOOTSTRAP", "1")
         .arg("--edition")
         .arg("2021")
         .arg("--crate-type")
@@ -4626,9 +4628,8 @@ fn test_make_test_command_subset_replay_reports_failing_command() {
         "link_required_{}",
         normalize_identifier_fragment(ZLIB_REQUIRED_LINK_OUTPUTS[0])
     );
-    let failing_status =
-        fs::read_to_string(log_dir.join(format!("{}.status", failing_step)))
-            .expect("failed to read strict link replay status");
+    let failing_status = fs::read_to_string(log_dir.join(format!("{}.status", failing_step)))
+        .expect("failed to read strict link replay status");
     assert_ne!(
         failing_status.trim(),
         "0",
@@ -4785,9 +4786,10 @@ fn test_make_test_stdout_stderr_parity_local_fixture_success() {
     .expect("failed to rewrite replay fixture test target for output parity success");
 
     let replay_log_dir = root.join("replay_logs");
-    let replay_err =
-        run_make_test_command_subset_replay_in_tree(&replay_project, &replay_log_dir)
-        .expect_err("strict make-test replay should fail at link step for output parity success case");
+    let replay_err = run_make_test_command_subset_replay_in_tree(&replay_project, &replay_log_dir)
+        .expect_err(
+            "strict make-test replay should fail at link step for output parity success case",
+        );
     assert!(
         replay_err.contains("link replay failed for"),
         "unexpected strict replay error: {}",
@@ -4852,9 +4854,10 @@ fn test_make_test_stdout_stderr_parity_local_fixture_reports_mismatch() {
     .expect("failed to rewrite replay fixture test target for output parity mismatch");
 
     let replay_log_dir = root.join("replay_logs");
-    let replay_err =
-        run_make_test_command_subset_replay_in_tree(&replay_project, &replay_log_dir)
-        .expect_err("strict make-test replay should fail at link step for output parity mismatch case");
+    let replay_err = run_make_test_command_subset_replay_in_tree(&replay_project, &replay_log_dir)
+        .expect_err(
+            "strict make-test replay should fail at link step for output parity mismatch case",
+        );
     assert!(
         replay_err.contains("link replay failed for"),
         "unexpected strict replay error: {}",
@@ -5995,7 +5998,9 @@ fn test_real_world_zlib_make_test_exit_status_parity() {
         .expect("fragile replay should succeed end-to-end");
 
     assert!(
-        replay_log_dir.join("make_test_commands_manifest.txt").exists(),
+        replay_log_dir
+            .join("make_test_commands_manifest.txt")
+            .exists(),
         "make-test command plan should exist once strict link replay succeeds"
     );
     assert_make_test_exit_status_parity(&native_log_dir, &replay_log_dir)
@@ -6010,7 +6015,9 @@ fn test_real_world_zlib_make_test_stdout_stderr_parity() {
         .expect("fragile replay should succeed end-to-end");
 
     assert!(
-        replay_log_dir.join("make_test_commands_manifest.txt").exists(),
+        replay_log_dir
+            .join("make_test_commands_manifest.txt")
+            .exists(),
         "make-test command plan should exist once strict link replay succeeds"
     );
     assert_make_test_stdout_stderr_parity(&native_log_dir, &replay_log_dir)
@@ -6025,7 +6032,9 @@ fn test_real_world_zlib_make_test_artifact_behavior_parity() {
         .expect("fragile replay should succeed end-to-end");
 
     assert!(
-        replay_log_dir.join("make_test_commands_manifest.txt").exists(),
+        replay_log_dir
+            .join("make_test_commands_manifest.txt")
+            .exists(),
         "make-test command plan should exist once strict link replay succeeds"
     );
     assert_make_test_artifact_behavior_parity(&native_log_dir, &replay_log_dir)

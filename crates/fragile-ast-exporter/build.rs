@@ -270,7 +270,11 @@ fn library_search_dirs(llvm_lib_dir: &Path, llvm_version: &str) -> Vec<PathBuf> 
     dirs
 }
 
-fn find_library_target(search_dirs: &[PathBuf], exact_name: &str, versioned_prefixes: &[&str]) -> Option<PathBuf> {
+fn find_library_target(
+    search_dirs: &[PathBuf],
+    exact_name: &str,
+    versioned_prefixes: &[&str],
+) -> Option<PathBuf> {
     for dir in search_dirs {
         let candidate = dir.join(exact_name);
         if candidate.exists() {

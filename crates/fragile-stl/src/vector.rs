@@ -6,8 +6,12 @@ impl<T> std_vector_push_arg<T> for T {
     fn into_std_vector_value(self) -> T { self }
 }
 
-impl<T: Clone> std_vector_push_arg<T> for &T {
-    fn into_std_vector_value(self) -> T { self.clone() }
+impl<T> std_vector_push_arg<T> for &T {
+    fn into_std_vector_value(self) -> T {
+        // Best-effort by-value copy for transpiled C++ `push_back(const T&)`
+        // call sites where `T` may not implement Rust `Clone`.
+        unsafe { std::ptr::read(self as *const T) }
+    }
 }
 
 // Generic std::vector<T> stub implementation backed by Vec<T>.

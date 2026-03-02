@@ -20,7 +20,12 @@ const PUGIXML_FRAGILE_SINGLE_TU_REPLAY_DIR: &str =
     "/tmp/fragile_real_world_pugixml_fragile_single_tu_replay";
 const PUGIXML_FRAGILEC_DRIVER_BASELINE_DIR: &str =
     "/tmp/fragile_real_world_pugixml_fragilec_driver_baseline";
-const PUGIXML_REQUIRED_PATHS: &[&str] = &["src/pugixml.cpp", "src/pugixml.hpp", "tests/main.cpp", "Makefile"];
+const PUGIXML_REQUIRED_PATHS: &[&str] = &[
+    "src/pugixml.cpp",
+    "src/pugixml.hpp",
+    "tests/main.cpp",
+    "Makefile",
+];
 const PUGIXML_NATIVE_LOG_FILES: &[&str] = &[
     "make_clean.status",
     "make_clean.stdout",
@@ -167,7 +172,10 @@ fn synchronize_pinned_checkout(
         }
 
         let repo_dir_str = repo_dir.to_string_lossy().to_string();
-        run_git(&["clone", "--no-tags", repo_url, repo_dir_str.as_str()], None)?;
+        run_git(
+            &["clone", "--no-tags", repo_url, repo_dir_str.as_str()],
+            None,
+        )?;
     }
 
     run_git(
@@ -287,8 +295,8 @@ fn status_code(output: &Output) -> i32 {
 }
 
 fn read_status_file(path: &Path) -> Result<i32, String> {
-    let raw =
-        fs::read_to_string(path).map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
+    let raw = fs::read_to_string(path)
+        .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
     raw.trim()
         .parse::<i32>()
         .map_err(|e| format!("failed to parse status file {}: {}", path.display(), e))
@@ -321,7 +329,10 @@ fn parse_make_test_commands_from_dry_run(dry_run_stdout: &str) -> Result<Vec<Str
     let mut commands = Vec::new();
     for line in dry_run_stdout.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with("./") && trimmed.contains("/test") && !trimmed.starts_with("./tests/") {
+        if trimmed.starts_with("./")
+            && trimmed.contains("/test")
+            && !trimmed.starts_with("./tests/")
+        {
             if !commands.contains(&trimmed.to_string()) {
                 commands.push(trimmed.to_string());
             }
@@ -395,13 +406,9 @@ fn run_native_baseline_in_tree(source_dir: &Path, log_dir: &Path) -> Result<(), 
         .env("LC_ALL", "C")
         .env("LANG", "C")
         .env("MAKEFLAGS", "-j1");
-    let make_test_output = make_test.output().map_err(|e| {
-        format!(
-            "failed to run make test at {}: {}",
-            source_dir.display(),
-            e
-        )
-    })?;
+    let make_test_output = make_test
+        .output()
+        .map_err(|e| format!("failed to run make test at {}: {}", source_dir.display(), e))?;
     write_command_capture(log_dir, "make_test", &make_test_output)?;
     if !make_test_output.status.success() {
         return Err(format!(
@@ -443,8 +450,13 @@ fn run_fragilec_driver_baseline_in_tree(source_dir: &Path, log_dir: &Path) -> Re
     let fragilec = ensure_fragilec_binary()?;
     let fragilec_str = fragilec.to_string_lossy().to_string();
     let driver_log = log_dir.join("fragilec_driver.log");
-    fs::write(&driver_log, "")
-        .map_err(|e| format!("failed to initialize fragilec driver log {}: {}", driver_log.display(), e))?;
+    fs::write(&driver_log, "").map_err(|e| {
+        format!(
+            "failed to initialize fragilec driver log {}: {}",
+            driver_log.display(),
+            e
+        )
+    })?;
     let driver_log_str = driver_log.to_string_lossy().to_string();
 
     let mut make_clean = Command::new("make");
@@ -527,8 +539,13 @@ fn run_fragilec_driver_baseline_in_tree(source_dir: &Path, log_dir: &Path) -> Re
         ));
     }
 
-    let log_content = fs::read_to_string(&driver_log)
-        .map_err(|e| format!("failed to read fragilec driver log {}: {}", driver_log.display(), e))?;
+    let log_content = fs::read_to_string(&driver_log).map_err(|e| {
+        format!(
+            "failed to read fragilec driver log {}: {}",
+            driver_log.display(),
+            e
+        )
+    })?;
     if log_content.trim().is_empty() {
         return Err(format!(
             "fragilec driver log {} is empty; expected compiler invocations",
@@ -598,7 +615,8 @@ fn compile_transpiled_rust_lib(
     log_dir: &Path,
     step_name: &str,
 ) -> Result<(), String> {
-    let output = Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
+    let output = Command::new("rustc")
+        .env("RUSTC_BOOTSTRAP", "1")
         .arg("--edition")
         .arg("2021")
         .arg("-A")
@@ -640,7 +658,13 @@ fn transpile_pugixml_single_tu_with_cli(
         .arg(transpiled_rs)
         .current_dir(workspace_root_dir())
         .output()
-        .map_err(|e| format!("failed to run fragile-cli transpile for {}: {}", source_path.display(), e))?;
+        .map_err(|e| {
+            format!(
+                "failed to run fragile-cli transpile for {}: {}",
+                source_path.display(),
+                e
+            )
+        })?;
     write_command_capture(log_dir, "fragile_transpile_pugixml_single_tu", &output)?;
     if !output.status.success() {
         return Err(format!(
@@ -695,7 +719,11 @@ fn run_fragile_single_tu_replay_in_tree(source_dir: &Path, log_dir: &Path) -> Re
         rlib_path.display(),
         object_size
     );
-    fs::write(log_dir.join("fragile_single_tu_replay_manifest.txt"), manifest).map_err(|e| {
+    fs::write(
+        log_dir.join("fragile_single_tu_replay_manifest.txt"),
+        manifest,
+    )
+    .map_err(|e| {
         format!(
             "failed to write fragile_single_tu_replay_manifest.txt in {}: {}",
             log_dir.display(),
@@ -894,7 +922,13 @@ fn create_local_pugixml_like_repo(base_dir: &Path) -> Result<(String, String, St
         Some(&remote_dir),
     )?;
     run_git(
-        &["add", "src/pugixml.hpp", "src/pugixml.cpp", "tests/main.cpp", "Makefile"],
+        &[
+            "add",
+            "src/pugixml.hpp",
+            "src/pugixml.cpp",
+            "tests/main.cpp",
+            "Makefile",
+        ],
         Some(&remote_dir),
     )?;
     run_git(&["commit", "-m", "initial fixture"], Some(&remote_dir))?;
@@ -957,10 +991,16 @@ fn test_ensure_pinned_checkout_clones_and_rewinds_local_pugixml_fixture() {
     )
     .expect("initial checkout should succeed");
 
-    run_git(&["checkout", "--detach", newer_commit.as_str()], Some(&checkout_dir))
-        .expect("failed to move checkout to newer commit");
+    run_git(
+        &["checkout", "--detach", newer_commit.as_str()],
+        Some(&checkout_dir),
+    )
+    .expect("failed to move checkout to newer commit");
     let moved_head = read_head(&checkout_dir).expect("failed to read moved HEAD");
-    assert_eq!(moved_head, newer_commit, "checkout should move before rewind");
+    assert_eq!(
+        moved_head, newer_commit,
+        "checkout should move before rewind"
+    );
 
     ensure_pinned_checkout(
         repo_url.as_str(),
@@ -971,7 +1011,10 @@ fn test_ensure_pinned_checkout_clones_and_rewinds_local_pugixml_fixture() {
     .expect("rewind checkout should succeed");
 
     let head = read_head(&checkout_dir).expect("failed to read pinned HEAD");
-    assert_eq!(head, pinned_commit, "checkout should rewind to pinned commit");
+    assert_eq!(
+        head, pinned_commit,
+        "checkout should rewind to pinned commit"
+    );
 
     let _ = fs::remove_dir_all(&root);
 }
@@ -1136,8 +1179,8 @@ fn test_fragile_pugixml_single_tu_replay_local_fixture_success() {
 
 #[test]
 fn test_ci_workflow_keeps_pugixml_smoke_coverage() {
-    let ci_workflow =
-        read_workflow_file("ci.yml").expect("failed to read CI workflow for pugixml smoke coverage");
+    let ci_workflow = read_workflow_file("ci.yml")
+        .expect("failed to read CI workflow for pugixml smoke coverage");
     assert!(
         ci_workflow.contains("pugixml-smoke-baseline"),
         "CI workflow should keep pugixml smoke lane"
@@ -1229,8 +1272,8 @@ fn test_real_world_pugixml_native_make_test_no_stl() {
 #[test]
 #[ignore = "real-world external project test (builds pugixml with CXX=fragilec strict-mode driver)"]
 fn test_real_world_pugixml_fragilec_make_test_no_stl() {
-    let log_dir =
-        run_pugixml_fragilec_driver_baseline().expect("failed to run pugixml fragilec-driver baseline");
+    let log_dir = run_pugixml_fragilec_driver_baseline()
+        .expect("failed to run pugixml fragilec-driver baseline");
 
     for rel in PUGIXML_FRAGILEC_DRIVER_LOG_FILES {
         assert!(

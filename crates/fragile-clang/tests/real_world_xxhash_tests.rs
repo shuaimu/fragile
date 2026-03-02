@@ -199,7 +199,8 @@ fn ensure_fragilec_binary() -> Result<PathBuf, String> {
 }
 
 fn compile_rust_file(path: &Path, out: &Path, crate_type: &str) -> Result<(), String> {
-    let output = Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
+    let output = Command::new("rustc")
+        .env("RUSTC_BOOTSTRAP", "1")
         .arg("--edition")
         .arg("2021")
         .arg("-C")
@@ -295,7 +296,8 @@ fn compile_transpiled_xxhsum_runner(
     wrapper_rs: &Path,
     wrapper_bin: &Path,
 ) -> Result<(), String> {
-    let lib_out = Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
+    let lib_out = Command::new("rustc")
+        .env("RUSTC_BOOTSTRAP", "1")
         .arg("--edition")
         .arg("2021")
         .arg("--crate-name")
@@ -339,7 +341,8 @@ fn main() {
     fs::write(wrapper_rs, wrapper_src)
         .map_err(|e| format!("failed to write wrapper source: {}", e))?;
 
-    let wrapper_out = Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
+    let wrapper_out = Command::new("rustc")
+        .env("RUSTC_BOOTSTRAP", "1")
         .arg("--edition")
         .arg("2021")
         .arg("-A")
@@ -583,7 +586,8 @@ fn test_real_world_xxhash_inline_wrapper_compiles_and_runs() {
         transpile_cpp_to_rust(&wrapper_c).expect("wrapper source should transpile to Rust");
     fs::write(&wrapper_rs, generated).expect("failed to write wrapper Rust source");
 
-    let output = Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
+    let output = Command::new("rustc")
+        .env("RUSTC_BOOTSTRAP", "1")
         .arg("--edition")
         .arg("2021")
         .arg("-C")

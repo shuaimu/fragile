@@ -466,14 +466,18 @@ fn parse_compile_commands_from_cxx_driver_log(
         if tokens.is_empty() {
             continue;
         }
-        if !tokens.iter().any(|tok| *tok == "-c" || tok.starts_with("-c")) {
+        if !tokens
+            .iter()
+            .any(|tok| *tok == "-c" || tok.starts_with("-c"))
+        {
             continue;
         }
 
         let Some((object_raw, object_consumed_idx)) = extract_arg_value(&tokens, "-o") else {
             continue;
         };
-        let Some(source_raw) = extract_compile_source_token(&tokens, &object_raw, object_consumed_idx)
+        let Some(source_raw) =
+            extract_compile_source_token(&tokens, &object_raw, object_consumed_idx)
         else {
             continue;
         };
@@ -535,7 +539,10 @@ fn parse_link_commands_from_cxx_driver_log(
         if tokens.is_empty() {
             continue;
         }
-        if tokens.iter().any(|tok| *tok == "-c" || tok.starts_with("-c")) {
+        if tokens
+            .iter()
+            .any(|tok| *tok == "-c" || tok.starts_with("-c"))
+        {
             continue;
         }
 
@@ -573,12 +580,14 @@ fn parse_link_commands_from_cxx_driver_log(
             continue;
         }
 
-        commands.entry(output_rel.clone()).or_insert_with(|| LinkCommand {
-            output_rel,
-            input_paths,
-            command_cwd: command_cwd.clone(),
-            command_tokens: tokens.iter().map(|token| (*token).to_string()).collect(),
-        });
+        commands
+            .entry(output_rel.clone())
+            .or_insert_with(|| LinkCommand {
+                output_rel,
+                input_paths,
+                command_cwd: command_cwd.clone(),
+                command_tokens: tokens.iter().map(|token| (*token).to_string()).collect(),
+            });
     }
 
     if commands.is_empty() {
@@ -746,7 +755,8 @@ fn compile_rust_source_to_object(
             )
         })?;
     }
-    Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
+    Command::new("rustc")
+        .env("RUSTC_BOOTSTRAP", "1")
         .arg("--edition")
         .arg("2021")
         .arg("--crate-type")
@@ -787,7 +797,7 @@ fn parse_native_static_libs_from_rustc_stderr(stderr: &str) -> Result<Vec<String
             .collect();
         if libs.is_empty() {
             return Err(
-                "rustc reported native-static-libs but no link flags were parsed".to_string()
+                "rustc reported native-static-libs but no link flags were parsed".to_string(),
             );
         }
         return Ok(libs);
@@ -810,7 +820,8 @@ fn build_rust_runtime_support_inputs(log_dir: &Path) -> Result<RustRuntimeSuppor
     })?;
 
     let archive_path = log_dir.join("libfragile_runtime_support.a");
-    let rustc_output = Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
+    let rustc_output = Command::new("rustc")
+        .env("RUSTC_BOOTSTRAP", "1")
         .arg("--edition")
         .arg("2021")
         .arg("--crate-type")
@@ -958,10 +969,22 @@ fn write_fragile_xmltest_manifest(
 ) -> Result<(), String> {
     let head = read_head(source_dir).unwrap_or_else(|| "unknown".to_string());
     let staged_binary_size = fs::metadata(staged_binary_path)
-        .map_err(|e| format!("failed to stat staged binary {}: {}", staged_binary_path.display(), e))?
+        .map_err(|e| {
+            format!(
+                "failed to stat staged binary {}: {}",
+                staged_binary_path.display(),
+                e
+            )
+        })?
         .len();
     let replay_binary_size = fs::metadata(replay_binary_path)
-        .map_err(|e| format!("failed to stat replay binary {}: {}", replay_binary_path.display(), e))?
+        .map_err(|e| {
+            format!(
+                "failed to stat replay binary {}: {}",
+                replay_binary_path.display(),
+                e
+            )
+        })?
         .len();
     let mut manifest = format!(
         "source_dir={}\ncommit={}\nstaged_binary={}\nstaged_binary_size={}\nreplay_binary={}\nreplay_binary_size={}\nruntime_support_archive={}\nruntime_support_archive_size={}\nruntime_support_native_static_libs={}\nreplayed_compile_unit_count={}\n",
@@ -976,7 +999,8 @@ fn write_fragile_xmltest_manifest(
         runtime_support.native_static_libs.join(" "),
         replayed_entries.len(),
     );
-    for (source_rel, object_rel, transpiled_rs_path, staged_object, object_size) in replayed_entries {
+    for (source_rel, object_rel, transpiled_rs_path, staged_object, object_size) in replayed_entries
+    {
         manifest.push_str(&format!(
             "source={} object={} transpiled_rust={} staged_object={} object_size={}\n",
             source_rel,
@@ -1188,9 +1212,16 @@ fn run_fragile_xmltest_build_from_cxx_driver_plan_in_tree(
                     }
                 };
                 let (transpiled_rs_path, staged_object_path, object_size) =
-                    stage_compile_command_object(source_dir, log_dir, &stage_object_root, &command)?;
-                staged_objects_by_object.insert(command.object_rel.clone(), staged_object_path.clone());
-                staged_objects_by_source.insert(command.source_rel.clone(), staged_object_path.clone());
+                    stage_compile_command_object(
+                        source_dir,
+                        log_dir,
+                        &stage_object_root,
+                        &command,
+                    )?;
+                staged_objects_by_object
+                    .insert(command.object_rel.clone(), staged_object_path.clone());
+                staged_objects_by_source
+                    .insert(command.source_rel.clone(), staged_object_path.clone());
                 replayed_entries.push((
                     command.source_rel.clone(),
                     command.object_rel.clone(),
@@ -2153,7 +2184,10 @@ fn parse_manifest_value(manifest: &str, key: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn read_source_dir_from_manifest(manifest_path: &Path, manifest_name: &str) -> Result<PathBuf, String> {
+fn read_source_dir_from_manifest(
+    manifest_path: &Path,
+    manifest_name: &str,
+) -> Result<PathBuf, String> {
     let manifest = fs::read_to_string(manifest_path)
         .map_err(|e| format!("failed to read {}: {}", manifest_path.display(), e))?;
     let source_dir = parse_manifest_value(&manifest, "source_dir").ok_or_else(|| {
@@ -2195,7 +2229,10 @@ fn read_make_test_replay_exit_status(log_dir: &Path) -> Result<i32, String> {
     Ok(0)
 }
 
-fn assert_make_test_exit_status_parity(native_log_dir: &Path, replay_log_dir: &Path) -> Result<(), String> {
+fn assert_make_test_exit_status_parity(
+    native_log_dir: &Path,
+    replay_log_dir: &Path,
+) -> Result<(), String> {
     let native_status = read_make_test_replay_exit_status(native_log_dir)?;
     let replay_status = read_make_test_replay_exit_status(replay_log_dir)?;
     if native_status == replay_status {
@@ -2491,13 +2528,25 @@ fn assert_make_test_generated_file_parity(
     replay_log_dir: &Path,
 ) -> Result<(), String> {
     let native_commands_manifest_path = native_log_dir.join("make_test_commands_manifest.txt");
-    let native_commands_manifest = fs::read_to_string(&native_commands_manifest_path)
-        .map_err(|e| format!("failed to read {}: {}", native_commands_manifest_path.display(), e))?;
+    let native_commands_manifest =
+        fs::read_to_string(&native_commands_manifest_path).map_err(|e| {
+            format!(
+                "failed to read {}: {}",
+                native_commands_manifest_path.display(),
+                e
+            )
+        })?;
     let native_commands = parse_make_test_commands_manifest_entries(&native_commands_manifest)?;
 
     let replay_commands_manifest_path = replay_log_dir.join("make_test_commands_manifest.txt");
-    let replay_commands_manifest = fs::read_to_string(&replay_commands_manifest_path)
-        .map_err(|e| format!("failed to read {}: {}", replay_commands_manifest_path.display(), e))?;
+    let replay_commands_manifest =
+        fs::read_to_string(&replay_commands_manifest_path).map_err(|e| {
+            format!(
+                "failed to read {}: {}",
+                replay_commands_manifest_path.display(),
+                e
+            )
+        })?;
     let replay_commands = parse_make_test_commands_manifest_entries(&replay_commands_manifest)?;
 
     if native_commands != replay_commands {
@@ -2509,11 +2558,21 @@ fn assert_make_test_generated_file_parity(
     }
 
     let native_replay_manifest_path = native_log_dir.join("make_test_replay_manifest.txt");
-    let native_replay_manifest = fs::read_to_string(&native_replay_manifest_path)
-        .map_err(|e| format!("failed to read {}: {}", native_replay_manifest_path.display(), e))?;
+    let native_replay_manifest = fs::read_to_string(&native_replay_manifest_path).map_err(|e| {
+        format!(
+            "failed to read {}: {}",
+            native_replay_manifest_path.display(),
+            e
+        )
+    })?;
     let replay_replay_manifest_path = replay_log_dir.join("make_test_replay_manifest.txt");
-    let replay_replay_manifest = fs::read_to_string(&replay_replay_manifest_path)
-        .map_err(|e| format!("failed to read {}: {}", replay_replay_manifest_path.display(), e))?;
+    let replay_replay_manifest = fs::read_to_string(&replay_replay_manifest_path).map_err(|e| {
+        format!(
+            "failed to read {}: {}",
+            replay_replay_manifest_path.display(),
+            e
+        )
+    })?;
 
     let path_filters = collect_make_test_output_path_filters(native_log_dir, replay_log_dir)?;
     let normalized_native_commands =
@@ -2521,14 +2580,20 @@ fn assert_make_test_generated_file_parity(
     let normalized_replay_commands =
         normalize_manifest_text_for_parity(&replay_commands_manifest, &path_filters);
     if normalized_native_commands != normalized_replay_commands {
-        return Err("generated-file parity mismatch: normalized make-test command manifests differ".to_string());
+        return Err(
+            "generated-file parity mismatch: normalized make-test command manifests differ"
+                .to_string(),
+        );
     }
     let normalized_native_replay =
         normalize_manifest_text_for_parity(&native_replay_manifest, &path_filters);
     let normalized_replay_replay =
         normalize_manifest_text_for_parity(&replay_replay_manifest, &path_filters);
     if normalized_native_replay != normalized_replay_replay {
-        return Err("generated-file parity mismatch: normalized make-test replay manifests differ".to_string());
+        return Err(
+            "generated-file parity mismatch: normalized make-test replay manifests differ"
+                .to_string(),
+        );
     }
 
     for idx in 0..native_commands.len() {
@@ -3625,7 +3690,9 @@ fn test_make_test_command_replay_local_fixture_fragile_runner_reports_missing_co
 
     let log_dir = root.join("replay_logs_fragile");
     let err = run_tinyxml2_fragile_make_test_command_replay_in_tree(&checkout_dir, &log_dir)
-        .expect_err("fragile replay runner should fail when compile coverage for xmltest build is unavailable");
+        .expect_err(
+        "fragile replay runner should fail when compile coverage for xmltest build is unavailable",
+    );
     assert!(
         err.contains("no compile units found in cxx_driver.log"),
         "missing compile coverage should fail during fragile build staging, got: {}",
@@ -3908,30 +3975,31 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
         replay_stdout
     );
     assert!(
-        !fail_lines
-            .iter()
-            .any(|line| line.starts_with("[fail] <!DOCTYPE html><html><body><p>test</p><p><br/></p></body></html>")),
+        !fail_lines.iter().any(|line| line.starts_with(
+            "[fail] <!DOCTYPE html><html><body><p>test</p><p><br/></p></body></html>"
+        )),
         "doctype/html serialization signature should be resolved, got:\n{}",
         replay_stdout
     );
     assert!(
-        !fail_lines
-            .iter()
-            .any(|line| line.starts_with("[fail] Test that declaration after self-closed child is not allowed")),
+        !fail_lines.iter().any(|line| line
+            .starts_with("[fail] Test that declaration after self-closed child is not allowed")),
         "declaration-after-self-closed-child signature should be resolved, got:\n{}",
         replay_stdout
     );
     assert!(
         !fail_lines
             .iter()
-            .any(|line| line.starts_with("[fail] Test that declaration after a child is not allowed")),
+            .any(|line| line
+                .starts_with("[fail] Test that declaration after a child is not allowed")),
         "declaration-after-child signature should be resolved, got:\n{}",
         replay_stdout
     );
     assert!(
         !fail_lines
             .iter()
-            .any(|line| line.starts_with("[fail] Test that declaration inside a child is not allowed")),
+            .any(|line| line
+                .starts_with("[fail] Test that declaration inside a child is not allowed")),
         "declaration-inside-child signature should be resolved, got:\n{}",
         replay_stdout
     );
@@ -4167,9 +4235,9 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
         replay_stdout
     );
     assert!(
-        !fail_lines
-            .iter()
-            .any(|line| *line == "[fail] Element names with lead digit fail to parse. [true][false]"),
+        !fail_lines.iter().any(
+            |line| *line == "[fail] Element names with lead digit fail to parse. [true][false]"
+        ),
         "lead-digit element-name parse-error signature should be resolved, got:\n{}",
         replay_stdout
     );
@@ -4207,7 +4275,9 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
         replay_stdout
     );
     assert!(
-        !fail_lines.iter().any(|line| *line == "[fail] QueryBoolText"),
+        !fail_lines
+            .iter()
+            .any(|line| *line == "[fail] QueryBoolText"),
         "QueryBoolText signature should be resolved, got:\n{}",
         replay_stdout
     );
@@ -4487,11 +4557,15 @@ fn test_real_world_tinyxml2_make_test_command_subset_parity() {
         .expect("failed to run tinyxml2 fragile make-test replay");
 
     assert!(
-        native_log_dir.join("make_test_commands_manifest.txt").exists(),
+        native_log_dir
+            .join("make_test_commands_manifest.txt")
+            .exists(),
         "native replay should write make-test command manifest"
     );
     assert!(
-        replay_log_dir.join("make_test_commands_manifest.txt").exists(),
+        replay_log_dir
+            .join("make_test_commands_manifest.txt")
+            .exists(),
         "fragile replay should write make-test command manifest"
     );
 

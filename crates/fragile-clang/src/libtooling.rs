@@ -16,8 +16,9 @@ use fragile_ast_exporter::{
     export_ast_with_options, ASTEntryTag, CborValue,
 };
 use miette::{miette, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Parser that uses LibTooling for full template instantiation access.
 pub struct LibToolingParser {
@@ -117,8 +118,10 @@ impl LibToolingParser {
     /// This provides access to the full AST including template instantiations
     /// with concrete types and actual method bodies.
     pub fn parse_file(&self, path: &Path) -> Result<AstContext> {
-        // For compile_commands_dir, default to the file's directory
-        let compile_dir = self
+        // Use the configured compile dir (or source parent) as the logical
+        // command directory, but always materialize compile_commands.json in a
+        // fresh temp directory so stale project-local databases cannot leak.
+        let compile_working_dir = self
             .compile_commands_dir
             .as_ref()
             .map(|s| Path::new(s).to_path_buf())
@@ -128,25 +131,34 @@ impl LibToolingParser {
                     .unwrap_or_else(|| Path::new(".").to_path_buf())
             });
 
-        // Ensure compile_commands.json exists, or create a minimal one
-        let compile_commands_path = compile_dir.join("compile_commands.json");
-        if !compile_commands_path.exists() {
-            // Create a minimal compile_commands.json
-            let compile_commands = format!(
-                r#"[
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let compile_db_dir = std::env::temp_dir().join(format!(
+            "fragile_ast_exporter_ccdb_{}_{}",
+            std::process::id(),
+            stamp
+        ));
+        std::fs::create_dir_all(&compile_db_dir)
+            .map_err(|e| miette!("Failed to create temp compile_commands dir: {}", e))?;
+
+        // Create a minimal fresh compile_commands.json for this invocation.
+        let compile_commands_path = compile_db_dir.join("compile_commands.json");
+        let compile_commands = format!(
+            r#"[
   {{
     "directory": "{}",
     "command": "clang++ -std=c++17 -c {} -o /dev/null",
     "file": "{}"
   }}
 ]"#,
-                compile_dir.display(),
-                path.display(),
-                path.display()
-            );
-            std::fs::write(&compile_commands_path, compile_commands)
-                .map_err(|e| miette!("Failed to create compile_commands.json: {}", e))?;
-        }
+            compile_working_dir.display(),
+            path.display(),
+            path.display()
+        );
+        std::fs::write(&compile_commands_path, compile_commands)
+            .map_err(|e| miette!("Failed to create compile_commands.json: {}", e))?;
 
         // Build extra args: combine user-specified args with vendored libc++ paths
         let mut all_extra_args: Vec<String> = self.extra_args.clone();
@@ -166,14 +178,19 @@ impl LibToolingParser {
 
         let extra_args: Vec<&str> = all_extra_args.iter().map(|s| s.as_str()).collect();
 
-        export_ast_with_options(
+        let parse_result = export_ast_with_options(
             path,
-            &compile_dir,
+            &compile_db_dir,
             &extra_args,
             false,
             self.skip_system_headers,
         )
-        .map_err(|e| miette!("LibTooling parse failed: {}", e))
+        .map_err(|e| miette!("LibTooling parse failed: {}", e));
+
+        let _ = std::fs::remove_file(&compile_commands_path);
+        let _ = std::fs::remove_dir_all(&compile_db_dir);
+
+        parse_result
     }
 
     /// Extract template method instantiations from an AST context.
@@ -413,7 +430,9 @@ pub fn convert_to_clang_node(ctx: &AstContext, root_id: u64) -> Option<ClangNode
     // Limit depth to avoid excessive processing of deeply nested STL internals
     const MAX_DEPTH: usize = 100;
 
-    convert_node_with_depth(ctx, root_id, 0, MAX_DEPTH)
+    let mut cache: HashMap<u64, ClangNode> = HashMap::new();
+    let mut active: HashSet<u64> = HashSet::new();
+    convert_node_with_depth(ctx, root_id, 0, MAX_DEPTH, &mut cache, &mut active)
 }
 
 fn extract_string_array_extra(node: &AstNode, index: usize) -> Vec<String> {
@@ -503,6 +522,8 @@ fn convert_node_with_depth(
     node_id: u64,
     current_depth: usize,
     max_depth: usize,
+    cache: &mut HashMap<u64, ClangNode>,
+    active: &mut HashSet<u64>,
 ) -> Option<ClangNode> {
     if current_depth > max_depth {
         // Return a placeholder for too-deep nodes
@@ -517,7 +538,22 @@ fn convert_node_with_depth(
         });
     }
 
+    if let Some(cached) = cache.get(&node_id) {
+        return Some(cached.clone());
+    }
+
     let node = ctx.ast_nodes.get(&node_id)?;
+    if !active.insert(node_id) {
+        return Some(ClangNode {
+            kind: ClangNodeKind::Unknown("RecursiveRef".to_string()),
+            children: vec![],
+            location: SourceLocation {
+                file: None,
+                line: node.loc.begin_line as u32,
+                column: node.loc.begin_column as u32,
+            },
+        });
+    }
 
     let location = SourceLocation {
         file: None, // TODO: Extract from node.loc
@@ -926,14 +962,19 @@ fn convert_node_with_depth(
     };
     let children: Vec<ClangNode> = child_ids
         .iter()
-        .filter_map(|id| convert_node_with_depth(ctx, *id, current_depth + 1, max_depth))
+        .filter_map(|id| {
+            convert_node_with_depth(ctx, *id, current_depth + 1, max_depth, cache, active)
+        })
         .collect();
 
-    Some(ClangNode {
+    let converted = ClangNode {
         kind,
         children,
         location,
-    })
+    };
+    active.remove(&node_id);
+    cache.insert(node_id, converted.clone());
+    Some(converted)
 }
 
 fn convert_function_decl_node(
