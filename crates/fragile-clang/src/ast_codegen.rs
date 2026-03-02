@@ -15331,6 +15331,49 @@ impl AstCodeGen {
         }
     }
 
+    /// Recover unresolved namespace-qualified deallocator calls (for example
+    /// `super::rocksdb_free(ptr)`) by mapping them through runtime `free`.
+    ///
+    /// This is intentionally narrow: only unresolved `super::`/`self::` calls
+    /// with a single argument and `_free` suffix are rewritten.
+    fn map_unresolved_deallocator_to_runtime_free(
+        &self,
+        func_name: &str,
+        arg_count: usize,
+    ) -> Option<&'static str> {
+        if arg_count != 1 {
+            return None;
+        }
+
+        let stripped = Self::strip_outer_unsafe_block(func_name)
+            .unwrap_or(func_name)
+            .trim();
+        if !(stripped.starts_with("super::") || stripped.starts_with("self::")) {
+            return None;
+        }
+
+        let leaf = stripped.rsplit("::").next()?;
+        if leaf.is_empty()
+            || !leaf.ends_with("_free")
+            || leaf == "free"
+            || leaf == "fragile_free"
+            || !leaf.chars().all(Self::is_identifier_char)
+        {
+            return None;
+        }
+
+        let base_name = Self::strip_namespace_and_template(leaf);
+        if self.declared_function_names.contains(leaf)
+            || self.declared_function_names.contains(&base_name)
+            || self.defined_function_names.contains(leaf)
+            || self.defined_function_names.contains(&base_name)
+        {
+            return None;
+        }
+
+        Some("crate::fragile_runtime::fragile_free")
+    }
+
     /// Check if a runtime function is declared as unsafe.
     /// Returns true for pthread functions and other unsafe FFI wrappers.
     fn is_unsafe_runtime_function(func_name: &str) -> bool {
@@ -44154,15 +44197,19 @@ impl AstCodeGen {
                     // Check if this is a C library function that should be mapped to fragile-runtime.
                     // Also handle qualified references produced inside namespace modules
                     // (e.g., `super::fopen`).
-                    let runtime_func = Self::map_runtime_function_name(&func).or_else(|| {
-                        if func.starts_with("super::") || func.starts_with("self::") {
-                            func.rsplit("::")
-                                .next()
-                                .and_then(Self::map_runtime_function_name)
-                        } else {
-                            None
-                        }
-                    });
+                    let runtime_func = Self::map_runtime_function_name(&func)
+                        .or_else(|| {
+                            if func.starts_with("super::") || func.starts_with("self::") {
+                                func.rsplit("::")
+                                    .next()
+                                    .and_then(Self::map_runtime_function_name)
+                            } else {
+                                None
+                            }
+                        })
+                        .or_else(|| {
+                            self.map_unresolved_deallocator_to_runtime_free(&func, args.len())
+                        });
                     let func = if let Some(runtime_func) = runtime_func {
                         // Apply argument fixups for C library functions
                         if runtime_func.ends_with("fragile_malloc") && !args.is_empty() {
@@ -60053,6 +60100,28 @@ pub mod janus {
             lowered.contains("fragile_pthread_self()"),
             "degraded zero-arg runtime C symbol should remain callable, got:\n{}",
             lowered
+        );
+    }
+
+    #[test]
+    fn test_unresolved_super_deallocator_maps_to_runtime_free() {
+        let gen = AstCodeGen::new();
+        assert_eq!(
+            gen.map_unresolved_deallocator_to_runtime_free("super::rocksdb_free", 1),
+            Some("crate::fragile_runtime::fragile_free"),
+            "unresolved one-arg super::*_free call should map to runtime free"
+        );
+    }
+
+    #[test]
+    fn test_declared_super_deallocator_does_not_map_to_runtime_free() {
+        let mut gen = AstCodeGen::new();
+        gen.declared_function_names
+            .insert("rocksdb_free".to_string());
+        assert!(
+            gen.map_unresolved_deallocator_to_runtime_free("super::rocksdb_free", 1)
+                .is_none(),
+            "declared deallocator should keep its original symbol"
         );
     }
 
