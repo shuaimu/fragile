@@ -6501,6 +6501,9 @@ impl AstCodeGen {
         // Degraded call-shapes can produce non-callable defaults like
         // `Default::default()()` or `Default::default()(...)`.
         output = Self::normalize_default_invocation_artifacts(&output);
+        // Degraded field lowering can leave ambiguous default-deref artifacts
+        // (for example `(*Default::default()).field`) that fail type inference.
+        output = Self::normalize_default_deref_field_artifacts(&output);
         // Literal-width recovery for common unsigned writer calls.
         output = Self::normalize_uint_call_literal_suffixes(&output);
         // Recover narrow integer literal suffixes at call-sites where the callee
@@ -6539,6 +6542,10 @@ impl AstCodeGen {
         // Re-run module/type disambiguation after unresolved-closure synthesis,
         // which can append top-level placeholder types (e.g. `thread`) late.
         output = Self::normalize_module_type_name_shadowing(&output);
+        // Re-run unreferenced static-mut cleanup at the end of the pipeline:
+        // late normalizations can remove residual references and expose globals
+        // whose zeroed/non-const initializers would otherwise fail const-eval.
+        output = Self::normalize_unreferenced_static_mut_initializers(&output);
         output
     }
 
@@ -6619,6 +6626,64 @@ impl AstCodeGen {
         }
 
         out.push_str(&code[idx..]);
+        out
+    }
+
+    fn normalize_default_deref_field_artifacts(code: &str) -> String {
+        let mut out = String::with_capacity(code.len());
+        for line in code.lines() {
+            let mut rewritten = line.to_string();
+            let trimmed = line.trim();
+
+            // Degraded pointer getter shape:
+            // `return (unsafe { &mut (*Default::default()).field as *mut T }) as *mut T;`
+            // Replace with a typed null return to avoid unconstrained default inference.
+            if let Some(return_tail) = trimmed
+                .strip_prefix("return (unsafe { &mut (*Default::default()).")
+            {
+                if let Some(as_ptr_pos) = return_tail.find(" as *mut ") {
+                    let type_with_suffix = &return_tail[(as_ptr_pos + " as *mut ".len())..];
+                    if let Some(split_pos) = type_with_suffix.find(" }) as *mut ") {
+                        let first_ty = type_with_suffix[..split_pos].trim();
+                        let second_with_semi =
+                            &type_with_suffix[(split_pos + " }) as *mut ".len())..];
+                        if let Some(second_ty) = second_with_semi.strip_suffix(';') {
+                            let second_ty = second_ty.trim();
+                            if !first_ty.is_empty() && first_ty == second_ty {
+                                let indent_len =
+                                    line.len().saturating_sub(line.trim_start().len());
+                                let indent = &line[..indent_len];
+                                rewritten = format!(
+                                    "{}return std::ptr::null_mut::<{}>();",
+                                    indent, first_ty
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Degraded typed local init shape:
+            // `let mut x: Ty = unsafe { (*Default::default()).field };`
+            // Fall back to typed default to keep compilation moving.
+            if rewritten == line
+                && line.contains("Default::default()")
+                && (line.contains("(*Default::default()).")
+                    || line.contains("(*unsafe { (*Default::default())."))
+            {
+                if let Some((lhs, _rhs)) = line.split_once(" = ") {
+                    if lhs.trim_start().starts_with("let ") && lhs.contains(':') {
+                        rewritten = format!("{} = Default::default();", lhs.trim_end());
+                    }
+                }
+            }
+
+            out.push_str(&rewritten);
+            out.push('\n');
+        }
+        if !code.ends_with('\n') && !out.is_empty() {
+            out.pop();
+        }
         out
     }
 
@@ -61796,6 +61861,34 @@ fn probe() {
         assert!(
             !output.contains("Default::default()("),
             "default invocation normalization must remove `Default::default()(...)` patterns, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_default_deref_field_artifacts_rewrites_pointer_getter_returns() {
+        let input = r#"
+pub extern "C" fn nc_get_read_requests(arg0: i32) -> *mut vector_vector_int {
+    return (unsafe { &mut (*Default::default()).read_requests as *mut vector_vector_int }) as *mut vector_vector_int;
+}
+"#;
+        let output = AstCodeGen::normalize_default_deref_field_artifacts(input);
+        assert!(
+            output.contains("return std::ptr::null_mut::<vector_vector_int>();"),
+            "default-deref artifact normalization should replace degraded pointer getter returns with typed null pointers, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_default_deref_field_artifacts_rewrites_typed_let_initializers() {
+        let input = r#"
+let mut par_id: i32 = unsafe { (*unsafe { (*Default::default()).site_info_ }).partition_id_ };
+"#;
+        let output = AstCodeGen::normalize_default_deref_field_artifacts(input);
+        assert!(
+            output.contains("let mut par_id: i32 = Default::default();"),
+            "default-deref artifact normalization should rewrite typed local inits with ambiguous default deref expressions, got:\n{}",
             output
         );
     }
