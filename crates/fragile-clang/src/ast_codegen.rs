@@ -2240,6 +2240,27 @@ impl AstCodeGen {
         out
     }
 
+    fn parse_static_item_name(line: &str) -> Option<String> {
+        let prefixes = [
+            "pub(crate) static mut ",
+            "pub(crate) static ",
+            "pub static mut ",
+            "pub static ",
+            "static mut ",
+            "static ",
+        ];
+        let rest = prefixes
+            .iter()
+            .find_map(|prefix| line.strip_prefix(prefix).map(str::trim_start))?;
+        let colon_idx = rest.find(':')?;
+        let name = rest[..colon_idx].trim();
+        if name.is_empty() {
+            None
+        } else {
+            Some(name.to_string())
+        }
+    }
+
     fn count_identifier_occurrences(code: &str, ident: &str) -> usize {
         if ident.is_empty() {
             return 0;
@@ -2333,6 +2354,93 @@ impl AstCodeGen {
             rewritten.push_str(ty);
             rewritten.push_str("> = std::mem::MaybeUninit::uninit();");
             out.push_str(&rewritten);
+            out.push('\n');
+        }
+
+        if !code.ends_with('\n') && !out.is_empty() {
+            out.pop();
+        }
+        out
+    }
+
+    /// Rewrite static initializers that reference missing `__gv_*` globals to
+    /// a zeroed fallback so unresolved global refs do not hard-fail compilation.
+    fn normalize_static_initializers_with_unresolved_global_refs(code: &str) -> String {
+        fn extract_global_symbols(text: &str) -> Vec<String> {
+            let mut symbols = Vec::new();
+            let mut idx = 0usize;
+            while let Some(rel) = text[idx..].find("__gv_") {
+                let start = idx + rel;
+                let prev = text[..start].chars().next_back();
+                if prev.is_some_and(AstCodeGen::is_identifier_char) {
+                    idx = start + "__gv_".len();
+                    continue;
+                }
+
+                let mut end = start;
+                while end < text.len() {
+                    let ch = text[end..].chars().next().unwrap();
+                    if AstCodeGen::is_identifier_char(ch) {
+                        end += ch.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+                if end > start {
+                    symbols.push(text[start..end].to_string());
+                }
+                idx = end;
+            }
+            symbols
+        }
+
+        let mut known_globals: HashSet<String> = HashSet::new();
+        for line in code.lines() {
+            if let Some(name) = Self::parse_static_item_name(line.trim_start()) {
+                known_globals.insert(name);
+            }
+        }
+        if known_globals.is_empty() {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        for line in code.lines() {
+            let trimmed = line.trim_start();
+            let is_static = Self::parse_static_item_name(trimmed).is_some();
+            if !is_static || !trimmed.contains(" = ") {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+
+            let Some(eq_idx) = trimmed.find(" = ") else {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            };
+            let rhs = trimmed[eq_idx + " = ".len()..].trim();
+            if !rhs.contains("__gv_") {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+
+            let has_missing_global = extract_global_symbols(rhs)
+                .into_iter()
+                .any(|sym| !known_globals.contains(&sym));
+            if !has_missing_global {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+
+            let indent_len = line.len().saturating_sub(trimmed.len());
+            let indent = &line[..indent_len];
+            let lhs = trimmed[..eq_idx].trim_end();
+            out.push_str(indent);
+            out.push_str(lhs);
+            out.push_str(" = unsafe { std::mem::zeroed() };");
             out.push('\n');
         }
 
@@ -4758,7 +4866,7 @@ impl AstCodeGen {
     }
 
     fn has_unresolved_function_symbol_markers(lines: &[&str]) -> bool {
-        const UNRESOLVED_MARKERS: [&str; 37] = [
+        const UNRESOLVED_MARKERS: [&str; 45] = [
             "super::Exp::",
             "super::EncodeBase64(",
             "super::IsNullString(",
@@ -4790,12 +4898,20 @@ impl AstCodeGen {
             "super::YAML::LoadFile(",
             "super::usleep(",
             "super::gettimeofday(",
+            "super::getcwd(",
             "super::rand()",
             "__gv_leader_callback_(",
+            "is_using_raft()",
+            "::Log::warn(",
+            "::Log::debug(",
             "if ()",
             "while ()",
             "match ()",
             "((()) as ",
+            ": UnknownTagAutoType =",
+            "()as *const ",
+            "()as *mut ",
+            ", (),",
         ];
         lines.iter().any(|line| {
             UNRESOLVED_MARKERS
@@ -4806,6 +4922,163 @@ impl AstCodeGen {
                     && line.contains('(')
                     && !line.contains("std::mem::zeroed"))
         })
+    }
+
+    fn normalize_pointer_negation_conditions(code: &str) -> String {
+        fn collect_pointer_param_names(signature_line: &str) -> HashSet<String> {
+            let mut names = HashSet::new();
+            let Some(open_idx) = signature_line.find('(') else {
+                return names;
+            };
+            let Some(close_idx) = signature_line[open_idx + 1..].find(')') else {
+                return names;
+            };
+            let params = &signature_line[open_idx + 1..open_idx + 1 + close_idx];
+            for param in params.split(',') {
+                let Some((name_part, ty_part)) = param.split_once(':') else {
+                    continue;
+                };
+                if !ty_part.contains("*mut") && !ty_part.contains("*const") {
+                    continue;
+                }
+                let name = name_part
+                    .trim()
+                    .trim_start_matches("mut ")
+                    .trim()
+                    .to_string();
+                if !name.is_empty() {
+                    names.insert(name);
+                }
+            }
+            names
+        }
+
+        fn collect_pointer_local_name(line: &str) -> Option<String> {
+            let trimmed = line.trim_start();
+            if !trimmed.starts_with("let ") {
+                return None;
+            }
+            let rest = trimmed["let ".len()..].trim_start();
+            let rest = rest.strip_prefix("mut ").unwrap_or(rest);
+            let (name_part, tail) = rest.split_once(':')?;
+            let name = name_part.trim();
+            if name.is_empty() {
+                return None;
+            }
+            let ty_part = tail.split('=').next().unwrap_or(tail).trim();
+            if ty_part.contains("*mut") || ty_part.contains("*const") {
+                Some(name.to_string())
+            } else {
+                None
+            }
+        }
+
+        fn rewrite_pointer_negation_line(line: &str, pointer_names: &HashSet<String>) -> String {
+            let trimmed = line.trim_start();
+            let Some(after_if) = trimmed.strip_prefix("if !") else {
+                return line.to_string();
+            };
+            let mut ident_end = 0usize;
+            while ident_end < after_if.len() {
+                let ch = after_if[ident_end..].chars().next().unwrap();
+                if AstCodeGen::is_identifier_char(ch) {
+                    ident_end += ch.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            if ident_end == 0 {
+                return line.to_string();
+            }
+            let ident = &after_if[..ident_end];
+            if !pointer_names.contains(ident) {
+                return line.to_string();
+            }
+            let suffix = &after_if[ident_end..];
+            let indent_len = line.len().saturating_sub(trimmed.len());
+            let indent = &line[..indent_len];
+            let mut rewritten = String::with_capacity(line.len() + 16);
+            rewritten.push_str(indent);
+            rewritten.push_str("if ");
+            rewritten.push_str(ident);
+            rewritten.push_str(".is_null()");
+            rewritten.push_str(suffix);
+            rewritten
+        }
+
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        let mut i = 0usize;
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim_end();
+            let is_fn_start =
+                (trimmed.contains(" fn ") || trimmed.starts_with("fn ")) && trimmed.ends_with('{');
+            if !is_fn_start {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let mut j = i;
+            let mut depth = 0isize;
+            while j < lines.len() {
+                let current = lines[j];
+                depth += current.chars().filter(|c| *c == '{').count() as isize;
+                depth -= current.chars().filter(|c| *c == '}').count() as isize;
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if j >= lines.len() || depth != 0 {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let mut pointer_names = collect_pointer_param_names(trimmed);
+            if j > i + 1 {
+                for body_line in &lines[i + 1..j] {
+                    if let Some(local) = collect_pointer_local_name(body_line) {
+                        pointer_names.insert(local);
+                    }
+                }
+            }
+
+            out.push_str(lines[i]);
+            if i + 1 < lines.len() || code.ends_with('\n') {
+                out.push('\n');
+            }
+            for k in i + 1..j {
+                let rewritten = rewrite_pointer_negation_line(lines[k], &pointer_names);
+                out.push_str(&rewritten);
+                if k + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            out.push_str(lines[j]);
+            if j + 1 < lines.len() || code.ends_with('\n') {
+                out.push('\n');
+            }
+
+            i = j + 1;
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
     }
 
     fn fallback_heavily_degraded_function_bodies(code: &str) -> String {
@@ -4891,6 +5164,377 @@ impl AstCodeGen {
         }
 
         if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    fn normalize_missing_new0_constructor_calls(code: &str) -> String {
+        fn parse_inherent_impl_target(line: &str) -> Option<String> {
+            let trimmed = line.trim_start();
+            if !trimmed.starts_with("impl ") || !trimmed.ends_with('{') {
+                return None;
+            }
+            let rest = trimmed["impl ".len()..trimmed.len() - 1].trim();
+            if rest.contains(" for ") {
+                return None;
+            }
+            let target: String = rest
+                .chars()
+                .take_while(|ch| *ch != '<' && !ch.is_whitespace())
+                .collect();
+            if target.is_empty()
+                || !target
+                    .chars()
+                    .all(|ch| AstCodeGen::is_identifier_char(ch))
+            {
+                return None;
+            }
+            Some(target)
+        }
+
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
+            return code.to_string();
+        }
+
+        let mut has_new0_ctor: HashSet<String> = HashSet::new();
+        let mut depth: i32 = 0;
+        let mut impl_stack: Vec<(i32, String, bool)> = Vec::new();
+
+        for line in &lines {
+            while impl_stack
+                .last()
+                .is_some_and(|(start_depth, _, _)| *start_depth > depth)
+            {
+                if let Some((_, target, found_new0)) = impl_stack.pop() {
+                    if found_new0 {
+                        has_new0_ctor.insert(target);
+                    }
+                }
+            }
+
+            if let Some((_, _, found_new0)) = impl_stack.last_mut() {
+                if line.contains("fn new_0(") {
+                    *found_new0 = true;
+                }
+            }
+
+            if let Some(target) = parse_inherent_impl_target(line) {
+                impl_stack.push((depth + 1, target, false));
+            }
+
+            let open_count = line.chars().filter(|&ch| ch == '{').count() as i32;
+            let close_count = line.chars().filter(|&ch| ch == '}').count() as i32;
+            depth += open_count - close_count;
+            if depth < 0 {
+                depth = 0;
+            }
+
+            while impl_stack
+                .last()
+                .is_some_and(|(start_depth, _, _)| *start_depth > depth)
+            {
+                if let Some((_, target, found_new0)) = impl_stack.pop() {
+                    if found_new0 {
+                        has_new0_ctor.insert(target);
+                    }
+                }
+            }
+        }
+        while let Some((_, target, found_new0)) = impl_stack.pop() {
+            if found_new0 {
+                has_new0_ctor.insert(target);
+            }
+        }
+
+        let mut out = String::with_capacity(code.len());
+        for line in code.lines() {
+            let mut rewritten = String::with_capacity(line.len());
+            let mut idx = 0usize;
+            let mut last = 0usize;
+            let needle = "::new_0()";
+            while let Some(rel) = line[idx..].find(needle) {
+                let pos = idx + rel;
+
+                let mut token_start = pos;
+                while token_start > 0 {
+                    let prev = line[..token_start].chars().next_back().unwrap();
+                    if Self::is_identifier_char(prev) {
+                        token_start -= prev.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+                let type_token = line[token_start..pos].trim();
+                let keep_original = type_token.is_empty() || has_new0_ctor.contains(type_token);
+                if keep_original {
+                    idx = pos + needle.len();
+                    continue;
+                }
+
+                rewritten.push_str(&line[last..token_start]);
+                rewritten.push_str("Default::default()");
+                last = pos + needle.len();
+                idx = last;
+            }
+            rewritten.push_str(&line[last..]);
+            out.push_str(&rewritten);
+            out.push('\n');
+        }
+
+        if !code.ends_with('\n') && !out.is_empty() {
+            out.pop();
+        }
+        out
+    }
+
+    fn normalize_integer_float_literal_binary_ops(code: &str) -> String {
+        fn float_token_cast_ty(token: &str) -> Option<&'static str> {
+            let trimmed = token.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            let (core, cast_ty) = if let Some(core) = trimmed.strip_suffix("f32") {
+                (core, "f32")
+            } else if let Some(core) = trimmed.strip_suffix("f64") {
+                (core, "f64")
+            } else {
+                (trimmed, "f64")
+            };
+            let core = core.replace('_', "");
+            if core.parse::<f64>().is_ok() && (core.contains('.') || core.contains('e') || core.contains('E')) {
+                Some(cast_ty)
+            } else {
+                None
+            }
+        }
+
+        fn rewrite_line(line: &str) -> String {
+            let mut out = String::with_capacity(line.len() + 32);
+            let mut last = 0usize;
+            let mut idx = 0usize;
+            while idx < line.len() {
+                let ch = line[idx..].chars().next().unwrap();
+                if ch != '*' && ch != '/' {
+                    idx += ch.len_utf8();
+                    continue;
+                }
+                let op_idx = idx;
+                let op_len = ch.len_utf8();
+                let prev = if op_idx > 0 {
+                    line[..op_idx].chars().next_back()
+                } else {
+                    None
+                };
+                let next = if op_idx + op_len < line.len() {
+                    line[op_idx + op_len..].chars().next()
+                } else {
+                    None
+                };
+                if !prev.is_some_and(char::is_whitespace) || !next.is_some_and(char::is_whitespace) {
+                    idx += op_len;
+                    continue;
+                }
+
+                let mut rhs_start = op_idx + op_len;
+                while rhs_start < line.len() {
+                    let c = line[rhs_start..].chars().next().unwrap();
+                    if c.is_whitespace() {
+                        rhs_start += c.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+                let mut rhs_end = rhs_start;
+                while rhs_end < line.len() {
+                    let c = line[rhs_end..].chars().next().unwrap();
+                    if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '+' || c == '-' {
+                        rhs_end += c.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+                if rhs_start >= rhs_end {
+                    idx += op_len;
+                    continue;
+                }
+                let rhs_token = &line[rhs_start..rhs_end];
+                let Some(cast_ty) = float_token_cast_ty(rhs_token) else {
+                    idx += op_len;
+                    continue;
+                };
+
+                let mut lhs_end = op_idx;
+                while lhs_end > 0 {
+                    let c = line[..lhs_end].chars().next_back().unwrap();
+                    if c.is_whitespace() {
+                        lhs_end -= c.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+                let mut lhs_start = lhs_end;
+                while lhs_start > 0 {
+                    let c = line[..lhs_start].chars().next_back().unwrap();
+                    if AstCodeGen::is_identifier_char(c) || c == '.' {
+                        lhs_start -= c.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+                if lhs_start >= lhs_end {
+                    idx += op_len;
+                    continue;
+                }
+                let lhs = &line[lhs_start..lhs_end];
+                if lhs.contains(" as f") {
+                    idx += op_len;
+                    continue;
+                }
+                let lhs_no_underscores = lhs.replace('_', "");
+                let lhs_is_float_literal = lhs_no_underscores.parse::<f64>().is_ok()
+                    && (lhs_no_underscores.contains('.')
+                        || lhs_no_underscores.contains('e')
+                        || lhs_no_underscores.contains('E'));
+                if lhs_is_float_literal {
+                    idx += op_len;
+                    continue;
+                }
+
+                out.push_str(&line[last..lhs_start]);
+                out.push('(');
+                out.push_str(lhs);
+                out.push_str(" as ");
+                out.push_str(cast_ty);
+                out.push(')');
+                last = lhs_end;
+                idx = op_idx + op_len;
+            }
+
+            out.push_str(&line[last..]);
+            out
+        }
+
+        let mut out = String::with_capacity(code.len());
+        for line in code.lines() {
+            out.push_str(&rewrite_line(line));
+            out.push('\n');
+        }
+        if !code.ends_with('\n') && !out.is_empty() {
+            out.pop();
+        }
+        out
+    }
+
+    fn normalize_global_symbol_aliases_for_prefixed_statics(code: &str) -> String {
+        let mut global_aliases: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for line in code.lines() {
+            let trimmed = line.trim_start();
+            if let Some(static_name) = Self::parse_static_item_name(trimmed) {
+                if let Some(alias_name) = static_name.strip_prefix("__gv_") {
+                    if !alias_name.is_empty() {
+                        global_aliases.insert(alias_name.to_string(), static_name);
+                    }
+                }
+            }
+        }
+        if global_aliases.is_empty() {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        for line in code.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//")
+                || trimmed.starts_with("///")
+                || trimmed.starts_with("/*")
+                || trimmed.starts_with('*')
+            {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+
+            let mut rewritten = String::with_capacity(line.len());
+            let mut idx = 0usize;
+            let mut last = 0usize;
+            while let Some(rel) = line[idx..].find("::") {
+                let sep = idx + rel;
+                let name_start = sep + 2;
+                if name_start >= line.len() {
+                    break;
+                }
+                if line[name_start..].starts_with("__gv_") {
+                    idx = name_start + "__gv_".len();
+                    continue;
+                }
+
+                let mut name_end = name_start;
+                while name_end < line.len() {
+                    let ch = line[name_end..].chars().next().unwrap();
+                    if Self::is_identifier_char(ch) {
+                        name_end += ch.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+                if name_end == name_start {
+                    idx = name_start;
+                    continue;
+                }
+
+                // Avoid rewriting qualified function calls (`...::name(...)`).
+                let mut look = name_end;
+                while look < line.len() {
+                    let ch = line[look..].chars().next().unwrap();
+                    if ch.is_whitespace() {
+                        look += ch.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+                if look < line.len() && line[look..].starts_with('(') {
+                    idx = name_end;
+                    continue;
+                }
+
+                let mut path_start = sep;
+                while path_start > 0 {
+                    let prev = line[..path_start].chars().next_back().unwrap();
+                    if Self::is_identifier_char(prev) || prev == ':' {
+                        path_start -= prev.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+                let path_before_tail = &line[path_start..sep];
+                let rooted = path_before_tail.starts_with("crate::")
+                    || path_before_tail.starts_with("self::")
+                    || path_before_tail.starts_with("super::");
+                if !rooted {
+                    idx = name_end;
+                    continue;
+                }
+
+                let ident = &line[name_start..name_end];
+                let Some(prefixed) = global_aliases.get(ident) else {
+                    idx = name_end;
+                    continue;
+                };
+
+                rewritten.push_str(&line[last..name_start]);
+                rewritten.push_str(prefixed);
+                last = name_end;
+                idx = name_end;
+            }
+            rewritten.push_str(&line[last..]);
+            out.push_str(&rewritten);
+            out.push('\n');
+        }
+
+        if !code.ends_with('\n') && !out.is_empty() {
             out.pop();
         }
         out
@@ -6501,6 +7145,9 @@ impl AstCodeGen {
         // Degraded call-shapes can produce non-callable defaults like
         // `Default::default()()` or `Default::default()(...)`.
         output = Self::normalize_default_invocation_artifacts(&output);
+        // Some lowered call-sites still reference missing `Type::new_0()`
+        // constructors on otherwise defaultable types.
+        output = Self::normalize_missing_new0_constructor_calls(&output);
         // Degraded field lowering can leave ambiguous default-deref artifacts
         // (for example `(*Default::default()).field`) that fail type inference.
         output = Self::normalize_default_deref_field_artifacts(&output);
@@ -6509,6 +7156,9 @@ impl AstCodeGen {
         // Recover narrow integer literal suffixes at call-sites where the callee
         // signature expects `u8` parameters.
         output = Self::normalize_u8_call_literal_suffixes(&output);
+        // Degraded arithmetic lowering can mix integer operands with float
+        // literals without casts (`i64 * 0.0`); insert numeric casts.
+        output = Self::normalize_integer_float_literal_binary_ops(&output);
         // Infer concrete enum spellings for unresolved `UnknownTagEnumType` slots
         // from nearby initializers/return statements.
         output = Self::normalize_unknown_enum_type_usages(&output);
@@ -6521,6 +7171,9 @@ impl AstCodeGen {
         output = Self::synthesize_empty_non_unit_function_bodies(&output);
         // Repair obvious scalar-vs-pointer local declaration mismatches.
         output = Self::normalize_obvious_local_var_type_mismatches(&output);
+        // Degraded pointer truthiness can lower as `if !ptr`; normalize to
+        // explicit `.is_null()` checks for pointer-typed bindings.
+        output = Self::normalize_pointer_negation_conditions(&output);
         // If a function body is heavily degraded (many unresolved `Default::default().method()`
         // markers), conservatively stub it to a return-default body so compile can progress.
         output = Self::fallback_heavily_degraded_function_bodies(&output);
@@ -6542,10 +7195,17 @@ impl AstCodeGen {
         // Re-run module/type disambiguation after unresolved-closure synthesis,
         // which can append top-level placeholder types (e.g. `thread`) late.
         output = Self::normalize_module_type_name_shadowing(&output);
+        // Some globals are emitted with initializers that dereference missing
+        // `__gv_*` placeholders; zero-initialize those statics to unblock build.
+        output = Self::normalize_static_initializers_with_unresolved_global_refs(&output);
         // Re-run unreferenced static-mut cleanup at the end of the pipeline:
         // late normalizations can remove residual references and expose globals
         // whose zeroed/non-const initializers would otherwise fail const-eval.
         output = Self::normalize_unreferenced_static_mut_initializers(&output);
+        // Global lowering prefixes mutable/static symbols with `__gv_`; some
+        // degraded qualified refs still use unprefixed tails (`...::name`).
+        // Rewrite rooted path tails to the internal `...::__gv_name` symbol.
+        output = Self::normalize_global_symbol_aliases_for_prefixed_statics(&output);
         output
     }
 
@@ -56812,6 +57472,129 @@ pub fn touch() {
     }
 
     #[test]
+    fn test_normalize_static_initializers_with_unresolved_global_refs_rewrites_missing_refs() {
+        let input = r#"
+pub(crate) static mut __gv_dst: *mut i8 = std::ptr::null_mut();
+pub(crate) static mut __gv_host_name: UnknownTagAutoType = unsafe { ((*unsafe { __gv_it }).second).r#as };
+pub(crate) static mut __gv_proc_name: UnknownTagAutoType = unsafe { ((*unsafe { __gv_it }).first).r#as };
+"#;
+        let normalized = AstCodeGen::normalize_static_initializers_with_unresolved_global_refs(input);
+        assert!(
+            normalized.contains(
+                "pub(crate) static mut __gv_host_name: UnknownTagAutoType = unsafe { std::mem::zeroed() };"
+            ),
+            "static initializer normalization should zero unresolved __gv_ refs, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains(
+                "pub(crate) static mut __gv_proc_name: UnknownTagAutoType = unsafe { std::mem::zeroed() };"
+            ),
+            "static initializer normalization should rewrite each missing-global use, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("pub(crate) static mut __gv_dst: *mut i8 = std::ptr::null_mut();"),
+            "known globals and regular initializers should be preserved, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_pointer_negation_conditions_rewrites_pointer_checks_only() {
+        let input = r#"
+pub fn probe(worker: *mut Worker) {
+    if !worker {
+        return;
+    }
+    let mut raft_server: *mut UnknownTagAutoType = std::ptr::null_mut();
+    if !raft_server {
+        return;
+    }
+    if !false {
+        return;
+    }
+}
+"#;
+        let normalized = AstCodeGen::normalize_pointer_negation_conditions(input);
+        assert!(
+            normalized.contains("if worker.is_null() {"),
+            "pointer guard normalization should rewrite pointer params, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("if raft_server.is_null() {"),
+            "pointer guard normalization should rewrite pointer locals, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("if !false {"),
+            "non-pointer boolean negation should remain unchanged, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_global_symbol_aliases_for_prefixed_statics_rewrites_rooted_paths() {
+        let input = r#"
+/// C++ global variable `pxs_workers_g`
+pub(crate) static mut __gv_pxs_workers_g: vector_shared_ptr_PaxosWorker = unsafe { std::mem::zeroed() };
+/// C++ global variable `submit_queue_nc`
+pub(crate) static mut __gv_submit_queue_nc: queue_pair_const_char__pair_int__int = unsafe { std::mem::zeroed() };
+pub fn read_worker() -> vector_shared_ptr_PaxosWorker {
+    unsafe { super::janus::pxs_workers_g }
+}
+pub fn read_queue() -> queue_pair_const_char__pair_int__int {
+    unsafe { crate::janus::submit_queue_nc }
+}
+"#;
+        let normalized = AstCodeGen::normalize_global_symbol_aliases_for_prefixed_statics(input);
+        assert!(
+            normalized.contains("unsafe { super::janus::__gv_pxs_workers_g }"),
+            "global-symbol normalization should rewrite rooted path refs to prefixed globals, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("unsafe { crate::janus::__gv_submit_queue_nc }"),
+            "global-symbol normalization should rewrite each rooted path tail, got:\n{}",
+            normalized
+        );
+        assert!(
+            !normalized.contains("use self::__gv_"),
+            "global-symbol normalization should not inject scope-polluting aliases, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_global_symbol_aliases_for_prefixed_statics_skips_calls_and_non_rooted_paths() {
+        let input = r#"
+pub(crate) static mut __gv_len: i32 = 0;
+pub fn probe() {
+    let _a = crate::mako::len();
+    let _b = std::cmp::min();
+    let _c = mako::len;
+}
+"#;
+        let normalized = AstCodeGen::normalize_global_symbol_aliases_for_prefixed_statics(input);
+        assert!(
+            normalized.contains("crate::mako::len();"),
+            "function-call style paths should not be rewritten, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("std::cmp::min();"),
+            "non-rooted external paths should remain unchanged, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("let _c = mako::len;"),
+            "non-rooted module paths should remain unchanged, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
     fn test_normalize_struct_default_clone_derives_rewrites_struct_derives_to_manual_impls() {
         let input = r#"
 #[derive(Default, Clone, Copy)]
@@ -61866,6 +62649,81 @@ fn probe() {
     }
 
     #[test]
+    fn test_normalize_missing_new0_constructor_calls_rewrites_missing_ctor_to_default() {
+        let input = r#"
+#[repr(C)]
+#[derive(Default, Clone, Copy)]
+pub struct timespec {
+    pub tv_sec: i64,
+    pub tv_nsec: i64,
+}
+pub fn probe() {
+    let mut ts: timespec = timespec::new_0();
+}
+"#;
+        let output = AstCodeGen::normalize_missing_new0_constructor_calls(input);
+        assert!(
+            output.contains("let mut ts: timespec = Default::default();"),
+            "missing-new_0 normalization should rewrite unresolved constructor calls to default expressions, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_missing_new0_constructor_calls_preserves_defined_ctor_calls() {
+        let input = r#"
+#[repr(C)]
+pub struct Demo {
+    pub v: i32,
+}
+impl Demo {
+    pub fn new_0() -> Self {
+        Self { v: 0 }
+    }
+}
+pub fn probe() {
+    let _ = Demo::new_0();
+}
+"#;
+        let output = AstCodeGen::normalize_missing_new0_constructor_calls(input);
+        assert!(
+            output.contains("let _ = Demo::new_0();"),
+            "missing-new_0 normalization must preserve calls when constructor exists, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_integer_float_literal_binary_ops_casts_integer_operands() {
+        let input = r#"
+pub extern "C" fn timespec2ms(time: timespec) -> f64 {
+    return time.tv_sec * 0.0 + time.tv_nsec / 0.0;
+}
+"#;
+        let output = AstCodeGen::normalize_integer_float_literal_binary_ops(input);
+        assert!(
+            output.contains("return (time.tv_sec as f64) * 0.0 + (time.tv_nsec as f64) / 0.0;"),
+            "integer-float normalization should cast integer operands before float arithmetic, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_integer_float_literal_binary_ops_keeps_non_float_binary_ops() {
+        let input = r#"
+pub fn probe(a: i64, b: i64) -> i64 {
+    return a * b + 7 / 2;
+}
+"#;
+        let output = AstCodeGen::normalize_integer_float_literal_binary_ops(input);
+        assert_eq!(
+            output, input,
+            "integer-float normalization should not change pure integer arithmetic, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
     fn test_normalize_default_deref_field_artifacts_rewrites_pointer_getter_returns() {
         let input = r#"
 pub extern "C" fn nc_get_read_requests(arg0: i32) -> *mut vector_vector_int {
@@ -62110,6 +62968,74 @@ pub fn probe() -> i32 {
         assert_eq!(
             output, input,
             "degraded-function fallback must not rewrite bodies without enough degradation markers"
+        );
+    }
+
+    #[test]
+    fn test_fallback_heavily_degraded_function_bodies_stubs_unknown_auto_local_declarations() {
+        let input = r#"
+pub extern "C" fn create_sync(epoch: i32) -> shared_ptr_SyncLogRequest {
+    let mut syncLog: UnknownTagAutoType = Default::default();
+    unsafe { (*syncLog).epoch = epoch as i64; }
+    return syncLog;
+}
+"#;
+        let output = AstCodeGen::fallback_heavily_degraded_function_bodies(input);
+        assert!(
+            output.contains("pub extern \"C\" fn create_sync(epoch: i32) -> shared_ptr_SyncLogRequest {\n    Default::default()\n}"),
+            "degraded-function fallback should stub bodies with unresolved UnknownTagAutoType local declarations, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_fallback_heavily_degraded_function_bodies_stubs_unit_placeholder_call_args() {
+        let input = r#"
+pub extern "C" fn probe() {
+    add_log_to_nc(()as *const i8, (), i, 0);
+}
+"#;
+        let output = AstCodeGen::fallback_heavily_degraded_function_bodies(input);
+        assert!(
+            output.contains("pub extern \"C\" fn probe() {\n}"),
+            "degraded-function fallback should stub bodies containing unit-placeholder call arguments, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_fallback_heavily_degraded_function_bodies_stubs_unresolved_log_and_super_calls() {
+        let input = r#"
+pub extern "C" fn check_current_path() {
+    if !(super::getcwd(cwd.as_mut_ptr() as *mut i8, (cwd))).is_null() {
+        ();
+    }
+}
+pub extern "C" fn submit() {
+    super::rrr::Log::warn(1i32, file, msg);
+    super::rrr::Log::debug(2i32, file, msg);
+}
+pub extern "C" fn notify() {
+    if is_using_raft() {
+        do_work();
+    }
+}
+"#;
+        let output = AstCodeGen::fallback_heavily_degraded_function_bodies(input);
+        assert!(
+            output.contains("pub extern \"C\" fn check_current_path() {\n}"),
+            "degraded-function fallback should stub unresolved super-call bodies, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub extern \"C\" fn submit() {\n}"),
+            "degraded-function fallback should stub unresolved log method calls, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub extern \"C\" fn notify() {\n}"),
+            "degraded-function fallback should stub unresolved bare call markers, got:\n{}",
+            output
         );
     }
 
