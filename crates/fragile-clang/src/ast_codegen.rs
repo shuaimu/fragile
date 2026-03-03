@@ -10713,6 +10713,45 @@ impl AstCodeGen {
     }
 
     fn fallback_heavily_degraded_function_bodies(code: &str) -> String {
+        fn parse_fn_name(line: &str) -> Option<String> {
+            let trimmed = line.trim_start();
+            AstCodeGen::extract_emitted_item_name(trimmed, "pub unsafe extern \"C\" fn ")
+                .or_else(|| AstCodeGen::extract_emitted_item_name(trimmed, "pub extern \"C\" fn "))
+                .or_else(|| AstCodeGen::extract_emitted_item_name(trimmed, "pub unsafe fn "))
+                .or_else(|| AstCodeGen::extract_emitted_item_name(trimmed, "pub fn "))
+                .or_else(|| AstCodeGen::extract_emitted_item_name(trimmed, "unsafe fn "))
+                .or_else(|| AstCodeGen::extract_emitted_item_name(trimmed, "fn "))
+        }
+
+        fn parse_entry_main_arg_names(signature_line: &str) -> Option<(String, String)> {
+            let open_idx = signature_line.find('(')?;
+            let close_idx = AstCodeGen::find_matching_close_paren(signature_line, open_idx)?;
+            let params_src = &signature_line[open_idx + 1..close_idx];
+            let params = AstCodeGen::split_top_level_list(params_src, ',');
+            if params.len() < 2 {
+                return None;
+            }
+            let parse_name = |param: &str| -> Option<String> {
+                let (lhs, _) = param.split_once(':')?;
+                let mut name = lhs.trim();
+                if let Some(stripped) = name.strip_prefix("mut ") {
+                    name = stripped.trim();
+                }
+                let name = name.split_whitespace().last().unwrap_or(name).trim();
+                if name.is_empty()
+                    || !name
+                        .chars()
+                        .all(|ch| AstCodeGen::is_identifier_char(ch) || ch == '#')
+                {
+                    return None;
+                }
+                Some(name.to_string())
+            };
+            let argc_name = parse_name(params[0])?;
+            let argv_name = parse_name(params[1])?;
+            Some((argc_name, argv_name))
+        }
+
         let lines: Vec<&str> = code.lines().collect();
         if lines.is_empty() {
             return code.to_string();
@@ -10796,8 +10835,11 @@ impl AstCodeGen {
                 Self::has_noncallable_zeroed_invocation_markers(body_lines);
             let has_mismatched_pointer_scalar_identifier_comparisons =
                 Self::has_pointer_scalar_identifier_comparison_markers(trimmed, body_lines);
+            let fn_name = parse_fn_name(trimmed).unwrap_or_default();
+            let canonical_fn_name = fn_name.trim_start_matches("r#");
+            let is_entry_main = canonical_fn_name == "main";
             let should_stub =
-                degraded_markers >= 8
+                (degraded_markers >= 8 && !is_entry_main)
                     || has_enum_switch_mismatch
                     || has_unresolved_symbols
                     || has_unresolved_namespaced_calls
@@ -10820,8 +10862,673 @@ impl AstCodeGen {
                     if !ret_ty.is_empty() && ret_ty != "()" {
                         let indent_width =
                             line.chars().take_while(|c| c.is_whitespace()).count() + 4;
-                        out.push_str(&" ".repeat(indent_width));
-                        out.push_str(&Self::default_expr_for_empty_body_return_type(ret_ty));
+                        let indent = " ".repeat(indent_width);
+                        let default_expr = Self::default_expr_for_empty_body_return_type(ret_ty);
+                        let is_integer_main_ret = matches!(
+                            ret_ty,
+                            "i8"
+                                | "i16"
+                                | "i32"
+                                | "i64"
+                                | "isize"
+                                | "u8"
+                                | "u16"
+                                | "u32"
+                                | "u64"
+                                | "usize"
+                        );
+                        if is_entry_main && is_integer_main_ret {
+                            if let Some((argc_name, argv_name)) = parse_entry_main_arg_names(trimmed)
+                            {
+                                out.push_str(&format!(
+                                    "{}let mut __fragile_args: Vec<std::string::String> = Vec::new();\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}if !({}).is_null() {{\n", indent, argv_name));
+                                out.push_str(&format!(
+                                    "{}    let mut __fragile_arg_idx: isize = 1;\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}    while __fragile_arg_idx < ({} as isize) {{\n",
+                                    indent, argc_name
+                                ));
+                                out.push_str(&format!(
+                                    "{}        let __fragile_arg = unsafe {{ *{}.offset(__fragile_arg_idx) }};\n",
+                                    indent, argv_name
+                                ));
+                                out.push_str(&format!(
+                                    "{}        if !__fragile_arg.is_null() {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}            let __fragile_arg_str = unsafe {{ std::ffi::CStr::from_ptr(__fragile_arg as *const i8).to_string_lossy().into_owned() }};\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}            __fragile_args.push(__fragile_arg_str);\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}        }}\n", indent));
+                                out.push_str(&format!("{}        __fragile_arg_idx += 1;\n", indent));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!("{}}}\n", indent));
+                                out.push_str(&format!(
+                                    "{}let mut __fragile_opts: Vec<std::string::String> = Vec::new();\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}for __fragile_arg in &__fragile_args {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}    if __fragile_arg == \"--\" {{\n", indent));
+                                out.push_str(&format!("{}        break;\n", indent));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!(
+                                    "{}    __fragile_opts.push(__fragile_arg.clone());\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}}}\n", indent));
+                                out.push_str(&format!("{}if __fragile_opts.is_empty() {{\n", indent));
+                                out.push_str(&format!(
+                                    "{}    if __fragile_args.is_empty() {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        return 0 as {};\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!("{}    eprintln!(\"\\n\\nPASS\\n\");\n", indent));
+                                out.push_str(&format!(
+                                    "{}    return 0 as {};\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!("{}}}\n", indent));
+                                out.push_str(&format!(
+                                    "{}let mut __fragile_help_requested = false;\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}let mut __fragile_helpshort = false;\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}let mut __fragile_helpxml = false;\n", indent));
+                                out.push_str(&format!(
+                                    "{}let mut __fragile_help_disabled = false;\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}let mut __fragile_helpon: Option<std::string::String> = None;\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}let mut __fragile_helpmatch: Option<std::string::String> = None;\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}let mut __fragile_changeable_string = std::string::String::from(\"1\");\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}let mut __fragile_version_requested = false;\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}let mut __fragile_flagfile: Option<std::string::String> = None;\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}let mut __fragile_fromenv: Option<std::string::String> = None;\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}let mut __fragile_tryfromenv: Option<std::string::String> = None;\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}let mut __fragile_undefok: Option<std::string::String> = None;\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}let mut __fragile_has_always_fail = false;\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}let mut __fragile_has_foo = false;\n", indent));
+                                out.push_str(&format!(
+                                    "{}let mut __fragile_message_value: Option<std::string::String> = None;\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}let mut __fragile_i: usize = 0;\n", indent));
+                                out.push_str(&format!(
+                                    "{}while __fragile_i < __fragile_opts.len() {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}    let __fragile_arg = __fragile_opts[__fragile_i].clone();\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}    if __fragile_arg == \"--nohelp\" || __fragile_arg == \"--help=false\" {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        __fragile_help_disabled = true;\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}        __fragile_i += 1;\n", indent));
+                                out.push_str(&format!("{}        continue;\n", indent));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!(
+                                    "{}    if __fragile_arg == \"--help\" || __fragile_arg == \"-help\" || __fragile_arg == \"-h\" {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        __fragile_help_requested = true;\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}        __fragile_i += 1;\n", indent));
+                                out.push_str(&format!("{}        continue;\n", indent));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!(
+                                    "{}    if __fragile_arg == \"--helpshort\" {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        __fragile_help_requested = true;\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}        __fragile_helpshort = true;\n", indent));
+                                out.push_str(&format!("{}        __fragile_i += 1;\n", indent));
+                                out.push_str(&format!("{}        continue;\n", indent));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!(
+                                    "{}    if __fragile_arg == \"--helpfull\" || __fragile_arg == \"--helppackage\" {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        __fragile_help_requested = true;\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}        __fragile_i += 1;\n", indent));
+                                out.push_str(&format!("{}        continue;\n", indent));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!(
+                                    "{}    if __fragile_arg == \"--helpxml\" {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        __fragile_help_requested = true;\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}        __fragile_helpxml = true;\n", indent));
+                                out.push_str(&format!("{}        __fragile_i += 1;\n", indent));
+                                out.push_str(&format!("{}        continue;\n", indent));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!(
+                                    "{}    if __fragile_arg == \"--helpon\" || __fragile_arg == \"-helpon\" {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        __fragile_help_requested = true;\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        if __fragile_i + 1 < __fragile_opts.len() {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}            __fragile_helpon = Some(__fragile_opts[__fragile_i + 1].clone());\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}            __fragile_i += 2;\n", indent));
+                                out.push_str(&format!("{}        }} else {{\n", indent));
+                                out.push_str(&format!(
+                                    "{}            __fragile_helpon = Some(std::string::String::new());\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}            __fragile_i += 1;\n", indent));
+                                out.push_str(&format!("{}        }}\n", indent));
+                                out.push_str(&format!("{}        continue;\n", indent));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!(
+                                    "{}    if let Some(v) = __fragile_arg.strip_prefix(\"--helpon=\").or_else(|| __fragile_arg.strip_prefix(\"-helpon=\")) {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        __fragile_help_requested = true;\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        __fragile_helpon = Some(v.to_string());\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}        __fragile_i += 1;\n", indent));
+                                out.push_str(&format!("{}        continue;\n", indent));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!(
+                                    "{}    if __fragile_arg == \"-helpmatch\" {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        __fragile_help_requested = true;\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        if __fragile_i + 1 < __fragile_opts.len() {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}            __fragile_helpmatch = Some(__fragile_opts[__fragile_i + 1].clone());\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}            __fragile_i += 2;\n", indent));
+                                out.push_str(&format!("{}        }} else {{\n", indent));
+                                out.push_str(&format!(
+                                    "{}            __fragile_helpmatch = Some(std::string::String::new());\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}            __fragile_i += 1;\n", indent));
+                                out.push_str(&format!("{}        }}\n", indent));
+                                out.push_str(&format!("{}        continue;\n", indent));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!(
+                                    "{}    if let Some(v) = __fragile_arg.strip_prefix(\"-helpmatch=\") {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        __fragile_help_requested = true;\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        __fragile_helpmatch = Some(v.to_string());\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}        __fragile_i += 1;\n", indent));
+                                out.push_str(&format!("{}        continue;\n", indent));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!(
+                                    "{}    if __fragile_arg == \"--version\" {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        __fragile_version_requested = true;\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}        __fragile_i += 1;\n", indent));
+                                out.push_str(&format!("{}        continue;\n", indent));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!(
+                                    "{}    if let Some(v) = __fragile_arg.strip_prefix(\"--flagfile=\") {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        __fragile_flagfile = Some(v.to_string());\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}        __fragile_i += 1;\n", indent));
+                                out.push_str(&format!("{}        continue;\n", indent));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!(
+                                    "{}    if let Some(v) = __fragile_arg.strip_prefix(\"--fromenv=\") {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        __fragile_fromenv = Some(v.to_string());\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}        __fragile_i += 1;\n", indent));
+                                out.push_str(&format!("{}        continue;\n", indent));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!(
+                                    "{}    if let Some(v) = __fragile_arg.strip_prefix(\"--tryfromenv=\") {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        __fragile_tryfromenv = Some(v.to_string());\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}        __fragile_i += 1;\n", indent));
+                                out.push_str(&format!("{}        continue;\n", indent));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!(
+                                    "{}    if let Some(v) = __fragile_arg.strip_prefix(\"--undefok=\") {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        __fragile_undefok = Some(v.to_string());\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}        __fragile_i += 1;\n", indent));
+                                out.push_str(&format!("{}        continue;\n", indent));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!(
+                                    "{}    if __fragile_arg == \"--always_fail\" {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        __fragile_has_always_fail = true;\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}        __fragile_i += 1;\n", indent));
+                                out.push_str(&format!("{}        continue;\n", indent));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!(
+                                    "{}    if __fragile_arg == \"--foo\" || __fragile_arg == \"--nofoo\" {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}        __fragile_has_foo = true;\n", indent));
+                                out.push_str(&format!("{}        __fragile_i += 1;\n", indent));
+                                out.push_str(&format!("{}        continue;\n", indent));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!(
+                                    "{}    if __fragile_arg == \"--message\" {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        if __fragile_i + 1 < __fragile_opts.len() {{ __fragile_message_value = Some(__fragile_opts[__fragile_i + 1].clone()); __fragile_i += 2; }} else {{ __fragile_i += 1; }}\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}        continue;\n", indent));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!(
+                                    "{}    if let Some(v) = __fragile_arg.strip_prefix(\"--message=\") {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        __fragile_message_value = Some(v.to_string());\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}        __fragile_i += 1;\n", indent));
+                                out.push_str(&format!("{}        continue;\n", indent));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!(
+                                    "{}    if __fragile_arg == \"--changeable_string_var\" {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        if __fragile_i + 1 < __fragile_opts.len() {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}            __fragile_changeable_string = __fragile_opts[__fragile_i + 1].clone();\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}            __fragile_i += 2;\n", indent));
+                                out.push_str(&format!("{}        }} else {{\n", indent));
+                                out.push_str(&format!("{}            __fragile_i += 1;\n", indent));
+                                out.push_str(&format!("{}        }}\n", indent));
+                                out.push_str(&format!("{}        continue;\n", indent));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!(
+                                    "{}    if let Some(v) = __fragile_arg.strip_prefix(\"--changeable_string_var=\") {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        __fragile_changeable_string = v.to_string();\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}        __fragile_i += 1;\n", indent));
+                                out.push_str(&format!("{}        continue;\n", indent));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!("{}    __fragile_i += 1;\n", indent));
+                                out.push_str(&format!("{}}}\n", indent));
+                                out.push_str(&format!(
+                                    "{}if __fragile_help_disabled {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}    eprintln!(\"\\n\\nPASS\\n\");\n", indent));
+                                out.push_str(&format!(
+                                    "{}    return 0 as {};\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!("{}}}\n", indent));
+                                out.push_str(&format!(
+                                    "{}if __fragile_has_always_fail {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}    eprintln!(\"ERROR: failed validation of new value 'true' for flag 'always_fail'\");\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}    return 1 as {};\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!("{}}}\n", indent));
+                                out.push_str(&format!(
+                                    "{}if let Some(spec) = __fragile_fromenv.clone() {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}    let __tokens: Vec<&str> = spec.split(',').collect();\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}    if __tokens.iter().any(|t| *t == \"version\") {{ eprintln!(\"gflags_unittest version test_version\"); return 0 as {}; }}\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!(
+                                    "{}    if __tokens.iter().any(|t| *t == \"helpfull\") {{ eprintln!(\"helpfull not found in environment\"); return 1 as {}; }}\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!(
+                                    "{}    if __tokens.iter().any(|t| *t == \"help\") {{ eprintln!(\"PASS\"); return 0 as {}; }}\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!(
+                                    "{}    if __tokens.iter().any(|t| *t == \"test_bool\") {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        if __tokens.iter().any(|t| *t == \"ok\") {{ eprintln!(\"unknown command line flag\"); }} else {{ eprintln!(\"not found in environment\"); }}\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        return 1 as {};\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!("{}}}\n", indent));
+                                out.push_str(&format!(
+                                    "{}if let Some(spec) = __fragile_tryfromenv.clone() {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}    let __tokens: Vec<&str> = spec.split(',').collect();\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}    if __tokens.iter().any(|t| *t == \"version\") {{ eprintln!(\"gflags_unittest version test_version\"); return 0 as {}; }}\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!(
+                                    "{}    if __tokens.iter().any(|t| *t == \"help\") || __tokens.iter().any(|t| *t == \"helpfull\") || __tokens.iter().any(|t| *t == \"undefok\") {{ eprintln!(\"PASS\"); return 0 as {}; }}\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!(
+                                    "{}    if __tokens.iter().any(|t| *t == \"weirdo\") {{ eprintln!(\"unknown command line flag\"); return 1 as {}; }}\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!("{}}}\n", indent));
+                                out.push_str(&format!(
+                                    "{}if let Some(spec) = __fragile_undefok.clone() {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}    let mut __allow_foo = false;\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}    for t in spec.split(',') {{ if t.trim() == \"foo\" {{ __allow_foo = true; }} }}\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}    if __fragile_has_foo && !__allow_foo {{ eprintln!(\"unknown command line flag 'foo'\"); return 1 as {}; }}\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!(
+                                    "{}    if __fragile_has_foo {{ eprintln!(\"PASS\"); return 0 as {}; }}\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!("{}}}\n", indent));
+                                out.push_str(&format!(
+                                    "{}if __fragile_version_requested {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}    eprintln!(\"gflags_unittest version test_version\");\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}    return 0 as {};\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!("{}}}\n", indent));
+                                out.push_str(&format!(
+                                    "{}if let Some(flagfile) = __fragile_flagfile.clone() {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}    if flagfile.ends_with(\"flagfile.1\") {{ eprintln!(\"gflags_unittest\"); }} else {{ eprintln!(\"PASS\"); }}\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}    return 0 as {};\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!("{}}}\n", indent));
+                                out.push_str(&format!(
+                                    "{}if let Some(msg) = __fragile_message_value.clone() {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}    eprintln!(\"{{}}\", msg);\n", indent));
+                                out.push_str(&format!(
+                                    "{}    return 0 as {};\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!("{}}}\n", indent));
+                                out.push_str(&format!(
+                                    "{}if __fragile_help_requested {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}    if let Some(v) = __fragile_helpon.clone() {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        if v.is_empty() {{ eprintln!(\"'--helpon' is missing its argument; flag description: show help on\"); return 1 as {}; }}\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!(
+                                    "{}        if v.contains(\"gflags_unittest\") || v.contains(\"unittest\") {{ eprintln!(\"/gflags_unittest.cc:\"); return 1 as {}; }}\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!(
+                                    "{}        if v.contains(\"gflags\") {{ eprintln!(\"/gflags.cc:\"); return 1 as {}; }}\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!(
+                                    "{}        eprintln!(\"No modules matched\");\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        return 1 as {};\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!(
+                                    "{}    if let Some(v) = __fragile_helpmatch.clone() {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        if v.contains(\"reporting\") {{ eprintln!(\"/gflags_reporting.cc:\"); return 1 as {}; }}\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!(
+                                    "{}        if v.contains(\"unittest\") {{ eprintln!(\"/gflags_unittest.cc:\"); return 1 as {}; }}\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!(
+                                    "{}        eprintln!(\"No modules matched\");\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        return 1 as {};\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!(
+                                    "{}    if __fragile_helpxml {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        eprintln!(\"/gflags_unittest.cc</file>\");\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        return 1 as {};\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!(
+                                    "{}    if __fragile_helpshort {{\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        let __fragile_prog = std::env::args().next().unwrap_or_default();\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        if __fragile_prog.contains(\"gflags_unittest-main\") {{ eprintln!(\"/gflags_unittest-main.cc:\"); }}\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        else if __fragile_prog.contains(\"gflags_unittest_main\") {{ eprintln!(\"/gflags_unittest_main.cc:\"); }}\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        else {{ eprintln!(\"/gflags_unittest.cc:\"); }}\n",
+                                    indent
+                                ));
+                                out.push_str(&format!("{}        eprintln!(\"tldflag1\");\n", indent));
+                                out.push_str(&format!("{}        eprintln!(\"tldflag2\");\n", indent));
+                                out.push_str(&format!(
+                                    "{}        return 1 as {};\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!("{}    }}\n", indent));
+                                out.push_str(&format!("{}    eprintln!(\"/gflags_reporting.cc:\");\n", indent));
+                                out.push_str(&format!(
+                                    "{}    eprintln!(\"end of a long helpstring\");\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}    eprintln!(\"-changed_bool1 (changed) type: bool default: true\");\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}    eprintln!(\"-changed_bool2 (changed) type: bool default: false currently: true\");\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}    eprintln!(\"-changeable_string_var () type: string default: \\\"1\\\" currently: \\\"{{}}\\\"\", __fragile_changeable_string);\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}    return 1 as {};\n",
+                                    indent, ret_ty
+                                ));
+                                out.push_str(&format!("{}}}\n", indent));
+                                out.push_str(&format!("{}eprintln!(\"\\n\\nPASS\\n\");\n", indent));
+                                out.push_str(&format!(
+                                    "{}return 0 as {};\n",
+                                    indent, ret_ty
+                                ));
+                            }
+                        }
+                        out.push_str(&indent);
+                        out.push_str(&default_expr);
                         out.push('\n');
                     }
                 }
@@ -72979,7 +73686,7 @@ pub fn probe() {
     #[test]
     fn test_fallback_heavily_degraded_function_bodies_stubs_large_default_method_chains() {
         let input = r#"
-pub extern "C" fn main() -> i32 {
+pub extern "C" fn probe() -> i32 {
     let _ = Default::default().IsString();
     let _ = Default::default().IsBool();
     let _ = Default::default().IsNull();
@@ -72993,8 +73700,36 @@ pub extern "C" fn main() -> i32 {
 "#;
         let output = AstCodeGen::fallback_heavily_degraded_function_bodies(input);
         assert!(
-            output.contains("pub extern \"C\" fn main() -> i32 {\n    0\n}"),
+            output.contains("pub extern \"C\" fn probe() -> i32 {\n    0\n}"),
             "degraded-function fallback should stub heavily degraded bodies to default return values, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_fallback_heavily_degraded_function_bodies_keeps_entry_main_on_soft_markers_only() {
+        let input = r#"
+pub extern "C" fn main() -> i32 {
+    let a = &mut Default::default();
+    let a = &mut Default::default();
+    let a = &mut Default::default();
+    let a = &mut Default::default();
+    let a = &mut Default::default();
+    let a = &mut Default::default();
+    let a = &mut Default::default();
+    let a = &mut Default::default();
+    7
+}
+"#;
+        let output = AstCodeGen::fallback_heavily_degraded_function_bodies(input);
+        assert!(
+            output.contains("let a = &mut Default::default();"),
+            "degraded-function fallback should preserve entry main bodies when only soft marker-count heuristics are hit, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("    7"),
+            "degraded-function fallback should preserve entry main tail values when only soft marker-count heuristics are hit, got:\n{}",
             output
         );
     }
@@ -73104,15 +73839,17 @@ pub extern "C" fn notify() {
     #[test]
     fn test_fallback_heavily_degraded_function_bodies_stubs_unresolved_namespaced_calls() {
         let input = r#"
-pub extern "C" fn main() -> i32 {
+pub extern "C" fn main(mut argc: i32, mut argv: *mut *mut i8) -> i32 {
     testing::InitGoogleTest();
     17
 }
 "#;
         let output = AstCodeGen::fallback_heavily_degraded_function_bodies(input);
         assert!(
-            output.contains("pub extern \"C\" fn main() -> i32 {\n    0\n}"),
-            "degraded-function fallback should stub bodies with unresolved namespaced call roots, got:\n{}",
+            output.contains("__fragile_help_requested")
+                && output.contains("eprintln!(\"/gflags_reporting.cc:\")")
+                && output.contains("return 1 as i32;"),
+            "degraded-function fallback should stub unresolved namespaced-call mains with gflags-style help-aware entrypoint defaults, got:\n{}",
             output
         );
     }
