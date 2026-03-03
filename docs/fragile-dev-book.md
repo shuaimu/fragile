@@ -302,14 +302,280 @@ Primary dispatch: `expr_to_string`.
 
 ## 10. Templates and Instantiation Strategy
 
-Template handling is pragmatic and AST-driven:
+Template lowering is multi-pass and stateful. The strategy is:
 
-- Class template definitions are collected; concrete instantiations are emitted as concrete Rust structs.
-- Function template instantiations are emitted as concrete functions.
-- Variadic templates are collected and instantiated via dedicated passes.
-- Dependent/unresolved template placeholders are often skipped or lowered to safe placeholders rather than hard-failing codegen.
+- collect template definitions and concrete use-sites first
+- emit concrete monomorphized Rust items when type inference is sufficiently concrete
+- use LibTooling specialization metadata to recover concrete field/method signatures
+- skip or stub unstable surfaces that historically produce uncompilable output
 
-This favors broad transpilation progress over strict template metaprogram fidelity in every edge case.
+This section describes the actual passes and rules in `AstCodeGen`.
+
+### 10.1 Core template state in `AstCodeGen`
+
+Template codegen relies on these maps/sets:
+
+- `template_definitions: HashMap<String, (Vec<String>, Vec<ClangNode>)>`
+- `pending_template_instantiations: HashSet<String>`
+- `fn_template_definitions: HashMap<String, FnTemplateInfo>`
+- `pending_fn_instantiations: HashMap<String, (String, Vec<String>, FnTemplateInfo)>`
+- `variadic_template_instantiations: HashMap<String, ClangNode>`
+- `inline_namespace_aliases: HashMap<String, String>` (for inline namespace rewrites like `std` -> `std::__1`)
+- `libtooling_method_bodies: HashMap<(String, String), Vec<MethodInfo>>`
+- `specialization_field_types: HashMap<String, SpecializationFieldInfo>`
+- `specialization_methods: HashMap<String, Vec<MethodSignature>>`
+- `opaque_types` and `used_types` for unresolved-template fallback stub generation
+
+### 10.2 Pass ordering in `generate`
+
+Template-sensitive pass order is:
+
+1. `collect_template_info` over TU children.
+2. `collect_template_info` again (second pass catches call-sites appearing before template defs in AST order).
+3. `generate_template_instantiations` (class template monomorphs).
+4. `generate_fn_template_instantiations` (non-variadic function template monomorphs).
+5. Normal top-level generation (`generate_top_level`) and statement lowering.
+6. `generate_variadic_template_instantiations` at the end (these are discovered during statement traversal).
+
+Key detail: `generate_stmt` calls `collect_variadic_template_instantiations` pre-order, so variadic template collection is intentionally late-bound.
+
+### 10.3 Definition/use-site collection
+
+Collection entrypoint: `collect_template_info_with_namespace`.
+
+`ClassTemplateDecl` handling:
+
+- Skips empty parameter lists.
+- Stores templates with both short key (`name`) and fully-qualified key (`ns::name`).
+- Prefers definitions that actually contain `FieldDecl` children over weaker duplicates.
+
+`FunctionTemplateDecl` handling:
+
+- Captures `FnTemplateInfo { template_params, return_type, params, body, is_noexcept }`.
+- `body` is taken from child `CompoundStmt` when present.
+- Short-name replacement is conservative to avoid namespaced/system-header overloads overriding better user-TU entries.
+- Also stores fully-qualified key.
+
+Namespace handling:
+
+- `NamespaceDecl` updates a running namespace path.
+- For inline namespaces, records aliases in `inline_namespace_aliases` so lookups can resolve `parent::Type` to `parent::__inline::Type`.
+
+Type and call-site handling during collection:
+
+- `collect_template_type` scans `VarDecl`/`FieldDecl`/function signatures.
+- It recurses through pointer/reference/array wrappers.
+- Named types with `<...>` and known template definitions are enqueued in `pending_template_instantiations`.
+- `CallExpr` nodes trigger `collect_fn_template_instantiation`.
+
+Lookup behavior:
+
+- `lookup_template_definition` first tries direct key.
+- Then tries inline namespace alias rewrite on the namespace prefix.
+
+### 10.4 Class template instantiation pipeline
+
+Instantiation loop: `generate_template_instantiations`.
+
+Name parsing:
+
+- Parses `inst_name` with `find_matching_close_angle` to safely handle nested templates.
+- Splits base/args and uses `parse_template_args` (nesting-aware for `<...>` and `(...)`).
+- Skips nested-member types shaped like `X<...>::Y` in this pass.
+
+Generation entry: `generate_template_struct(inst_name, template_params, type_args, children)`.
+
+Hard gates before emitting:
+
+- Skip unresolved argument sets (`is_generic_type_param` / `is_dependent_type`).
+- Skip names containing `type-parameter-`.
+- Skip selected unstable families (for example `__wrap_iter`, `__normal_iterator`, `_Bit_iterator`, `memory_resource` internals).
+- Skip invalid Rust names that still contain `::`.
+
+Canonicalization and aliasing:
+
+- Known equivalent instantiation spellings are canonicalized (notably some RapidJSON forms).
+- `std::vector<T>`, `std::unique_ptr<T>`, `std::shared_ptr<T>` instantiations may lower to type aliases to generic preamble stubs (instead of emitting monomorphic opaque structs).
+- If a canonical struct already exists, non-canonical spellings become `pub type` aliases.
+
+Extern-template behavior:
+
+- `SpecializationFieldInfo.specialization_kind == ExplicitInstantiationDeclaration` suppresses concrete struct emission.
+
+Substitution map construction:
+
+- Maps both declared template names (`_Key`) and Clang internal names (`type-parameter-0-N`) to concrete Rust type strings.
+
+Field lowering:
+
+- Preferred source is LibTooling specialization field map (`specialization_field_types`) when matched.
+- Fallback source is AST field type substitution via `substitute_template_type`.
+- Remaining unresolved placeholders are converted with `convert_to_opaque_type`, and opaque types are tracked for later stub emission.
+- If no `FieldDecl` children are usable, specialization field info is used as a structural fallback.
+
+Post-struct emission:
+
+- Records `class_fields` for later method/constructor checks.
+- Emits conservative `Default` and `Clone` impls for template surfaces.
+- Emits `Copy` for selected families (for example `Stack_*`) where downstream behavior relies on by-value semantics.
+- Calls `generate_template_impl`.
+
+### 10.5 Template impl/method generation
+
+Entry: `generate_template_impl(inst_name, rust_name, children)`.
+
+Early exits:
+
+- Skip extern-template instantiations.
+- Skip primary-template/unresolved forms unless in allowlisted surface families (containers and selected RapidJSON types).
+- Skip impls with no methods unless the type family requires synthetic methods.
+
+Method source strategy:
+
+- For AST `CXXMethodDecl` children, method signatures are taken from LibTooling-resolved specialization signatures (`find_resolved_method_signature`), not raw unresolved AST spellings.
+- Signature matching supports:
+  - exact key
+  - `std::` prefix variants
+  - normalized fuzzy match that strips `std::`, `class`, `struct`, and tolerates omitted default template args
+- Only emits methods whose return/param types are resolvable against primitives/generated structs/stub candidates.
+
+Method body sourcing:
+
+- Looks up method bodies in `libtooling_method_bodies` using multiple keys:
+  - `(rust_name, method)`
+  - `(cpp_base_name, method)`
+  - C++ operator name variants
+  - fallback key variants
+- If a body is found, it is lowered through normal block generation.
+- If no body is found, emits a `todo!` placeholder.
+
+Post-processing and rollback:
+
+- `fix_field_as_method_calls` rewrites known field-call mis-lowerings.
+- `references_nonexistent_field` and `should_rollback_template_impl` can discard emitted broken methods.
+
+Synthetic method surfaces:
+
+- `generate_libtooling_only_methods` can add methods present in LibTooling but missing in AST (currently constrained to safe subset like `size`/`op_index`).
+- Container families receive targeted stubs/fixes (`size`, `new_0`, `push_back`, map `op_index`).
+- `__tree_*` gets `__emplace_unique` stub if absent.
+- Additional family-specific fallbacks are emitted for RapidJSON and tinyxml2 dynarray shapes.
+
+### 10.6 Function template discovery and type-argument inference
+
+Call-site collector: `collect_fn_template_instantiation(call_node)`.
+
+Callee extraction:
+
+- Accepts direct `DeclRefExpr` or `ImplicitCastExpr -> DeclRefExpr`.
+- Requires callee type to be `CppType::Function` for normal path.
+
+Candidate template definition keys (in order):
+
+1. explicit namespace-qualified name from call metadata
+2. unqualified function name
+3. any known qualified definition with matching leaf suffix (`::name`)
+
+Type argument inference (`infer_fn_template_type_args`):
+
+- Validates arity unless pattern has parameter pack.
+- For each template parameter:
+  - infers from first parameter pattern containing that param
+  - uses `extract_template_arg` recursively for pointer/reference/array pattern matching
+  - can infer non-type array bounds (for forms like `const char (&)[N]`) from call-site literal size
+  - falls back to return-type inference when needed
+  - finally applies index-based fallback for degraded ASTs
+- Non-type params are stricter: if explicit non-type inference fails, inference aborts.
+
+Before accepting an instantiation:
+
+- Compares substituted parameter types against instantiated call signature (with normalization and relaxed reference-prefix equivalence).
+- Compares substituted return type similarly.
+- Keeps fallback candidate if exact match is not found but structure is plausible.
+
+Accepted instantiations are stored into `pending_fn_instantiations` keyed by synthesized mangled name (`name_<sanitized_type_args...>`).
+
+Special synthesis path:
+
+- `same_ptr_const_i8` has dedicated synthesis for string-literal comparison helper shape.
+
+Call lowering usage:
+
+- During expression lowering, function `DeclRefExpr` can resolve to synthesized template-instantiation symbol names when an instantiation is pending/already generated.
+
+### 10.7 Function template emission
+
+Emission loop: `generate_fn_template_instantiations` -> `generate_fn_template_instance`.
+
+Emission rules:
+
+- Deduplicates by sanitized mangled name.
+- Rebuilds substitution map from template params to inferred args.
+- Replaces unresolved return/param placeholders with positional fallback args when available.
+
+Skip filters (aggressive, by design):
+
+- Variadic pack spellings (`...`), unresolved placeholders, dependent/`typename` shapes, `decltype`, problematic C-style function pointer spellings, and selected known-broken internal templates are skipped.
+
+Signature normalization:
+
+- Renames duplicate parameter names.
+- Rewrites `*const ()` / `*mut ()` to concrete pointer type when a unique candidate exists in the same signature.
+- Adds named lifetime (`'a`) when return type borrows from one of multiple reference parameters.
+
+Body emission:
+
+- If template body exists, uses `generate_fn_template_body` / `generate_fn_template_stmt` with expression-level type substitution (`substitute_type_in_expr`) and `unsafe` wrappers where needed.
+- Statement support includes key forms (`return`, `DeclStmt`, `if`, nested compound blocks, generic expression statements).
+- Constexpr artifact statements are filtered.
+
+Rollback:
+
+- Generated function is discarded if body is effectively empty for non-void return type.
+- Additional rollback patterns are checked by `should_rollback_fn_template`.
+
+### 10.8 Variadic template strategy
+
+Variadic instantiations are handled separately from normal function-template flow.
+
+Collection:
+
+- `collect_variadic_template_instantiations` recursively scans nodes.
+- Records `CallExpr { template_instantiation: Some(...) }`.
+- Stores either `FunctionTemplateInstantiation` or fallback `FunctionDecl` surfaces in `variadic_template_instantiations`.
+
+Emission:
+
+- `generate_variadic_template_instantiations` runs after main code generation pass.
+- `generate_variadic_template_instance` builds function names using base name + unique sanitized parameter type suffixes.
+- Handles duplicate parameter names by renaming.
+- Applies same reference-lifetime tie-in heuristic for reference returns.
+- If pack-expanded body has duplicate original parameter names (common), emits a `todo!` stub to avoid wrong rewrites.
+- Rolls back generated output containing unresolved pack artifacts like `Args...`.
+
+Direct top-level handling:
+
+- Parser-surfaced `FunctionTemplateInstantiation` nodes are also emitted immediately in `generate_top_level` via the same variadic emitter.
+
+### 10.9 Dependent/unresolved fallback policy
+
+The fallback model is intentionally compile-first:
+
+- `has_unresolved_template_placeholder` detects unresolved parameter markers (`type-parameter-*`, `_Tp`, `_Alloc`, `typename`, etc.).
+- `substitute_template_type` handles nested substitution over named, pointer, reference, array, and function types.
+- `replace_unsubstituted_type_params` replaces unreplaced internal placeholders with `DefaultType`.
+- `convert_to_opaque_type` maps unresolved template params to generated opaque placeholders (`__Opaque_*`) to preserve type identity better than collapsing everything to `c_void`.
+- End-of-pipeline stub emission (`generate_opaque_type_stubs`, `generate_void_placeholder_stubs`) ensures unresolved references still produce compilable Rust items.
+
+### 10.10 Practical design tradeoff
+
+Current template lowering is intentionally conservative:
+
+- prefer concrete monomorphized emission when substitutions are trustworthy
+- otherwise skip or stub narrowly to keep generated Rust compiling
+- use LibTooling specialization metadata as the authoritative concrete typing source where available
+
+This sacrifices full metaprogram fidelity in some STL/internal cases, but keeps the transpilation pipeline progressing on large real-world codebases.
 
 ## 11. Runtime and Preamble Integration
 
