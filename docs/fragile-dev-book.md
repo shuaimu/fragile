@@ -577,6 +577,74 @@ Current template lowering is intentionally conservative:
 
 This sacrifices full metaprogram fidelity in some STL/internal cases, but keeps the transpilation pipeline progressing on large real-world codebases.
 
+### 10.11 Concrete Translation Examples
+
+The following examples mirror current emitted shapes.
+
+| C++ template surface | Rust output shape |
+|---|---|
+| `std::vector<Employee>` | `pub type std_vector_Employee = std_vector<Employee>;` |
+| `vector<char>` | `pub type vector_char = std_vector<i8>;` |
+| `vector<void *>` | `pub type vector_void = std_vector<*mut std::ffi::c_void>;` |
+| `vector<unique_ptr<Group>>` | `pub type vector_unique_ptr_Group = std_vector<std_unique_ptr<Group>>;` |
+| `std::unique_ptr<Widget>` | `pub type std_unique_ptr_Widget = std_unique_ptr<Widget>;` |
+| `std::shared_ptr<Node>` | `pub type std_shared_ptr_Node = std_shared_ptr<Node>;` |
+| `extern template class Widget<int>;` | No concrete struct/impl emitted for that instantiation. |
+| `template class Widget<int>;` (explicit instantiation definition) | Concrete `pub struct Widget_int { ... }`-style instantiation is emitted (sanitized name). |
+| `Stack<CrtAllocator>` specialization | Concrete struct + fallback `impl Default`, `impl Clone`, and `impl Copy` surface. |
+| `template<typename T> bool XMLTest(..., T expected, T found, ...)` called with string pointers | Function instantiation emitted with deduced type in name, e.g. `pub fn XMLTest_ptr_const_i8(...) -> bool`. |
+| `template<size_t N> bool same(..., const char (&)[N])` called with `"~"` | NTTP bound is inferred and emitted as bound-specific instantiation, e.g. `pub fn same_2(...) -> bool`, with call-site rewritten to `same_2(...)`. |
+| variadic template instantiation with duplicate expanded parameter names | Emits `todo!("variadic template instantiation")` stub rather than incorrect body rewrite. |
+
+Example snippets:
+
+```cpp
+// C++
+std::vector<Employee> employees;
+vector<char> bytes;
+```
+
+```rust
+// Rust (emitted aliases)
+pub type std_vector_Employee = std_vector<Employee>;
+pub type vector_char = std_vector<i8>;
+```
+
+```cpp
+// C++
+template<typename T>
+bool XMLTest(const char* testString, T expected, T found, bool echo);
+
+bool call_xml_test_strings() {
+  return XMLTest("Test", "Expected", "Found", true);
+}
+```
+
+```rust
+// Rust (emitted instantiation + call path)
+pub fn XMLTest_ptr_const_i8(
+    testString: *const i8,
+    expected: *const i8,
+    found: *const i8,
+    echo: bool,
+) -> bool { ... }
+```
+
+```cpp
+// C++
+template<size_t N>
+bool same(const char* str, size_t size, const char (&literal)[N]);
+
+bool IsNullString(const char* str, size_t size) {
+  return same(str, size, "~");
+}
+```
+
+```rust
+// Rust (bound inferred from "~" + nul => N = 2)
+pub fn same_2(str: *const i8, size: u64, literal: *const i8) -> bool { ... }
+```
+
 ## 11. Runtime and Preamble Integration
 
 `AstCodeGen::generate` emits integration scaffolding before/after normal item emission:
