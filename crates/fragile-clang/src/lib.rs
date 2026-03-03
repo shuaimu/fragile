@@ -30,7 +30,7 @@ pub use libtooling::{
 pub use parse::{ClangParser, ParserLanguage};
 pub use types::{CppType, TypeProperties, TypeTraitEvaluator, TypeTraitResult};
 
-use fragile_ast_exporter::{clang_ast::AstContext, ASTEntryTag};
+use fragile_ast_exporter::{clang_ast::AstContext, clang_ast::SrcSpan, ASTEntryTag};
 use miette::Result;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -57,6 +57,17 @@ pub enum IncludeDirectiveKind {
     Quote,
 }
 
+/// Template parsing strategy used for LibTooling export.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemplateParsingMode {
+    /// Try standard parsing first, then retry with delayed template parsing.
+    Auto,
+    /// Use standard template parsing only.
+    Standard,
+    /// Force delayed template parsing.
+    Delayed,
+}
+
 /// Ordered include directive forwarded to the parser frontend.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IncludeDirective {
@@ -80,6 +91,7 @@ pub struct TranspileOptions {
     pub language_standard: Option<String>,
     pub ignored_error_patterns: Vec<String>,
     pub backend: ParserBackend,
+    pub template_parsing_mode: TemplateParsingMode,
     pub libtooling_skip_system_headers: bool,
     pub stage_timing_trace_path: Option<PathBuf>,
 }
@@ -95,6 +107,7 @@ impl Default for TranspileOptions {
             language_standard: None,
             ignored_error_patterns: Vec::new(),
             backend: ParserBackend::Libtooling,
+            template_parsing_mode: TemplateParsingMode::Auto,
             libtooling_skip_system_headers: false,
             stage_timing_trace_path: None,
         }
@@ -289,7 +302,17 @@ fn frontend_args_contains_define(frontend_args: &[String], define: &str) -> bool
     false
 }
 
-fn libtooling_parser_for_path(path: &Path, options: &TranspileOptions) -> LibToolingParser {
+fn frontend_args_has_template_parsing_override(frontend_args: &[String]) -> bool {
+    frontend_args.iter().any(|arg| {
+        arg == "-fdelayed-template-parsing" || arg == "-fno-delayed-template-parsing"
+    })
+}
+
+fn libtooling_parser_for_path(
+    path: &Path,
+    options: &TranspileOptions,
+    delayed_template_parsing: bool,
+) -> LibToolingParser {
     let mut extra_args = Vec::new();
     match options.language {
         ParserLanguage::Cpp => {
@@ -301,10 +324,6 @@ fn libtooling_parser_for_path(path: &Path, options: &TranspileOptions) -> LibToo
                 .unwrap_or("c++17")
                 .to_string();
             extra_args.push(format!("-std={std}"));
-            // Keep LibTooling aligned with libclang's tolerant template parsing for
-            // known upstream headers (e.g. RapidJSON GenericStringRef assignment form)
-            // that are semantically diagnosed only when eagerly parsing template bodies.
-            extra_args.push("-fdelayed-template-parsing".to_string());
         }
         ParserLanguage::C => {
             extra_args.push("-x".to_string());
@@ -350,6 +369,14 @@ fn libtooling_parser_for_path(path: &Path, options: &TranspileOptions) -> LibToo
         }
     }
 
+    if options.language == ParserLanguage::Cpp
+        && delayed_template_parsing
+        && !frontend_args_has_template_parsing_override(&extra_args)
+    {
+        // Delayed template parsing is only enabled on explicit delayed attempts.
+        extra_args.push("-fdelayed-template-parsing".to_string());
+    }
+
     let mut parser = LibToolingParser::new().with_extra_args(extra_args);
     if let Ok(cwd) = std::env::current_dir() {
         parser = parser.with_compile_commands_dir(&cwd.to_string_lossy());
@@ -362,9 +389,55 @@ fn libtooling_parser_for_path(path: &Path, options: &TranspileOptions) -> LibToo
     parser
 }
 
+fn template_parsing_attempts(
+    language: ParserLanguage,
+    mode: TemplateParsingMode,
+) -> &'static [bool] {
+    const STANDARD_ONLY: [bool; 1] = [false];
+    const DELAYED_ONLY: [bool; 1] = [true];
+    const AUTO_CPP: [bool; 2] = [false, true];
+
+    if language != ParserLanguage::Cpp {
+        return &STANDARD_ONLY;
+    }
+    match mode {
+        TemplateParsingMode::Auto => &AUTO_CPP,
+        TemplateParsingMode::Standard => &STANDARD_ONLY,
+        TemplateParsingMode::Delayed => &DELAYED_ONLY,
+    }
+}
+
+fn template_parsing_label(delayed: bool) -> &'static str {
+    if delayed {
+        "delayed"
+    } else {
+        "standard"
+    }
+}
+
 fn parse_libtooling_context(path: &Path, options: &TranspileOptions) -> Result<AstContext> {
-    let parser = libtooling_parser_for_path(path, options);
-    parser.parse_file(path)
+    let mut errors: Vec<String> = Vec::new();
+    for &delayed_template_parsing in
+        template_parsing_attempts(options.language, options.template_parsing_mode)
+    {
+        let parser = libtooling_parser_for_path(path, options, delayed_template_parsing);
+        match parser.parse_file(path) {
+            Ok(ctx) => return Ok(ctx),
+            Err(err) => {
+                errors.push(format!(
+                    "{}: {}",
+                    template_parsing_label(delayed_template_parsing),
+                    err
+                ));
+            }
+        }
+    }
+
+    Err(miette::miette!(
+        "LibTooling parse failed for {} after template parsing attempt(s): {}",
+        path.display(),
+        errors.join(" | ")
+    ))
 }
 
 fn function_param_count(
@@ -479,39 +552,183 @@ fn dedup_function_roots(ctx: &AstContext, root_ids: Vec<u64>) -> Vec<u64> {
     deduped
 }
 
+fn has_decl_context_parent(
+    ctx: &AstContext,
+    parent_map: &HashMap<u64, Vec<u64>>,
+    node_id: u64,
+) -> bool {
+    parent_map.get(&node_id).is_some_and(|parents| {
+        parents.iter().any(|parent_id| {
+            ctx.ast_nodes.get(parent_id).is_some_and(|parent| {
+                matches!(
+                    parent.tag,
+                    ASTEntryTag::TagNamespaceDecl
+                        | ASTEntryTag::TagCXXRecordDecl
+                        | ASTEntryTag::TagClassTemplateDecl
+                        | ASTEntryTag::TagClassTemplateSpecializationDecl
+                        | ASTEntryTag::TagFunctionTemplateDecl
+                        | ASTEntryTag::TagFunctionDecl
+                        | ASTEntryTag::TagCXXMethodDecl
+                        | ASTEntryTag::TagCXXConstructorDecl
+                        | ASTEntryTag::TagCXXDestructorDecl
+                        | ASTEntryTag::TagEnumDecl
+                        | ASTEntryTag::TagDeclStmt
+                )
+            })
+        })
+    })
+}
+
+fn is_promotable_decl_tag(tag: ASTEntryTag) -> bool {
+    matches!(
+        tag,
+        ASTEntryTag::TagFunctionDecl
+            | ASTEntryTag::TagVarDecl
+            | ASTEntryTag::TagCXXRecordDecl
+            | ASTEntryTag::TagClassTemplateDecl
+            | ASTEntryTag::TagClassTemplateSpecializationDecl
+            | ASTEntryTag::TagFunctionTemplateDecl
+            | ASTEntryTag::TagNamespaceDecl
+            | ASTEntryTag::TagTypedefDecl
+            | ASTEntryTag::TagTypeAliasDecl
+            | ASTEntryTag::TagEnumDecl
+            | ASTEntryTag::TagUsingDecl
+            | ASTEntryTag::TagUsingDirectiveDecl
+    )
+}
+
+fn span_has_bounds(span: &SrcSpan) -> bool {
+    span.begin_line > 0
+        && span.end_line > 0
+        && ((span.end_line > span.begin_line)
+            || (span.end_line == span.begin_line && span.end_column >= span.begin_column))
+}
+
+fn span_pos_leq(line_a: u64, col_a: u64, line_b: u64, col_b: u64) -> bool {
+    line_a < line_b || (line_a == line_b && col_a <= col_b)
+}
+
+fn span_contains(outer: &SrcSpan, inner: &SrcSpan) -> bool {
+    if !span_has_bounds(outer) || !span_has_bounds(inner) {
+        return false;
+    }
+    if outer.file_id != 0 && inner.file_id != 0 && outer.file_id != inner.file_id {
+        return false;
+    }
+    span_pos_leq(
+        outer.begin_line,
+        outer.begin_column,
+        inner.begin_line,
+        inner.begin_column,
+    ) && span_pos_leq(
+        inner.end_line,
+        inner.end_column,
+        outer.end_line,
+        outer.end_column,
+    )
+}
+
+fn function_like_spans(ctx: &AstContext) -> Vec<SrcSpan> {
+    ctx.ast_nodes
+        .values()
+        .filter(|node| {
+            matches!(
+                node.tag,
+                ASTEntryTag::TagFunctionDecl
+                    | ASTEntryTag::TagCXXMethodDecl
+                    | ASTEntryTag::TagCXXConstructorDecl
+                    | ASTEntryTag::TagCXXDestructorDecl
+                    | ASTEntryTag::TagFunctionTemplateDecl
+            )
+        })
+        .map(|node| node.loc)
+        .filter(span_has_bounds)
+        .collect()
+}
+
+fn should_keep_root_var_decl(
+    node: &fragile_ast_exporter::clang_ast::AstNode,
+    fn_spans: &[SrcSpan],
+) -> bool {
+    // Exporter payload for VarDecl extras:
+    // [name, isStaticLocal, isConstexpr, hasExternalStorage, isStaticStorage, isExternStorage, qualifiedName, namespacePath, canonicalId]
+    if node.get_bool(1).unwrap_or(false) {
+        return false;
+    }
+
+    // Clang formats function-scope qualified names as `foo()::x`.
+    if node
+        .get_string(6)
+        .is_some_and(|qname| qname.contains(")::"))
+    {
+        return false;
+    }
+
+    // Guard against malformed parent edges: local variables can be surfaced as
+    // roots in LibTooling export when statement links are pruned.
+    !fn_spans.iter().any(|span| span_contains(span, &node.loc))
+}
+
 fn translation_unit_from_libtooling_context(ctx: &AstContext) -> ClangNode {
     let mut root_ids = ctx.top_nodes.clone();
+    let mut parent_map: HashMap<u64, Vec<u64>> = HashMap::new();
+    for (parent_id, node) in &ctx.ast_nodes {
+        for child_id in node.children.iter().flatten() {
+            parent_map.entry(*child_id).or_default().push(*parent_id);
+        }
+    }
+    let fn_spans = function_like_spans(ctx);
+    root_ids.retain(|id| {
+        let Some(node) = ctx.ast_nodes.get(id) else {
+            return false;
+        };
+        if node.tag == ASTEntryTag::TagParmVarDecl {
+            return false;
+        }
+        if node.tag != ASTEntryTag::TagVarDecl {
+            return true;
+        }
+        if has_decl_context_parent(ctx, &parent_map, node.id) {
+            return false;
+        }
+        should_keep_root_var_decl(node, &fn_spans)
+    });
     let mut seen_roots: HashSet<u64> = root_ids.iter().copied().collect();
-    let all_children: HashSet<u64> = ctx
-        .ast_nodes
-        .values()
-        .flat_map(|n| n.children.iter().filter_map(|child| *child))
-        .collect();
 
-    // Promote body-bearing free functions that can be nested in the exported graph
-    // and therefore omitted from computed top nodes.
-    let mut function_ids: Vec<u64> = ctx
+    // Promote declaration nodes that can be pruned from `top_nodes` because
+    // they are referenced by expression edges (for example DeclRefExpr).
+    let mut candidate_ids: Vec<u64> = ctx
         .ast_nodes
         .iter()
-        .filter_map(|(id, node)| (node.tag == ASTEntryTag::TagFunctionDecl).then_some(*id))
+        .filter_map(|(id, node)| is_promotable_decl_tag(node.tag).then_some(*id))
         .collect();
-    function_ids.sort_unstable();
+    candidate_ids.sort_unstable();
 
-    for function_id in function_ids {
-        let Some(node) = ctx.ast_nodes.get(&function_id) else {
+    for node_id in candidate_ids {
+        let Some(node) = ctx.ast_nodes.get(&node_id) else {
             continue;
         };
 
-        if seen_roots.contains(&node.id) || all_children.contains(&node.id) {
+        if seen_roots.contains(&node.id) {
+            continue;
+        }
+        if has_decl_context_parent(ctx, &parent_map, node.id) {
             continue;
         }
 
-        if !function_has_body(node, ctx) {
+        if node.tag == ASTEntryTag::TagFunctionDecl {
+            if !function_has_body(node, ctx) {
+                continue;
+            }
+            let name = node.get_string(0).unwrap_or("");
+            if name.is_empty() || name.starts_with("__") {
+                continue;
+            }
+        }
+        if node.tag == ASTEntryTag::TagVarDecl && !node.children.iter().any(|c| c.is_some()) {
             continue;
         }
-
-        let name = node.get_string(0).unwrap_or("");
-        if name.is_empty() || name.starts_with("__") {
+        if node.tag == ASTEntryTag::TagVarDecl && !should_keep_root_var_decl(node, &fn_spans) {
             continue;
         }
 
@@ -634,4 +851,368 @@ pub fn generate_stubs(path: &Path) -> Result<String> {
 /// Parse a C++ source file and transpile to Rust source code with LibTooling.
 pub fn transpile_cpp_to_rust_with_libtooling(path: &Path) -> Result<String> {
     transpile_cpp_to_rust_with_backend(path, ParserBackend::Libtooling)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fragile_ast_exporter::{
+        clang_ast::{AstNode, SrcFile},
+        CborValue,
+    };
+
+    fn span(file_id: u64, begin_line: u64, begin_column: u64, end_line: u64, end_column: u64) -> SrcSpan {
+        SrcSpan {
+            file_id,
+            begin_line,
+            begin_column,
+            end_line,
+            end_column,
+        }
+    }
+
+    fn ast_node(
+        id: u64,
+        tag: ASTEntryTag,
+        children: Vec<Option<u64>>,
+        loc: SrcSpan,
+        extras: Vec<CborValue>,
+    ) -> AstNode {
+        AstNode {
+            id,
+            tag,
+            children,
+            loc,
+            type_id: None,
+            extras,
+        }
+    }
+
+    #[test]
+    fn test_translation_unit_filters_function_local_vardecl_roots() {
+        let mut ast_nodes: HashMap<u64, AstNode> = HashMap::new();
+        ast_nodes.insert(
+            1,
+            ast_node(
+                1,
+                ASTEntryTag::TagFunctionDecl,
+                vec![Some(2)],
+                span(1, 1, 1, 20, 1),
+                vec![CborValue::Text("f".to_string())],
+            ),
+        );
+        ast_nodes.insert(
+            2,
+            ast_node(
+                2,
+                ASTEntryTag::TagCompoundStmt,
+                vec![Some(3)],
+                span(1, 1, 10, 20, 1),
+                vec![],
+            ),
+        );
+        ast_nodes.insert(
+            3,
+            ast_node(
+                3,
+                ASTEntryTag::TagDeclStmt,
+                vec![Some(4)],
+                span(1, 5, 3, 5, 12),
+                vec![],
+            ),
+        );
+        ast_nodes.insert(
+            4,
+            ast_node(
+                4,
+                ASTEntryTag::TagVarDecl,
+                vec![],
+                span(1, 5, 5, 5, 9),
+                vec![
+                    CborValue::Text("arg".to_string()),
+                    CborValue::Bool(false), // isStaticLocal
+                    CborValue::Bool(false),
+                    CborValue::Bool(false),
+                    CborValue::Bool(false), // isStaticStorage
+                    CborValue::Bool(false), // isExternStorage
+                    CborValue::Text("f()::arg".to_string()),
+                ],
+            ),
+        );
+
+        let ctx = AstContext {
+            ast_nodes,
+            type_nodes: HashMap::new(),
+            top_nodes: vec![1, 4],
+            files: vec![SrcFile {
+                path: None,
+                include_loc: None,
+            }],
+        };
+
+        let tu = translation_unit_from_libtooling_context(&ctx);
+        assert!(
+            tu.children
+                .iter()
+                .all(|child| !matches!(child.kind, ClangNodeKind::VarDecl { .. })),
+            "function-local VarDecl roots should be filtered out"
+        );
+    }
+
+    #[test]
+    fn test_translation_unit_keeps_true_global_vardecl_roots() {
+        let mut ast_nodes: HashMap<u64, AstNode> = HashMap::new();
+        ast_nodes.insert(
+            10,
+            ast_node(
+                10,
+                ASTEntryTag::TagFunctionDecl,
+                vec![Some(11)],
+                span(1, 1, 1, 8, 1),
+                vec![CborValue::Text("f".to_string())],
+            ),
+        );
+        ast_nodes.insert(
+            11,
+            ast_node(
+                11,
+                ASTEntryTag::TagCompoundStmt,
+                vec![],
+                span(1, 1, 10, 8, 1),
+                vec![],
+            ),
+        );
+        ast_nodes.insert(
+            12,
+            ast_node(
+                12,
+                ASTEntryTag::TagVarDecl,
+                vec![Some(13)],
+                span(1, 20, 1, 20, 14),
+                vec![
+                    CborValue::Text("g_value".to_string()),
+                    CborValue::Bool(false), // isStaticLocal
+                    CborValue::Bool(false),
+                    CborValue::Bool(false),
+                    CborValue::Bool(false), // isStaticStorage
+                    CborValue::Bool(false), // isExternStorage
+                    CborValue::Text("g_value".to_string()),
+                ],
+            ),
+        );
+        ast_nodes.insert(
+            13,
+            ast_node(
+                13,
+                ASTEntryTag::TagIntegerLiteral,
+                vec![],
+                span(1, 20, 12, 20, 12),
+                vec![CborValue::Integer(1.into())],
+            ),
+        );
+
+        let ctx = AstContext {
+            ast_nodes,
+            type_nodes: HashMap::new(),
+            top_nodes: vec![10, 12],
+            files: vec![SrcFile {
+                path: None,
+                include_loc: None,
+            }],
+        };
+
+        let tu = translation_unit_from_libtooling_context(&ctx);
+        assert!(
+            tu.children.iter().any(|child| {
+                matches!(
+                    &child.kind,
+                    ClangNodeKind::VarDecl { name, .. } if name == "g_value"
+                )
+            }),
+            "true global VarDecl roots should remain in the translation unit"
+        );
+    }
+
+    #[test]
+    fn test_translation_unit_filters_static_local_vardecl_roots() {
+        let mut ast_nodes: HashMap<u64, AstNode> = HashMap::new();
+        ast_nodes.insert(
+            20,
+            ast_node(
+                20,
+                ASTEntryTag::TagVarDecl,
+                vec![],
+                span(0, 0, 0, 0, 0),
+                vec![
+                    CborValue::Text("cache".to_string()),
+                    CborValue::Bool(true), // isStaticLocal
+                    CborValue::Bool(false),
+                    CborValue::Bool(false),
+                    CborValue::Bool(true), // isStaticStorage
+                    CborValue::Bool(false), // isExternStorage
+                    CborValue::Text("f()::cache".to_string()),
+                ],
+            ),
+        );
+
+        let ctx = AstContext {
+            ast_nodes,
+            type_nodes: HashMap::new(),
+            top_nodes: vec![20],
+            files: Vec::new(),
+        };
+
+        let tu = translation_unit_from_libtooling_context(&ctx);
+        assert!(
+            tu.children.is_empty(),
+            "static-local VarDecl roots should be filtered from translation-unit roots"
+        );
+    }
+
+    #[test]
+    fn test_translation_unit_filters_parm_vardecl_roots() {
+        let mut ast_nodes: HashMap<u64, AstNode> = HashMap::new();
+        ast_nodes.insert(
+            30,
+            ast_node(
+                30,
+                ASTEntryTag::TagParmVarDecl,
+                vec![],
+                span(0, 0, 0, 0, 0),
+                vec![CborValue::Text("dst".to_string())],
+            ),
+        );
+
+        let ctx = AstContext {
+            ast_nodes,
+            type_nodes: HashMap::new(),
+            top_nodes: vec![30],
+            files: Vec::new(),
+        };
+
+        let tu = translation_unit_from_libtooling_context(&ctx);
+        assert!(
+            tu.children.is_empty(),
+            "ParmVarDecl roots should not be promoted into translation-unit declarations"
+        );
+    }
+
+    #[test]
+    fn test_translation_unit_filters_root_vardecl_with_declstmt_parent() {
+        let mut ast_nodes: HashMap<u64, AstNode> = HashMap::new();
+        ast_nodes.insert(
+            40,
+            ast_node(
+                40,
+                ASTEntryTag::TagFunctionDecl,
+                vec![Some(41)],
+                span(1, 1, 1, 8, 1),
+                vec![CborValue::Text("f".to_string())],
+            ),
+        );
+        ast_nodes.insert(
+            41,
+            ast_node(
+                41,
+                ASTEntryTag::TagCompoundStmt,
+                vec![Some(42)],
+                span(1, 1, 10, 8, 1),
+                vec![],
+            ),
+        );
+        ast_nodes.insert(
+            42,
+            ast_node(
+                42,
+                ASTEntryTag::TagDeclStmt,
+                vec![Some(43)],
+                span(1, 5, 2, 5, 9),
+                vec![],
+            ),
+        );
+        ast_nodes.insert(
+            43,
+            ast_node(
+                43,
+                ASTEntryTag::TagVarDecl,
+                vec![Some(44)],
+                span(1, 50, 12, 50, 50),
+                vec![
+                    CborValue::Text("src".to_string()),
+                    CborValue::Bool(false), // isStaticLocal
+                    CborValue::Bool(false),
+                    CborValue::Bool(false),
+                    CborValue::Bool(false), // isStaticStorage
+                    CborValue::Bool(false), // isExternStorage
+                    CborValue::Text("src".to_string()),
+                ],
+            ),
+        );
+        ast_nodes.insert(
+            44,
+            ast_node(
+                44,
+                ASTEntryTag::TagIntegerLiteral,
+                vec![],
+                span(1, 56, 12, 56, 56),
+                vec![CborValue::Integer(0.into())],
+            ),
+        );
+
+        let ctx = AstContext {
+            ast_nodes,
+            type_nodes: HashMap::new(),
+            top_nodes: vec![40, 43],
+            files: vec![SrcFile {
+                path: None,
+                include_loc: None,
+            }],
+        };
+
+        let tu = translation_unit_from_libtooling_context(&ctx);
+        assert!(
+            !tu.children.iter().any(
+                |child| matches!(&child.kind, ClangNodeKind::VarDecl { name, .. } if name == "src")
+            ),
+            "root VarDecl with DeclStmt parent should be filtered as function-local"
+        );
+    }
+
+    #[test]
+    fn template_parsing_attempts_cpp_auto_prefers_standard_then_delayed() {
+        let attempts = template_parsing_attempts(ParserLanguage::Cpp, TemplateParsingMode::Auto);
+        assert_eq!(attempts, &[false, true]);
+    }
+
+    #[test]
+    fn template_parsing_attempts_cpp_standard_is_single_attempt() {
+        let attempts = template_parsing_attempts(ParserLanguage::Cpp, TemplateParsingMode::Standard);
+        assert_eq!(attempts, &[false]);
+    }
+
+    #[test]
+    fn template_parsing_attempts_cpp_delayed_is_single_attempt() {
+        let attempts = template_parsing_attempts(ParserLanguage::Cpp, TemplateParsingMode::Delayed);
+        assert_eq!(attempts, &[true]);
+    }
+
+    #[test]
+    fn template_parsing_attempts_c_ignores_mode_override() {
+        let auto_attempts = template_parsing_attempts(ParserLanguage::C, TemplateParsingMode::Auto);
+        let delayed_attempts =
+            template_parsing_attempts(ParserLanguage::C, TemplateParsingMode::Delayed);
+        assert_eq!(auto_attempts, &[false]);
+        assert_eq!(delayed_attempts, &[false]);
+    }
+
+    #[test]
+    fn frontend_args_template_parsing_override_detection() {
+        assert!(!frontend_args_has_template_parsing_override(&[]));
+        assert!(frontend_args_has_template_parsing_override(&[
+            "-fdelayed-template-parsing".to_string()
+        ]));
+        assert!(frontend_args_has_template_parsing_override(&[
+            "-fno-delayed-template-parsing".to_string()
+        ]));
+    }
 }

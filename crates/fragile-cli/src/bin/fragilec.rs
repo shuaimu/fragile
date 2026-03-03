@@ -1,5 +1,6 @@
 use fragile_clang::{
-    IncludeDirective, IncludeDirectiveKind, ParserBackend, ParserLanguage, TranspileOptions,
+    IncludeDirective, IncludeDirectiveKind, ParserBackend, ParserLanguage, TemplateParsingMode,
+    TranspileOptions,
 };
 use std::collections::hash_map::DefaultHasher;
 use std::ffi::OsString;
@@ -901,6 +902,7 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
         language_standard,
         ignored_error_patterns: strict_parser_ignored_error_patterns(language),
         backend: parser_backend,
+        template_parsing_mode: TemplateParsingMode::Auto,
         libtooling_skip_system_headers: true,
         stage_timing_trace_path,
     };

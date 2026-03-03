@@ -63,6 +63,31 @@ Backend note:
 
 - `ParserBackend` contains legacy variants, but transpilation is centered on LibTooling flow.
 
+### 2.1 Mako `btree.cc` failure pattern and generic mitigation
+
+A recurring failure pattern on large C++ codebases (including `mako/src/core/btree.cc`) is:
+
+- parse-time diagnostics only when template bodies are eagerly parsed
+- exporter abort on enum constants that do not fit 64-bit integer extraction
+
+Current generic mitigation in Fragile:
+
+- `TranspileOptions.template_parsing_mode` controls LibTooling template parsing policy.
+- Default mode is `TemplateParsingMode::Auto`:
+  - first attempt uses standard parsing flags
+  - second attempt retries with `-fdelayed-template-parsing` if the first parse fails
+- If frontend args already specify template parsing (`-fdelayed-template-parsing` or `-fno-delayed-template-parsing`), Fragile does not override them.
+
+This keeps standard-conforming behavior by default while preserving a tolerant fallback for third-party headers that are known to be sensitive to eager template-body parsing.
+
+Exporter hardening for wide enum constants:
+
+- Enum constant emission no longer assumes `APSInt` always fits a signed 64-bit payload.
+- Values that fit are encoded as CBOR integers.
+- Wider values are encoded as decimal strings.
+
+This removes exporter-side aborts for large constants (for example `unsigned __int128` enum values) while preserving payload information for downstream lowering.
+
 ## 3. Internal Data Models
 
 Core node model: `crates/fragile-clang/src/ast.rs`

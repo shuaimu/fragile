@@ -19,6 +19,7 @@
 #include <vector>
 
 // LLVM headers
+#include "llvm/ADT/SmallString.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
@@ -96,6 +97,24 @@ void cbor_encode_string_array(CborEncoder *encoder,
         cbor_encode_string(&arr, value);
     }
     cbor_encoder_close_container(encoder, &arr);
+}
+
+void cbor_encode_apsint(CborEncoder *encoder, const llvm::APSInt &value) {
+    if (value.isSigned()) {
+        if (value.isSignedIntN(64)) {
+            cbor_encode_int(encoder, value.getSExtValue());
+            return;
+        }
+    } else {
+        if (value.getActiveBits() <= 64) {
+            cbor_encode_uint(encoder, value.getZExtValue());
+            return;
+        }
+    }
+
+    llvm::SmallString<64> text;
+    value.toString(text, 10);
+    cbor_encode_string(encoder, std::string(text.str()));
 }
 
 std::vector<std::string> collect_decl_context_path(const DeclContext *dc,
@@ -1786,7 +1805,7 @@ bool ASTExporterVisitor::VisitEnumConstantDecl(EnumConstantDecl *ECD) {
 
                     // Value
                     auto val = ECD->getInitVal();
-                    cbor_encode_int(enc, val.getExtValue());
+                    cbor_encode_apsint(enc, val);
                 });
 
     if (init && shouldTraverseStmtTree(init)) {

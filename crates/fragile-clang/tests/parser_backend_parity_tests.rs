@@ -1,6 +1,7 @@
 use fragile_clang::{
     convert_to_clang_node, transpile_cpp_to_rust_with_options, ClangNode, ClangNodeKind,
-    ClangParser, CppType, LibToolingParser, ParserBackend, ParserLanguage, TranspileOptions,
+    ClangParser, CppType, LibToolingParser, ParserBackend, ParserLanguage, TemplateParsingMode,
+    TranspileOptions,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -240,6 +241,7 @@ int mul(int x, int y) {
             language_standard: None,
             ignored_error_patterns: Vec::new(),
             backend,
+            template_parsing_mode: TemplateParsingMode::Auto,
             libtooling_skip_system_headers: false,
             stage_timing_trace_path: None,
         };
@@ -577,6 +579,7 @@ int add(int a, int b) {
             language_standard: None,
             ignored_error_patterns: Vec::new(),
             backend,
+            template_parsing_mode: TemplateParsingMode::Auto,
             libtooling_skip_system_headers: false,
             stage_timing_trace_path: Some(stage_timing_trace_path.clone()),
         };

@@ -213,3 +213,55 @@ int read_local(const LocalType& v) {
         "filtered export should drop system-header declaration"
     );
 }
+
+#[test]
+fn test_export_ast_wide_enum_constant_does_not_abort() {
+    let temp_dir = unique_temp_dir("fragile_ast_exporter_wide_enum_constant");
+    fs::create_dir_all(&temp_dir).expect("failed to create wide-enum fixture dir");
+
+    let source_path = temp_dir.join("wide_enum.cpp");
+    fs::write(
+        &source_path,
+        r#"
+enum class BigMask : unsigned __int128 {
+    Value = (static_cast<unsigned __int128>(1) << 100)
+};
+
+int read_mask() {
+    return 0;
+}
+"#,
+    )
+    .expect("failed to write wide-enum fixture source");
+
+    let compile_commands = format!(
+        r#"[
+  {{
+    "directory": "{}",
+    "command": "clang++ -std=gnu++23 -c {} -o /dev/null",
+    "file": "{}"
+  }}
+]"#,
+        temp_dir.display(),
+        source_path.display(),
+        source_path.display()
+    );
+    fs::write(temp_dir.join("compile_commands.json"), compile_commands)
+        .expect("failed to write compile_commands.json for wide-enum fixture");
+
+    let ctx = export_ast_with_options(&source_path, &temp_dir, &[], false, false)
+        .expect("AST export should succeed for wide enum constants");
+
+    let wide_enum_constant = ctx
+        .ast_nodes
+        .values()
+        .find(|node| {
+            node.tag == ASTEntryTag::TagEnumConstantDecl && node.get_string(0).unwrap_or("") == "Value"
+        })
+        .expect("expected BigMask::Value enum constant in exported AST");
+
+    assert!(
+        wide_enum_constant.get_int(1).is_some() || wide_enum_constant.get_string(1).is_some(),
+        "enum constant payload should be preserved as integer or textual fallback"
+    );
+}
