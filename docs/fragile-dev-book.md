@@ -88,6 +88,45 @@ Exporter hardening for wide enum constants:
 
 This removes exporter-side aborts for large constants (for example `unsigned __int128` enum values) while preserving payload information for downstream lowering.
 
+### 2.2 Mako drop-in replay loop (March 2026)
+
+Drop-in validation workflow used for `vendor/mako`:
+
+1. Build with `gmake -j32` in `vendor/mako/build_fragilec_dropin`.
+2. Take the first `fragile rustc object compile failed` translation unit from the log.
+3. Re-run that file alone from `compile_commands.json` with the exact command.
+4. Add a generic normalization in `AstCodeGen` (no mako-specific source patching).
+5. Add a focused unit test in `crates/fragile-clang/src/ast_codegen.rs`.
+6. Rebuild `fragilec`, confirm isolated file passes, then run next full `gmake -j32`.
+
+Generic normalizations added in this replay cycle:
+
+- `normalize_empty_union_definitions`:
+  - injects a placeholder field for zero-field unions.
+- `normalize_empty_struct_enum_name_collisions`:
+  - drops empty struct shells that collide with same-scope enums.
+- `normalize_module_type_name_shadowing` refinement:
+  - only qualifies/shims against top-level type-like names.
+- `normalize_obvious_local_var_type_mismatches` expansions:
+  - stream-like ctor identifier assignment fallback (`unsafe { std::mem::zeroed() }`);
+  - non-primitive local from primitive-typed local fallback;
+  - unresolved lowercase zeroed local types -> `UnknownTagAutoType`.
+- `normalize_static_array_integer_element_widths`:
+  - casts static integer-array elements into declared element lanes.
+- `normalize_bare_identifier_expression_statements`:
+  - rewrites bare identifier statements (`v;`) to borrow no-ops.
+- `normalize_invalid_placeholder_type_item_names`:
+  - removes invalid `_`-named struct/enum/union items and their impls.
+- `normalize_vector_capacity_call_argument_widths`:
+  - casts `.reserve(...)` / `.resize(...)` call args to `i32` while skipping `self.inner.*` implementation calls.
+- `normalize_unresolved_join_method_calls`:
+  - rewrites unresolved identifier `.join();` statements to no-op.
+
+Outcome snapshot:
+
+- `gmake -j32` in `build_fragilec_dropin` completes with `RC=0` after iterative fixes.
+- `ctest -j32` still reports many runtime-level failures (primarily gflags/example behavior parity), so compile-surface drop-in reached parity before runtime test parity.
+
 ## 3. Internal Data Models
 
 Core node model: `crates/fragile-clang/src/ast.rs`
