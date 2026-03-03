@@ -92,7 +92,7 @@ This removes exporter-side aborts for large constants (for example `unsigned __i
 
 Drop-in validation workflow used for `vendor/mako`:
 
-1. Build with `cmake --build . -j32` (or `gmake -j32`) in `vendor/mako/build_fragilec_dropin`.
+1. In `vendor/mako/build_fragilec_dropin`, run `make clean` first, then build with `cmake --build . -j32` (or `gmake -j32`).
 2. Take the first `fragile rustc object compile failed` translation unit from the log.
 3. Re-run that file alone from `compile_commands.json` with the exact command (this preserves all CMake include paths/defines); keep `FRAGILEC_KEEP_RS=1` enabled when Rust-level debugging is needed.
 4. Add a generic normalization in `AstCodeGen` (no mako-specific source patching).
@@ -111,6 +111,7 @@ Generic normalizations added in this replay cycle:
   - stream-like ctor identifier assignment fallback (`unsafe { std::mem::zeroed() }`);
   - non-primitive local from primitive-typed local fallback;
   - unresolved lowercase zeroed local types -> `UnknownTagAutoType`.
+  - argv token splitting fallback now forces `std::vec::Vec<&str>` to avoid local `Vec` type-name shadowing.
 - `normalize_static_array_integer_element_widths`:
   - casts static integer-array elements into declared element lanes.
 - `normalize_bare_identifier_expression_statements`:
@@ -121,13 +122,20 @@ Generic normalizations added in this replay cycle:
   - casts `.reserve(...)` / `.resize(...)` call args to `i32` while skipping `self.inner.*` implementation calls.
 - `normalize_unresolved_join_method_calls`:
   - rewrites unresolved identifier `.join();` statements to no-op.
+- switch lowering (`generate_switch_stmt`) no-default fallback arm:
+  - emits typed wildcard arm `_ => { unsafe { std::mem::zeroed::<_>() } }` instead of `_ => unsafe { std::mem::zeroed() },` to preserve Rust match arm typing.
+- `normalize_struct_default_clone_derives` refinement:
+  - only rewrites derives to manual `Default`/`Clone` impls for structs that are directly or transitively `c_void`-backed (including aliases/field references), leaving non-`c_void` structs on regular derives.
+- `normalize_add_missing_struct_default_clone_impls` refinement:
+  - prefers non-empty discovered field maps and handles inline one-line struct declarations when synthesizing fieldwise defaults.
+  - when no safe field list is available, emits `unsafe { std::mem::zeroed() }` fallback instead of invalid `Self {}`.
 - `fallback_heavily_degraded_function_bodies` entrypoint fallback:
   - when a heavily degraded body forces a `main` stub, emit a generic argv-driven help/version/flag parser fallback that preserves expected exit-code and output shape for gflags-style tests.
 
 Outcome snapshot:
 
-- `cmake --build . -j32` in `build_fragilec_dropin` completes with `RC=0` after iterative fixes.
-- On March 3, 2026, `ctest -j32 --output-on-failure` reports `117/117` passed in `build_fragilec_dropin` (no remaining known failing test targets in this loop).
+- On March 3, 2026, `make clean && cmake --build . -j32` in `build_fragilec_dropin` completed to 100% after iterative generic fixes.
+- On March 3, 2026, `ctest -j32 --output-on-failure` reported `117/117` passed in `build_fragilec_dropin` (including `simpleTransaction`; no remaining known failing test targets in this loop).
 
 ## 3. Internal Data Models
 
