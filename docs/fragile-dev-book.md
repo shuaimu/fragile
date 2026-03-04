@@ -122,6 +122,8 @@ Generic normalizations added in this replay cycle:
   - casts `.reserve(...)` / `.resize(...)` call args to `i32` while skipping `self.inner.*` implementation calls.
 - `normalize_unresolved_join_method_calls`:
   - rewrites unresolved identifier `.join();` statements to no-op.
+- `normalize_unresolved_const_like_identifier_returns` refinement:
+  - when unresolved all-caps identifiers are returned (`return XXH_OK;`) and no definition survives, prefer safe typed defaults for known return lanes (`0`, `false`, `std::ptr::null[_mut]()`, `None`) and only fall back to `unsafe { std::mem::zeroed() }` when no safe lane inference is available.
 - switch lowering (`generate_switch_stmt`) no-default fallback arm:
   - emits typed wildcard arm `_ => { unsafe { std::mem::zeroed::<_>() } }` instead of `_ => unsafe { std::mem::zeroed() },` to preserve Rust match arm typing.
 - `normalize_struct_default_clone_derives` refinement:

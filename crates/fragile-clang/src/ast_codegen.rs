@@ -7422,14 +7422,72 @@ impl AstCodeGen {
             defined
         }
 
+        fn parse_function_return_type(line: &str) -> Option<String> {
+            let trimmed = line.trim_start();
+            let is_fn_signature = trimmed.starts_with("pub fn ")
+                || trimmed.starts_with("pub(crate) fn ")
+                || trimmed.starts_with("pub(super) fn ")
+                || trimmed.starts_with("fn ")
+                || trimmed.starts_with("extern \"C\" fn ")
+                || trimmed.starts_with("pub extern \"C\" fn ")
+                || trimmed.starts_with("pub(crate) extern \"C\" fn ")
+                || trimmed.starts_with("pub(super) extern \"C\" fn ");
+            if !is_fn_signature {
+                return None;
+            }
+            let (_, ret_tail) = trimmed.split_once("->")?;
+            let mut end = ret_tail.len();
+            for marker in [" where ", "{", ";"] {
+                if let Some(idx) = ret_tail.find(marker) {
+                    end = end.min(idx);
+                }
+            }
+            let ty = ret_tail[..end].trim();
+            if ty.is_empty() {
+                None
+            } else {
+                Some(ty.to_string())
+            }
+        }
+
+        fn safe_default_expr_for_return_type(return_ty: &str) -> Option<String> {
+            let ty = return_ty.trim();
+            if ty.is_empty() {
+                return None;
+            }
+            if ty.starts_with("*const ") {
+                return Some("std::ptr::null()".to_string());
+            }
+            if ty.starts_with("*mut ") {
+                return Some("std::ptr::null_mut()".to_string());
+            }
+            if ty.starts_with("Option<") {
+                return Some("None".to_string());
+            }
+            match ty {
+                "bool" => Some("false".to_string()),
+                "f32" => Some("0.0f32".to_string()),
+                "f64" => Some("0.0f64".to_string()),
+                "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32"
+                | "u64" | "u128" | "usize" => Some("0".to_string()),
+                _ => None,
+            }
+        }
+
         if !code.contains("return ") {
             return code.to_string();
         }
 
         let defined_names = collect_defined_names(code);
+        let mut brace_depth: isize = 0;
+        let mut current_fn_return: Option<(isize, String)> = None;
         let mut out = String::with_capacity(code.len());
         for line in code.lines() {
             let trimmed = line.trim_start();
+            if let Some(return_ty) = parse_function_return_type(trimmed) {
+                current_fn_return = Some((brace_depth, return_ty));
+            }
+            let mut replaced = false;
             if let Some(rest) = trimmed.strip_prefix("return ") {
                 let expr = rest.trim_end_matches(';').trim();
                 if Self::is_simple_identifier_expr(expr) {
@@ -7437,15 +7495,33 @@ impl AstCodeGen {
                     if is_const_like_identifier(ident) && !defined_names.contains(ident) {
                         let indent_len = line.len().saturating_sub(trimmed.len());
                         let indent = &line[..indent_len];
+                        let fallback = current_fn_return
+                            .as_ref()
+                            .and_then(|(_, return_ty)| {
+                                safe_default_expr_for_return_type(return_ty)
+                            })
+                            .unwrap_or_else(|| "unsafe { std::mem::zeroed() }".to_string());
                         out.push_str(indent);
-                        out.push_str("return unsafe { std::mem::zeroed() };");
+                        out.push_str("return ");
+                        out.push_str(&fallback);
+                        out.push(';');
                         out.push('\n');
-                        continue;
+                        replaced = true;
                     }
                 }
             }
-            out.push_str(line);
-            out.push('\n');
+            if !replaced {
+                out.push_str(line);
+                out.push('\n');
+            }
+            let opens = line.chars().filter(|ch| *ch == '{').count() as isize;
+            let closes = line.chars().filter(|ch| *ch == '}').count() as isize;
+            brace_depth += opens - closes;
+            if let Some((fn_depth, _)) = &current_fn_return {
+                if brace_depth <= *fn_depth {
+                    current_fn_return = None;
+                }
+            }
         }
 
         if !code.ends_with('\n') && !out.is_empty() {
@@ -75486,6 +75562,42 @@ pub fn XXH32_reset() -> UnknownTagEnumType {
         assert!(
             !output.contains("return XXH_OK;"),
             "missing const-like return identifiers should not survive unchanged, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_unresolved_const_like_identifier_returns_prefers_safe_primitive_defaults() {
+        let input = r#"
+pub fn XXH32_reset() -> i32 {
+    return XXH_OK;
+}
+pub fn get_ptr() -> *mut i8 {
+    return BAD_PTR;
+}
+pub fn maybe_mode() -> Option<i32> {
+    return MISSING_MODE;
+}
+"#;
+        let output = AstCodeGen::normalize_unresolved_const_like_identifier_returns(input);
+        assert!(
+            output.contains("return 0;"),
+            "primitive integer return types should degrade to safe zero defaults, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("return std::ptr::null_mut();"),
+            "raw mut pointer return types should degrade to safe null_mut defaults, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("return None;"),
+            "Option return types should degrade to safe None defaults, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("return unsafe { std::mem::zeroed() };"),
+            "safe primitive fallback should avoid unsafe zeroed defaults when return type is known, got:\n{}",
             output
         );
     }
