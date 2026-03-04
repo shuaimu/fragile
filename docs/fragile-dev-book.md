@@ -129,13 +129,19 @@ Generic normalizations added in this replay cycle:
 - `normalize_add_missing_struct_default_clone_impls` refinement:
   - prefers non-empty discovered field maps and handles inline one-line struct declarations when synthesizing fieldwise defaults.
   - when no safe field list is available, emits `unsafe { std::mem::zeroed() }` fallback instead of invalid `Self {}`.
+- `normalize_self_recursive_struct_fields` refinement:
+  - resolves simple local `type` aliases while scanning struct/union field declarations.
+  - rewrites alias-mediated by-value self recursion (including `ManuallyDrop<Alias>`) to pointer form (`*mut Self`) so generated Rust types remain sized.
+- LibTooling missing-header fallback in `parse_libtooling_context`:
+  - when parse attempts fail on `file not found` diagnostics, Fragile extracts missing header names, creates sanitized temporary `#pragma once` stubs, and retries parse with an extra `-I <stub_dir>`.
+  - this is generic and avoids mako-specific patches when generated build headers are absent during early translation-unit compilation.
 - `fallback_heavily_degraded_function_bodies` entrypoint fallback:
   - when a heavily degraded body forces a `main` stub, emit a generic argv-driven help/version/flag parser fallback that preserves expected exit-code and output shape for gflags-style tests.
 
 Outcome snapshot:
 
-- On March 3, 2026, `make clean && cmake --build . -j32` in `build_fragilec_dropin` completed to 100% after iterative generic fixes.
-- On March 3, 2026, `ctest -j32 --output-on-failure` reported `117/117` passed in `build_fragilec_dropin` (including `simpleTransaction`; no remaining known failing test targets in this loop).
+- On March 4, 2026, `make clean && cmake --build . -j32` in `build_fragilec_dropin` completed to 100% after iterative generic fixes.
+- On March 4, 2026, `ctest -j32 --output-on-failure` hit one transient `rpcbench` kill in one run but passed on rerun (`117/117`) in `build_fragilec_dropin`; no deterministic compile-failure translation units remained in this loop.
 
 ## 3. Internal Data Models
 

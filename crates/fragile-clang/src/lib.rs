@@ -36,7 +36,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Parser backend selection for transpilation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -415,6 +415,142 @@ fn template_parsing_label(delayed: bool) -> &'static str {
     }
 }
 
+fn extract_missing_header_name_from_line(line: &str) -> Option<String> {
+    let marker_idx = line.find("file not found")?;
+    let prefix = &line[..marker_idx];
+
+    for quote in ['\'', '"'] {
+        if let Some(end) = prefix.rfind(quote) {
+            if let Some(start) = prefix[..end].rfind(quote) {
+                let candidate = prefix[start + 1..end].trim();
+                if !candidate.is_empty() {
+                    return Some(candidate.to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn collect_missing_header_names(parse_error: &str) -> Vec<String> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut headers: Vec<String> = Vec::new();
+    for line in parse_error.lines() {
+        let Some(header) = extract_missing_header_name_from_line(line) else {
+            continue;
+        };
+        if seen.insert(header.clone()) {
+            headers.push(header);
+        }
+    }
+    headers
+}
+
+fn sanitize_missing_header_rel_path(header: &str) -> Option<PathBuf> {
+    let raw = header
+        .trim()
+        .trim_matches('<')
+        .trim_matches('>')
+        .trim_matches('"')
+        .trim_matches('\'');
+    if raw.is_empty() {
+        return None;
+    }
+
+    let path = Path::new(raw);
+    if path.is_absolute() {
+        return None;
+    }
+
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(part) => normalized.push(part),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => return None,
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => return None,
+        }
+    }
+
+    if normalized.as_os_str().is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn create_missing_header_stub_dir(headers: &[String]) -> Result<PathBuf> {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let stub_dir = std::env::temp_dir().join(format!(
+        "fragile_missing_headers_{}_{}",
+        std::process::id(),
+        ts
+    ));
+    fs::create_dir_all(&stub_dir).map_err(|err| {
+        miette::miette!(
+            "failed to create missing-header stub directory {}: {}",
+            stub_dir.display(),
+            err
+        )
+    })?;
+
+    for header in headers {
+        let Some(rel_path) = sanitize_missing_header_rel_path(header) else {
+            continue;
+        };
+        let stub_path = stub_dir.join(rel_path);
+        if let Some(parent) = stub_path.parent() {
+            fs::create_dir_all(parent).map_err(|err| {
+                miette::miette!(
+                    "failed to create missing-header stub parent {}: {}",
+                    parent.display(),
+                    err
+                )
+            })?;
+        }
+        fs::write(
+            &stub_path,
+            format!(
+                "// Auto-generated fragile missing-header stub for {}\n#pragma once\n",
+                header
+            ),
+        )
+        .map_err(|err| {
+            miette::miette!(
+                "failed to write missing-header stub {}: {}",
+                stub_path.display(),
+                err
+            )
+        })?;
+    }
+
+    Ok(stub_dir)
+}
+
+fn add_missing_header_stub_search_path(
+    options: &TranspileOptions,
+    stub_dir: &Path,
+) -> TranspileOptions {
+    let mut adjusted = options.clone();
+    let stub_path = stub_dir.to_string_lossy().to_string();
+
+    if adjusted.frontend_args.is_empty() {
+        adjusted.include_directives.push(IncludeDirective {
+            kind: IncludeDirectiveKind::Include,
+            path: stub_path,
+        });
+    } else {
+        adjusted.frontend_args.push("-I".to_string());
+        adjusted.frontend_args.push(stub_path);
+    }
+
+    adjusted
+}
+
 fn parse_libtooling_context(path: &Path, options: &TranspileOptions) -> Result<AstContext> {
     let mut errors: Vec<String> = Vec::new();
     for &delayed_template_parsing in
@@ -429,6 +565,39 @@ fn parse_libtooling_context(path: &Path, options: &TranspileOptions) -> Result<A
                     template_parsing_label(delayed_template_parsing),
                     err
                 ));
+            }
+        }
+    }
+
+    let combined_errors = errors.join(" | ");
+    let missing_headers = collect_missing_header_names(&combined_errors);
+    if !missing_headers.is_empty() {
+        match create_missing_header_stub_dir(&missing_headers) {
+            Ok(stub_dir) => {
+                let stubbed_options = add_missing_header_stub_search_path(options, &stub_dir);
+                for &delayed_template_parsing in
+                    template_parsing_attempts(options.language, options.template_parsing_mode)
+                {
+                    let parser =
+                        libtooling_parser_for_path(path, &stubbed_options, delayed_template_parsing);
+                    match parser.parse_file(path) {
+                        Ok(ctx) => {
+                            let _ = fs::remove_dir_all(&stub_dir);
+                            return Ok(ctx);
+                        }
+                        Err(err) => {
+                            errors.push(format!(
+                                "missing-header-stub {}: {}",
+                                template_parsing_label(delayed_template_parsing),
+                                err
+                            ));
+                        }
+                    }
+                }
+                let _ = fs::remove_dir_all(&stub_dir);
+            }
+            Err(err) => {
+                errors.push(format!("missing-header-stub setup: {err}"));
             }
         }
     }
@@ -1214,5 +1383,36 @@ mod tests {
         assert!(frontend_args_has_template_parsing_override(&[
             "-fno-delayed-template-parsing".to_string()
         ]));
+    }
+
+    #[test]
+    fn extract_missing_header_name_from_line_parses_common_diagnostics() {
+        let single = "/tmp/foo.cc:10:10: fatal error: 'rcc_rpc.h' file not found";
+        let double = "/tmp/foo.cc:10:10: fatal error: \"foo/bar/baz.hpp\" file not found";
+        assert_eq!(
+            extract_missing_header_name_from_line(single).as_deref(),
+            Some("rcc_rpc.h")
+        );
+        assert_eq!(
+            extract_missing_header_name_from_line(double).as_deref(),
+            Some("foo/bar/baz.hpp")
+        );
+    }
+
+    #[test]
+    fn collect_missing_header_names_deduplicates_headers() {
+        let error = "fatal error: 'a.h' file not found\nfatal error: 'a.h' file not found\nfatal error: 'b/c.h' file not found";
+        let headers = collect_missing_header_names(error);
+        assert_eq!(headers, vec!["a.h".to_string(), "b/c.h".to_string()]);
+    }
+
+    #[test]
+    fn create_missing_header_stub_dir_creates_relative_stub_files() {
+        let headers = vec!["rcc_rpc.h".to_string(), "foo/bar.hpp".to_string()];
+        let stub_dir =
+            create_missing_header_stub_dir(&headers).expect("failed to create stub directory");
+        assert!(stub_dir.join("rcc_rpc.h").exists());
+        assert!(stub_dir.join("foo/bar.hpp").exists());
+        let _ = fs::remove_dir_all(stub_dir);
     }
 }

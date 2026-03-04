@@ -2359,9 +2359,112 @@ impl AstCodeGen {
     /// (`struct X { field: X }`), which are invalid in Rust. Rewrite those
     /// field types to raw pointers to preserve compile-ability.
     fn normalize_self_recursive_struct_fields(code: &str) -> String {
-        fn rewrite_self_recursive_type(ty_part: &str, bare_name: &str, raw_name: &str) -> Option<String> {
+        fn parse_simple_type_leaf_name(ty: &str) -> Option<String> {
+            let ty = ty.trim();
+            if ty.is_empty()
+                || ty.starts_with('*')
+                || ty.starts_with('&')
+                || ty.contains(' ')
+                || ty.contains('<')
+                || ty.contains('>')
+                || ty.contains('[')
+                || ty.contains(']')
+                || ty.contains('(')
+                || ty.contains(')')
+                || ty.contains('{')
+                || ty.contains('}')
+                || ty.contains(',')
+            {
+                return None;
+            }
+
+            let leaf = ty
+                .rsplit("::")
+                .next()
+                .unwrap_or(ty)
+                .trim()
+                .trim_start_matches("r#");
+            if leaf.is_empty()
+                || !leaf
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+            {
+                return None;
+            }
+            Some(leaf.to_string())
+        }
+
+        fn collect_simple_type_aliases(code: &str) -> HashMap<String, String> {
+            let mut aliases: HashMap<String, String> = HashMap::new();
+            for line in code.lines() {
+                let trimmed = line.trim_start();
+                let body = trimmed
+                    .strip_prefix("pub type ")
+                    .or_else(|| trimmed.strip_prefix("type "));
+                let Some(body) = body else { continue };
+                let Some((lhs, rhs)) = body.split_once('=') else {
+                    continue;
+                };
+                let alias = lhs.trim().trim_start_matches("r#");
+                if alias.is_empty()
+                    || !alias
+                        .chars()
+                        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+                {
+                    continue;
+                }
+                let rhs = rhs.trim().trim_end_matches(';').trim();
+                if rhs.is_empty() {
+                    continue;
+                }
+                aliases.insert(alias.to_string(), rhs.to_string());
+            }
+            aliases
+        }
+
+        fn type_resolves_to_self(
+            ty_part: &str,
+            bare_name: &str,
+            raw_name: &str,
+            alias_map: &HashMap<String, String>,
+        ) -> bool {
             let ty = ty_part.trim();
             if ty == bare_name || ty == raw_name {
+                return true;
+            }
+
+            let Some(mut current) = parse_simple_type_leaf_name(ty) else {
+                return false;
+            };
+            if current == bare_name || current == raw_name {
+                return true;
+            }
+
+            let mut seen: HashSet<String> = HashSet::new();
+            while seen.insert(current.clone()) {
+                let Some(rhs) = alias_map.get(&current) else {
+                    break;
+                };
+                let Some(next) = parse_simple_type_leaf_name(rhs) else {
+                    break;
+                };
+                if next == bare_name || next == raw_name {
+                    return true;
+                }
+                current = next;
+            }
+
+            false
+        }
+
+        fn rewrite_self_recursive_type(
+            ty_part: &str,
+            bare_name: &str,
+            raw_name: &str,
+            alias_map: &HashMap<String, String>,
+        ) -> Option<String> {
+            let ty = ty_part.trim();
+            if type_resolves_to_self(ty, bare_name, raw_name, alias_map) {
                 return Some(format!("*mut {}", bare_name));
             }
 
@@ -2372,7 +2475,7 @@ impl AstCodeGen {
             ] {
                 if let Some(inner) = ty.strip_prefix(prefix).and_then(|s| s.strip_suffix('>')) {
                     let inner = inner.trim();
-                    if inner == bare_name || inner == raw_name {
+                    if type_resolves_to_self(inner, bare_name, raw_name, alias_map) {
                         return Some(format!("{prefix}*mut {bare_name}>"));
                     }
                 }
@@ -2412,6 +2515,7 @@ impl AstCodeGen {
         let mut out = String::with_capacity(code.len());
         let mut depth: i32 = 0;
         let mut aggregate_stack: Vec<(i32, String)> = Vec::new();
+        let alias_map = collect_simple_type_aliases(code);
 
         for line in code.lines() {
             while aggregate_stack
@@ -2429,7 +2533,12 @@ impl AstCodeGen {
                         let bare_aggregate = aggregate_name.trim_start_matches("r#");
                         let raw_aggregate = format!("r#{}", bare_aggregate);
                         if let Some(rewritten_ty) =
-                            rewrite_self_recursive_type(ty_part, bare_aggregate, &raw_aggregate)
+                            rewrite_self_recursive_type(
+                                ty_part,
+                                bare_aggregate,
+                                &raw_aggregate,
+                                &alias_map,
+                            )
                         {
                             let mut rebuilt = String::new();
                             rebuilt.push_str(lhs.trim_end());
@@ -66980,6 +67089,24 @@ pub union rep_type {
         assert!(
             normalized.contains("pub raw: i32,"),
             "non-recursive union fields should remain unchanged, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_self_recursive_struct_fields_rewrites_alias_mediated_self_fields() {
+        let input = r#"
+#[repr(C)]
+pub struct basic_endpoint_udp {
+    pub(crate) impl_: endpoint,
+}
+
+pub type endpoint = basic_endpoint_udp;
+"#;
+        let normalized = AstCodeGen::normalize_self_recursive_struct_fields(input);
+        assert!(
+            normalized.contains("pub(crate) impl_: *mut basic_endpoint_udp,"),
+            "alias-mediated self-recursive struct fields should normalize to raw pointers, got:\n{}",
             normalized
         );
     }
