@@ -3711,7 +3711,7 @@ impl AstCodeGen {
         }
 
         for struct_name in needs_default {
-            if Self::is_external_std_core_alloc_type_path(&struct_name) {
+            if Self::resolves_to_external_std_core_alloc_type_path(&struct_name) {
                 continue;
             }
             if out.contains(&format!("impl Default for {} {{", struct_name)) {
@@ -3727,7 +3727,7 @@ impl AstCodeGen {
         }
 
         for struct_name in needs_clone {
-            if Self::is_external_std_core_alloc_type_path(&struct_name) {
+            if Self::resolves_to_external_std_core_alloc_type_path(&struct_name) {
                 continue;
             }
             if out.contains(&format!("impl Clone for {} {{", struct_name)) {
@@ -4064,7 +4064,9 @@ impl AstCodeGen {
                         let canonical_struct_name =
                             resolve_alias_target(&qualified_struct_name, &alias_targets);
                         let canonical_struct_is_external =
-                            Self::is_external_std_core_alloc_type_path(&canonical_struct_name);
+                            Self::resolves_to_external_std_core_alloc_type_path(
+                                &canonical_struct_name,
+                            );
                         let module_path_root_accessible = module_stack
                             .last()
                             .is_none_or(|(_, _, accessible)| *accessible);
@@ -4152,7 +4154,7 @@ impl AstCodeGen {
         }
 
         for struct_name in needs_default {
-            if Self::is_external_std_core_alloc_type_path(&struct_name) {
+            if Self::resolves_to_external_std_core_alloc_type_path(&struct_name) {
                 continue;
             }
             if existing_default_impls.contains(&struct_name)
@@ -4184,7 +4186,7 @@ impl AstCodeGen {
         }
 
         for struct_name in needs_clone {
-            if Self::is_external_std_core_alloc_type_path(&struct_name) {
+            if Self::resolves_to_external_std_core_alloc_type_path(&struct_name) {
                 continue;
             }
             if existing_clone_impls.contains(&struct_name)
@@ -4234,6 +4236,27 @@ impl AstCodeGen {
         normalized.starts_with("std::")
             || normalized.starts_with("core::")
             || normalized.starts_with("alloc::")
+    }
+
+    fn resolves_to_external_std_core_alloc_type_path(path: &str) -> bool {
+        if Self::is_external_std_core_alloc_type_path(path) {
+            return true;
+        }
+        let normalized_path = path
+            .trim()
+            .trim_start_matches("crate::")
+            .trim_start_matches("::");
+        // Keep lowered Rusty thread join-handle placeholders eligible for local
+        // fallback impl synthesis: they are generated wrapper surfaces rather
+        // than direct std paths and can still be referenced by synthesized
+        // field-wise defaults.
+        if normalized_path.starts_with("rusty::thread::rusty_thread_JoinHandle_")
+            || normalized_path.starts_with("rusty::thread::JoinHandle")
+        {
+            return false;
+        }
+        let normalized = Self::normalize_namespace_alias_target(path);
+        Self::is_external_std_core_alloc_type_path(&normalized)
     }
 
     fn split_top_level_list<'a>(input: &'a str, separator: char) -> Vec<&'a str> {
@@ -69385,6 +69408,60 @@ pub mod janus {
             !normalized.contains("impl Default for std::sync::Barrier {")
                 && !normalized.contains("impl Clone for std::sync::Barrier {"),
             "fallback impl synthesis should never target std paths via unrelated leaf aliases, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_add_missing_struct_default_clone_impls_skips_rusty_wrapper_paths_that_normalize_to_std(
+    ) {
+        let input = r#"
+pub mod rusty {
+    pub struct Barrier {
+        pub inner: i32,
+    }
+    pub struct Once {
+        pub inner: i32,
+    }
+    pub struct ProbeSeq {
+        pub inner: i32,
+    }
+}
+"#;
+        let normalized = AstCodeGen::normalize_add_missing_struct_default_clone_impls(input);
+        assert!(
+            !normalized.contains("impl Default for rusty::Barrier {")
+                && !normalized.contains("impl Clone for rusty::Barrier {")
+                && !normalized.contains("impl Default for rusty::Once {")
+                && !normalized.contains("impl Clone for rusty::Once {"),
+            "fallback impl synthesis should skip Rusty wrapper paths that normalize to external std targets, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("impl Default for rusty::ProbeSeq {")
+                && normalized.contains("impl Clone for rusty::ProbeSeq {"),
+            "fallback impl synthesis should still emit impls for non-normalized Rusty paths, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_add_missing_struct_default_clone_impls_keeps_lowered_rusty_thread_join_handle_fallbacks(
+    ) {
+        let input = r#"
+pub mod rusty {
+    pub mod thread {
+        pub struct rusty_thread_JoinHandle_void_ {
+            pub joined_: bool,
+        }
+    }
+}
+"#;
+        let normalized = AstCodeGen::normalize_add_missing_struct_default_clone_impls(input);
+        assert!(
+            normalized.contains("impl Default for rusty::thread::rusty_thread_JoinHandle_void_ {")
+                && normalized.contains("impl Clone for rusty::thread::rusty_thread_JoinHandle_void_ {"),
+            "fallback impl synthesis should preserve lowered Rusty thread JoinHandle wrapper impls, got:\n{}",
             normalized
         );
     }
