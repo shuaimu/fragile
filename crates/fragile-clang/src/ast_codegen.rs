@@ -33743,6 +33743,7 @@ impl AstCodeGen {
             if self.global_type_names.contains(&alias) {
                 continue;
             }
+            let normalized_target = Self::normalize_namespace_alias_target(&target);
             let alias_decl = format!("pub type {} =", alias);
             if self.output.contains(&alias_decl) {
                 continue;
@@ -33754,7 +33755,10 @@ impl AstCodeGen {
                 continue;
             }
             if alias.starts_with('_') {
-                let target_leaf = target.rsplit("::").next().unwrap_or(target.as_str());
+                let target_leaf = normalized_target
+                    .rsplit("::")
+                    .next()
+                    .unwrap_or(normalized_target.as_str());
                 if target_leaf == alias {
                     continue;
                 }
@@ -33765,12 +33769,21 @@ impl AstCodeGen {
                 self.writeln("// Auto-exported aliases for uniquely-resolved namespaced types");
                 wrote_header = true;
             }
-            self.writeln(&format!("pub type {} = {};", alias, target));
+            self.writeln(&format!("pub type {} = {};", alias, normalized_target));
             self.generated_aliases.insert(alias.clone());
-            self.type_alias_targets.insert(alias, target);
+            self.type_alias_targets.insert(alias, normalized_target);
         }
         if wrote_header {
             self.writeln("");
+        }
+    }
+
+    fn normalize_namespace_alias_target(target: &str) -> String {
+        match target {
+            // Rusty-C++ `String` aliases are equivalent to Rust `String` in
+            // generated code. Keep top-level aliases std-native.
+            "rusty::String" => "std::string::String".to_string(),
+            _ => target.to_string(),
         }
     }
 
@@ -75517,6 +75530,35 @@ pub mod testing {
         assert!(
             !output.contains("pub type TestNameIs = testing::TestNameIs;"),
             "namespace alias emission should skip aliases that target non-direct module imports, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_emit_namespace_type_aliases_normalizes_rusty_string_to_std_string() {
+        let mut codegen = AstCodeGen::new();
+        codegen.output = r#"
+pub mod rusty {
+    pub struct String {
+    }
+}
+"#
+        .to_string();
+        codegen
+            .namespace_type_alias_targets
+            .insert("String".to_string(), "rusty::String".to_string());
+
+        codegen.emit_namespace_type_aliases();
+        let output = codegen.output;
+
+        assert!(
+            output.contains("pub type String = std::string::String;"),
+            "namespace alias emission should normalize rusty::String aliases to std::string::String, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("pub type String = rusty::String;"),
+            "namespace alias emission should avoid emitting rusty::String aliases, got:\n{}",
             output
         );
     }

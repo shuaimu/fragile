@@ -14,6 +14,7 @@
 - [8. Statement Mapping](#8-statement-mapping)
 - [9. Expression Mapping](#9-expression-mapping)
 - [9.7 Rusty wrapper call normalization](#97-rusty-wrapper-call-normalization)
+- [9.8 Namespace alias target normalization](#98-namespace-alias-target-normalization)
 - [10. Templates and Instantiation Strategy](#10-templates-and-instantiation-strategy)
 - [11. Runtime and Preamble Integration](#11-runtime-and-preamble-integration)
 - [12. Extension Guide for Contributors](#12-extension-guide-for-contributors)
@@ -434,6 +435,16 @@ Wrapper constructor helpers emitted from Rusty-C++-style APIs are normalized dir
 - `Err_* (e)` -> `std::result::Result::Err(e)`
 
 This removes shim-style constructor names from generated expressions and improves safe-Rust readability.
+
+### 9.8 Namespace alias target normalization
+
+Source: `emit_namespace_type_aliases` and `normalize_namespace_alias_target` in `crates/fragile-clang/src/ast_codegen.rs`.
+
+Auto-exported namespace aliases are normalized before emission. Current rule:
+
+- `rusty::String` -> `std::string::String`
+
+This keeps generated top-level aliases std-native and avoids re-introducing rusty-cpp wrapper names in otherwise safe/std lowered output.
 
 ## 10. Templates and Instantiation Strategy
 
