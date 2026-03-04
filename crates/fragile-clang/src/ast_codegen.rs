@@ -8221,7 +8221,48 @@ impl AstCodeGen {
             .sum()
     }
 
-    fn has_unresolved_function_symbol_markers(lines: &[&str]) -> bool {
+    fn collect_emitted_global_storage_symbols(code: &str) -> HashSet<String> {
+        let mut symbols = HashSet::new();
+        for line in code.lines() {
+            let trimmed = line.trim_start();
+            if let Some(name) = Self::parse_static_item_name(trimmed) {
+                if name.starts_with("__gv_") {
+                    symbols.insert(name);
+                }
+            }
+        }
+        symbols
+    }
+
+    fn has_unknown_global_storage_symbol_reference(
+        line: &str,
+        known_global_symbols: &HashSet<String>,
+    ) -> bool {
+        let mut idx = 0usize;
+        while let Some(rel) = line[idx..].find("__gv_") {
+            let start = idx + rel;
+            let mut end = start + "__gv_".len();
+            while end < line.len() {
+                let ch = line[end..].chars().next().unwrap();
+                if Self::is_identifier_char(ch) {
+                    end += ch.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            let symbol = &line[start..end];
+            if !known_global_symbols.contains(symbol) {
+                return true;
+            }
+            idx = end;
+        }
+        false
+    }
+
+    fn has_unresolved_function_symbol_markers(
+        lines: &[&str],
+        known_global_symbols: &HashSet<String>,
+    ) -> bool {
         const UNRESOLVED_MARKERS: [&str; 59] = [
             "super::Exp::",
             "super::EncodeBase64(",
@@ -8287,6 +8328,7 @@ impl AstCodeGen {
             UNRESOLVED_MARKERS
                 .iter()
                 .any(|marker| line.contains(marker))
+                || Self::has_unknown_global_storage_symbol_reference(line, known_global_symbols)
                 || (line.contains("__gv_") && line.contains("}()"))
                 || (line.contains("__gv_")
                     && line.contains('(')
@@ -12488,6 +12530,7 @@ impl AstCodeGen {
         let known_module_roots = Self::collect_top_level_module_roots(code);
         let known_type_methods = Self::collect_emitted_inherent_associated_methods(code);
         let known_struct_fields = Self::collect_emitted_struct_field_names(code);
+        let known_global_symbols = Self::collect_emitted_global_storage_symbols(code);
 
         let mut out = String::new();
         let mut i = 0usize;
@@ -12531,7 +12574,8 @@ impl AstCodeGen {
             let has_enum_switch_mismatch = body_lines.iter().any(|l| l.contains("return value::"))
                 && body_lines.iter().any(|l| l.contains("match "))
                 && body_lines.iter().any(|l| l.contains("=>"));
-            let has_unresolved_symbols = Self::has_unresolved_function_symbol_markers(body_lines);
+            let has_unresolved_symbols =
+                Self::has_unresolved_function_symbol_markers(body_lines, &known_global_symbols);
             let has_unresolved_namespaced_calls = Self::has_unresolved_namespaced_call_markers(
                 body_lines,
                 &known_type_names,
@@ -76645,7 +76689,7 @@ pub extern "C" fn value_get_zero() -> i32 {
     return (0 as _).clone() as _;
 }
 pub extern "C" fn op_inc(lhs: &mut ()) -> &mut () {
-    return unsafe { &mut super::__gv_rhs };
+    return unsafe { &mut super::rusty::__gv_rhs };
 }
 pub extern "C" fn value_rr_get_next() -> i32 {
     unsafe { (*std::ptr::null_mut()).second(0) };
@@ -76660,7 +76704,7 @@ pub extern "C" fn value_rr_get_next() -> i32 {
         );
         assert!(
             !output.contains("super::__gv_rhs"),
-            "degraded-function fallback should stub unresolved `__gv_*` borrow artifacts, got:\n{}",
+            "degraded-function fallback should stub unresolved namespaced `__gv_*` borrow artifacts, got:\n{}",
             output
         );
         assert!(
@@ -76672,6 +76716,21 @@ pub extern "C" fn value_rr_get_next() -> i32 {
             output.contains("pub extern \"C\" fn value_get_zero() -> i32 {\n    0\n}"),
             "clone-cast artifact function should collapse to default return body, got:\n{}",
             output
+        );
+    }
+
+    #[test]
+    fn test_fallback_heavily_degraded_function_bodies_keeps_known_namespaced_global_refs() {
+        let input = r#"
+pub(crate) static mut __gv_rhs: i32 = 0;
+pub extern "C" fn read_rhs() -> &mut i32 {
+    return unsafe { &mut super::rusty::__gv_rhs };
+}
+"#;
+        let output = AstCodeGen::fallback_heavily_degraded_function_bodies(input);
+        assert_eq!(
+            output, input,
+            "degraded-function fallback should preserve references to emitted namespaced __gv_* statics"
         );
     }
 

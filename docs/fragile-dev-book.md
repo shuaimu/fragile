@@ -141,6 +141,9 @@ Generic normalizations added in this replay cycle:
   - this is generic and avoids mako-specific patches when generated build headers are absent during early translation-unit compilation.
 - `fallback_heavily_degraded_function_bodies` entrypoint fallback:
   - when a heavily degraded body forces a `main` stub, emit a generic argv-driven help/version/flag parser fallback that preserves expected exit-code and output shape for gflags-style tests.
+- `fallback_heavily_degraded_function_bodies` unresolved-global guard:
+  - track emitted `__gv_*` static symbols and treat references to missing ones as degraded-body markers.
+  - this catches namespaced unresolved forms (for example `super::rusty::__gv_rhs`) and stubs those functions instead of letting rustc fail on missing globals.
 
 Outcome snapshot:
 
