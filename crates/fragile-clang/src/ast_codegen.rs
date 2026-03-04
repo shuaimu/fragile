@@ -216,6 +216,65 @@ fn should_use_unknown_return_panic_fallback(return_ty: &str, default_expr: &str)
             && (is_plain_nominal_rust_type(return_ty) || is_placeholder_like_rust_type(return_ty)))
 }
 
+/// Collect simple local Rust `type` aliases (`type A = B;`) for return-lane
+/// default synthesis passes.
+fn collect_simple_rust_type_aliases(code: &str) -> HashMap<String, String> {
+    let mut aliases = HashMap::new();
+    for line in code.lines() {
+        let trimmed = line.trim_start();
+        let rest = [
+            "pub type ",
+            "pub(crate) type ",
+            "pub(super) type ",
+            "type ",
+        ]
+        .iter()
+        .find_map(|prefix| trimmed.strip_prefix(prefix));
+        let Some(rest) = rest else {
+            continue;
+        };
+        let Some((lhs, rhs)) = rest.split_once('=') else {
+            continue;
+        };
+        let alias_name: String = lhs
+            .trim()
+            .chars()
+            .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '#')
+            .collect();
+        let alias_name = alias_name.trim_start_matches("r#").trim();
+        if alias_name.is_empty() {
+            continue;
+        }
+        let rhs_ty = rhs.split(';').next().unwrap_or("").trim();
+        if rhs_ty.is_empty() {
+            continue;
+        }
+        aliases.insert(alias_name.to_string(), rhs_ty.to_string());
+    }
+    aliases
+}
+
+fn resolve_simple_rust_type_alias(ty: &str, aliases: &HashMap<String, String>) -> String {
+    let mut current = ty.trim().to_string();
+    for _ in 0..8 {
+        let lookup = current.trim().trim_start_matches("::");
+        if lookup.is_empty() {
+            break;
+        }
+        let terminal = lookup.rsplit("::").next().unwrap_or(lookup).trim();
+        let next = aliases.get(lookup).or_else(|| aliases.get(terminal));
+        let Some(next_ty) = next else {
+            break;
+        };
+        let next_trimmed = next_ty.trim();
+        if next_trimmed.is_empty() || next_trimmed == current.trim() {
+            break;
+        }
+        current = next_trimmed.to_string();
+    }
+    current
+}
+
 /// Check whether a Rust type string is an Option-wrapped function pointer.
 fn is_option_fn_rust_type(ty: &str) -> bool {
     ty.starts_with("Option<fn(")
@@ -6108,7 +6167,20 @@ impl AstCodeGen {
     }
 
     fn default_expr_for_empty_body_return_type(ret_ty: &str) -> String {
-        let trimmed = ret_ty.trim();
+        Self::default_expr_for_empty_body_return_type_with_aliases(ret_ty, None)
+    }
+
+    fn default_expr_for_empty_body_return_type_with_aliases(
+        ret_ty: &str,
+        type_aliases: Option<&HashMap<String, String>>,
+    ) -> String {
+        let resolved_storage;
+        let trimmed = if let Some(aliases) = type_aliases {
+            resolved_storage = resolve_simple_rust_type_alias(ret_ty, aliases);
+            resolved_storage.trim()
+        } else {
+            ret_ty.trim()
+        };
         if trimmed.starts_with("*const ") {
             "std::ptr::null()".to_string()
         } else if trimmed.starts_with("*mut ") {
@@ -6133,6 +6205,7 @@ impl AstCodeGen {
             return code.to_string();
         }
 
+        let type_aliases = collect_simple_rust_type_aliases(code);
         let mut out = String::new();
         let mut i = 0usize;
         while i < lines.len() {
@@ -6152,7 +6225,10 @@ impl AstCodeGen {
                         let indent_width =
                             line.chars().take_while(|c| c.is_whitespace()).count() + 4;
                         out.push_str(&" ".repeat(indent_width));
-                        out.push_str(&Self::default_expr_for_empty_body_return_type(ret_ty));
+                        out.push_str(&Self::default_expr_for_empty_body_return_type_with_aliases(
+                            ret_ty,
+                            Some(&type_aliases),
+                        ));
                         out.push('\n');
                         out.push_str(lines[i + 1]);
                         if i + 2 < lines.len() || code.ends_with('\n') {
@@ -6182,6 +6258,7 @@ impl AstCodeGen {
             return code.to_string();
         }
 
+        let type_aliases = collect_simple_rust_type_aliases(code);
         let mut out = String::new();
         let mut i = 0usize;
         while i < lines.len() {
@@ -6273,8 +6350,11 @@ impl AstCodeGen {
                 _ => false,
             };
             let needs_tail_default = has_explicit_return && last_stmt_requires_tail_default;
-            let wildcard_arm_default_expr =
-                Self::default_expr_for_empty_body_return_type(ret_ty).replace('\n', " ");
+            let wildcard_arm_default_expr = Self::default_expr_for_empty_body_return_type_with_aliases(
+                ret_ty,
+                Some(&type_aliases),
+            )
+            .replace('\n', " ");
 
             out.push_str(line);
             out.push('\n');
@@ -6314,7 +6394,10 @@ impl AstCodeGen {
                 let indent_width = line.chars().take_while(|c| c.is_whitespace()).count() + 4;
                 out.push_str(&" ".repeat(indent_width));
                 out.push_str("return ");
-                out.push_str(&Self::default_expr_for_empty_body_return_type(ret_ty));
+                out.push_str(&Self::default_expr_for_empty_body_return_type_with_aliases(
+                    ret_ty,
+                    Some(&type_aliases),
+                ));
                 out.push(';');
                 out.push('\n');
             }
@@ -12322,15 +12405,24 @@ impl AstCodeGen {
             format!("&{}", rest)
         }
 
-        fn default_expr_for_stubbed_function(signature_line: &str, ret_ty: &str) -> String {
+        fn default_expr_for_stubbed_function(
+            signature_line: &str,
+            ret_ty: &str,
+            type_aliases: &HashMap<String, String>,
+        ) -> String {
             let ret_ty = ret_ty.trim();
-            if ret_ty.starts_with('&') {
-                let normalized_ret = normalize_reference_type_for_matching(ret_ty);
+            let resolved_storage = resolve_simple_rust_type_alias(ret_ty, type_aliases);
+            let resolved_ret_ty = resolved_storage.trim();
+            if resolved_ret_ty.starts_with('&') {
+                let normalized_ret = normalize_reference_type_for_matching(resolved_ret_ty);
                 let ret_is_mut_ref = normalized_ret.starts_with("&mut ");
                 for (name, ty) in parse_param_name_type_pairs(signature_line) {
                     let ty_trimmed = ty.trim();
-                    let normalized_param = normalize_reference_type_for_matching(ty_trimmed);
-                    if ty_trimmed != ret_ty && normalized_param != normalized_ret {
+                    let param_resolved_storage =
+                        resolve_simple_rust_type_alias(ty_trimmed, type_aliases);
+                    let param_resolved_ty = param_resolved_storage.trim();
+                    let normalized_param = normalize_reference_type_for_matching(param_resolved_ty);
+                    if param_resolved_ty != resolved_ret_ty && normalized_param != normalized_ret {
                         continue;
                     }
                     if ret_is_mut_ref {
@@ -12339,7 +12431,14 @@ impl AstCodeGen {
                     return format!("&*{}", name);
                 }
             }
-            AstCodeGen::default_expr_for_empty_body_return_type(ret_ty)
+            if type_aliases.is_empty() {
+                AstCodeGen::default_expr_for_empty_body_return_type(ret_ty)
+            } else {
+                AstCodeGen::default_expr_for_empty_body_return_type_with_aliases(
+                    ret_ty,
+                    Some(type_aliases),
+                )
+            }
         }
 
         let lines: Vec<&str> = code.lines().collect();
@@ -12351,6 +12450,7 @@ impl AstCodeGen {
         let known_module_roots = Self::collect_top_level_module_roots(code);
         let known_type_methods = Self::collect_emitted_inherent_associated_methods(code);
         let known_struct_fields = Self::collect_emitted_struct_field_names(code);
+        let type_aliases = collect_simple_rust_type_aliases(code);
 
         let mut out = String::new();
         let mut i = 0usize;
@@ -12456,9 +12556,13 @@ impl AstCodeGen {
                         let indent_width =
                             line.chars().take_while(|c| c.is_whitespace()).count() + 4;
                         let indent = " ".repeat(indent_width);
-                        let default_expr = default_expr_for_stubbed_function(trimmed, ret_ty);
+                        let default_expr =
+                            default_expr_for_stubbed_function(trimmed, ret_ty, &type_aliases);
+                        let resolved_ret_ty_storage =
+                            resolve_simple_rust_type_alias(ret_ty, &type_aliases);
+                        let resolved_ret_ty = resolved_ret_ty_storage.trim();
                         let is_integer_main_ret = matches!(
-                            ret_ty,
+                            resolved_ret_ty,
                             "i8"
                                 | "i16"
                                 | "i32"
@@ -75443,6 +75547,37 @@ pub fn OpaqueResultNamespaced() -> std::result::Result<crate::UnknownTagAutoType
     }
 
     #[test]
+    fn test_synthesize_empty_non_unit_function_bodies_resolves_alias_return_defaults() {
+        let input = r#"
+pub type AliasI32 = i32;
+pub fn AliasScalar() -> AliasI32 {
+}
+pub type AliasResult = std::result::Result<i32, i32>;
+pub fn AliasOk() -> AliasResult {
+}
+pub type AliasOpaque = crate::UnknownTagAutoType;
+pub fn AliasUnknown() -> AliasOpaque {
+}
+"#;
+        let output = AstCodeGen::synthesize_empty_non_unit_function_bodies(input);
+        assert!(
+            output.contains("pub fn AliasScalar() -> AliasI32 {\n    0\n}"),
+            "alias-backed scalar returns should synthesize safe concrete defaults, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn AliasOk() -> AliasResult {\n    Ok(0)\n}"),
+            "alias-backed Result returns should synthesize safe Ok-lane defaults, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn AliasUnknown() -> AliasOpaque {\n    panic!(\"fragile: missing safe default for return type\")\n}"),
+            "alias-backed placeholder returns should synthesize panic fallback instead of Default::default(), got:\n{}",
+            output
+        );
+    }
+
+    #[test]
     fn test_synthesize_missing_non_unit_tail_returns_appends_default_after_trailing_if_block() {
         let input = r#"
 pub extern "C" fn initialize_tpcc_sharding_policy(num_warehouses_total: i32, num_shards: i32) -> bool {
@@ -76082,6 +76217,40 @@ pub fn probe() -> Result<std::string::String, ()> {
                 "pub fn probe() -> Result<std::string::String, ()> {\n    Ok(Default::default())\n}"
             ),
             "degraded-function fallback should emit `Ok(...)` for unqualified Result return types, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_fallback_heavily_degraded_function_bodies_resolves_alias_return_defaults() {
+        let input = r#"
+type AliasI32 = i32;
+type AliasResult = Result<i32, i32>;
+type AliasOpaque = crate::UnknownTagAutoType;
+pub fn probe_scalar() -> AliasI32 {
+    unresolved_symbol();
+}
+pub fn probe_result() -> AliasResult {
+    unresolved_symbol();
+}
+pub fn probe_opaque() -> AliasOpaque {
+    unresolved_symbol();
+}
+"#;
+        let output = AstCodeGen::fallback_heavily_degraded_function_bodies(input);
+        assert!(
+            output.contains("pub fn probe_scalar() -> AliasI32 {\n    0\n}"),
+            "degraded-function fallback should resolve alias-backed scalar returns to safe defaults, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn probe_result() -> AliasResult {\n    Ok(0)\n}"),
+            "degraded-function fallback should resolve alias-backed Result returns to safe Ok-lane defaults, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn probe_opaque() -> AliasOpaque {\n    panic!(\"fragile: missing safe default for return type\")\n}"),
+            "degraded-function fallback should use panic fallback for alias-backed placeholder returns, got:\n{}",
             output
         );
     }
