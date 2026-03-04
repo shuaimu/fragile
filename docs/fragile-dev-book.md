@@ -927,3 +927,23 @@ This appendix enumerates every variant in `ClangNodeKind` and the current loweri
 | `CXXNewExpr` | `expr_to_string` | Emits heap/array/placement-new forms using `Box::into_raw`, `fragile_new_array`, and `std::ptr::write`-based placement code. |
 | `CXXDeleteExpr` | `expr_to_string` | Emits delete/delete[] forms using `Box::from_raw` drop and `fragile_delete_array`. |
 | `Unknown` | `expr_to_string` | Handles specific known unknowns (for example `BuiltinBitCastExpr` -> `transmute`); otherwise logs diagnostic and falls back to first child or `"0"`. |
+
+## 14. Namespace Alias Normalization for Rusty Wrappers (2026-03-04)
+
+### Problem
+
+Auto-exported namespace aliases were only normalizing the single case `rusty::String -> std::string::String`. Other Rusty-C++ wrapper spellings (for example `rusty::Option<rusty::String>` or `rusty::HashMap<int, long>`) were not normalized through the same shared path used by regular type lowering.
+
+### Rule
+
+Namespace alias target normalization must reuse the same Rusty-wrapper mapping logic used in `CppType::Named` lowering, while preserving non-rusty namespaced targets unchanged.
+
+### Implementation
+
+- Added shared helper `normalize_rusty_type_alias_to_std()` in `crates/fragile-clang/src/types.rs`.
+- Updated `AstCodeGen::normalize_namespace_alias_target()` to delegate to this helper instead of special-casing only `rusty::String`.
+
+### Guardrails
+
+- Wrapper aliases now normalize to Rust std paths consistently.
+- Non-rusty namespaced aliases (for example `testing::internal::Visible`) are preserved as-is, avoiding accidental namespace mangling.

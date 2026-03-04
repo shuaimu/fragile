@@ -8,7 +8,7 @@ use crate::ast::{
     AccessSpecifier, BinaryOp, CastKind, ClangNode, ClangNodeKind, ConstructorKind, CoroutineInfo,
     CoroutineKind, TemplateSpecializationKind, UnaryOp,
 };
-use crate::types::{parse_template_args, CppType};
+use crate::types::{normalize_rusty_type_alias_to_std, parse_template_args, CppType};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -33823,12 +33823,7 @@ impl AstCodeGen {
     }
 
     fn normalize_namespace_alias_target(target: &str) -> String {
-        match target {
-            // Rusty-C++ `String` aliases are equivalent to Rust `String` in
-            // generated code. Keep top-level aliases std-native.
-            "rusty::String" => "std::string::String".to_string(),
-            _ => target.to_string(),
-        }
+        normalize_rusty_type_alias_to_std(target)
     }
 
     /// Generate Rust stubs (signatures only, no bodies) from a Clang AST.
@@ -75604,6 +75599,22 @@ pub mod rusty {
             !output.contains("pub type String = rusty::String;"),
             "namespace alias emission should avoid emitting rusty::String aliases, got:\n{}",
             output
+        );
+    }
+
+    #[test]
+    fn test_normalize_namespace_alias_target_maps_rusty_wrappers_and_preserves_custom_paths() {
+        assert_eq!(
+            AstCodeGen::normalize_namespace_alias_target("rusty::Option<rusty::String>"),
+            "std::option::Option<std::string::String>"
+        );
+        assert_eq!(
+            AstCodeGen::normalize_namespace_alias_target("rusty::HashMap<int, long>"),
+            "std::collections::HashMap<i32, i64>"
+        );
+        assert_eq!(
+            AstCodeGen::normalize_namespace_alias_target("testing::internal::Visible"),
+            "testing::internal::Visible"
         );
     }
 

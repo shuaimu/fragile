@@ -311,6 +311,10 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
     None
 }
 
+pub(crate) fn normalize_rusty_type_alias_to_std(spelling: &str) -> String {
+    map_rusty_type_to_std(spelling).unwrap_or_else(|| spelling.to_string())
+}
+
 /// A C++ type that can be converted to Rust types.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CppType {
@@ -1637,6 +1641,22 @@ mod tests {
         assert_eq!(
             CppType::Named("ResultInt<long>".to_string()).to_rust_type_str(),
             "std::result::Result<i64, i32>"
+        );
+    }
+
+    #[test]
+    fn test_normalize_rusty_type_alias_to_std_maps_wrappers_and_preserves_non_rusty_paths() {
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::Option<rusty::String>"),
+            "std::option::Option<std::string::String>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::HashMap<int, long>"),
+            "std::collections::HashMap<i32, i64>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("testing::internal::Visible"),
+            "testing::internal::Visible"
         );
     }
 
