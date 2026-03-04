@@ -982,6 +982,12 @@ Namespace alias target normalization must reuse the same Rusty-wrapper mapping l
   - `rusty::{Vec, VecDeque, HashSet, BTreeSet}<T, ...>` -> std one-parameter forms
   - `rusty::{HashMap, BTreeMap}<K, V, ...>` -> std two-parameter forms
   - strict-arity wrappers such as `Option<T>` and `Result<T, E>` remain strict (extra args are not silently rewritten)
+- Rusty convenience aliases now normalize through the same path:
+  - `rusty::Boxed<T>` / `Boxed<T>` -> `std::boxed::Box<T>`
+  - `rusty::Shared<T>` / `Shared<T>` -> `std::sync::Arc<T>`
+  - `rusty::RefCounted<T>` / `RefCounted<T>` -> `std::rc::Rc<T>`
+  - `rusty::Ptr<T>` / `Ptr<T>` -> `*const T`
+  - `rusty::MutPtr<T>` / `MutPtr<T>` -> `*mut T`
 - Alias fallback emitters now also run the same normalization step (`generate_type_alias`, unresolved namespaced/lowercase alias synthesis, and template-instantiation alias bridges), so `pub type ... = rusty::...` RHS paths are normalized consistently wherever aliases are emitted.
 - Added a late textual alias-RHS normalization pass over emitted `type` items so Rusty wrapper RHS spellings are normalized even when produced by alternate/degraded alias emitters (for example `pub type Barrier = rusty::Barrier; -> pub type Barrier = std::sync::Barrier;`), while unmapped Rusty spellings remain unchanged.
 - Lowered Rusty thread spellings in namespace exports are normalized as well (for example `rusty::thread::rusty_thread_JoinHandle_void_ -> std::thread::JoinHandle<()>`).

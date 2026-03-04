@@ -254,6 +254,20 @@ fn map_double_template_alias_to_std_allow_extra_args(
     Some(format!("{}<{}, {}>", std_path, left, right))
 }
 
+fn map_single_template_alias_to_pointer(
+    spelling: &str,
+    alias_prefix: &str,
+    pointer_prefix: &str,
+) -> Option<String> {
+    let inner = spelling.strip_prefix(alias_prefix)?.strip_suffix('>')?;
+    let args = parse_template_args(inner);
+    if args.len() != 1 {
+        return None;
+    }
+    let mapped = map_alias_template_arg_to_rust(&args[0]);
+    Some(format!("{}{}", pointer_prefix, mapped))
+}
+
 fn is_explicit_rust_function_pointer_type(arg: &str) -> bool {
     let trimmed = arg.trim();
     trimmed.contains("extern \"C\" fn(")
@@ -361,12 +375,12 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         (
             "Box",
             "std::boxed::Box",
-            &["rusty::Box", "rusty::boxed::Box"] as &[&str],
+            &["rusty::Box", "rusty::boxed::Box", "rusty::Boxed"] as &[&str],
         ),
         (
             "Arc",
             "std::sync::Arc",
-            &["rusty::Arc", "rusty::sync::Arc"] as &[&str],
+            &["rusty::Arc", "rusty::sync::Arc", "rusty::Shared"] as &[&str],
         ),
         (
             "ArcWeak",
@@ -376,7 +390,7 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         (
             "Rc",
             "std::rc::Rc",
-            &["rusty::Rc", "rusty::rc::Rc"] as &[&str],
+            &["rusty::Rc", "rusty::rc::Rc", "rusty::RefCounted"] as &[&str],
         ),
         (
             "Weak",
@@ -420,6 +434,50 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         if root_is_unqualified {
             let bare_prefix = format!("{}<", alias);
             if let Some(mapped) = map_single_template_alias_to_std(cleaned, &bare_prefix, std_path)
+            {
+                return Some(mapped);
+            }
+        }
+    }
+
+    if root_is_unqualified {
+        for (bare_alias_prefix, std_path) in [
+            ("Boxed<", "std::boxed::Box"),
+            ("Shared<", "std::sync::Arc"),
+            ("RefCounted<", "std::rc::Rc"),
+        ] {
+            if let Some(mapped) =
+                map_single_template_alias_to_std(cleaned, bare_alias_prefix, std_path)
+            {
+                return Some(mapped);
+            }
+        }
+    }
+
+    for (alias, pointer_prefix, qualified_roots) in [
+        (
+            "Ptr",
+            "*const ",
+            &["rusty::Ptr", "rusty::ptr::Ptr"] as &[&str],
+        ),
+        (
+            "MutPtr",
+            "*mut ",
+            &["rusty::MutPtr", "rusty::ptr::MutPtr"] as &[&str],
+        ),
+    ] {
+        for root in qualified_roots {
+            let qualified_prefix = format!("{}<", root);
+            if let Some(mapped) =
+                map_single_template_alias_to_pointer(cleaned, &qualified_prefix, pointer_prefix)
+            {
+                return Some(mapped);
+            }
+        }
+        if root_is_unqualified {
+            let bare_prefix = format!("{}<", alias);
+            if let Some(mapped) =
+                map_single_template_alias_to_pointer(cleaned, &bare_prefix, pointer_prefix)
             {
                 return Some(mapped);
             }
@@ -1882,6 +1940,18 @@ mod tests {
             "std::sync::Arc<i32>"
         );
         assert_eq!(
+            CppType::Named("rusty::Shared<int>".to_string()).to_rust_type_str(),
+            "std::sync::Arc<i32>"
+        );
+        assert_eq!(
+            CppType::Named("rusty::RefCounted<int>".to_string()).to_rust_type_str(),
+            "std::rc::Rc<i32>"
+        );
+        assert_eq!(
+            CppType::Named("rusty::Boxed<int>".to_string()).to_rust_type_str(),
+            "std::boxed::Box<i32>"
+        );
+        assert_eq!(
             CppType::Named("rusty::ResultVoid<long>".to_string()).to_rust_type_str(),
             "std::result::Result<i64, ()>"
         );
@@ -1924,6 +1994,18 @@ mod tests {
             "std::result::Result<i64, i32>"
         );
         assert_eq!(
+            CppType::Named("Boxed<int>".to_string()).to_rust_type_str(),
+            "std::boxed::Box<i32>"
+        );
+        assert_eq!(
+            CppType::Named("Shared<int>".to_string()).to_rust_type_str(),
+            "std::sync::Arc<i32>"
+        );
+        assert_eq!(
+            CppType::Named("RefCounted<int>".to_string()).to_rust_type_str(),
+            "std::rc::Rc<i32>"
+        );
+        assert_eq!(
             CppType::Named("HashMap<int, long, std::hash<int>>".to_string()).to_rust_type_str(),
             "std::collections::HashMap<i32, i64>"
         );
@@ -1950,6 +2032,14 @@ mod tests {
         assert_eq!(
             CppType::Named("rusty::sync::Weak<int>".to_string()).to_rust_type_str(),
             "std::sync::Weak<i32>"
+        );
+        assert_eq!(
+            CppType::Named("rusty::Ptr<rusty::String>".to_string()).to_rust_type_str(),
+            "*const std::string::String"
+        );
+        assert_eq!(
+            CppType::Named("rusty::MutPtr<int>".to_string()).to_rust_type_str(),
+            "*mut i32"
         );
     }
 
@@ -2056,6 +2146,23 @@ mod tests {
             normalize_rusty_type_alias_to_std("rusty::sync::mpsc::Sender<int>"),
             "std::sync::mpsc::Sender<i32>"
         );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::Boxed<int>"),
+            "std::boxed::Box<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::Shared<int>"),
+            "std::sync::Arc<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::RefCounted<int>"),
+            "std::rc::Rc<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::Ptr<rusty::String>"),
+            "*const std::string::String"
+        );
+        assert_eq!(normalize_rusty_type_alias_to_std("MutPtr<int>"), "*mut i32");
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::UnsafeCell<rusty::Vec<int>>"),
             "std::cell::UnsafeCell<std::vec::Vec<i32>>"
