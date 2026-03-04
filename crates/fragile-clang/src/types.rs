@@ -174,6 +174,28 @@ fn strip_cpp_type_tag_prefix(name: &str) -> &str {
     name
 }
 
+fn strip_cv_qualifiers_and_tag_prefix(name: &str) -> &str {
+    let mut current = name.trim();
+    loop {
+        let mut changed = false;
+        for qualifier in ["const ", "volatile "] {
+            if let Some(rest) = current.strip_prefix(qualifier) {
+                current = rest.trim_start();
+                changed = true;
+            }
+        }
+        let stripped = strip_cpp_type_tag_prefix(current);
+        if stripped != current {
+            current = stripped.trim_start();
+            changed = true;
+        }
+        if !changed {
+            break;
+        }
+    }
+    current
+}
+
 fn map_single_template_alias_to_std(
     spelling: &str,
     alias_prefix: &str,
@@ -227,11 +249,7 @@ fn map_thread_join_handle_to_std(spelling: &str) -> Option<String> {
     if args.len() != 1 {
         return None;
     }
-    let raw_arg = strip_cpp_type_tag_prefix(args[0].trim());
-    let normalized_arg = raw_arg
-        .trim_start_matches("const ")
-        .trim_start_matches("volatile ")
-        .trim();
+    let normalized_arg = strip_cv_qualifiers_and_tag_prefix(args[0].trim());
     let mapped = if normalized_arg == "void" {
         "()".to_string()
     } else {
@@ -258,12 +276,8 @@ fn map_lowered_thread_join_handle_to_std(spelling: &str) -> Option<String> {
 }
 
 fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
-    let stripped = strip_cpp_type_tag_prefix(spelling.trim());
-    let cleaned = stripped
-        .trim_start_matches("const ")
-        .trim_start_matches("volatile ")
-        .trim();
-    let mut cleaned = cleaned.trim_start_matches("::").trim();
+    let mut cleaned = strip_cv_qualifiers_and_tag_prefix(spelling);
+    cleaned = cleaned.trim_start_matches("::").trim();
     if let Some(rest) = cleaned.strip_prefix("crate::") {
         cleaned = rest.trim();
     }
@@ -1839,6 +1853,11 @@ mod tests {
             "std::thread::JoinHandle<()>"
         );
         assert_eq!(
+            CppType::Named("const class rusty::thread::JoinHandle<void>".to_string())
+                .to_rust_type_str(),
+            "std::thread::JoinHandle<()>"
+        );
+        assert_eq!(
             CppType::Named("rusty::thread::JoinHandle<int>".to_string()).to_rust_type_str(),
             "std::thread::JoinHandle<i32>"
         );
@@ -1849,6 +1868,14 @@ mod tests {
         assert_eq!(
             CppType::Named("rusty::sync::mpsc::Receiver<int>".to_string()).to_rust_type_str(),
             "std::sync::mpsc::Receiver<i32>"
+        );
+        assert_eq!(
+            CppType::Named(
+                "volatile struct rusty::sync::mpsc::Sender<const class rusty::String>"
+                    .to_string()
+            )
+            .to_rust_type_str(),
+            "std::sync::mpsc::Sender<std::string::String>"
         );
         assert_eq!(
             CppType::Named("rusty::sync::mpsc::Unit".to_string()).to_rust_type_str(),
@@ -1952,6 +1979,16 @@ mod tests {
         assert_eq!(
             normalize_rusty_type_alias_to_std("crate::rusty::sync::mpsc::RecvError"),
             "std::sync::mpsc::RecvError"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("const class ::rusty::Barrier"),
+            "std::sync::Barrier"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std(
+                "volatile struct crate::rusty::sync::mpsc::Receiver<const class rusty::String>"
+            ),
+            "std::sync::mpsc::Receiver<std::string::String>"
         );
     }
 
