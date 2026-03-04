@@ -218,7 +218,7 @@ fn get_ast_cbors(
 
     // Add extra arguments
     for &arg in extra_args {
-        args_owned.push(CString::new(format!("-extra-arg={}", arg)).unwrap());
+        args_owned.push(encode_extra_arg_before(arg)?);
     }
 
     let args_ptrs: Vec<*const c_char> = args_owned.iter().map(|s| s.as_ptr()).collect();
@@ -248,6 +248,15 @@ fn get_ast_cbors(
     Ok(hashmap)
 }
 
+fn encode_extra_arg_before(arg: &str) -> Result<CString, Error> {
+    CString::new(format!("-extra-arg-before={arg}")).map_err(|_| {
+        Error::new(
+            ErrorKind::InvalidInput,
+            "extra argument contains interior NUL byte",
+        )
+    })
+}
+
 unsafe fn marshal_result(result: *const ffi::ExportResult) -> HashMap<String, Vec<u8>> {
     let mut output = HashMap::new();
 
@@ -275,6 +284,7 @@ unsafe fn marshal_result(result: *const ffi::ExportResult) -> HashMap<String, Ve
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::ffi::CStr;
     use std::path::PathBuf;
 
     #[test]
@@ -311,5 +321,15 @@ mod tests {
             "expected ambiguity failure message, got: {}",
             msg
         );
+    }
+
+    #[test]
+    fn test_encode_extra_arg_before_uses_pre_source_injection_flag() {
+        let encoded = encode_extra_arg_before("-x").expect("encoding should succeed");
+        let rendered = CStr::from_bytes_with_nul(encoded.as_bytes_with_nul())
+            .expect("encoded CString should remain NUL-terminated")
+            .to_str()
+            .expect("encoded argument should be UTF-8");
+        assert_eq!(rendered, "-extra-arg-before=-x");
     }
 }

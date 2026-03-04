@@ -145,6 +145,10 @@ Generic normalizations added in this replay cycle:
 - `fallback_heavily_degraded_function_bodies` unresolved-global guard:
   - track emitted `__gv_*` static symbols and treat references to missing ones as degraded-body markers.
   - this catches namespaced unresolved forms (for example `super::rusty::__gv_rhs`) and stubs those functions instead of letting rustc fail on missing globals.
+- LibTooling compile-arg injection ordering:
+  - `fragile-ast-exporter` now forwards parser extra args via `-extra-arg-before=` so compile-mode flags land before the source file from `compile_commands.json`.
+  - `LibToolingParser` normalizes `-x`/`-std` overrides into the generated compile command and strips them from appended extra args.
+  - this removes noisy Clang warnings like `'-x c++' after last input file has no effect` during drop-in builds.
 
 Outcome snapshot:
 
