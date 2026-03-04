@@ -5868,6 +5868,9 @@ impl AstCodeGen {
                 if !Self::is_root_accessible_module_path(target_module_path, &module_visibility) {
                     continue;
                 }
+                if Self::is_rusty_marker_trait_namespace_alias(&canonical_name, target) {
+                    continue;
+                }
                 aliases
                     .entry(canonical_name.clone())
                     .or_insert_with(|| target.clone());
@@ -5902,6 +5905,9 @@ impl AstCodeGen {
         for (alias, target) in aliases {
             let prefix = format!("pub type {} =", alias);
             if out.contains(&prefix) {
+                continue;
+            }
+            if Self::is_rusty_marker_trait_namespace_alias(&alias, &target) {
                 continue;
             }
             let normalized_target = Self::normalize_namespace_alias_target(&target);
@@ -33941,6 +33947,9 @@ impl AstCodeGen {
             if self.global_type_names.contains(&alias) {
                 continue;
             }
+            if Self::is_rusty_marker_trait_namespace_alias(&alias, &target) {
+                continue;
+            }
             let normalized_target = Self::normalize_namespace_alias_target(&target);
             let alias_decl = format!("pub type {} =", alias);
             if self.output.contains(&alias_decl) {
@@ -33974,6 +33983,18 @@ impl AstCodeGen {
         if wrote_header {
             self.writeln("");
         }
+    }
+
+    fn is_rusty_marker_trait_namespace_alias(alias: &str, target: &str) -> bool {
+        let mut cleaned = target.trim();
+        cleaned = cleaned.trim_start_matches("::").trim();
+        if let Some(rest) = cleaned.strip_prefix("crate::") {
+            cleaned = rest.trim();
+        }
+        let is_marker_target = cleaned.starts_with("rusty::rusty_is_send_")
+            || cleaned.starts_with("rusty::rusty_is_sync_");
+        let is_marker_alias = alias.starts_with("rusty_is_send_") || alias.starts_with("rusty_is_sync_");
+        is_marker_target || is_marker_alias
     }
 
     fn normalize_namespace_alias_target(target: &str) -> String {
@@ -74709,6 +74730,42 @@ pub type queue_RecvError = std_queue<RecvError>;
     }
 
     #[test]
+    fn test_normalize_unresolved_namespaced_type_aliases_skips_rusty_send_sync_marker_aliases() {
+        let input = r#"
+pub mod rusty {
+    pub struct rusty_is_send_classrrr_PollThread_ {
+        _opaque: [u8; 1],
+    }
+    pub struct rusty_is_sync_classrrr_PollThread_ {
+        _opaque: [u8; 1],
+    }
+    pub struct Group {
+        _opaque: [u8; 1],
+    }
+}
+pub type vector_rusty_is_send_classrrr_PollThread_ = std_vector<rusty_is_send_classrrr_PollThread_>;
+pub type vector_rusty_is_sync_classrrr_PollThread_ = std_vector<rusty_is_sync_classrrr_PollThread_>;
+pub type vector_Group = std_vector<Group>;
+"#;
+        let output = AstCodeGen::normalize_unresolved_namespaced_type_aliases(input);
+        assert!(
+            !output.contains("pub type rusty_is_send_classrrr_PollThread_ ="),
+            "namespaced unresolved alias normalization should skip rusty send marker helper aliases, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("pub type rusty_is_sync_classrrr_PollThread_ ="),
+            "namespaced unresolved alias normalization should skip rusty sync marker helper aliases, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub type Group = rusty::Group;"),
+            "namespaced unresolved alias normalization should keep non-marker rusty aliases, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
     fn test_normalize_unresolved_namespaced_type_aliases_skips_conflicted_leaf_names() {
         let input = r#"
 pub mod a {
@@ -75897,6 +75954,52 @@ pub mod rusty {
         assert!(
             !output.contains("pub type String = rusty::String;"),
             "namespace alias emission should avoid emitting rusty::String aliases, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_emit_namespace_type_aliases_skips_rusty_send_sync_marker_aliases() {
+        let mut codegen = AstCodeGen::new();
+        codegen.output = r#"
+pub mod rusty {
+    pub struct rusty_is_send_classrrr_PollThread_ {
+    }
+    pub struct rusty_is_sync_classrrr_PollThread_ {
+    }
+    pub struct Group {
+    }
+}
+"#
+        .to_string();
+        codegen.namespace_type_alias_targets.insert(
+            "rusty_is_send_classrrr_PollThread_".to_string(),
+            "rusty::rusty_is_send_classrrr_PollThread_".to_string(),
+        );
+        codegen.namespace_type_alias_targets.insert(
+            "rusty_is_sync_classrrr_PollThread_".to_string(),
+            "rusty::rusty_is_sync_classrrr_PollThread_".to_string(),
+        );
+        codegen
+            .namespace_type_alias_targets
+            .insert("Group".to_string(), "rusty::Group".to_string());
+
+        codegen.emit_namespace_type_aliases();
+        let output = codegen.output;
+
+        assert!(
+            !output.contains("pub type rusty_is_send_classrrr_PollThread_ ="),
+            "namespace alias emission should skip rusty send marker helper aliases, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("pub type rusty_is_sync_classrrr_PollThread_ ="),
+            "namespace alias emission should skip rusty sync marker helper aliases, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub type Group = rusty::Group;"),
+            "namespace alias emission should keep non-marker rusty aliases unchanged when no std mapping exists, got:\n{}",
             output
         );
     }
