@@ -8,10 +8,12 @@
 - [3. Internal Data Models](#3-internal-data-models)
 - [4. C++ Declaration to Rust Item Mapping](#4-c-declaration-to-rust-item-mapping)
 - [5. C++ Type to Rust Type Mapping](#5-c-type-to-rust-type-mapping)
+- [5.4 Rusty-C++ alias normalization to Rust std types](#54-rusty-c-alias-normalization-to-rust-std-types)
 - [6. Object Model and Inheritance Design](#6-object-model-and-inheritance-design)
 - [7. Function, Method, Constructor, Destructor Mapping](#7-function-method-constructor-destructor-mapping)
 - [8. Statement Mapping](#8-statement-mapping)
 - [9. Expression Mapping](#9-expression-mapping)
+- [9.7 Rusty wrapper call normalization](#97-rusty-wrapper-call-normalization)
 - [10. Templates and Instantiation Strategy](#10-templates-and-instantiation-strategy)
 - [11. Runtime and Preamble Integration](#11-runtime-and-preamble-integration)
 - [12. Extension Guide for Contributors](#12-extension-guide-for-contributors)
@@ -242,6 +244,27 @@ Examples:
 
 This behavior is intentionally pragmatic to keep codegen compilable when upstream types are partially unresolved.
 
+### 5.4 Rusty-C++ alias normalization to Rust std types
+
+Source: `map_rusty_type_to_std` in `crates/fragile-clang/src/types.rs`.
+
+Large codebases that include `rusty-cpp` headers frequently surface both fully qualified and unqualified alias spellings (for example after `using namespace rusty;`). Fragile now normalizes both forms to Rust std paths:
+
+- Single-parameter aliases:
+  - `rusty::Option<T>` and `Option<T>` -> `std::option::Option<T>`
+  - `rusty::RefCell<T>` and `RefCell<T>` -> `std::cell::RefCell<T>`
+  - `rusty::Vec<T>` and `Vec<T>` -> `std::vec::Vec<T>`
+  - `rusty::HashSet<T>` and `HashSet<T>` -> `std::collections::HashSet<T>`
+- Two-parameter aliases:
+  - `rusty::Result<T, E>` and `Result<T, E>` -> `std::result::Result<T, E>`
+  - `rusty::HashMap<K, V>` and `HashMap<K, V>` -> `std::collections::HashMap<K, V>`
+- Result convenience aliases:
+  - `rusty::ResultVoid<T>` and `ResultVoid<T>` -> `std::result::Result<T, ()>`
+  - `rusty::ResultInt<T>` and `ResultInt<T>` -> `std::result::Result<T, i32>`
+  - `rusty::ResultString<T>` and `ResultString<T>` -> `std::result::Result<T, *const i8>`
+
+This keeps generated Rust in safe/std-native form instead of preserving rusty-cpp wrapper type names in emitted signatures.
+
 ## 6. Object Model and Inheritance Design
 
 ### 6.1 Struct layout and base embedding
@@ -398,6 +421,19 @@ Primary dispatch: `expr_to_string`.
   - `co_await` -> `.await`
   - `co_yield` -> `yield ...`
   - `co_return` -> `return ...`
+
+### 9.7 Rusty wrapper call normalization
+
+Source: `map_builtin_function` in `crates/fragile-clang/src/ast_codegen.rs`.
+
+Wrapper constructor helpers emitted from Rusty-C++-style APIs are normalized directly to Rust std enum constructors when argument shape is compatible:
+
+- `Some_* (x)` -> `std::option::Option::Some(x)`
+- `None` / `None_* ()` -> `std::option::Option::None`
+- `Ok_* (v)` -> `std::result::Result::Ok(v)`
+- `Err_* (e)` -> `std::result::Result::Err(e)`
+
+This removes shim-style constructor names from generated expressions and improves safe-Rust readability.
 
 ## 10. Templates and Instantiation Strategy
 
@@ -665,6 +701,7 @@ The fallback model is intentionally compile-first:
 - `replace_unsubstituted_type_params` replaces unreplaced internal placeholders with `DefaultType`.
 - `convert_to_opaque_type` maps unresolved template params to generated opaque placeholders (`__Opaque_*`) to preserve type identity better than collapsing everything to `c_void`.
 - End-of-pipeline stub emission (`generate_opaque_type_stubs`, `generate_void_placeholder_stubs`) ensures unresolved references still produce compilable Rust items.
+- Missing-specialization placeholder structs with recovered primitive fields synthesize typed defaults (`false` for `bool`, numeric zero for numeric primitives, null for pointers) to keep fallback `Default` impls type-correct.
 
 ### 10.10 Practical design tradeoff
 

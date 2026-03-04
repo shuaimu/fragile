@@ -209,73 +209,102 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         .trim_start_matches("const ")
         .trim_start_matches("volatile ")
         .trim();
+    let root_name = cleaned.split('<').next().unwrap_or(cleaned).trim();
+    let root_is_unqualified = !root_name.contains("::");
 
     match cleaned {
         "rusty::String" => return Some("std::string::String".to_string()),
+        // `using namespace rusty;` can leave aliases unqualified in Clang spellings.
+        "String" => return Some("std::string::String".to_string()),
         _ => {}
     }
 
-    for (prefix, std_path) in [
-        ("rusty::Option<", "std::option::Option"),
-        ("rusty::Box<", "std::boxed::Box"),
-        ("rusty::Arc<", "std::sync::Arc"),
-        ("rusty::ArcWeak<", "std::sync::Weak"),
-        ("rusty::Rc<", "std::rc::Rc"),
-        ("rusty::Weak<", "std::rc::Weak"),
-        ("rusty::Cell<", "std::cell::Cell"),
-        ("rusty::RefCell<", "std::cell::RefCell"),
-        ("rusty::Vec<", "std::vec::Vec"),
-        ("rusty::VecDeque<", "std::collections::VecDeque"),
-        ("rusty::HashSet<", "std::collections::HashSet"),
-        ("rusty::BTreeSet<", "std::collections::BTreeSet"),
-        ("rusty::Mutex<", "std::sync::Mutex"),
-        ("rusty::RwLock<", "std::sync::RwLock"),
+    for (alias, std_path) in [
+        ("Option", "std::option::Option"),
+        ("Box", "std::boxed::Box"),
+        ("Arc", "std::sync::Arc"),
+        ("ArcWeak", "std::sync::Weak"),
+        ("Rc", "std::rc::Rc"),
+        ("Weak", "std::rc::Weak"),
+        ("Cell", "std::cell::Cell"),
+        ("RefCell", "std::cell::RefCell"),
+        ("Vec", "std::vec::Vec"),
+        ("VecDeque", "std::collections::VecDeque"),
+        ("HashSet", "std::collections::HashSet"),
+        ("BTreeSet", "std::collections::BTreeSet"),
+        ("Mutex", "std::sync::Mutex"),
+        ("RwLock", "std::sync::RwLock"),
     ] {
-        if let Some(mapped) = map_single_template_alias_to_std(cleaned, prefix, std_path) {
+        let qualified_prefix = format!("rusty::{}<", alias);
+        if let Some(mapped) = map_single_template_alias_to_std(cleaned, &qualified_prefix, std_path)
+        {
             return Some(mapped);
         }
+        if root_is_unqualified {
+            let bare_prefix = format!("{}<", alias);
+            if let Some(mapped) = map_single_template_alias_to_std(cleaned, &bare_prefix, std_path)
+            {
+                return Some(mapped);
+            }
+        }
     }
 
-    for (prefix, std_path) in [
-        ("rusty::Result<", "std::result::Result"),
-        ("rusty::HashMap<", "std::collections::HashMap"),
-        ("rusty::BTreeMap<", "std::collections::BTreeMap"),
+    for (alias, std_path) in [
+        ("Result", "std::result::Result"),
+        ("HashMap", "std::collections::HashMap"),
+        ("BTreeMap", "std::collections::BTreeMap"),
     ] {
-        if let Some(mapped) = map_double_template_alias_to_std(cleaned, prefix, std_path) {
+        let qualified_prefix = format!("rusty::{}<", alias);
+        if let Some(mapped) = map_double_template_alias_to_std(cleaned, &qualified_prefix, std_path)
+        {
             return Some(mapped);
         }
-    }
-
-    if let Some(inner) = cleaned
-        .strip_prefix("rusty::ResultVoid<")
-        .and_then(|rest| rest.strip_suffix('>'))
-    {
-        let args = parse_template_args(inner);
-        if args.len() == 1 {
-            let ok = CppType::Named(args[0].clone()).to_rust_type_str();
-            return Some(format!("std::result::Result<{}, ()>", ok));
+        if root_is_unqualified {
+            let bare_prefix = format!("{}<", alias);
+            if let Some(mapped) =
+                map_double_template_alias_to_std(cleaned, &bare_prefix, std_path)
+            {
+                return Some(mapped);
+            }
         }
     }
 
-    if let Some(inner) = cleaned
-        .strip_prefix("rusty::ResultInt<")
-        .and_then(|rest| rest.strip_suffix('>'))
-    {
-        let args = parse_template_args(inner);
-        if args.len() == 1 {
-            let ok = CppType::Named(args[0].clone()).to_rust_type_str();
-            return Some(format!("std::result::Result<{}, i32>", ok));
+    for prefix in ["rusty::ResultVoid<", "ResultVoid<"] {
+        if let Some(inner) = cleaned
+            .strip_prefix(prefix)
+            .and_then(|rest| rest.strip_suffix('>'))
+        {
+            let args = parse_template_args(inner);
+            if args.len() == 1 {
+                let ok = CppType::Named(args[0].clone()).to_rust_type_str();
+                return Some(format!("std::result::Result<{}, ()>", ok));
+            }
         }
     }
 
-    if let Some(inner) = cleaned
-        .strip_prefix("rusty::ResultString<")
-        .and_then(|rest| rest.strip_suffix('>'))
-    {
-        let args = parse_template_args(inner);
-        if args.len() == 1 {
-            let ok = CppType::Named(args[0].clone()).to_rust_type_str();
-            return Some(format!("std::result::Result<{}, *const i8>", ok));
+    for prefix in ["rusty::ResultInt<", "ResultInt<"] {
+        if let Some(inner) = cleaned
+            .strip_prefix(prefix)
+            .and_then(|rest| rest.strip_suffix('>'))
+        {
+            let args = parse_template_args(inner);
+            if args.len() == 1 {
+                let ok = CppType::Named(args[0].clone()).to_rust_type_str();
+                return Some(format!("std::result::Result<{}, i32>", ok));
+            }
+        }
+    }
+
+    for prefix in ["rusty::ResultString<", "ResultString<"] {
+        if let Some(inner) = cleaned
+            .strip_prefix(prefix)
+            .and_then(|rest| rest.strip_suffix('>'))
+        {
+            let args = parse_template_args(inner);
+            if args.len() == 1 {
+                let ok = CppType::Named(args[0].clone()).to_rust_type_str();
+                return Some(format!("std::result::Result<{}, *const i8>", ok));
+            }
         }
     }
 
@@ -1584,6 +1613,30 @@ mod tests {
         assert_eq!(
             CppType::Named("rusty::ResultVoid<long>".to_string()).to_rust_type_str(),
             "std::result::Result<i64, ()>"
+        );
+    }
+
+    #[test]
+    fn test_unqualified_rusty_aliases_map_to_std_library_types() {
+        assert_eq!(
+            CppType::Named("RefCell<int>".to_string()).to_rust_type_str(),
+            "std::cell::RefCell<i32>"
+        );
+        assert_eq!(
+            CppType::Named("HashMap<int, long>".to_string()).to_rust_type_str(),
+            "std::collections::HashMap<i32, i64>"
+        );
+        assert_eq!(
+            CppType::Named("Option<String>".to_string()).to_rust_type_str(),
+            "std::option::Option<std::string::String>"
+        );
+        assert_eq!(
+            CppType::Named("Result<int, String>".to_string()).to_rust_type_str(),
+            "std::result::Result<i32, std::string::String>"
+        );
+        assert_eq!(
+            CppType::Named("ResultInt<long>".to_string()).to_rust_type_str(),
+            "std::result::Result<i64, i32>"
         );
     }
 

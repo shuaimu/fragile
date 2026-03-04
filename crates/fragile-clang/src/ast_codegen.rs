@@ -17831,7 +17831,12 @@ impl AstCodeGen {
                             | "f64"
                             | "isize"
                     ) {
-                        (rust_type.clone(), "0".into())
+                        let default_val = if rust_type == "bool" {
+                            "false".to_string()
+                        } else {
+                            "0".to_string()
+                        };
+                        (rust_type.clone(), default_val)
                     } else {
                         // Complex internal type (tree_end_node, allocator, comparator, etc.)
                         // Use pointer-sized opaque bytes since these are typically pointer-sized
@@ -23824,6 +23829,15 @@ impl AstCodeGen {
         }
         if leaf.starts_with("Some_") && args.len() == 1 {
             return Some((format!("std::option::Option::Some({})", args[0]), false));
+        }
+        if (leaf == "None" || leaf.starts_with("None_")) && args.is_empty() {
+            return Some(("std::option::Option::None".to_string(), false));
+        }
+        if leaf.starts_with("Ok_") && args.len() == 1 {
+            return Some((format!("std::result::Result::Ok({})", args[0]), false));
+        }
+        if leaf.starts_with("Err_") && args.len() == 1 {
+            return Some((format!("std::result::Result::Err({})", args[0]), false));
         }
         if leaf == "clock_gettime" || leaf == "sleep" {
             return Some(("0".to_string(), false));
@@ -69841,6 +69855,43 @@ pub mod testing {
     }
 
     #[test]
+    fn test_missing_stub_default_uses_false_for_bool_specialization_fields() {
+        let mut codegen = AstCodeGen::new();
+        let rust_name = "ConnState".to_string();
+        let cpp_name = "ConnState".to_string();
+        codegen
+            .used_types
+            .insert(rust_name.clone(), cpp_name.clone());
+
+        let mut spec_info = make_specialization_field_info(
+            &cpp_name,
+            vec![],
+            TemplateSpecializationKind::ImplicitInstantiation,
+        );
+        spec_info
+            .field_types
+            .insert("joined_".to_string(), CppType::Bool);
+        codegen
+            .specialization_field_types
+            .insert(cpp_name.clone(), spec_info);
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        let struct_impl = code.split("impl Default for ConnState {").nth(1).unwrap_or("");
+
+        assert!(
+            struct_impl.contains("joined_: false,"),
+            "bool specialization fields in placeholder defaults should use `false`, got:\n{}",
+            code
+        );
+        assert!(
+            !struct_impl.contains("joined_: 0"),
+            "bool specialization fields must not default to integer zero, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
     fn test_record_with_unqualified_vector_field_does_not_derive_copy() {
         let ast = make_node(
             ClangNodeKind::TranslationUnit,
@@ -71888,6 +71939,32 @@ pub mod testing {
         assert_eq!(
             some_call.0, "std::option::Option::Some(x)",
             "Some_* fallback should normalize to Option::Some"
+        );
+
+        let none_call = AstCodeGen::map_builtin_function(
+            "super::rusty::None_Arc_class_rrr_PollThread",
+            &[],
+        )
+        .expect("None_* wrapper fallback should map");
+        assert_eq!(
+            none_call.0, "std::option::Option::None",
+            "None_* fallback should normalize to Option::None"
+        );
+
+        let ok_call =
+            AstCodeGen::map_builtin_function("super::rusty::Ok_AddrInfo", &["v".to_string()])
+                .expect("Ok_* wrapper fallback should map");
+        assert_eq!(
+            ok_call.0, "std::result::Result::Ok(v)",
+            "Ok_* fallback should normalize to Result::Ok"
+        );
+
+        let err_call =
+            AstCodeGen::map_builtin_function("super::rusty::Err_i32", &["e".to_string()])
+                .expect("Err_* wrapper fallback should map");
+        assert_eq!(
+            err_call.0, "std::result::Result::Err(e)",
+            "Err_* fallback should normalize to Result::Err"
         );
     }
 
