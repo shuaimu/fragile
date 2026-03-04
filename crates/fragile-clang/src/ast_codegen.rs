@@ -98,6 +98,64 @@ fn is_rust_integral_non_bool_type(ty: &str) -> bool {
     )
 }
 
+/// Check whether a Rust type string is an Option-like wrapper.
+fn is_option_rust_type(ty: &str) -> bool {
+    let ty = ty.trim();
+    ty.starts_with("Option<")
+        || ty.starts_with("std::option::Option<")
+        || ty.starts_with("core::option::Option<")
+        || ty.starts_with("::std::option::Option<")
+        || ty.starts_with("::core::option::Option<")
+        || ty.starts_with("rusty::Option<")
+}
+
+/// Split a generic argument list into exactly two top-level lanes at the first comma.
+fn split_top_level_pair_at_comma(s: &str) -> Option<(&str, &str)> {
+    let mut angle_depth: isize = 0;
+    let mut paren_depth: isize = 0;
+    let mut bracket_depth: isize = 0;
+    let mut brace_depth: isize = 0;
+
+    for (idx, ch) in s.char_indices() {
+        match ch {
+            '<' => angle_depth += 1,
+            '>' if angle_depth > 0 => angle_depth -= 1,
+            '(' => paren_depth += 1,
+            ')' if paren_depth > 0 => paren_depth -= 1,
+            '[' => bracket_depth += 1,
+            ']' if bracket_depth > 0 => bracket_depth -= 1,
+            '{' => brace_depth += 1,
+            '}' if brace_depth > 0 => brace_depth -= 1,
+            ',' if angle_depth == 0 && paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                let lhs = s[..idx].trim();
+                let rhs = s[idx + 1..].trim();
+                if lhs.is_empty() || rhs.is_empty() {
+                    return None;
+                }
+                return Some((lhs, rhs));
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
+/// Parse a Rust Result-like type and return `(OkLane, ErrLane)` generic arguments.
+fn parse_result_rust_type(ty: &str) -> Option<(&str, &str)> {
+    let ty = ty.trim();
+    let inner = ty
+        .strip_prefix("Result<")
+        .or_else(|| ty.strip_prefix("std::result::Result<"))
+        .or_else(|| ty.strip_prefix("core::result::Result<"))
+        .or_else(|| ty.strip_prefix("::std::result::Result<"))
+        .or_else(|| ty.strip_prefix("::core::result::Result<"))
+        .or_else(|| ty.strip_prefix("rusty::Result<"))
+        .or_else(|| ty.strip_prefix("::rusty::Result<"))?
+        .strip_suffix('>')?;
+    split_top_level_pair_at_comma(inner)
+}
+
 /// Check whether a Rust type string is an Option-wrapped function pointer.
 fn is_option_fn_rust_type(ty: &str) -> bool {
     ty.starts_with("Option<fn(")
@@ -5969,6 +6027,21 @@ impl AstCodeGen {
         out
     }
 
+    fn default_expr_for_result_type(ret_ty: &str) -> Option<String> {
+        let trimmed = ret_ty.trim();
+        if trimmed == "std::fmt::Result" {
+            return Some("Ok(())".to_string());
+        }
+
+        let (ok_ty, _err_ty) = parse_result_rust_type(trimmed)?;
+        let ok_ty = ok_ty.trim();
+        if ok_ty == "()" {
+            Some("Ok(())".to_string())
+        } else {
+            Some(format!("Ok({})", Self::get_default_value_for_type(ok_ty)))
+        }
+    }
+
     fn default_expr_for_empty_body_return_type(ret_ty: &str) -> String {
         let trimmed = ret_ty.trim();
         if trimmed.starts_with("*const ") {
@@ -5977,26 +6050,8 @@ impl AstCodeGen {
             "std::ptr::null_mut()".to_string()
         } else if trimmed.starts_with("&mut ") || trimmed.starts_with('&') {
             "unsafe { std::mem::zeroed() }".to_string()
-        } else if trimmed == "std::fmt::Result" {
-            "Ok(())".to_string()
-        } else if let Some(inner) = trimmed
-            .strip_prefix("std::result::Result<")
-            .or_else(|| trimmed.strip_prefix("core::result::Result<"))
-            .or_else(|| trimmed.strip_prefix("::std::result::Result<"))
-            .or_else(|| trimmed.strip_prefix("::core::result::Result<"))
-            .or_else(|| trimmed.strip_prefix("Result<"))
-            .and_then(|rest| rest.strip_suffix('>'))
-        {
-            let parts = Self::split_top_level_list(inner, ',');
-            if let Some(ok_ty) = parts.first().map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                if ok_ty == "()" {
-                    "Ok(())".to_string()
-                } else {
-                    format!("Ok({})", Self::get_default_value_for_type(ok_ty))
-                }
-            } else {
-                "Ok(())".to_string()
-            }
+        } else if let Some(default_result) = Self::default_expr_for_result_type(trimmed) {
+            default_result
         } else {
             Self::get_default_value_for_type(trimmed)
         }
@@ -7461,8 +7516,11 @@ impl AstCodeGen {
             if ty.starts_with("*mut ") {
                 return Some("std::ptr::null_mut()".to_string());
             }
-            if ty.starts_with("Option<") {
+            if is_option_rust_type(ty) {
                 return Some("None".to_string());
+            }
+            if let Some(default_result) = AstCodeGen::default_expr_for_result_type(ty) {
+                return Some(default_result);
             }
             match ty {
                 "bool" => Some("false".to_string()),
@@ -13582,6 +13640,11 @@ impl AstCodeGen {
             }
         }
 
+        let rust_ty = rust_ty.trim();
+        if let Some(default_result) = Self::default_expr_for_result_type(rust_ty) {
+            return default_result;
+        }
+
         match rust_ty {
             "i8" | "i16" | "i32" | "i64" | "i128" | "isize" => "0".to_string(),
             "u8" | "u16" | "u32" | "u64" | "u128" | "usize" => "0".to_string(),
@@ -13606,7 +13669,7 @@ impl AstCodeGen {
                         elem if elem.starts_with("*mut ") => {
                             format!("[std::ptr::null_mut(); {}]", size_expr)
                         }
-                        elem if elem.starts_with("Option<") => {
+                        elem if is_option_rust_type(elem) => {
                             // `Option<T>` is not always `Copy`; synthesize each slot safely.
                             "std::array::from_fn(|_| None)".to_string()
                         }
@@ -13626,6 +13689,7 @@ impl AstCodeGen {
             }
             ty if ty.starts_with("*const ") => "std::ptr::null()".to_string(),
             ty if ty.starts_with("*mut ") => "std::ptr::null_mut()".to_string(),
+            ty if is_option_rust_type(ty) => "None".to_string(),
             // c_void doesn't implement Default — use zeroed memory
             ty if ty.contains("c_void") => "unsafe { std::mem::zeroed() }".to_string(),
             _ => "Default::default()".to_string(),
@@ -75157,6 +75221,10 @@ pub fn Pretty() -> std::result::Result<std::string::String, ()> {
 }
 pub fn Fmt() -> std::fmt::Result {
 }
+pub fn Rusty() -> rusty::Result<i32, i32> {
+}
+pub fn CoreRooted() -> ::core::result::Result<i32, i32> {
+}
 "#;
         let output = AstCodeGen::synthesize_empty_non_unit_function_bodies(input);
         assert!(
@@ -75169,6 +75237,16 @@ pub fn Fmt() -> std::fmt::Result {
         assert!(
             output.contains("pub fn Fmt() -> std::fmt::Result {\n    Ok(())\n}"),
             "empty non-unit body synthesis should use `Ok(())` for std::fmt::Result returns, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn Rusty() -> rusty::Result<i32, i32> {\n    Ok(0)\n}"),
+            "empty non-unit body synthesis should use `Ok(...)` for rusty::Result<T, E> returns, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn CoreRooted() -> ::core::result::Result<i32, i32> {\n    Ok(0)\n}"),
+            "empty non-unit body synthesis should use `Ok(...)` for rooted core::result::Result<T, E> returns, got:\n{}",
             output
         );
     }
@@ -75586,6 +75664,21 @@ pub fn get_ptr() -> *mut i8 {
 pub fn maybe_mode() -> Option<i32> {
     return MISSING_MODE;
 }
+pub fn maybe_mode_std() -> std::option::Option<i32> {
+    return MISSING_MODE_STD;
+}
+pub fn maybe_mode_core() -> core::option::Option<i32> {
+    return MISSING_MODE_CORE;
+}
+pub fn maybe_status() -> std::result::Result<i32, i32> {
+    return MISSING_STATUS;
+}
+pub fn maybe_status_rusty() -> rusty::Result<i32, i32> {
+    return MISSING_STATUS_RUSTY;
+}
+pub fn maybe_fmt() -> std::fmt::Result {
+    return MISSING_FMT;
+}
 "#;
         let output = AstCodeGen::normalize_unresolved_const_like_identifier_returns(input);
         assert!(
@@ -75601,6 +75694,31 @@ pub fn maybe_mode() -> Option<i32> {
         assert!(
             output.contains("return None;"),
             "Option return types should degrade to safe None defaults, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn maybe_mode_std() -> std::option::Option<i32> {\n    return None;\n}"),
+            "std::option::Option return types should degrade to safe None defaults, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn maybe_mode_core() -> core::option::Option<i32> {\n    return None;\n}"),
+            "core::option::Option return types should degrade to safe None defaults, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn maybe_status() -> std::result::Result<i32, i32> {\n    return Ok(0);\n}"),
+            "std::result::Result return types should degrade to safe Ok defaults, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn maybe_status_rusty() -> rusty::Result<i32, i32> {\n    return Ok(0);\n}"),
+            "rusty::Result return types should degrade to safe Ok defaults, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn maybe_fmt() -> std::fmt::Result {\n    return Ok(());\n}"),
+            "std::fmt::Result return types should degrade to safe Ok(()) defaults, got:\n{}",
             output
         );
         assert!(
@@ -84806,6 +84924,40 @@ stream.PutN(c, n);
             AstCodeGen::get_default_value_for_type("[Option<String>; 2]"),
             "std::array::from_fn(|_| None)",
             "Option arrays should avoid repeat syntax and synthesize element defaults without Copy bounds"
+        );
+        assert_eq!(
+            AstCodeGen::get_default_value_for_type("[std::option::Option<String>; 2]"),
+            "std::array::from_fn(|_| None)",
+            "namespaced Option arrays should also synthesize None lanes with from_fn"
+        );
+        assert_eq!(
+            AstCodeGen::get_default_value_for_type("core::option::Option<String>"),
+            "None",
+            "top-level namespaced Option lanes should degrade to None defaults"
+        );
+    }
+
+    #[test]
+    fn test_get_default_value_for_type_result_lanes_prefer_ok_defaults() {
+        assert_eq!(
+            AstCodeGen::get_default_value_for_type("std::result::Result<i32, ()>"),
+            "Ok(0)",
+            "std::result::Result defaults should synthesize Ok lane defaults"
+        );
+        assert_eq!(
+            AstCodeGen::get_default_value_for_type("::core::result::Result<(), i32>"),
+            "Ok(())",
+            "rooted core::result::Result unit-ok defaults should synthesize Ok(())"
+        );
+        assert_eq!(
+            AstCodeGen::get_default_value_for_type("rusty::Result<std::string::String, i32>"),
+            "Ok(Default::default())",
+            "rusty::Result defaults should synthesize Ok lane defaults without relying on Result::default"
+        );
+        assert_eq!(
+            AstCodeGen::get_default_value_for_type("std::fmt::Result"),
+            "Ok(())",
+            "std::fmt::Result defaults should synthesize Ok(())"
         );
     }
 
