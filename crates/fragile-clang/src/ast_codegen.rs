@@ -198,10 +198,22 @@ fn is_plain_nominal_rust_type(ty: &str) -> bool {
     ty.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
+fn is_placeholder_like_rust_type(ty: &str) -> bool {
+    let ty = ty.trim();
+    if ty.is_empty() {
+        return false;
+    }
+    let last_segment = ty.rsplit("::").next().unwrap_or(ty).trim();
+    last_segment.starts_with("UnknownTag")
+        || last_segment.starts_with("UnknownType")
+        || last_segment.ends_with("UnknownTagAutoType")
+}
+
 fn should_use_unknown_return_panic_fallback(return_ty: &str, default_expr: &str) -> bool {
     let expr = default_expr.trim();
     is_unsafe_zeroed_expr(expr)
-        || (expr == "Default::default()" && is_plain_nominal_rust_type(return_ty))
+        || (expr == "Default::default()"
+            && (is_plain_nominal_rust_type(return_ty) || is_placeholder_like_rust_type(return_ty)))
 }
 
 /// Check whether a Rust type string is an Option-wrapped function pointer.
@@ -75301,11 +75313,18 @@ pub fn RefMut() -> &'static mut i32 {
         let input = r#"
 pub fn Unknown() -> UnknownTagAutoType {
 }
+pub fn UnknownNamespaced() -> crate::UnknownTagAutoType {
+}
 "#;
         let output = AstCodeGen::synthesize_empty_non_unit_function_bodies(input);
         assert!(
             output.contains("pub fn Unknown() -> UnknownTagAutoType {\n    panic!(\"fragile: missing safe default for return type\")\n}"),
             "empty non-unit body synthesis should use panic fallback for unknown return types, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn UnknownNamespaced() -> crate::UnknownTagAutoType {\n    panic!(\"fragile: missing safe default for return type\")\n}"),
+            "empty non-unit body synthesis should use panic fallback for namespaced placeholder return types, got:\n{}",
             output
         );
     }
@@ -75322,6 +75341,8 @@ pub fn Rusty() -> rusty::Result<i32, i32> {
 pub fn CoreRooted() -> ::core::result::Result<i32, i32> {
 }
 pub fn OpaqueResult() -> std::result::Result<UnknownTagAutoType, i32> {
+}
+pub fn OpaqueResultNamespaced() -> std::result::Result<crate::UnknownTagAutoType, i32> {
 }
 "#;
         let output = AstCodeGen::synthesize_empty_non_unit_function_bodies(input);
@@ -75350,6 +75371,11 @@ pub fn OpaqueResult() -> std::result::Result<UnknownTagAutoType, i32> {
         assert!(
             output.contains("pub fn OpaqueResult() -> std::result::Result<UnknownTagAutoType, i32> {\n    Ok(panic!(\"fragile: missing safe default for return type\"))\n}"),
             "empty non-unit body synthesis should avoid unsafe zeroed for unknown Result<T, E> ok lanes, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn OpaqueResultNamespaced() -> std::result::Result<crate::UnknownTagAutoType, i32> {\n    Ok(panic!(\"fragile: missing safe default for return type\"))\n}"),
+            "empty non-unit body synthesis should avoid unsafe zeroed for namespaced placeholder Result<T, E> ok lanes, got:\n{}",
             output
         );
     }
@@ -75794,6 +75820,12 @@ pub fn opaque_mode() -> UnknownTagAutoType {
 pub fn opaque_result() -> std::result::Result<UnknownTagAutoType, i32> {
     return MISSING_OPAQUE_RESULT;
 }
+pub fn opaque_mode_namespaced() -> crate::UnknownTagAutoType {
+    return MISSING_OPAQUE_NAMESPACED;
+}
+pub fn opaque_result_namespaced() -> std::result::Result<crate::UnknownTagAutoType, i32> {
+    return MISSING_OPAQUE_RESULT_NAMESPACED;
+}
 "#;
         let output = AstCodeGen::normalize_unresolved_const_like_identifier_returns(input);
         assert!(
@@ -75854,6 +75886,16 @@ pub fn opaque_result() -> std::result::Result<UnknownTagAutoType, i32> {
         assert!(
             output.contains("pub fn opaque_result() -> std::result::Result<UnknownTagAutoType, i32> {\n    return Ok(panic!(\"fragile: missing safe default for return type\"));\n}"),
             "Result<T, E> unknown ok lanes should degrade to Ok(panic!(...)) instead of unsafe zeroed, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn opaque_mode_namespaced() -> crate::UnknownTagAutoType {\n    return panic!(\"fragile: missing safe default for return type\");\n}"),
+            "namespaced unknown return types should degrade to panic fallback defaults, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn opaque_result_namespaced() -> std::result::Result<crate::UnknownTagAutoType, i32> {\n    return Ok(panic!(\"fragile: missing safe default for return type\"));\n}"),
+            "namespaced placeholder Result<T, E> ok lanes should degrade to Ok(panic!(...)) instead of unsafe zeroed, got:\n{}",
             output
         );
         assert!(

@@ -138,6 +138,7 @@ Generic normalizations added in this replay cycle:
 - `default_expr_for_empty_body_return_type` reference-lane refinement:
   - for `&T` / `&mut T` return lanes in synthesized stub bodies (including injected tail-returns and wildcard match-arm rewrites), use a `panic!(...)` fallback expression instead of `unsafe { std::mem::zeroed() }`.
   - when top-level return-lane default synthesis degrades to `unsafe { std::mem::zeroed() }` (unknown/non-inferable return type), rewrite to a `panic!(...)` fallback expression instead.
+  - treat placeholder-like nominal return lanes (including namespaced forms such as `crate::UnknownTagAutoType`) as unknown-safe lanes: if default synthesis would rely on `Default::default()`, rewrite to `panic!(...)` fallback instead.
 - switch lowering (`generate_switch_stmt`) no-default fallback arm:
   - emits typed wildcard arm `_ => { unsafe { std::mem::zeroed::<_>() } }` instead of `_ => unsafe { std::mem::zeroed() },` to preserve Rust match arm typing.
 - `normalize_struct_default_clone_derives` refinement:
