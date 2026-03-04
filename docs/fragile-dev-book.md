@@ -947,3 +947,4 @@ Namespace alias target normalization must reuse the same Rusty-wrapper mapping l
 
 - Wrapper aliases now normalize to Rust std paths consistently.
 - Non-rusty namespaced aliases (for example `testing::internal::Visible`) are preserved as-is, avoiding accidental namespace mangling.
+- Nested Rusty namespace spellings (for example `rusty::sync::Weak<T>`, `rusty::rc::Weak<T>`, `rusty::collections::HashMap<K, V>`) are normalized through the same shared path.

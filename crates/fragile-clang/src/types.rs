@@ -214,31 +214,87 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
 
     match cleaned {
         "rusty::String" => return Some("std::string::String".to_string()),
+        "rusty::string::String" => return Some("std::string::String".to_string()),
         // `using namespace rusty;` can leave aliases unqualified in Clang spellings.
         "String" => return Some("std::string::String".to_string()),
         _ => {}
     }
 
-    for (alias, std_path) in [
-        ("Option", "std::option::Option"),
-        ("Box", "std::boxed::Box"),
-        ("Arc", "std::sync::Arc"),
-        ("ArcWeak", "std::sync::Weak"),
-        ("Rc", "std::rc::Rc"),
-        ("Weak", "std::rc::Weak"),
-        ("Cell", "std::cell::Cell"),
-        ("RefCell", "std::cell::RefCell"),
-        ("Vec", "std::vec::Vec"),
-        ("VecDeque", "std::collections::VecDeque"),
-        ("HashSet", "std::collections::HashSet"),
-        ("BTreeSet", "std::collections::BTreeSet"),
-        ("Mutex", "std::sync::Mutex"),
-        ("RwLock", "std::sync::RwLock"),
+    for (alias, std_path, qualified_roots) in [
+        (
+            "Option",
+            "std::option::Option",
+            &["rusty::Option", "rusty::option::Option"] as &[&str],
+        ),
+        (
+            "Box",
+            "std::boxed::Box",
+            &["rusty::Box", "rusty::boxed::Box"] as &[&str],
+        ),
+        (
+            "Arc",
+            "std::sync::Arc",
+            &["rusty::Arc", "rusty::sync::Arc"] as &[&str],
+        ),
+        (
+            "ArcWeak",
+            "std::sync::Weak",
+            &["rusty::ArcWeak", "rusty::sync::Weak"] as &[&str],
+        ),
+        (
+            "Rc",
+            "std::rc::Rc",
+            &["rusty::Rc", "rusty::rc::Rc"] as &[&str],
+        ),
+        (
+            "Weak",
+            "std::rc::Weak",
+            &["rusty::Weak", "rusty::rc::Weak"] as &[&str],
+        ),
+        (
+            "Cell",
+            "std::cell::Cell",
+            &["rusty::Cell", "rusty::cell::Cell"] as &[&str],
+        ),
+        (
+            "RefCell",
+            "std::cell::RefCell",
+            &["rusty::RefCell", "rusty::cell::RefCell"] as &[&str],
+        ),
+        ("Vec", "std::vec::Vec", &["rusty::Vec", "rusty::vec::Vec"] as &[&str]),
+        (
+            "VecDeque",
+            "std::collections::VecDeque",
+            &["rusty::VecDeque", "rusty::collections::VecDeque"] as &[&str],
+        ),
+        (
+            "HashSet",
+            "std::collections::HashSet",
+            &["rusty::HashSet", "rusty::collections::HashSet"] as &[&str],
+        ),
+        (
+            "BTreeSet",
+            "std::collections::BTreeSet",
+            &["rusty::BTreeSet", "rusty::collections::BTreeSet"] as &[&str],
+        ),
+        (
+            "Mutex",
+            "std::sync::Mutex",
+            &["rusty::Mutex", "rusty::sync::Mutex"] as &[&str],
+        ),
+        (
+            "RwLock",
+            "std::sync::RwLock",
+            &["rusty::RwLock", "rusty::sync::RwLock"] as &[&str],
+        ),
     ] {
-        let qualified_prefix = format!("rusty::{}<", alias);
-        if let Some(mapped) = map_single_template_alias_to_std(cleaned, &qualified_prefix, std_path)
-        {
-            return Some(mapped);
+        for root in qualified_roots {
+            let qualified_prefix = format!("{}<", root);
+            if let Some(mapped) =
+                map_single_template_alias_to_std(cleaned, &qualified_prefix, std_path)
+            {
+                return Some(mapped);
+            }
         }
         if root_is_unqualified {
             let bare_prefix = format!("{}<", alias);
@@ -249,15 +305,30 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         }
     }
 
-    for (alias, std_path) in [
-        ("Result", "std::result::Result"),
-        ("HashMap", "std::collections::HashMap"),
-        ("BTreeMap", "std::collections::BTreeMap"),
+    for (alias, std_path, qualified_roots) in [
+        (
+            "Result",
+            "std::result::Result",
+            &["rusty::Result", "rusty::result::Result"] as &[&str],
+        ),
+        (
+            "HashMap",
+            "std::collections::HashMap",
+            &["rusty::HashMap", "rusty::collections::HashMap"] as &[&str],
+        ),
+        (
+            "BTreeMap",
+            "std::collections::BTreeMap",
+            &["rusty::BTreeMap", "rusty::collections::BTreeMap"] as &[&str],
+        ),
     ] {
-        let qualified_prefix = format!("rusty::{}<", alias);
-        if let Some(mapped) = map_double_template_alias_to_std(cleaned, &qualified_prefix, std_path)
-        {
-            return Some(mapped);
+        for root in qualified_roots {
+            let qualified_prefix = format!("{}<", root);
+            if let Some(mapped) =
+                map_double_template_alias_to_std(cleaned, &qualified_prefix, std_path)
+            {
+                return Some(mapped);
+            }
         }
         if root_is_unqualified {
             let bare_prefix = format!("{}<", alias);
@@ -269,7 +340,7 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         }
     }
 
-    for prefix in ["rusty::ResultVoid<", "ResultVoid<"] {
+    for prefix in ["rusty::ResultVoid<", "rusty::result::ResultVoid<", "ResultVoid<"] {
         if let Some(inner) = cleaned
             .strip_prefix(prefix)
             .and_then(|rest| rest.strip_suffix('>'))
@@ -282,7 +353,7 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         }
     }
 
-    for prefix in ["rusty::ResultInt<", "ResultInt<"] {
+    for prefix in ["rusty::ResultInt<", "rusty::result::ResultInt<", "ResultInt<"] {
         if let Some(inner) = cleaned
             .strip_prefix(prefix)
             .and_then(|rest| rest.strip_suffix('>'))
@@ -295,7 +366,11 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         }
     }
 
-    for prefix in ["rusty::ResultString<", "ResultString<"] {
+    for prefix in [
+        "rusty::ResultString<",
+        "rusty::result::ResultString<",
+        "ResultString<",
+    ] {
         if let Some(inner) = cleaned
             .strip_prefix(prefix)
             .and_then(|rest| rest.strip_suffix('>'))
@@ -1645,6 +1720,30 @@ mod tests {
     }
 
     #[test]
+    fn test_nested_rusty_namespace_aliases_map_to_std_library_types() {
+        assert_eq!(
+            CppType::Named("rusty::string::String".to_string()).to_rust_type_str(),
+            "std::string::String"
+        );
+        assert_eq!(
+            CppType::Named("rusty::cell::RefCell<int>".to_string()).to_rust_type_str(),
+            "std::cell::RefCell<i32>"
+        );
+        assert_eq!(
+            CppType::Named("rusty::collections::HashMap<int, long>".to_string()).to_rust_type_str(),
+            "std::collections::HashMap<i32, i64>"
+        );
+        assert_eq!(
+            CppType::Named("rusty::rc::Weak<int>".to_string()).to_rust_type_str(),
+            "std::rc::Weak<i32>"
+        );
+        assert_eq!(
+            CppType::Named("rusty::sync::Weak<int>".to_string()).to_rust_type_str(),
+            "std::sync::Weak<i32>"
+        );
+    }
+
+    #[test]
     fn test_normalize_rusty_type_alias_to_std_maps_wrappers_and_preserves_non_rusty_paths() {
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::Option<rusty::String>"),
@@ -1657,6 +1756,10 @@ mod tests {
         assert_eq!(
             normalize_rusty_type_alias_to_std("testing::internal::Visible"),
             "testing::internal::Visible"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::sync::Weak<int>"),
+            "std::sync::Weak<i32>"
         );
     }
 

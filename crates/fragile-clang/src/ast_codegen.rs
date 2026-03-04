@@ -75616,6 +75616,10 @@ pub mod rusty {
             AstCodeGen::normalize_namespace_alias_target("testing::internal::Visible"),
             "testing::internal::Visible"
         );
+        assert_eq!(
+            AstCodeGen::normalize_namespace_alias_target("rusty::sync::Weak<int>"),
+            "std::sync::Weak<i32>"
+        );
     }
 
     #[test]
