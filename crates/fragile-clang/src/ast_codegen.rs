@@ -12550,6 +12550,124 @@ impl AstCodeGen {
         out
     }
 
+    /// Keep typed null pointer returns aligned with the enclosing function
+    /// signature pointee (`return std::ptr::null_mut::<T>();` in `-> *mut U`).
+    fn normalize_typed_null_pointer_return_pointees(code: &str) -> String {
+        fn parse_pointer_return_pointee(signature_line: &str) -> Option<(bool, String)> {
+            let arrow_idx = signature_line.rfind("->")?;
+            let mut ret_ty = signature_line[arrow_idx + 2..].trim();
+            ret_ty = ret_ty.trim_end_matches('{').trim();
+            if let Some(rest) = ret_ty.strip_prefix("*mut ") {
+                let pointee = rest.trim();
+                if !pointee.is_empty() {
+                    return Some((true, pointee.to_string()));
+                }
+            } else if let Some(rest) = ret_ty.strip_prefix("*const ") {
+                let pointee = rest.trim();
+                if !pointee.is_empty() {
+                    return Some((false, pointee.to_string()));
+                }
+            }
+            None
+        }
+
+        fn rewrite_typed_null_return_line(
+            line: &str,
+            expect_mut_ptr: bool,
+            expected_pointee: &str,
+        ) -> String {
+            let trimmed = line.trim();
+            let (prefix, suffix) = if expect_mut_ptr {
+                ("return std::ptr::null_mut::<", ">();")
+            } else {
+                ("return std::ptr::null::<", ">();")
+            };
+            let Some(actual_pointee) = trimmed
+                .strip_prefix(prefix)
+                .and_then(|rest| rest.strip_suffix(suffix))
+            else {
+                return line.to_string();
+            };
+            let actual_pointee = actual_pointee.trim();
+            if actual_pointee.is_empty() || actual_pointee == expected_pointee {
+                return line.to_string();
+            }
+            let indent_len = line.len().saturating_sub(line.trim_start().len());
+            format!(
+                "{}{}{}{}",
+                &line[..indent_len],
+                prefix,
+                expected_pointee,
+                suffix
+            )
+        }
+
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        let mut i = 0usize;
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim_end();
+            let is_fn_start =
+                (trimmed.contains(" fn ") || trimmed.starts_with("fn ")) && trimmed.ends_with('{');
+            if !is_fn_start {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let mut j = i;
+            let mut depth = 0isize;
+            while j < lines.len() {
+                let current = lines[j];
+                depth += current.chars().filter(|c| *c == '{').count() as isize;
+                depth -= current.chars().filter(|c| *c == '}').count() as isize;
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if j >= lines.len() || depth != 0 {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let pointer_ret = parse_pointer_return_pointee(trimmed);
+            out.push_str(line);
+            out.push('\n');
+            for body_line in &lines[i + 1..j] {
+                let rewritten = if let Some((is_mut, expected_pointee)) = pointer_ret.as_ref() {
+                    rewrite_typed_null_return_line(body_line, *is_mut, expected_pointee)
+                } else {
+                    (*body_line).to_string()
+                };
+                out.push_str(&rewritten);
+                out.push('\n');
+            }
+            out.push_str(lines[j]);
+            if j + 1 < lines.len() || code.ends_with('\n') {
+                out.push('\n');
+            }
+            i = j + 1;
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
     fn fallback_heavily_degraded_function_bodies(code: &str) -> String {
         fn parse_fn_name(line: &str) -> Option<String> {
             let trimmed = line.trim_start();
@@ -15909,6 +16027,9 @@ impl AstCodeGen {
         // default placeholders; drop those again before returning final output.
         output = Self::normalize_unused_default_local_bindings(&output);
         output = Self::normalize_pre_return_unused_default_local_bindings(&output);
+        // Degraded pointer fallback normalization can strand typed null returns
+        // with mismatched pointees (`null_mut::<param_name>()` in `-> *mut T`).
+        output = Self::normalize_typed_null_pointer_return_pointees(&output);
         output
     }
 
@@ -33445,11 +33566,47 @@ impl AstCodeGen {
             || self.output.contains(&format!("pub type {} =", target))
     }
 
+    fn resolve_unique_public_type_item_path(&self, leaf: &str) -> Option<String> {
+        let mut candidates: Vec<String> = Self::collect_direct_public_type_items_by_module(
+            self.output.as_str(),
+        )
+        .into_iter()
+        .filter_map(|(module_path, item_name)| {
+            if item_name != leaf {
+                return None;
+            }
+            if module_path.is_empty() {
+                Some(item_name)
+            } else {
+                Some(format!("{}::{}", module_path, item_name))
+            }
+        })
+        .collect();
+        candidates.sort();
+        candidates.dedup();
+        if candidates.len() == 1 {
+            candidates.into_iter().next()
+        } else {
+            None
+        }
+    }
+
     fn resolve_missing_stub_concrete_alias_target(
         &self,
         rust_name: &str,
         cpp_name: &str,
     ) -> Option<String> {
+        // Treat qualifier-family variants as aliases of the canonical emitted
+        // surface whenever a sibling spelling is available.
+        for candidate in Self::qualifier_family_siblings(rust_name) {
+            if candidate.starts_with("rusty_is_send_") || candidate.starts_with("rusty_is_sync_") {
+                return Some(format!("rusty::{}", candidate));
+            }
+            if let Some(path) = self.resolve_unique_public_type_item_path(&candidate) {
+                return Some(path);
+            }
+        }
+
         if let Some(container_alias_target) =
             Self::unqualified_vector_alias_target_from_rust_cpp_name(rust_name, cpp_name)
         {
@@ -68785,6 +68942,44 @@ pub fn b() -> *mut u32 {
     }
 
     #[test]
+    fn test_normalize_typed_null_pointer_return_pointees_rewrites_mut_pointer_mismatch() {
+        let input = r#"
+pub extern "C" fn nc_get_new_order_requests(par_id: i32) -> *mut vector_vector_int {
+    return std::ptr::null_mut::<par_id>();
+}
+"#;
+        let normalized = AstCodeGen::normalize_typed_null_pointer_return_pointees(input);
+        assert!(
+            normalized.contains("return std::ptr::null_mut::<vector_vector_int>();"),
+            "typed-null-pointer return normalization should align null-mut pointee with function return type, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_typed_null_pointer_return_pointees_rewrites_const_pointer_mismatch() {
+        let input = r#"
+pub fn bad_const_ptr(flag: bool) -> *const Foo {
+    if flag {
+        return std::ptr::null::<bar>();
+    }
+    return std::ptr::null::<Foo>();
+}
+"#;
+        let normalized = AstCodeGen::normalize_typed_null_pointer_return_pointees(input);
+        assert!(
+            normalized.contains("return std::ptr::null::<Foo>();"),
+            "typed-null-pointer return normalization should align null pointee with function return type, got:\n{}",
+            normalized
+        );
+        assert!(
+            !normalized.contains("return std::ptr::null::<bar>();"),
+            "typed-null-pointer return normalization should remove mismatched null pointees, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
     fn test_normalize_read_unaligned_assignment_stores_rewrites_invalid_store_shape() {
         let input = r#"
 unsafe { std::ptr::read_unaligned((out as *mut u32) as *const u32) = ((h1) as u32); std::ptr::read_unaligned((out as *mut u32) as *const u32) };
@@ -70070,6 +70265,38 @@ pub mod testing {
                 "pub type vector_unique_ptr = std_vector<std_unique_ptr<std::ffi::c_void>>;"
             ),
             "missing stub generation should map bare vector_unique_ptr names to a generic std_unique_ptr<c_void> element specialization, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_qualifier_family_aliases_constclass_variant_to_known_sibling() {
+        let mut codegen = AstCodeGen::new();
+        codegen.output = r#"
+pub mod rusty {
+    pub struct rusty_is_send_classrrr_PollThread_ {
+        _opaque: [u8; 1],
+    }
+}
+"#
+        .to_string();
+        codegen.used_types.insert(
+            "rusty_is_send_constclassrrr_PollThread_".to_string(),
+            "rusty::is::send::constclassrrr::PollThread::".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            code.contains(
+                "pub type rusty_is_send_constclassrrr_PollThread_ = rusty::rusty_is_send_classrrr_PollThread_;"
+            ),
+            "missing stub generation should alias qualifier-family constclass variants to emitted sibling paths (including module qualification) instead of emitting opaque placeholders, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct rusty_is_send_constclassrrr_PollThread_ {"),
+            "missing stub generation should avoid opaque placeholders when a qualifier-family sibling type exists, got:\n{}",
             code
         );
     }

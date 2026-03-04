@@ -15,6 +15,7 @@
 - [9. Expression Mapping](#9-expression-mapping)
 - [9.7 Rusty wrapper call normalization](#97-rusty-wrapper-call-normalization)
 - [9.8 Namespace alias target normalization](#98-namespace-alias-target-normalization)
+- [9.9 Typed null pointer return pointee normalization](#99-typed-null-pointer-return-pointee-normalization)
 - [10. Templates and Instantiation Strategy](#10-templates-and-instantiation-strategy)
 - [11. Runtime and Preamble Integration](#11-runtime-and-preamble-integration)
 - [12. Extension Guide for Contributors](#12-extension-guide-for-contributors)
@@ -448,6 +449,19 @@ Auto-exported namespace aliases are normalized before emission. Current rule:
 - `rusty::String` -> `std::string::String`
 
 This keeps generated top-level aliases std-native and avoids re-introducing rusty-cpp wrapper names in otherwise safe/std lowered output.
+
+### 9.9 Typed null pointer return pointee normalization
+
+Source: `normalize_typed_null_pointer_return_pointees` in `crates/fragile-clang/src/ast_codegen.rs`.
+
+Late degraded rewrites can produce mismatched typed-null returns such as:
+
+- function signature: `-> *mut T`
+- body line: `return std::ptr::null_mut::<U>();`
+
+where `U` is not the function return pointee (for example a parameter-name artifact).
+
+The normalization pass walks emitted function bodies and rewrites typed `null`/`null_mut` return pointees to match the enclosing function signature pointee. This keeps fallback returns type-correct without adding source-project-specific rules.
 
 ## 10. Templates and Instantiation Strategy
 
