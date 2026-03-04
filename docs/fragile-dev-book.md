@@ -153,6 +153,9 @@ Generic normalizations added in this replay cycle:
   - `fragile-ast-exporter` now forwards parser extra args via `-extra-arg-before=` so compile-mode flags land before the source file from `compile_commands.json`.
   - `LibToolingParser` normalizes `-x`/`-std` overrides into the generated compile command and strips them from appended extra args.
   - this removes noisy Clang warnings like `'-x c++' after last input file has no effect` during drop-in builds.
+- `normalize_rusty_type_alias_rhs_paths` late rerun:
+  - `AstCodeGen::generate` now re-runs Rusty alias RHS normalization at the end of the pipeline.
+  - this catches Rusty wrapper aliases appended by late unresolved-closure/degraded fallback passes and keeps final alias targets std-native where generic mapping exists.
 
 Outcome snapshot:
 
@@ -460,6 +463,8 @@ Auto-exported namespace aliases are normalized before emission. Representative r
 - `rusty::RefCell<T>` / `rusty::UnsafeCell<T>` -> `std::cell::RefCell<T>` / `std::cell::UnsafeCell<T>`
 
 This keeps generated top-level aliases std-native and avoids re-introducing rusty-cpp wrapper names in otherwise safe/std lowered output.
+
+`generate` applies Rusty alias RHS normalization both in the main normalization chain and again at the end of the pipeline. The second sweep is intentional: late unresolved-reference closure and degraded fallback passes can append new `type` items after the first sweep.
 
 ### 9.9 Typed null pointer return pointee normalization
 
@@ -1007,6 +1012,7 @@ Namespace alias target normalization must reuse the same Rusty-wrapper mapping l
   - `rusty::RefMut<T>` / `RefMut<T>` -> `std::cell::RefMut<T>`
 - Alias fallback emitters now also run the same normalization step (`generate_type_alias`, unresolved namespaced/lowercase alias synthesis, and template-instantiation alias bridges), so `pub type ... = rusty::...` RHS paths are normalized consistently wherever aliases are emitted.
 - Added a late textual alias-RHS normalization pass over emitted `type` items so Rusty wrapper RHS spellings are normalized even when produced by alternate/degraded alias emitters (for example `pub type Barrier = rusty::Barrier; -> pub type Barrier = std::sync::Barrier;`), while unmapped Rusty spellings remain unchanged.
+- `AstCodeGen::generate` now performs a final alias-RHS normalization sweep immediately before returning output so aliases appended by late unresolved-closure/fallback passes are normalized too.
 - Lowered Rusty thread spellings in namespace exports are normalized as well (for example `rusty::thread::rusty_thread_JoinHandle_void_ -> std::thread::JoinHandle<()>`).
 - Normalization preserves explicit Rust function-pointer template arguments (for example `Option<extern "C" fn(...) -> ...>`) instead of re-parsing/mangling them through C++ named-type lowering.
 - Non-template Rusty sync primitives with direct std equivalents are normalized as well (`rusty::{Barrier, Condvar, Once, WaitTimeoutResult}` and `rusty::sync::{Barrier, Condvar, Once, WaitTimeoutResult}`).

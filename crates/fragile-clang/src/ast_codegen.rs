@@ -16104,6 +16104,11 @@ impl AstCodeGen {
         // Degraded pointer fallback normalization can strand typed null returns
         // with mismatched pointees (`null_mut::<param_name>()` in `-> *mut T`).
         output = Self::normalize_typed_null_pointer_return_pointees(&output);
+        // Late unresolved-closure and degraded fallback passes can append fresh
+        // `type` aliases after the early alias-rhs normalization stage.
+        // Re-run Rusty wrapper alias normalization so final output keeps std
+        // alias targets wherever generic mapping exists.
+        output = Self::normalize_rusty_type_alias_rhs_paths(&output);
         output
     }
 
@@ -75325,6 +75330,24 @@ pub type TrySendError = rusty::sync::mpsc::TrySendError;
             output.contains("pub type Scope = rusty::thread::Scope;")
                 && output.contains("pub type TrySendError = std::sync::mpsc::TrySendError;"),
             "rusty alias rhs normalization should keep unmapped targets and rewrite mapped targets, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rusty_type_alias_rhs_paths_rewrites_visibility_variants_and_preserves_tails() {
+        let input = r#"
+pub type Seed = u32;
+pub(super) type LateRecv = rusty::sync::mpsc::RecvError;
+pub(self) type LateTrySend = rusty::sync::mpsc::TrySendError; // tail
+"#;
+        let output = AstCodeGen::normalize_rusty_type_alias_rhs_paths(input);
+        assert!(
+            output.contains("pub(super) type LateRecv = std::sync::mpsc::RecvError;")
+                && output.contains(
+                    "pub(self) type LateTrySend = std::sync::mpsc::TrySendError; // tail"
+                ),
+            "rusty alias rhs normalization should rewrite visibility variants and preserve trailing content, got:\n{}",
             output
         );
     }
