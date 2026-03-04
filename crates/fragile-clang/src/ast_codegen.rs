@@ -7575,8 +7575,69 @@ impl AstCodeGen {
             }
         }
 
-        fn safe_default_expr_for_return_type(return_ty: &str) -> Option<String> {
-            let ty = return_ty.trim();
+        fn collect_simple_type_aliases(code: &str) -> HashMap<String, String> {
+            let mut aliases = HashMap::new();
+            for line in code.lines() {
+                let trimmed = line.trim_start();
+                let rest = [
+                    "pub type ",
+                    "pub(crate) type ",
+                    "pub(super) type ",
+                    "type ",
+                ]
+                .iter()
+                .find_map(|prefix| trimmed.strip_prefix(prefix));
+                let Some(rest) = rest else {
+                    continue;
+                };
+                let Some((lhs, rhs)) = rest.split_once('=') else {
+                    continue;
+                };
+                let alias_name: String = lhs
+                    .trim()
+                    .chars()
+                    .take_while(|ch| AstCodeGen::is_identifier_char(*ch) || *ch == '#')
+                    .collect();
+                let alias_name = alias_name.trim_start_matches("r#").trim();
+                if alias_name.is_empty() {
+                    continue;
+                }
+                let rhs_ty = rhs.split(';').next().unwrap_or("").trim();
+                if rhs_ty.is_empty() {
+                    continue;
+                }
+                aliases.insert(alias_name.to_string(), rhs_ty.to_string());
+            }
+            aliases
+        }
+
+        fn resolve_simple_type_alias(ty: &str, aliases: &HashMap<String, String>) -> String {
+            let mut current = ty.trim().to_string();
+            for _ in 0..8 {
+                let lookup = current.trim().trim_start_matches("::");
+                if lookup.is_empty() {
+                    break;
+                }
+                let terminal = lookup.rsplit("::").next().unwrap_or(lookup).trim();
+                let next = aliases.get(lookup).or_else(|| aliases.get(terminal));
+                let Some(next_ty) = next else {
+                    break;
+                };
+                let next_trimmed = next_ty.trim();
+                if next_trimmed.is_empty() || next_trimmed == current.trim() {
+                    break;
+                }
+                current = next_trimmed.to_string();
+            }
+            current
+        }
+
+        fn safe_default_expr_for_return_type(
+            return_ty: &str,
+            aliases: &HashMap<String, String>,
+        ) -> Option<String> {
+            let resolved = resolve_simple_type_alias(return_ty, aliases);
+            let ty = resolved.trim();
             if ty.is_empty() {
                 return None;
             }
@@ -7610,6 +7671,7 @@ impl AstCodeGen {
         }
 
         let defined_names = collect_defined_names(code);
+        let type_aliases = collect_simple_type_aliases(code);
         let mut brace_depth: isize = 0;
         let mut current_fn_return: Option<(isize, String)> = None;
         let mut out = String::with_capacity(code.len());
@@ -7629,7 +7691,7 @@ impl AstCodeGen {
                         let fallback = current_fn_return
                             .as_ref()
                             .and_then(|(_, return_ty)| {
-                                safe_default_expr_for_return_type(return_ty)
+                                safe_default_expr_for_return_type(return_ty, &type_aliases)
                             })
                             .unwrap_or_else(|| unknown_return_fallback_panic_expr().to_string());
                         out.push_str(indent);
@@ -75770,8 +75832,8 @@ pub fn XXH32_reset() -> UnknownTagEnumType {
 "#;
         let output = AstCodeGen::normalize_unresolved_const_like_identifier_returns(input);
         assert!(
-            output.contains("return panic!(\"fragile: missing safe default for return type\");"),
-            "missing const-like return identifiers should degrade to panic fallbacks when return lane inference is unavailable, got:\n{}",
+            output.contains("return 0;"),
+            "type-alias return lanes should resolve to safe defaults when possible, got:\n{}",
             output
         );
         assert!(
@@ -75825,6 +75887,14 @@ pub fn opaque_mode_namespaced() -> crate::UnknownTagAutoType {
 }
 pub fn opaque_result_namespaced() -> std::result::Result<crate::UnknownTagAutoType, i32> {
     return MISSING_OPAQUE_RESULT_NAMESPACED;
+}
+pub type AliasI32 = i32;
+pub fn alias_mode() -> AliasI32 {
+    return MISSING_ALIAS;
+}
+pub type AliasResult = std::result::Result<i32, i32>;
+pub fn alias_result() -> AliasResult {
+    return MISSING_ALIAS_RESULT;
 }
 "#;
         let output = AstCodeGen::normalize_unresolved_const_like_identifier_returns(input);
@@ -75896,6 +75966,16 @@ pub fn opaque_result_namespaced() -> std::result::Result<crate::UnknownTagAutoTy
         assert!(
             output.contains("pub fn opaque_result_namespaced() -> std::result::Result<crate::UnknownTagAutoType, i32> {\n    return Ok(panic!(\"fragile: missing safe default for return type\"));\n}"),
             "namespaced placeholder Result<T, E> ok lanes should degrade to Ok(panic!(...)) instead of unsafe zeroed, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn alias_mode() -> AliasI32 {\n    return 0;\n}"),
+            "simple primitive type aliases should resolve to safe defaults, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn alias_result() -> AliasResult {\n    return Ok(0);\n}"),
+            "Result aliases should resolve to safe Ok-lane defaults, got:\n{}",
             output
         );
         assert!(

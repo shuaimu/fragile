@@ -124,6 +124,7 @@ Generic normalizations added in this replay cycle:
   - rewrites unresolved identifier `.join();` statements to no-op.
 - `normalize_unresolved_const_like_identifier_returns` refinement:
   - when unresolved all-caps identifiers are returned (`return XXH_OK;`) and no definition survives, prefer safe typed defaults for known return lanes (`0`, `false`, `std::ptr::null[_mut]()`, `None`) and fall back to `panic!(...)` when no safe lane inference is available.
+  - resolve simple local type aliases in return signatures (`type Alias = i32; fn f() -> Alias`) before choosing fallback lanes, so alias-backed primitive and `Result` returns degrade to safe concrete defaults instead of panic-only fallbacks.
   - recognize namespaced option lanes (`std::option::Option<...>`, `core::option::Option<...>`, `rusty::Option<...>`) as safe-`None` candidates so unresolved returns in those signatures avoid `unsafe { std::mem::zeroed() }`.
   - recognize `Result`-like return lanes (`std/core/rusty Result<Ok, Err>` and `std::fmt::Result`) and rewrite unresolved const-like returns to `Ok(<safe_default>)` (or `Ok(())`), using `Ok(panic!(...))` when the `Ok` lane has no safe concrete default.
   - for reference return lanes (`&T`, `&mut T`) where no concrete safe value can be synthesized, rewrite to a `panic!(...)` fallback instead of `unsafe { std::mem::zeroed() }`.
