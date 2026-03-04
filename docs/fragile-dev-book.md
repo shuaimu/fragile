@@ -121,12 +121,16 @@ Generic normalizations added in this replay cycle:
   - casts static integer-array elements into declared element lanes.
 - `normalize_bare_identifier_expression_statements`:
   - rewrites bare identifier statements (`v;`) to borrow no-ops.
+- `normalize_placeholder_struct_invocation_artifacts` expansion:
+  - rewrites placeholder-struct call artifacts with argument lists (`placeholder(...)`) to `placeholder::default()` (existing zero-arg rewrite retained), avoiding Rust value-namespace call failures when degraded lowering emits placeholder types like `make_pair`.
 - `normalize_invalid_placeholder_type_item_names`:
   - removes invalid `_`-named struct/enum/union items and their impls.
 - `normalize_vector_capacity_call_argument_widths`:
   - casts `.reserve(...)` / `.resize(...)` call args to `i32` while skipping `self.inner.*` implementation calls.
 - `normalize_unresolved_join_method_calls`:
   - rewrites unresolved identifier `.join();` statements to no-op.
+- `normalize_global_range_for_paths_to_unsafe_borrows`:
+  - wraps rooted prefixed-global range expressions (`for x in super::mod::__gv_name { ... }`) as borrowed unsafe reads (`for x in &(unsafe { super::mod::__gv_name }) { ... }`) so iteration does not move from mutable statics and satisfies Rust unsafe access rules.
 - switch lowering (`generate_switch_stmt`) no-default fallback arm:
   - emits typed wildcard arm `_ => { unsafe { std::mem::zeroed::<_>() } }` instead of `_ => unsafe { std::mem::zeroed() },` to preserve Rust match arm typing.
 - `normalize_struct_default_clone_derives` refinement:
@@ -977,7 +981,7 @@ Namespace alias target normalization must reuse the same Rusty-wrapper mapping l
 - Wrapper aliases now normalize to Rust std paths consistently.
 - Non-rusty namespaced aliases (for example `testing::internal::Visible`) are preserved as-is, avoiding accidental namespace mangling.
 - Nested Rusty namespace spellings (for example `rusty::sync::Weak<T>`, `rusty::rc::Weak<T>`, `rusty::collections::HashMap<K, V>`) are normalized through the same shared path.
-- Rusty thread/channel spellings now normalize as well (for example `rusty::thread::JoinHandle<T>`, `rusty::sync::mpsc::{Sender<T>, Receiver<T>, Unit, RecvError, TryRecvError}`), with `JoinHandle<void>` mapped to `std::thread::JoinHandle<()>`.
+- Rusty thread/channel spellings now normalize as well (for example `rusty::thread::JoinHandle<T>`, `rusty::sync::mpsc::{Sender<T>, Receiver<T>, Unit, RecvError, TryRecvError, TrySendError}`), with `JoinHandle<void>` mapped to `std::thread::JoinHandle<()>`.
 - Rusty collection wrappers now tolerate extra C++ comparator/hasher/allocator template arguments while mapping to Rust std primary parameters:
   - `rusty::{Vec, VecDeque, HashSet, BTreeSet}<T, ...>` -> std one-parameter forms
   - `rusty::{HashMap, BTreeMap}<K, V, ...>` -> std two-parameter forms

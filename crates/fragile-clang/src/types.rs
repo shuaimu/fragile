@@ -361,6 +361,9 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         "rusty::sync::mpsc::TryRecvError" => {
             return Some("std::sync::mpsc::TryRecvError".to_string());
         }
+        "rusty::sync::mpsc::TrySendError" => {
+            return Some("std::sync::mpsc::TrySendError".to_string());
+        }
         // `using namespace rusty;` can leave aliases unqualified in Clang spellings.
         "String" => return Some("std::string::String".to_string()),
         _ => {}
@@ -2186,6 +2189,10 @@ mod tests {
             "std::sync::mpsc::TryRecvError"
         );
         assert_eq!(
+            CppType::Named("rusty::sync::mpsc::TrySendError".to_string()).to_rust_type_str(),
+            "std::sync::mpsc::TrySendError"
+        );
+        assert_eq!(
             CppType::Named("rusty::sync::Mutex<int>::Guard".to_string()).to_rust_type_str(),
             "std::sync::MutexGuard<i32>"
         );
@@ -2289,6 +2296,10 @@ mod tests {
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::sync::mpsc::Sender<int>"),
             "std::sync::mpsc::Sender<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::sync::mpsc::TrySendError"),
+            "std::sync::mpsc::TrySendError"
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::sync::Mutex<int>::Guard"),

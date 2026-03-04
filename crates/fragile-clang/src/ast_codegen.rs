@@ -8228,9 +8228,8 @@ impl AstCodeGen {
         }
 
         fn replace_placeholder_calls(line: &str, placeholder: &str) -> String {
-            let needle = format!("{}()", placeholder);
+            let needle = format!("{}(", placeholder);
             let replacement = format!("{}::default()", placeholder);
-            let qualified_tail = format!("::{}", placeholder);
             let mut rewritten = line.to_string();
             let mut search_from = 0usize;
 
@@ -8239,6 +8238,12 @@ impl AstCodeGen {
                     break;
                 };
                 let call_idx = search_from + rel_idx;
+                let open_paren_idx = call_idx + placeholder.len();
+                let Some(close_paren_idx) =
+                    AstCodeGen::find_matching_close_paren(&rewritten, open_paren_idx)
+                else {
+                    break;
+                };
 
                 let mut start = call_idx;
                 while start > 0 {
@@ -8258,24 +8263,22 @@ impl AstCodeGen {
 
                 // Preserve function declarations like `pub fn default() -> ...`.
                 if matches!(previous_ident_token(&rewritten, start), Some("fn")) {
-                    search_from = call_idx + needle.len();
+                    search_from = close_paren_idx + 1;
                     continue;
                 }
 
-                // Only rewrite exact placeholder calls (`placeholder()`) or qualified
-                // path tails (`foo::bar::placeholder()`). Avoid suffix overmatches like
-                // `__fragile_extern_LZ4_create_size()` when placeholder is `_size`.
-                let callee = &rewritten[start..call_idx];
-                let has_qualified_path_prefix = callee.ends_with("::");
-                if callee != placeholder
-                    && !callee.ends_with(&qualified_tail)
-                    && !has_qualified_path_prefix
-                {
-                    search_from = call_idx + needle.len();
+                // Only rewrite exact placeholder callees (`placeholder(...)`) or
+                // qualified path tails (`foo::bar::placeholder(...)`). Avoid suffix
+                // overmatches like `__fragile_extern_LZ4_create_size(...)` when the
+                // placeholder name is `_size`.
+                let callee = &rewritten[start..open_paren_idx];
+                let qualified_tail = format!("::{}", placeholder);
+                if callee != placeholder && !callee.ends_with(&qualified_tail) {
+                    search_from = close_paren_idx + 1;
                     continue;
                 }
 
-                let end = call_idx + needle.len();
+                let end = close_paren_idx + 1;
                 rewritten.replace_range(start..end, &replacement);
                 search_from = start + replacement.len();
             }
@@ -14206,6 +14209,78 @@ impl AstCodeGen {
         out
     }
 
+    fn normalize_global_range_for_paths_to_unsafe_borrows(code: &str) -> String {
+        fn is_prefixed_global_path(expr: &str) -> bool {
+            let trimmed = expr.trim();
+            if trimmed.is_empty() {
+                return false;
+            }
+            if trimmed.starts_with("&(unsafe {") || trimmed.starts_with("unsafe {") {
+                return false;
+            }
+            if !trimmed.contains("__gv_") && !trimmed.contains("__fsv_") {
+                return false;
+            }
+            if trimmed.contains('(')
+                || trimmed.contains(')')
+                || trimmed.contains('[')
+                || trimmed.contains(']')
+                || trimmed.contains('{')
+                || trimmed.contains('}')
+            {
+                return false;
+            }
+            trimmed
+                .chars()
+                .all(|ch| AstCodeGen::is_identifier_char(ch) || ch == ':')
+        }
+
+        if !code.contains("for ") || (!code.contains("__gv_") && !code.contains("__fsv_")) {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        for line in code.lines() {
+            let trimmed = line.trim_start();
+            if !trimmed.starts_with("for ") {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+
+            let Some(in_idx) = trimmed.find(" in ") else {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            };
+            let Some(body_idx) = trimmed.rfind(" {") else {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            };
+
+            let range_expr = trimmed[in_idx + 4..body_idx].trim();
+            if !is_prefixed_global_path(range_expr) {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+
+            let indent_len = line.len().saturating_sub(trimmed.len());
+            out.push_str(&line[..indent_len]);
+            out.push_str(&trimmed[..in_idx]);
+            out.push_str(" in &(unsafe { ");
+            out.push_str(range_expr);
+            out.push_str(" })");
+            out.push_str(&trimmed[body_idx..]);
+            out.push('\n');
+        }
+        if !code.ends_with('\n') && !out.is_empty() {
+            out.pop();
+        }
+        out
+    }
+
     /// Get a default value for a Rust type (used for uninitialized template variables)
     fn get_default_value_for_type(rust_ty: &str) -> String {
         fn parse_sized_array_type(type_str: &str) -> Option<(&str, &str)> {
@@ -16006,6 +16081,9 @@ impl AstCodeGen {
         // degraded qualified refs still use unprefixed tails (`...::name`).
         // Rewrite rooted path tails to the internal `...::__gv_name` symbol.
         output = Self::normalize_global_symbol_aliases_for_prefixed_statics(&output);
+        // `for .. in super::module::__gv_*` over mutable static globals needs an
+        // explicit unsafe read plus borrow to avoid moving out of static storage.
+        output = Self::normalize_global_range_for_paths_to_unsafe_borrows(&output);
         // Run unreferenced static-mut cleanup after global alias normalization:
         // rooted-path rewrites can materialize additional `__gv_*` references
         // (`...::name` -> `...::__gv_name`) that must count as live uses.
@@ -69417,8 +69495,16 @@ pub fn probe() {
             "alias normalization should rewrite rooted global path before static-use analysis, got:\n{}",
             normalized_aliases
         );
+        let normalized_ranges =
+            AstCodeGen::normalize_global_range_for_paths_to_unsafe_borrows(&normalized_aliases);
+        assert!(
+            normalized_ranges
+                .contains("for worker in &(unsafe { super::janus::__gv_pxs_workers_g }) {"),
+            "range-for normalization should wrap rewritten rooted global path in unsafe borrow, got:\n{}",
+            normalized_ranges
+        );
         let normalized =
-            AstCodeGen::normalize_unreferenced_static_mut_initializers(&normalized_aliases);
+            AstCodeGen::normalize_unreferenced_static_mut_initializers(&normalized_ranges);
         assert!(
             normalized.contains(
                 "pub(crate) static mut __gv_pxs_workers_g: vector_shared_ptr_PaxosWorker = unsafe { std::mem::zeroed() };"
@@ -69431,6 +69517,48 @@ pub fn probe() {
                 "pub(crate) static mut __gv_pxs_workers_g: std::mem::MaybeUninit<vector_shared_ptr_PaxosWorker> = std::mem::MaybeUninit::uninit();"
             ),
             "referenced global must not be downgraded to MaybeUninit after alias rewrite, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_global_range_for_paths_to_unsafe_borrows_wraps_prefixed_global_paths() {
+        let input = r#"
+pub fn probe() {
+    for worker in super::janus::__gv_pxs_workers_g {
+        worker;
+    }
+}
+"#;
+        let normalized = AstCodeGen::normalize_global_range_for_paths_to_unsafe_borrows(input);
+        assert!(
+            normalized.contains("for worker in &(unsafe { super::janus::__gv_pxs_workers_g }) {"),
+            "global range-for normalization should wrap rooted __gv_ paths with unsafe borrows, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_global_range_for_paths_to_unsafe_borrows_preserves_existing_unsafe_borrow() {
+        let input = r#"
+pub fn probe() {
+    for worker in &(unsafe { super::janus::__gv_pxs_workers_g }) {
+        worker;
+    }
+}
+"#;
+        let normalized = AstCodeGen::normalize_global_range_for_paths_to_unsafe_borrows(input);
+        assert!(
+            normalized.contains("for worker in &(unsafe { super::janus::__gv_pxs_workers_g }) {"),
+            "global range-for normalization should preserve already-wrapped unsafe global borrows, got:\n{}",
+            normalized
+        );
+        assert_eq!(
+            normalized
+                .matches("for worker in &(unsafe { super::janus::__gv_pxs_workers_g }) {")
+                .count(),
+            1,
+            "global range-for normalization must not duplicate wrapping, got:\n{}",
             normalized
         );
     }
@@ -75186,17 +75314,17 @@ pub type WaitTimeoutResult = rusty::WaitTimeoutResult;
     }
 
     #[test]
-    fn test_normalize_rusty_type_alias_rhs_paths_preserves_unmapped_rusty_targets() {
+    fn test_normalize_rusty_type_alias_rhs_paths_preserves_unmapped_rusty_targets_and_rewrites_trysenderror(
+    ) {
         let input = r#"
 pub type Scope = rusty::thread::Scope;
-pub type TrySendError = rusty::sync::mpsc::TrySendError; // no std equivalent shape
+pub type TrySendError = rusty::sync::mpsc::TrySendError;
 "#;
         let output = AstCodeGen::normalize_rusty_type_alias_rhs_paths(input);
         assert!(
             output.contains("pub type Scope = rusty::thread::Scope;")
-                && output
-                    .contains("pub type TrySendError = rusty::sync::mpsc::TrySendError; // no std equivalent shape"),
-            "rusty alias rhs normalization should keep unmapped targets unchanged, got:\n{}",
+                && output.contains("pub type TrySendError = std::sync::mpsc::TrySendError;"),
+            "rusty alias rhs normalization should keep unmapped targets and rewrite mapped targets, got:\n{}",
             output
         );
     }
@@ -75758,6 +75886,33 @@ pub struct get_sharding_policy_cache {
     }
 
     #[test]
+    fn test_normalize_placeholder_struct_invocation_artifacts_rewrites_placeholder_calls_with_args(
+    ) {
+        let input = r#"
+pub fn probe(log: *const i8, len: i32, par_id: u32) {
+    let mut paxos_entry = super::make_pair(&mut log, &mut super::make_pair(&mut len, &mut par_id));
+}
+
+/// Placeholder for C++ `make::pair`
+#[repr(C)]
+pub struct make_pair {
+    _opaque: [u8; 64],
+}
+"#;
+        let output = AstCodeGen::normalize_placeholder_struct_invocation_artifacts(input);
+        assert!(
+            output.contains("let mut paxos_entry = make_pair::default();"),
+            "placeholder-call normalization should rewrite placeholder invocations with arguments to concrete placeholder defaults, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("make_pair(&mut"),
+            "placeholder-call normalization must eliminate non-callable placeholder argument invocations, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
     fn test_normalize_placeholder_struct_invocation_artifacts_skips_ctor_like_placeholders() {
         let input = r#"
 pub fn probe() {
@@ -76299,6 +76454,10 @@ pub mod rusty {
         assert_eq!(
             AstCodeGen::normalize_namespace_alias_target("rusty::sync::mpsc::TryRecvError"),
             "std::sync::mpsc::TryRecvError"
+        );
+        assert_eq!(
+            AstCodeGen::normalize_namespace_alias_target("rusty::sync::mpsc::TrySendError"),
+            "std::sync::mpsc::TrySendError"
         );
         assert_eq!(
             AstCodeGen::normalize_namespace_alias_target("rusty::sync::mpsc::Unit"),
