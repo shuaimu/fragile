@@ -3711,6 +3711,9 @@ impl AstCodeGen {
         }
 
         for struct_name in needs_default {
+            if Self::is_external_std_core_alloc_type_path(&struct_name) {
+                continue;
+            }
             if out.contains(&format!("impl Default for {} {{", struct_name)) {
                 continue;
             }
@@ -3724,6 +3727,9 @@ impl AstCodeGen {
         }
 
         for struct_name in needs_clone {
+            if Self::is_external_std_core_alloc_type_path(&struct_name) {
+                continue;
+            }
             if out.contains(&format!("impl Clone for {} {{", struct_name)) {
                 continue;
             }
@@ -3744,36 +3750,68 @@ impl AstCodeGen {
     fn normalize_add_missing_struct_default_clone_impls(code: &str) -> String {
         fn collect_flat_type_alias_targets(code: &str) -> HashMap<String, String> {
             let mut aliases: HashMap<String, String> = HashMap::new();
+            let mut depth: i32 = 0;
+            let mut module_stack: Vec<(i32, String)> = Vec::new();
             for line in code.lines() {
+                while module_stack
+                    .last()
+                    .is_some_and(|(start_depth, _)| *start_depth > depth)
+                {
+                    module_stack.pop();
+                }
+
                 let trimmed = line.trim_start();
-                let Some(rest) = trimmed
+                if let Some(rest) = trimmed
                     .strip_prefix("pub type ")
                     .or_else(|| trimmed.strip_prefix("type "))
-                else {
-                    continue;
-                };
-                let Some((lhs, rhs)) = rest.split_once('=') else {
-                    continue;
-                };
-                let alias = lhs.trim().trim_start_matches("r#");
-                if alias.is_empty()
-                    || !alias.chars().all(AstCodeGen::is_identifier_char)
-                    || alias.contains('<')
                 {
-                    continue;
+                    if let Some((lhs, rhs)) = rest.split_once('=') {
+                        let alias = lhs.trim().trim_start_matches("r#");
+                        if !alias.is_empty()
+                            && alias.chars().all(AstCodeGen::is_identifier_char)
+                            && !alias.contains('<')
+                        {
+                            let target = rhs.trim().trim_end_matches(';').trim();
+                            if !target.is_empty()
+                                && !target.contains('<')
+                                && !target.contains('[')
+                                && !target.contains('(')
+                            {
+                                let normalized_target =
+                                    target.trim_start_matches("crate::").to_string();
+                                aliases.insert(alias.to_string(), normalized_target.clone());
+                                if !module_stack.is_empty() {
+                                    let module_path: Vec<&str> = module_stack
+                                        .iter()
+                                        .map(|(_, module_name)| module_name.as_str())
+                                        .collect();
+                                    let qualified_alias =
+                                        format!("{}::{}", module_path.join("::"), alias);
+                                    aliases.insert(qualified_alias, normalized_target);
+                                }
+                            }
+                        }
+                    }
                 }
-                let target = rhs.trim().trim_end_matches(';').trim();
-                if target.is_empty()
-                    || target.contains('<')
-                    || target.contains('[')
-                    || target.contains('(')
+
+                let declared_module = AstCodeGen::parse_module_decl_info(line);
+                let open_count = line.chars().filter(|&ch| ch == '{').count() as i32;
+                let close_count = line.chars().filter(|&ch| ch == '}').count() as i32;
+                if let Some((module_name, _)) = declared_module {
+                    if open_count > 0 {
+                        module_stack.push((depth + 1, module_name));
+                    }
+                }
+                depth += open_count - close_count;
+                if depth < 0 {
+                    depth = 0;
+                }
+                while module_stack
+                    .last()
+                    .is_some_and(|(start_depth, _)| *start_depth > depth)
                 {
-                    continue;
+                    module_stack.pop();
                 }
-                aliases.insert(
-                    alias.to_string(),
-                    target.trim_start_matches("crate::").to_string(),
-                );
             }
             aliases
         }
@@ -3785,11 +3823,7 @@ impl AstCodeGen {
                 if current.is_empty() || !seen.insert(current.clone()) {
                     break;
                 }
-                let leaf = current.rsplit("::").next().unwrap_or("");
-                let next = aliases
-                    .get(&current)
-                    .or_else(|| aliases.get(leaf))
-                    .cloned();
+                let next = aliases.get(&current).cloned();
                 let Some(next) = next else {
                     break;
                 };
@@ -4029,6 +4063,8 @@ impl AstCodeGen {
                         };
                         let canonical_struct_name =
                             resolve_alias_target(&qualified_struct_name, &alias_targets);
+                        let canonical_struct_is_external =
+                            Self::is_external_std_core_alloc_type_path(&canonical_struct_name);
                         let module_path_root_accessible = module_stack
                             .last()
                             .is_none_or(|(_, _, accessible)| *accessible);
@@ -4037,6 +4073,7 @@ impl AstCodeGen {
                             && !disallowed_struct_name
                             && !is_private_struct
                             && module_path_root_accessible
+                            && !canonical_struct_is_external
                         {
                             let derives_default = derived.contains("Default");
                             let derives_clone = derived.contains("Clone");
@@ -4052,6 +4089,7 @@ impl AstCodeGen {
                             && !disallowed_struct_name
                             && !is_private_struct
                             && module_path_root_accessible
+                            && !canonical_struct_is_external
                         {
                             if let Some(field_names) =
                                 collect_struct_field_names_for_default(&lines, line_idx)
@@ -4114,6 +4152,9 @@ impl AstCodeGen {
         }
 
         for struct_name in needs_default {
+            if Self::is_external_std_core_alloc_type_path(&struct_name) {
+                continue;
+            }
             if existing_default_impls.contains(&struct_name)
                 || out.contains(&format!("impl Default for {} {{", struct_name))
             {
@@ -4143,6 +4184,9 @@ impl AstCodeGen {
         }
 
         for struct_name in needs_clone {
+            if Self::is_external_std_core_alloc_type_path(&struct_name) {
+                continue;
+            }
             if existing_clone_impls.contains(&struct_name)
                 || out.contains(&format!("impl Clone for {} {{", struct_name))
             {
@@ -4180,6 +4224,16 @@ impl AstCodeGen {
 
     fn is_identifier_char(ch: char) -> bool {
         ch.is_ascii_alphanumeric() || ch == '_'
+    }
+
+    fn is_external_std_core_alloc_type_path(path: &str) -> bool {
+        let normalized = path
+            .trim()
+            .trim_start_matches("crate::")
+            .trim_start_matches("::");
+        normalized.starts_with("std::")
+            || normalized.starts_with("core::")
+            || normalized.starts_with("alloc::")
     }
 
     fn split_top_level_list<'a>(input: &'a str, separator: char) -> Vec<&'a str> {
@@ -69246,6 +69300,33 @@ pub struct ScopedThread {
     }
 
     #[test]
+    fn test_normalize_add_missing_struct_default_clone_impls_does_not_leaf_alias_nested_structs_to_std_paths(
+    ) {
+        let input = r#"
+pub type Barrier = std::sync::Barrier;
+
+pub mod janus {
+    pub struct Barrier {
+        pub inner: i32,
+    }
+}
+"#;
+        let normalized = AstCodeGen::normalize_add_missing_struct_default_clone_impls(input);
+        assert!(
+            normalized.contains("impl Default for janus::Barrier {")
+                && normalized.contains("impl Clone for janus::Barrier {"),
+            "leaf alias normalization should not redirect nested structs away from their local paths, got:\n{}",
+            normalized
+        );
+        assert!(
+            !normalized.contains("impl Default for std::sync::Barrier {")
+                && !normalized.contains("impl Clone for std::sync::Barrier {"),
+            "fallback impl synthesis should never target std paths via unrelated leaf aliases, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
     fn test_normalize_add_missing_struct_default_clone_impls_skips_private_and_existing_impls() {
         let input = r#"
 pub mod fragile_runtime {
@@ -75688,6 +75769,22 @@ pub mod rusty {
                 "rusty::thread::rusty_thread_JoinHandle_void_"
             ),
             "std::thread::JoinHandle<()>"
+        );
+        assert_eq!(
+            AstCodeGen::normalize_namespace_alias_target("rusty::Barrier"),
+            "std::sync::Barrier"
+        );
+        assert_eq!(
+            AstCodeGen::normalize_namespace_alias_target("rusty::Condvar"),
+            "std::sync::Condvar"
+        );
+        assert_eq!(
+            AstCodeGen::normalize_namespace_alias_target("rusty::Once"),
+            "std::sync::Once"
+        );
+        assert_eq!(
+            AstCodeGen::normalize_namespace_alias_target("rusty::WaitTimeoutResult"),
+            "std::sync::WaitTimeoutResult"
         );
     }
 

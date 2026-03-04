@@ -269,6 +269,16 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
     match cleaned {
         "rusty::String" => return Some("std::string::String".to_string()),
         "rusty::string::String" => return Some("std::string::String".to_string()),
+        "rusty::Barrier" | "rusty::sync::Barrier" => {
+            return Some("std::sync::Barrier".to_string());
+        }
+        "rusty::Condvar" | "rusty::sync::Condvar" => {
+            return Some("std::sync::Condvar".to_string());
+        }
+        "rusty::Once" | "rusty::sync::Once" => return Some("std::sync::Once".to_string()),
+        "rusty::WaitTimeoutResult" | "rusty::sync::WaitTimeoutResult" => {
+            return Some("std::sync::WaitTimeoutResult".to_string());
+        }
         "rusty::sync::mpsc::Unit" => return Some("()".to_string()),
         "rusty::sync::mpsc::RecvError" => return Some("std::sync::mpsc::RecvError".to_string()),
         "rusty::sync::mpsc::TryRecvError" => {
@@ -1853,6 +1863,22 @@ mod tests {
                 .to_rust_type_str(),
             "std::thread::JoinHandle<()>"
         );
+        assert_eq!(
+            CppType::Named("rusty::Barrier".to_string()).to_rust_type_str(),
+            "std::sync::Barrier"
+        );
+        assert_eq!(
+            CppType::Named("rusty::Condvar".to_string()).to_rust_type_str(),
+            "std::sync::Condvar"
+        );
+        assert_eq!(
+            CppType::Named("rusty::sync::Once".to_string()).to_rust_type_str(),
+            "std::sync::Once"
+        );
+        assert_eq!(
+            CppType::Named("rusty::WaitTimeoutResult".to_string()).to_rust_type_str(),
+            "std::sync::WaitTimeoutResult"
+        );
     }
 
     #[test]
@@ -1890,6 +1916,22 @@ mod tests {
                 "Option<extern \"C\" fn(*mut ReqHandle, *mut ()) -> ()>"
             ),
             "std::option::Option<extern \"C\" fn(*mut ReqHandle, *mut ()) -> ()>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::Barrier"),
+            "std::sync::Barrier"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::Condvar"),
+            "std::sync::Condvar"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::Once"),
+            "std::sync::Once"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::WaitTimeoutResult"),
+            "std::sync::WaitTimeoutResult"
         );
     }
 
