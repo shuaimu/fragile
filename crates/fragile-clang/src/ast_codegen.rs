@@ -211,9 +211,12 @@ fn is_placeholder_like_rust_type(ty: &str) -> bool {
 
 fn should_use_unknown_return_panic_fallback(return_ty: &str, default_expr: &str) -> bool {
     let expr = default_expr.trim();
+    let trimmed_ty = return_ty.trim();
     is_unsafe_zeroed_expr(expr)
         || (expr == "Default::default()"
-            && (is_plain_nominal_rust_type(return_ty) || is_placeholder_like_rust_type(return_ty)))
+            && (is_plain_nominal_rust_type(trimmed_ty)
+                || is_placeholder_like_rust_type(trimmed_ty)
+                || trimmed_ty.starts_with('&')))
 }
 
 /// Collect simple local Rust `type` aliases (`type A = B;`) for return-lane
@@ -75506,6 +75509,10 @@ pub fn Rusty() -> rusty::Result<i32, i32> {
 }
 pub fn CoreRooted() -> ::core::result::Result<i32, i32> {
 }
+pub fn RefResult() -> std::result::Result<&'static i32, i32> {
+}
+pub fn RefResultMut() -> std::result::Result<&'static mut i32, i32> {
+}
 pub fn OpaqueResult() -> std::result::Result<UnknownTagAutoType, i32> {
 }
 pub fn OpaqueResultNamespaced() -> std::result::Result<crate::UnknownTagAutoType, i32> {
@@ -75532,6 +75539,16 @@ pub fn OpaqueResultNamespaced() -> std::result::Result<crate::UnknownTagAutoType
         assert!(
             output.contains("pub fn CoreRooted() -> ::core::result::Result<i32, i32> {\n    Ok(0)\n}"),
             "empty non-unit body synthesis should use `Ok(...)` for rooted core::result::Result<T, E> returns, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn RefResult() -> std::result::Result<&'static i32, i32> {\n    Ok(panic!(\"fragile: missing safe default for return type\"))\n}"),
+            "empty non-unit body synthesis should avoid `Ok(Default::default())` for reference ok-lanes in Result<T, E>, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn RefResultMut() -> std::result::Result<&'static mut i32, i32> {\n    Ok(panic!(\"fragile: missing safe default for return type\"))\n}"),
+            "empty non-unit body synthesis should avoid `Ok(Default::default())` for mutable-reference ok-lanes in Result<T, E>, got:\n{}",
             output
         );
         assert!(
@@ -76005,6 +76022,9 @@ pub fn maybe_status_rusty() -> rusty::Result<i32, i32> {
 pub fn maybe_fmt() -> std::fmt::Result {
     return MISSING_FMT;
 }
+pub fn maybe_ref_status() -> std::result::Result<&'static i32, i32> {
+    return MISSING_REF_STATUS;
+}
 pub fn ref_mode() -> &'static i32 {
     return MISSING_REF;
 }
@@ -76071,6 +76091,11 @@ pub fn alias_result() -> AliasResult {
         assert!(
             output.contains("pub fn maybe_fmt() -> std::fmt::Result {\n    return Ok(());\n}"),
             "std::fmt::Result return types should degrade to safe Ok(()) defaults, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn maybe_ref_status() -> std::result::Result<&'static i32, i32> {\n    return Ok(panic!(\"fragile: missing safe default for return type\"));\n}"),
+            "Result<T, E> reference ok-lanes should degrade to Ok(panic!(...)) instead of Ok(Default::default()), got:\n{}",
             output
         );
         assert!(

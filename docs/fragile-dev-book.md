@@ -127,6 +127,7 @@ Generic normalizations added in this replay cycle:
   - resolve simple local type aliases in return signatures (`type Alias = i32; fn f() -> Alias`) before choosing fallback lanes, so alias-backed primitive and `Result` returns degrade to safe concrete defaults instead of panic-only fallbacks.
   - recognize namespaced option lanes (`std::option::Option<...>`, `core::option::Option<...>`, `rusty::Option<...>`) as safe-`None` candidates so unresolved returns in those signatures avoid `unsafe { std::mem::zeroed() }`.
   - recognize `Result`-like return lanes (`std/core/rusty Result<Ok, Err>` and `std::fmt::Result`) and rewrite unresolved const-like returns to `Ok(<safe_default>)` (or `Ok(())`), using `Ok(panic!(...))` when the `Ok` lane has no safe concrete default.
+  - treat reference-like `Result` ok lanes (`Result<&T, E>`, `Result<&mut T, E>`) as non-defaultable and rewrite unresolved const-like returns to `Ok(panic!(...))` instead of `Ok(Default::default())`.
   - for reference return lanes (`&T`, `&mut T`) where no concrete safe value can be synthesized, rewrite to a `panic!(...)` fallback instead of `unsafe { std::mem::zeroed() }`.
 - `get_default_value_for_type` pointer-lane refinement:
   - preserve raw-pointer mutability when synthesizing defaults (`*const T -> std::ptr::null()`, `*mut T -> std::ptr::null_mut()`), so const-pointer defaults remain type-correct safe values.
