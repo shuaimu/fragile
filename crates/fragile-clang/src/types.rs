@@ -268,6 +268,22 @@ fn map_single_template_alias_to_pointer(
     Some(format!("{}{}", pointer_prefix, mapped))
 }
 
+fn map_single_template_member_alias_to_std(
+    spelling: &str,
+    owner_prefix: &str,
+    member_suffix: &str,
+    std_path: &str,
+) -> Option<String> {
+    let owner = spelling.strip_suffix(member_suffix)?;
+    let inner = owner.strip_prefix(owner_prefix)?.strip_suffix('>')?;
+    let args = parse_template_args(inner);
+    if args.len() != 1 {
+        return None;
+    }
+    let mapped = map_alias_template_arg_to_rust(&args[0]);
+    Some(format!("{}<{}>", std_path, mapped))
+}
+
 fn is_explicit_rust_function_pointer_type(arg: &str) -> bool {
     let trimmed = arg.trim();
     trimmed.contains("extern \"C\" fn(")
@@ -357,6 +373,50 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         return Some(mapped);
     }
 
+    for (member_suffix, std_path, qualified_roots, unqualified_root) in [
+        (
+            "::Guard",
+            "std::sync::MutexGuard",
+            &["rusty::Mutex", "rusty::sync::Mutex"] as &[&str],
+            "Mutex",
+        ),
+        (
+            "::ReadGuard",
+            "std::sync::RwLockReadGuard",
+            &["rusty::RwLock", "rusty::sync::RwLock"] as &[&str],
+            "RwLock",
+        ),
+        (
+            "::WriteGuard",
+            "std::sync::RwLockWriteGuard",
+            &["rusty::RwLock", "rusty::sync::RwLock"] as &[&str],
+            "RwLock",
+        ),
+    ] {
+        for root in qualified_roots {
+            let owner_prefix = format!("{}<", root);
+            if let Some(mapped) = map_single_template_member_alias_to_std(
+                cleaned,
+                &owner_prefix,
+                member_suffix,
+                std_path,
+            ) {
+                return Some(mapped);
+            }
+        }
+        if root_is_unqualified {
+            let owner_prefix = format!("{}<", unqualified_root);
+            if let Some(mapped) = map_single_template_member_alias_to_std(
+                cleaned,
+                &owner_prefix,
+                member_suffix,
+                std_path,
+            ) {
+                return Some(mapped);
+            }
+        }
+    }
+
     for (prefix, std_path) in [
         ("rusty::sync::mpsc::Sender<", "std::sync::mpsc::Sender"),
         ("rusty::sync::mpsc::Receiver<", "std::sync::mpsc::Receiver"),
@@ -421,6 +481,21 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
             "RwLock",
             "std::sync::RwLock",
             &["rusty::RwLock", "rusty::sync::RwLock"] as &[&str],
+        ),
+        (
+            "PoisonError",
+            "std::sync::PoisonError",
+            &["rusty::PoisonError", "rusty::sync::PoisonError"] as &[&str],
+        ),
+        (
+            "LockResult",
+            "std::sync::LockResult",
+            &["rusty::LockResult", "rusty::sync::LockResult"] as &[&str],
+        ),
+        (
+            "TryLockResult",
+            "std::sync::TryLockResult",
+            &["rusty::TryLockResult", "rusty::sync::TryLockResult"] as &[&str],
         ),
     ] {
         for root in qualified_roots {
@@ -2086,6 +2161,30 @@ mod tests {
             "std::sync::mpsc::TryRecvError"
         );
         assert_eq!(
+            CppType::Named("rusty::sync::Mutex<int>::Guard".to_string()).to_rust_type_str(),
+            "std::sync::MutexGuard<i32>"
+        );
+        assert_eq!(
+            CppType::Named("rusty::RwLock<long>::ReadGuard".to_string()).to_rust_type_str(),
+            "std::sync::RwLockReadGuard<i64>"
+        );
+        assert_eq!(
+            CppType::Named("RwLock<long>::WriteGuard".to_string()).to_rust_type_str(),
+            "std::sync::RwLockWriteGuard<i64>"
+        );
+        assert_eq!(
+            CppType::Named("rusty::sync::PoisonError<int>".to_string()).to_rust_type_str(),
+            "std::sync::PoisonError<i32>"
+        );
+        assert_eq!(
+            CppType::Named("rusty::LockResult<int>".to_string()).to_rust_type_str(),
+            "std::sync::LockResult<i32>"
+        );
+        assert_eq!(
+            CppType::Named("TryLockResult<int>".to_string()).to_rust_type_str(),
+            "std::sync::TryLockResult<i32>"
+        );
+        assert_eq!(
             CppType::Named("rusty::UnsafeCell<int>".to_string()).to_rust_type_str(),
             "std::cell::UnsafeCell<i32>"
         );
@@ -2145,6 +2244,30 @@ mod tests {
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::sync::mpsc::Sender<int>"),
             "std::sync::mpsc::Sender<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::sync::Mutex<int>::Guard"),
+            "std::sync::MutexGuard<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("RwLock<long>::ReadGuard"),
+            "std::sync::RwLockReadGuard<i64>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::RwLock<long>::WriteGuard"),
+            "std::sync::RwLockWriteGuard<i64>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::PoisonError<int>"),
+            "std::sync::PoisonError<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("LockResult<int>"),
+            "std::sync::LockResult<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::sync::TryLockResult<int>"),
+            "std::sync::TryLockResult<i32>"
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::Boxed<int>"),

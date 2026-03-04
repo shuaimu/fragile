@@ -988,6 +988,13 @@ Namespace alias target normalization must reuse the same Rusty-wrapper mapping l
   - `rusty::RefCounted<T>` / `RefCounted<T>` -> `std::rc::Rc<T>`
   - `rusty::Ptr<T>` / `Ptr<T>` -> `*const T`
   - `rusty::MutPtr<T>` / `MutPtr<T>` -> `*mut T`
+- Rusty sync guard/result wrappers now normalize to std sync types:
+  - `rusty::Mutex<T>::Guard` / `Mutex<T>::Guard` -> `std::sync::MutexGuard<T>`
+  - `rusty::RwLock<T>::ReadGuard` / `RwLock<T>::ReadGuard` -> `std::sync::RwLockReadGuard<T>`
+  - `rusty::RwLock<T>::WriteGuard` / `RwLock<T>::WriteGuard` -> `std::sync::RwLockWriteGuard<T>`
+  - `rusty::PoisonError<T>` / `PoisonError<T>` -> `std::sync::PoisonError<T>`
+  - `rusty::LockResult<T>` / `LockResult<T>` -> `std::sync::LockResult<T>`
+  - `rusty::TryLockResult<T>` / `TryLockResult<T>` -> `std::sync::TryLockResult<T>`
 - Alias fallback emitters now also run the same normalization step (`generate_type_alias`, unresolved namespaced/lowercase alias synthesis, and template-instantiation alias bridges), so `pub type ... = rusty::...` RHS paths are normalized consistently wherever aliases are emitted.
 - Added a late textual alias-RHS normalization pass over emitted `type` items so Rusty wrapper RHS spellings are normalized even when produced by alternate/degraded alias emitters (for example `pub type Barrier = rusty::Barrier; -> pub type Barrier = std::sync::Barrier;`), while unmapped Rusty spellings remain unchanged.
 - Lowered Rusty thread spellings in namespace exports are normalized as well (for example `rusty::thread::rusty_thread_JoinHandle_void_ -> std::thread::JoinHandle<()>`).
