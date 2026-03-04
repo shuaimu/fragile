@@ -156,6 +156,11 @@ fn parse_result_rust_type(ty: &str) -> Option<(&str, &str)> {
     split_top_level_pair_at_comma(inner)
 }
 
+/// Safe fallback expression for lanes where a reference value cannot be synthesized.
+fn reference_fallback_panic_expr() -> &'static str {
+    "panic!(\"fragile: missing safe default for reference return type\")"
+}
+
 /// Check whether a Rust type string is an Option-wrapped function pointer.
 fn is_option_fn_rust_type(ty: &str) -> bool {
     ty.starts_with("Option<fn(")
@@ -6049,7 +6054,7 @@ impl AstCodeGen {
         } else if trimmed.starts_with("*mut ") {
             "std::ptr::null_mut()".to_string()
         } else if trimmed.starts_with("&mut ") || trimmed.starts_with('&') {
-            "unsafe { std::mem::zeroed() }".to_string()
+            reference_fallback_panic_expr().to_string()
         } else if let Some(default_result) = Self::default_expr_for_result_type(trimmed) {
             default_result
         } else {
@@ -7515,6 +7520,9 @@ impl AstCodeGen {
             }
             if ty.starts_with("*mut ") {
                 return Some("std::ptr::null_mut()".to_string());
+            }
+            if ty.starts_with("&mut ") || ty.starts_with('&') {
+                return Some(reference_fallback_panic_expr().to_string());
             }
             if is_option_rust_type(ty) {
                 return Some("None".to_string());
@@ -75215,6 +75223,27 @@ pub fn Ptr() -> *const i8 {
     }
 
     #[test]
+    fn test_synthesize_empty_non_unit_function_bodies_uses_panic_for_reference_returns() {
+        let input = r#"
+pub fn Ref() -> &'static i32 {
+}
+pub fn RefMut() -> &'static mut i32 {
+}
+"#;
+        let output = AstCodeGen::synthesize_empty_non_unit_function_bodies(input);
+        assert!(
+            output.contains("pub fn Ref() -> &'static i32 {\n    panic!(\"fragile: missing safe default for reference return type\")\n}"),
+            "empty non-unit body synthesis should use panic fallback for immutable reference returns, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn RefMut() -> &'static mut i32 {\n    panic!(\"fragile: missing safe default for reference return type\")\n}"),
+            "empty non-unit body synthesis should use panic fallback for mutable reference returns, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
     fn test_synthesize_empty_non_unit_function_bodies_uses_ok_fallback_for_result_returns() {
         let input = r#"
 pub fn Pretty() -> std::result::Result<std::string::String, ()> {
@@ -75679,6 +75708,12 @@ pub fn maybe_status_rusty() -> rusty::Result<i32, i32> {
 pub fn maybe_fmt() -> std::fmt::Result {
     return MISSING_FMT;
 }
+pub fn ref_mode() -> &'static i32 {
+    return MISSING_REF;
+}
+pub fn ref_mode_mut() -> &'static mut i32 {
+    return MISSING_REF_MUT;
+}
 "#;
         let output = AstCodeGen::normalize_unresolved_const_like_identifier_returns(input);
         assert!(
@@ -75719,6 +75754,16 @@ pub fn maybe_fmt() -> std::fmt::Result {
         assert!(
             output.contains("pub fn maybe_fmt() -> std::fmt::Result {\n    return Ok(());\n}"),
             "std::fmt::Result return types should degrade to safe Ok(()) defaults, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn ref_mode() -> &'static i32 {\n    return panic!(\"fragile: missing safe default for reference return type\");\n}"),
+            "reference return types should degrade to panic fallback defaults, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn ref_mode_mut() -> &'static mut i32 {\n    return panic!(\"fragile: missing safe default for reference return type\");\n}"),
+            "mutable reference return types should degrade to panic fallback defaults, got:\n{}",
             output
         );
         assert!(
