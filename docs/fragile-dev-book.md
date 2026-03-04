@@ -142,6 +142,7 @@ Outcome snapshot:
 
 - On March 4, 2026, `make clean && cmake --build . -j32` in `build_fragilec_dropin` completed to 100% after iterative generic fixes.
 - On March 4, 2026, `ctest -j32 --output-on-failure` hit one transient `rpcbench` kill in one run but passed on rerun (`117/117`) in `build_fragilec_dropin`; no deterministic compile-failure translation units remained in this loop.
+- On March 4, 2026 (revalidation pass), a fresh rerun in `build_fragilec_dropin` with `make clean`, `cmake --build . -j32`, and `ctest -j32 --output-on-failure` completed with `117/117` tests passed and no `fragile rustc object compile failed` translation units in the build log.
 
 ## 3. Internal Data Models
 
