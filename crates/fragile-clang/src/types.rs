@@ -165,6 +165,123 @@ fn normalize_array_size_expr(size: &str) -> String {
     format!("({}) as usize", current)
 }
 
+fn strip_cpp_type_tag_prefix(name: &str) -> &str {
+    for prefix in ["class ", "struct ", "enum ", "union "] {
+        if let Some(rest) = name.strip_prefix(prefix) {
+            return rest.trim_start();
+        }
+    }
+    name
+}
+
+fn map_single_template_alias_to_std(
+    spelling: &str,
+    alias_prefix: &str,
+    std_path: &str,
+) -> Option<String> {
+    let inner = spelling.strip_prefix(alias_prefix)?.strip_suffix('>')?;
+    let args = parse_template_args(inner);
+    if args.len() != 1 {
+        return None;
+    }
+    let mapped = CppType::Named(args[0].clone()).to_rust_type_str();
+    Some(format!("{}<{}>", std_path, mapped))
+}
+
+fn map_double_template_alias_to_std(
+    spelling: &str,
+    alias_prefix: &str,
+    std_path: &str,
+) -> Option<String> {
+    let inner = spelling.strip_prefix(alias_prefix)?.strip_suffix('>')?;
+    let args = parse_template_args(inner);
+    if args.len() != 2 {
+        return None;
+    }
+    let left = CppType::Named(args[0].clone()).to_rust_type_str();
+    let right = CppType::Named(args[1].clone()).to_rust_type_str();
+    Some(format!("{}<{}, {}>", std_path, left, right))
+}
+
+fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
+    let stripped = strip_cpp_type_tag_prefix(spelling.trim());
+    let cleaned = stripped
+        .trim_start_matches("const ")
+        .trim_start_matches("volatile ")
+        .trim();
+
+    match cleaned {
+        "rusty::String" => return Some("std::string::String".to_string()),
+        _ => {}
+    }
+
+    for (prefix, std_path) in [
+        ("rusty::Option<", "std::option::Option"),
+        ("rusty::Box<", "std::boxed::Box"),
+        ("rusty::Arc<", "std::sync::Arc"),
+        ("rusty::ArcWeak<", "std::sync::Weak"),
+        ("rusty::Rc<", "std::rc::Rc"),
+        ("rusty::Weak<", "std::rc::Weak"),
+        ("rusty::Cell<", "std::cell::Cell"),
+        ("rusty::RefCell<", "std::cell::RefCell"),
+        ("rusty::Vec<", "std::vec::Vec"),
+        ("rusty::VecDeque<", "std::collections::VecDeque"),
+        ("rusty::HashSet<", "std::collections::HashSet"),
+        ("rusty::BTreeSet<", "std::collections::BTreeSet"),
+        ("rusty::Mutex<", "std::sync::Mutex"),
+        ("rusty::RwLock<", "std::sync::RwLock"),
+    ] {
+        if let Some(mapped) = map_single_template_alias_to_std(cleaned, prefix, std_path) {
+            return Some(mapped);
+        }
+    }
+
+    for (prefix, std_path) in [
+        ("rusty::Result<", "std::result::Result"),
+        ("rusty::HashMap<", "std::collections::HashMap"),
+        ("rusty::BTreeMap<", "std::collections::BTreeMap"),
+    ] {
+        if let Some(mapped) = map_double_template_alias_to_std(cleaned, prefix, std_path) {
+            return Some(mapped);
+        }
+    }
+
+    if let Some(inner) = cleaned
+        .strip_prefix("rusty::ResultVoid<")
+        .and_then(|rest| rest.strip_suffix('>'))
+    {
+        let args = parse_template_args(inner);
+        if args.len() == 1 {
+            let ok = CppType::Named(args[0].clone()).to_rust_type_str();
+            return Some(format!("std::result::Result<{}, ()>", ok));
+        }
+    }
+
+    if let Some(inner) = cleaned
+        .strip_prefix("rusty::ResultInt<")
+        .and_then(|rest| rest.strip_suffix('>'))
+    {
+        let args = parse_template_args(inner);
+        if args.len() == 1 {
+            let ok = CppType::Named(args[0].clone()).to_rust_type_str();
+            return Some(format!("std::result::Result<{}, i32>", ok));
+        }
+    }
+
+    if let Some(inner) = cleaned
+        .strip_prefix("rusty::ResultString<")
+        .and_then(|rest| rest.strip_suffix('>'))
+    {
+        let args = parse_template_args(inner);
+        if args.len() == 1 {
+            let ok = CppType::Named(args[0].clone()).to_rust_type_str();
+            return Some(format!("std::result::Result<{}, *const i8>", ok));
+        }
+    }
+
+    None
+}
+
 /// A C++ type that can be converted to Rust types.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CppType {
@@ -367,6 +484,9 @@ impl CppType {
                     .trim_start_matches("const ")
                     .trim_start_matches("volatile ")
                     .trim();
+                if let Some(mapped) = map_rusty_type_to_std(normalized_name) {
+                    return mapped;
+                }
                 // Handle special C++ types that don't map directly to Rust
                 match normalized_name {
                     "void" => "std::ffi::c_void".to_string(),
@@ -501,7 +621,7 @@ impl CppType {
                     // Optional type
                     "nullopt_t" => "()".to_string(),
                     // Time value types
-                    "timeval" => "i64".to_string(),
+                    "timeval" => "timeval".to_string(),
                     // libc++ internal string representation types
                     "__long" | "__rep" | "rep" => "std::ffi::c_void".to_string(),
                     // Duration types
@@ -746,6 +866,7 @@ impl CppType {
                             .replace("-", "_") // Clang uses dashes in template param names
                             .replace(".", "_") // Variadic pack expansion uses ...
                             .replace("+", "_") // Template expressions (Index + 1)
+                            .replace("'", "_") // Char-literal template args (e.g., '_')
                             .replace("(", "_") // Expression grouping
                             .replace(")", "_")
                             .replace("/", "_") // File paths in anonymous union names from system headers
@@ -1439,6 +1560,44 @@ mod tests {
     }
 
     #[test]
+    fn test_rusty_cpp_types_map_to_std_library_types() {
+        assert_eq!(
+            CppType::Named("rusty::RefCell<int>".to_string()).to_rust_type_str(),
+            "std::cell::RefCell<i32>"
+        );
+        assert_eq!(
+            CppType::Named("rusty::HashMap<int, long>".to_string()).to_rust_type_str(),
+            "std::collections::HashMap<i32, i64>"
+        );
+        assert_eq!(
+            CppType::Named("rusty::Option<rusty::String>".to_string()).to_rust_type_str(),
+            "std::option::Option<std::string::String>"
+        );
+        assert_eq!(
+            CppType::Named("rusty::Result<int, rusty::String>".to_string()).to_rust_type_str(),
+            "std::result::Result<i32, std::string::String>"
+        );
+        assert_eq!(
+            CppType::Named("rusty::Arc<int>".to_string()).to_rust_type_str(),
+            "std::sync::Arc<i32>"
+        );
+        assert_eq!(
+            CppType::Named("rusty::ResultVoid<long>".to_string()).to_rust_type_str(),
+            "std::result::Result<i64, ()>"
+        );
+    }
+
+    #[test]
+    fn test_template_char_literal_type_name_sanitizes_apostrophes() {
+        let lowered = CppType::Named("inline_str_fixed<9, '_'>".to_string()).to_rust_type_str();
+        assert!(
+            !lowered.contains('\''),
+            "template-char type lowering must strip apostrophes from generated Rust identifiers, got: {}",
+            lowered
+        );
+    }
+
+    #[test]
     fn test_std_array_type_mapping() {
         // NOTE: STL mappings removed - all types pass through as-is
         // See Section 22 in TODO.md for rationale
@@ -1722,6 +1881,14 @@ mod tests {
             }
             .to_rust_type_str(),
             "*mut std::ffi::c_void"
+        );
+    }
+
+    #[test]
+    fn test_timeval_named_type_preserves_struct_spelling() {
+        assert_eq!(
+            CppType::Named("timeval".to_string()).to_rust_type_str(),
+            "timeval"
         );
     }
 

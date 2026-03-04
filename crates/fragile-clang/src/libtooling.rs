@@ -1531,11 +1531,17 @@ fn convert_enum_decl_node(
     ctx: &AstContext,
     node: &fragile_ast_exporter::clang_ast::AstNode,
 ) -> ClangNodeKind {
-    let name = node.get_string(0).unwrap_or("").to_string();
-    if name.is_empty() {
-        // Keep unnamed enums in the existing conservative path for now.
-        return ClangNodeKind::Unknown("InlineEnumDecl".to_string());
-    }
+    let raw_name = node.get_string(0).unwrap_or("").to_string();
+    let name = if raw_name.is_empty() {
+        // Preserve anonymous enums by giving them a stable synthetic spelling so
+        // downstream enum codegen can still emit standalone constants.
+        format!(
+            "(unnamed enum at file_{}:{}:{})",
+            node.loc.file_id, node.loc.begin_line, node.loc.begin_column
+        )
+    } else {
+        raw_name
+    };
 
     let is_scoped = node.get_bool(1).unwrap_or(false);
     let underlying_type = node
@@ -3054,6 +3060,36 @@ mod tests {
             }
             other => panic!(
                 "expected FunctionTemplateInstantiation conversion, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn test_convert_enum_decl_node_synthesizes_name_for_unnamed_enum() {
+        let mut enum_node = make_node(700, ASTEntryTag::TagEnumDecl, vec![], vec![]);
+        enum_node.loc = SrcSpan {
+            file_id: 42,
+            begin_line: 7,
+            begin_column: 3,
+            end_line: 7,
+            end_column: 25,
+        };
+
+        let ctx = AstContext {
+            ast_nodes: HashMap::new(),
+            type_nodes: HashMap::new(),
+            top_nodes: vec![],
+            files: vec![],
+        };
+
+        let kind = convert_enum_decl_node(&ctx, &enum_node);
+        match kind {
+            ClangNodeKind::EnumDecl { name, .. } => {
+                assert_eq!(name, "(unnamed enum at file_42:7:3)");
+            }
+            other => panic!(
+                "expected unnamed enum conversion to produce EnumDecl, got {:?}",
                 other
             ),
         }

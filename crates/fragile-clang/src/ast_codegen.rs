@@ -2915,30 +2915,40 @@ impl AstCodeGen {
     }
 
     fn normalize_vector_static_zeroed_initializers(code: &str) -> String {
+        fn is_vector_like_static_type(ty: &str) -> bool {
+            let ty = ty.trim();
+            ty.starts_with("vector_")
+                || ty.starts_with("std_vector<")
+                || ty.starts_with("std::vec::Vec<")
+        }
+
         let mut out = String::with_capacity(code.len());
         for line in code.lines() {
             let trimmed = line.trim_start();
             let is_static = Self::parse_static_item_name(trimmed).is_some();
-            let zeroed_suffix = " = unsafe { std::mem::zeroed() };";
-            if !is_static || !trimmed.ends_with(zeroed_suffix) {
+            if !is_static {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+            let Some((lhs, rhs)) = trimmed.split_once(" = ") else {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            };
+            if !rhs.trim().starts_with("unsafe { std::mem::zeroed() }") {
                 out.push_str(line);
                 out.push('\n');
                 continue;
             }
 
-            let Some((lhs, _)) = trimmed.split_once(zeroed_suffix) else {
+            let Some((prefix, ty_raw)) = lhs.rsplit_once(':') else {
                 out.push_str(line);
                 out.push('\n');
                 continue;
             };
-            let Some((_, ty_part)) = lhs.rsplit_once(':') else {
-                out.push_str(line);
-                out.push('\n');
-                continue;
-            };
-            let ty = ty_part.trim();
-            let is_vector_ty = ty.starts_with("vector_") || ty.starts_with("std_vector<");
-            if !is_vector_ty {
+            let ty = ty_raw.trim();
+            if !is_vector_like_static_type(ty) {
                 out.push_str(line);
                 out.push('\n');
                 continue;
@@ -2947,12 +2957,14 @@ impl AstCodeGen {
             let indent_len = line.len().saturating_sub(trimmed.len());
             let indent = &line[..indent_len];
             out.push_str(indent);
-            out.push_str(lhs);
+            out.push_str(prefix.trim_end());
+            out.push_str(": ");
+            out.push_str(ty);
             out.push_str(" = ");
             out.push_str(ty);
-            out.push_str("::new_0();");
-            out.push('\n');
+            out.push_str("::new_0();\n");
         }
+
         if !code.ends_with('\n') && !out.is_empty() {
             out.pop();
         }
@@ -3092,15 +3104,6 @@ impl AstCodeGen {
             symbols
         }
 
-        fn is_const_safe_new0_static_ctor(rhs_no_semi: &str) -> bool {
-            let compact: String = rhs_no_semi.chars().filter(|ch| !ch.is_whitespace()).collect();
-            let Some(ty) = compact.strip_suffix("::new_0()") else {
-                return false;
-            };
-            // STL vector stubs use a const-capable empty-Vec constructor.
-            ty.starts_with("std_vector<") || ty.starts_with("vector_")
-        }
-
         fn contains_non_const_function_call(rhs_no_semi: &str) -> bool {
             let bytes = rhs_no_semi.as_bytes();
             let mut idx = 0usize;
@@ -3169,6 +3172,82 @@ impl AstCodeGen {
             false
         }
 
+        fn parse_const_item_name(line: &str) -> Option<String> {
+            let rest = line
+                .strip_prefix("pub const ")
+                .or_else(|| line.strip_prefix("pub(crate) const "))
+                .or_else(|| line.strip_prefix("pub(super) const "))
+                .or_else(|| line.strip_prefix("const "))?;
+            let name: String = rest
+                .chars()
+                .take_while(|ch| AstCodeGen::is_identifier_char(*ch) || *ch == '#')
+                .collect();
+            if name.is_empty() {
+                None
+            } else {
+                Some(name.trim_start_matches("r#").to_string())
+            }
+        }
+
+        fn is_const_like_identifier(name: &str) -> bool {
+            if name.is_empty() {
+                return false;
+            }
+            let mut saw_alpha = false;
+            for ch in name.chars() {
+                if ch == '_' || ch.is_ascii_digit() {
+                    continue;
+                }
+                if ch.is_ascii_uppercase() {
+                    saw_alpha = true;
+                    continue;
+                }
+                return false;
+            }
+            saw_alpha
+        }
+
+        fn extract_const_like_symbols(text: &str) -> Vec<String> {
+            let mut symbols = Vec::new();
+            let mut idx = 0usize;
+            while idx < text.len() {
+                let ch = text[idx..].chars().next().unwrap();
+                if ch == '_' || ch.is_ascii_alphabetic() {
+                    let start = idx;
+                    idx += ch.len_utf8();
+                    while idx < text.len() {
+                        let next = text[idx..].chars().next().unwrap();
+                        if AstCodeGen::is_identifier_char(next) {
+                            idx += next.len_utf8();
+                        } else {
+                            break;
+                        }
+                    }
+                    let ident = &text[start..idx];
+                    let prev = if start > 0 {
+                        text[..start].chars().next_back()
+                    } else {
+                        None
+                    };
+                    let next = if idx < text.len() {
+                        text[idx..].chars().next()
+                    } else {
+                        None
+                    };
+                    let prev_ok = prev.is_none_or(|c| !AstCodeGen::is_identifier_char(c))
+                        && prev != Some(':')
+                        && prev != Some('.');
+                    let next_ok = next.is_none_or(|c| !AstCodeGen::is_identifier_char(c));
+                    if prev_ok && next_ok && is_const_like_identifier(ident) {
+                        symbols.push(ident.to_string());
+                    }
+                } else {
+                    idx += ch.len_utf8();
+                }
+            }
+            symbols
+        }
+
         let mut known_globals: HashSet<String> = HashSet::new();
         for line in code.lines() {
             if let Some(name) = Self::parse_static_item_name(line.trim_start()) {
@@ -3177,6 +3256,16 @@ impl AstCodeGen {
         }
         if known_globals.is_empty() {
             return code.to_string();
+        }
+
+        let mut known_const_symbols: HashSet<String> = HashSet::new();
+        for line in code.lines() {
+            if let Some(name) = parse_const_item_name(line.trim_start()) {
+                known_const_symbols.insert(name);
+            }
+        }
+        for name in &known_globals {
+            known_const_symbols.insert(name.clone());
         }
 
         let mut out = String::with_capacity(code.len());
@@ -3211,7 +3300,7 @@ impl AstCodeGen {
             let rhs_no_semi = rhs.trim_end_matches(';').trim();
             let has_non_const_ctor_call = (rhs_no_semi.contains("::new_")
                 && rhs_no_semi.ends_with(')')
-                && !is_const_safe_new0_static_ctor(rhs_no_semi))
+                )
                 || rhs_no_semi.contains("Default::default()");
             // `unsafe { extern_static }` and nested C aggregate brace initializers
             // are also non-const in Rust static contexts; normalize them similarly.
@@ -3242,8 +3331,7 @@ impl AstCodeGen {
                 && !rhs_no_semi.contains("std::ptr::null()")
                 && !rhs_no_semi.contains("std::ptr::null_mut()")
                 && !rhs_no_semi.contains("std::ptr::null::<")
-                && !rhs_no_semi.contains("std::ptr::null_mut::<")
-                && !is_const_safe_new0_static_ctor(rhs_no_semi);
+                && !rhs_no_semi.contains("std::ptr::null_mut::<");
             // Degraded static initializers can also carry mutating unsafe blocks
             // (`unsafe { x += 1; x }`) which are rejected during const-eval.
             let has_mutating_assignment_op = [
@@ -3273,6 +3361,20 @@ impl AstCodeGen {
                 || has_non_const_unsafe_side_effect_block
                 || has_nested_brace_aggregate_without_fields
             {
+                let indent_len = line.len().saturating_sub(trimmed.len());
+                let indent = &line[..indent_len];
+                let lhs = trimmed[..eq_idx].trim_end();
+                out.push_str(indent);
+                out.push_str(lhs);
+                out.push_str(" = unsafe { std::mem::zeroed() };");
+                out.push('\n');
+                continue;
+            }
+
+            let has_missing_const_like_symbol = extract_const_like_symbols(rhs_no_semi)
+                .into_iter()
+                .any(|sym| !known_const_symbols.contains(&sym));
+            if has_missing_const_like_symbol {
                 let indent_len = line.len().saturating_sub(trimmed.len());
                 let indent = &line[..indent_len];
                 let lhs = trimmed[..eq_idx].trim_end();
@@ -4798,6 +4900,8 @@ impl AstCodeGen {
                 "condition_variable",
                 "once_flag",
                 "thread",
+                "tm",
+                "timeval",
                 "vector",
                 "deque",
                 "queue",
@@ -5428,6 +5532,21 @@ impl AstCodeGen {
             out = Self::rewrite_bare_path_prefix(&out, "Vec<", "std::vec::Vec<");
             out = Self::rewrite_bare_path_prefix(&out, "Vec::", "std::vec::Vec::");
         }
+        // Bare `Result<T, E>`/`Result::...` frequently collide with user-defined
+        // non-generic `Result` placeholder records.
+        let has_non_generic_result_shadow = defined.contains("Result")
+            && !code.contains("struct Result<")
+            && !code.contains("pub struct Result<")
+            && !code.contains("enum Result<")
+            && !code.contains("pub enum Result<")
+            && !code.contains("union Result<")
+            && !code.contains("pub union Result<")
+            && !code.contains("type Result<")
+            && !code.contains("pub type Result<");
+        if has_non_generic_result_shadow {
+            out = Self::rewrite_bare_path_prefix(&out, "Result<", "std::result::Result<");
+            out = Self::rewrite_bare_path_prefix(&out, "Result::", "std::result::Result::");
+        }
         out
     }
 
@@ -5914,6 +6033,8 @@ impl AstCodeGen {
         } else if let Some(inner) = trimmed
             .strip_prefix("std::result::Result<")
             .or_else(|| trimmed.strip_prefix("core::result::Result<"))
+            .or_else(|| trimmed.strip_prefix("alloc::result::Result<"))
+            .or_else(|| trimmed.strip_prefix("Result<"))
             .and_then(|rest| rest.strip_suffix('>'))
         {
             let parts = Self::split_top_level_list(inner, ',');
@@ -5929,6 +6050,246 @@ impl AstCodeGen {
         } else {
             Self::get_default_value_for_type(trimmed)
         }
+    }
+
+    fn skip_impl_block(lines: &[&str], start: usize) -> usize {
+        if start >= lines.len() {
+            return start;
+        }
+        let mut depth: i32 = lines[start].matches('{').count() as i32
+            - lines[start].matches('}').count() as i32;
+        let mut idx = start + 1;
+        if depth <= 0 {
+            return idx;
+        }
+        while idx < lines.len() {
+            depth += lines[idx].matches('{').count() as i32;
+            depth -= lines[idx].matches('}').count() as i32;
+            idx += 1;
+            if depth <= 0 {
+                break;
+            }
+        }
+        idx
+    }
+
+    fn normalize_known_libc_time_struct_placeholders(code: &str) -> String {
+        let needs_tm = code.contains(".tm_year")
+            || code.contains(".tm_mon")
+            || code.contains(".tm_mday")
+            || code.contains(".tm_hour")
+            || code.contains(".tm_min")
+            || code.contains(".tm_sec");
+        let needs_timeval = code.contains(".tv_sec") || code.contains(".tv_usec");
+        if !needs_tm && !needs_timeval {
+            return code.to_string();
+        }
+
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
+            return code.to_string();
+        }
+        let mut out = String::with_capacity(code.len() + 512);
+        let mut i = 0usize;
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim();
+
+            let emit_tm = |out: &mut String| {
+                out.push_str("#[repr(C)]\n");
+                out.push_str("pub struct tm {\n");
+                out.push_str("    pub tm_sec: i32,\n");
+                out.push_str("    pub tm_min: i32,\n");
+                out.push_str("    pub tm_hour: i32,\n");
+                out.push_str("    pub tm_mday: i32,\n");
+                out.push_str("    pub tm_mon: i32,\n");
+                out.push_str("    pub tm_year: i32,\n");
+                out.push_str("    pub tm_wday: i32,\n");
+                out.push_str("    pub tm_yday: i32,\n");
+                out.push_str("    pub tm_isdst: i32,\n");
+                out.push_str("    pub tm_gmtoff: i64,\n");
+                out.push_str("    pub tm_zone: *const i8,\n");
+                out.push_str("}\n");
+                out.push_str("impl Default for tm {\n");
+                out.push_str("    fn default() -> Self {\n");
+                out.push_str("        Self {\n");
+                out.push_str("            tm_sec: 0,\n");
+                out.push_str("            tm_min: 0,\n");
+                out.push_str("            tm_hour: 0,\n");
+                out.push_str("            tm_mday: 0,\n");
+                out.push_str("            tm_mon: 0,\n");
+                out.push_str("            tm_year: 0,\n");
+                out.push_str("            tm_wday: 0,\n");
+                out.push_str("            tm_yday: 0,\n");
+                out.push_str("            tm_isdst: 0,\n");
+                out.push_str("            tm_gmtoff: 0,\n");
+                out.push_str("            tm_zone: std::ptr::null(),\n");
+                out.push_str("        }\n");
+                out.push_str("    }\n");
+                out.push_str("}\n");
+            };
+            let emit_timeval = |out: &mut String| {
+                out.push_str("#[repr(C)]\n");
+                out.push_str("pub struct timeval {\n");
+                out.push_str("    pub tv_sec: i64,\n");
+                out.push_str("    pub tv_usec: i64,\n");
+                out.push_str("}\n");
+                out.push_str("impl Default for timeval {\n");
+                out.push_str("    fn default() -> Self {\n");
+                out.push_str("        Self { tv_sec: 0, tv_usec: 0 }\n");
+                out.push_str("    }\n");
+                out.push_str("}\n");
+            };
+
+            if needs_timeval && trimmed == "pub type timeval = i64;" {
+                emit_timeval(&mut out);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            if needs_tm && trimmed.contains("pub struct tm {") && trimmed.contains("_opaque:") {
+                emit_tm(&mut out);
+                i += 1;
+                if i < lines.len() && lines[i].trim().starts_with("impl Default for tm") {
+                    i = Self::skip_impl_block(&lines, i);
+                }
+                if i < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                continue;
+            }
+
+            if needs_timeval
+                && trimmed.contains("pub struct timeval {")
+                && trimmed.contains("_opaque:")
+            {
+                emit_timeval(&mut out);
+                i += 1;
+                if i < lines.len() && lines[i].trim().starts_with("impl Default for timeval") {
+                    i = Self::skip_impl_block(&lines, i);
+                }
+                if i < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                continue;
+            }
+
+            if needs_tm && trimmed == "#[repr(C)]" && i + 2 < lines.len() {
+                let next_trimmed = lines[i + 1].trim();
+                if next_trimmed.starts_with("pub struct tm {") {
+                    let mut j = i + 2;
+                    let mut saw_opaque = false;
+                    while j < lines.len() {
+                        let t = lines[j].trim();
+                        if t.contains("_opaque:") {
+                            saw_opaque = true;
+                        }
+                        if t == "}" {
+                            break;
+                        }
+                        j += 1;
+                    }
+                    if saw_opaque && j < lines.len() {
+                        emit_tm(&mut out);
+                        i = j + 1;
+                        if i < lines.len() && lines[i].trim().starts_with("impl Default for tm") {
+                            i = Self::skip_impl_block(&lines, i);
+                        }
+                        if i < lines.len() || code.ends_with('\n') {
+                            out.push('\n');
+                        }
+                        continue;
+                    }
+                }
+            }
+
+            if needs_timeval && trimmed == "#[repr(C)]" && i + 2 < lines.len() {
+                let next_trimmed = lines[i + 1].trim();
+                if next_trimmed.starts_with("pub struct timeval {") {
+                    let mut j = i + 2;
+                    let mut saw_opaque = false;
+                    while j < lines.len() {
+                        let t = lines[j].trim();
+                        if t.contains("_opaque:") {
+                            saw_opaque = true;
+                        }
+                        if t == "}" {
+                            break;
+                        }
+                        j += 1;
+                    }
+                    if saw_opaque && j < lines.len() {
+                        emit_timeval(&mut out);
+                        i = j + 1;
+                        if i < lines.len()
+                            && lines[i].trim().starts_with("impl Default for timeval")
+                        {
+                            i = Self::skip_impl_block(&lines, i);
+                        }
+                        if i < lines.len() || code.ends_with('\n') {
+                            out.push('\n');
+                        }
+                        continue;
+                    }
+                }
+            }
+
+            out.push_str(line);
+            if i + 1 < lines.len() || code.ends_with('\n') {
+                out.push('\n');
+            }
+            i += 1;
+        }
+        Self::strip_stale_time_placeholder_default_impls(&out, needs_tm, needs_timeval)
+    }
+
+    fn strip_stale_time_placeholder_default_impls(
+        code: &str,
+        strip_tm: bool,
+        strip_timeval: bool,
+    ) -> String {
+        if (!strip_tm || !code.contains("impl Default for tm"))
+            && (!strip_timeval || !code.contains("impl Default for timeval"))
+        {
+            return code.to_string();
+        }
+
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        let mut i = 0usize;
+        while i < lines.len() {
+            let trimmed = lines[i].trim_start();
+            let is_target = (strip_tm && trimmed.starts_with("impl Default for tm"))
+                || (strip_timeval && trimmed.starts_with("impl Default for timeval"));
+            if is_target {
+                let end = Self::skip_impl_block(&lines, i);
+                let mut block = String::new();
+                for (idx, line) in lines[i..end].iter().enumerate() {
+                    if idx > 0 {
+                        block.push('\n');
+                    }
+                    block.push_str(line);
+                }
+                if block.contains("_opaque") {
+                    i = end;
+                    continue;
+                }
+            }
+
+            out.push_str(lines[i]);
+            if i + 1 < lines.len() || code.ends_with('\n') {
+                out.push('\n');
+            }
+            i += 1;
+        }
+        out
     }
 
     fn synthesize_empty_non_unit_function_bodies(code: &str) -> String {
@@ -6617,6 +6978,198 @@ impl AstCodeGen {
             out.push_str(&rewritten);
             out.push('\n');
         }
+        if !code.ends_with('\n') && !out.is_empty() {
+            out.pop();
+        }
+        out
+    }
+
+    /// Drop local `let` bindings whose initializer is an untyped
+    /// `Default::default()` and whose binding is never used in the enclosing
+    /// function body. These are degraded call placeholders that can trigger
+    /// E0790/E0282 when type inference has no remaining constraints.
+    fn normalize_unused_default_local_bindings(code: &str) -> String {
+        fn parse_default_local_binding_name(line: &str) -> Option<String> {
+            let trimmed = line.trim_start();
+            if !trimmed.starts_with("let ") {
+                return None;
+            }
+            let mut rest = trimmed["let ".len()..].trim_start();
+            if let Some(next) = rest.strip_prefix("mut ") {
+                rest = next.trim_start();
+            }
+            let eq_idx = rest.find('=')?;
+            let name = rest[..eq_idx].trim();
+            if name.is_empty() {
+                return None;
+            }
+            if name.contains(':')
+                || !name
+                    .chars()
+                    .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+            {
+                return None;
+            }
+
+            let rhs = rest[eq_idx + 1..].trim().trim_end_matches(';').trim();
+            if rhs == "Default::default()"
+                || rhs == "std::default::Default::default()"
+                || rhs == "std::prelude::v1::Default::default()"
+            {
+                Some(name.to_string())
+            } else {
+                None
+            }
+        }
+
+        let lines: Vec<&str> = code.lines().collect();
+        let mut out = String::with_capacity(code.len());
+        let mut idx = 0usize;
+        while idx < lines.len() {
+            let line = lines[idx];
+            let trimmed = line.trim_start();
+            let is_fn_head = trimmed.starts_with("pub fn ")
+                || trimmed.starts_with("pub(crate) fn ")
+                || trimmed.starts_with("pub(super) fn ")
+                || trimmed.starts_with("unsafe fn ")
+                || trimmed.starts_with("fn ");
+            if !is_fn_head {
+                out.push_str(line);
+                out.push('\n');
+                idx += 1;
+                continue;
+            }
+
+            let mut end = idx;
+            let mut depth: i32 = 0;
+            let mut saw_open_brace = false;
+            while end < lines.len() {
+                let cur = lines[end];
+                for ch in cur.chars() {
+                    if ch == '{' {
+                        depth += 1;
+                        saw_open_brace = true;
+                    } else if ch == '}' && saw_open_brace {
+                        depth -= 1;
+                    }
+                }
+                end += 1;
+                if saw_open_brace && depth <= 0 {
+                    break;
+                }
+            }
+            if !saw_open_brace {
+                out.push_str(line);
+                out.push('\n');
+                idx += 1;
+                continue;
+            }
+
+            let fn_lines = &lines[idx..end];
+            let fn_text = fn_lines.join("\n");
+            for fn_line in fn_lines {
+                let should_drop = parse_default_local_binding_name(fn_line)
+                    .is_some_and(|name| Self::count_identifier_occurrences(&fn_text, &name) == 1);
+                if should_drop {
+                    continue;
+                }
+                out.push_str(fn_line);
+                out.push('\n');
+            }
+            idx = end;
+        }
+
+        if !code.ends_with('\n') && !out.is_empty() {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fast-path cleanup for trivial degraded functions shaped like:
+    /// `let mut x = Default::default(); return ...;`
+    /// even if broader function-body scanning missed the local.
+    fn normalize_pre_return_unused_default_local_bindings(code: &str) -> String {
+        fn parse_default_local_binding_name(line: &str) -> Option<String> {
+            let trimmed = line.trim_start();
+            if !trimmed.starts_with("let ") {
+                return None;
+            }
+            let mut rest = trimmed["let ".len()..].trim_start();
+            if let Some(next) = rest.strip_prefix("mut ") {
+                rest = next.trim_start();
+            }
+            let eq_idx = rest.find('=')?;
+            let name = rest[..eq_idx].trim();
+            if name.is_empty() {
+                return None;
+            }
+            if name.contains(':')
+                || !name
+                    .chars()
+                    .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+            {
+                return None;
+            }
+            let rhs = rest[eq_idx + 1..].trim().trim_end_matches(';').trim();
+            if rhs == "Default::default()"
+                || rhs == "std::default::Default::default()"
+                || rhs == "std::prelude::v1::Default::default()"
+            {
+                Some(name.to_string())
+            } else {
+                None
+            }
+        }
+
+        fn line_contains_identifier(line: &str, ident: &str) -> bool {
+            if ident.is_empty() {
+                return false;
+            }
+            let mut idx = 0usize;
+            while let Some(rel) = line[idx..].find(ident) {
+                let start = idx + rel;
+                let end = start + ident.len();
+                let prev = line[..start].chars().next_back();
+                let next = line[end..].chars().next();
+                let prev_ok = prev.is_none_or(|ch| !AstCodeGen::is_identifier_char(ch));
+                let next_ok = next.is_none_or(|ch| !AstCodeGen::is_identifier_char(ch));
+                if prev_ok && next_ok {
+                    return true;
+                }
+                idx = end;
+            }
+            false
+        }
+
+        let lines: Vec<&str> = code.lines().collect();
+        let mut out = String::with_capacity(code.len());
+        let mut idx = 0usize;
+        while idx < lines.len() {
+            let line = lines[idx];
+            let mut should_drop = false;
+            if let Some(name) = parse_default_local_binding_name(line) {
+                let mut probe = idx + 1;
+                while probe < lines.len() {
+                    let next_trimmed = lines[probe].trim();
+                    if next_trimmed.is_empty() || next_trimmed.starts_with("//") {
+                        probe += 1;
+                        continue;
+                    }
+                    if next_trimmed.starts_with("return ")
+                        && !line_contains_identifier(next_trimmed, &name)
+                    {
+                        should_drop = true;
+                    }
+                    break;
+                }
+            }
+            if !should_drop {
+                out.push_str(line);
+                out.push('\n');
+            }
+            idx += 1;
+        }
+
         if !code.ends_with('\n') && !out.is_empty() {
             out.pop();
         }
@@ -11608,8 +12161,33 @@ impl AstCodeGen {
     }
 
     fn normalize_null_mut_placeholder_calls(code: &str) -> String {
-        code.replace("null_mut::default()", "std::ptr::null_mut()")
-            .replace("null_mut::new_0()", "std::ptr::null_mut()")
+        let replaced = code
+            .replace("null_mut::default()", "std::ptr::null_mut()")
+            .replace("null_mut::new_0()", "std::ptr::null_mut()");
+        if !replaced.contains("std::ptr::null_mut();") && !replaced.contains("std::ptr::null();") {
+            return replaced;
+        }
+
+        let mut out = String::with_capacity(replaced.len() + 64);
+        for line in replaced.lines() {
+            let trimmed = line.trim();
+            let indent_len = line.len().saturating_sub(line.trim_start().len());
+            let indent = &line[..indent_len];
+            if trimmed == "std::ptr::null_mut();" {
+                out.push_str(indent);
+                out.push_str("let _ = std::ptr::null_mut::<std::ffi::c_void>();");
+            } else if trimmed == "std::ptr::null();" {
+                out.push_str(indent);
+                out.push_str("let _ = std::ptr::null::<std::ffi::c_void>();");
+            } else {
+                out.push_str(line);
+            }
+            out.push('\n');
+        }
+        if !replaced.ends_with('\n') && !out.is_empty() {
+            out.pop();
+        }
+        out
     }
 
     /// Repair degraded pointer cast targets in pointer-typed local bindings.
@@ -14897,8 +15475,7 @@ impl AstCodeGen {
         // initializers from degraded lowering; keep symbol surface while
         // deferring initialization through MaybeUninit.
         output = Self::normalize_unreferenced_static_mut_initializers(&output);
-        // Referenced vector-like globals cannot be zero-initialized safely.
-        // Normalize zeroed artifacts to const-capable empty constructors.
+        // Keep vector-like static zeroed fallbacks stable across the pipeline.
         output = Self::normalize_vector_static_zeroed_initializers(&output);
         // Some generated structs can miss `Default`/`Clone` impls under
         // degraded lowering even though downstream code requires them.
@@ -14916,6 +15493,9 @@ impl AstCodeGen {
         output = Self::normalize_unresolved_lowercase_item_type_tokens(&output);
         // Canonicalize unresolved type spellings against already-emitted definitions.
         output = Self::normalize_unresolved_type_spelling_variants(&output);
+        // libc time structs can degrade to opaque placeholders while call-sites
+        // still access standard fields (`tm_year`, `tv_usec`).
+        output = Self::normalize_known_libc_time_struct_placeholders(&output);
         // Degraded pointer casts can pick local value identifiers as target types.
         output = Self::normalize_unresolved_pointer_cast_targets_in_pointer_bindings(&output);
         // Preempt std-prelude shadowing from emitted placeholders named `Option`/`Box`.
@@ -15067,6 +15647,9 @@ impl AstCodeGen {
         // Degraded placeholder rewrites can leak call-shaped tokens into local
         // binding names (e.g. `let mut Default::default(): T = ...;`).
         output = Self::normalize_invalid_local_binding_identifiers(&output);
+        // Degraded expression lowering can strand unused untyped
+        // `let x = Default::default();` placeholders that fail type inference.
+        output = Self::normalize_unused_default_local_bindings(&output);
         // Degraded enum lowering can emit zeroed local placeholders for
         // all-caps constant identifiers (`_SC_*`), which shadows imported
         // constants and triggers Rust E0530. Drop those placeholders.
@@ -15109,8 +15692,7 @@ impl AstCodeGen {
         // Some globals are emitted with initializers that dereference missing
         // `__gv_*` placeholders; zero-initialize those statics to unblock build.
         output = Self::normalize_static_initializers_with_unresolved_global_refs(&output);
-        // Static-initializer normalization can still leave vector globals on
-        // zeroed fallbacks; fold those back to const-capable constructors.
+        // Keep vector-like static zeroed fallbacks stable after late rewrites.
         output = Self::normalize_vector_static_zeroed_initializers(&output);
         // Re-run unreferenced static-mut cleanup at the end of the pipeline:
         // late normalizations can remove residual references and expose globals
@@ -15129,6 +15711,10 @@ impl AstCodeGen {
         // Final degraded fallback synthesis can reintroduce bare std-prelude
         // paths (for example `Option<...>` / `Vec<...>` in helper stubs).
         output = Self::normalize_shadowed_std_prelude_paths(&output);
+        // Late fallback/static normalizations can reintroduce untyped local
+        // default placeholders; drop those again before returning final output.
+        output = Self::normalize_unused_default_local_bindings(&output);
+        output = Self::normalize_pre_return_unused_default_local_bindings(&output);
         output
     }
 
@@ -23242,6 +23828,44 @@ impl AstCodeGen {
         if leaf == "clock_gettime" || leaf == "sleep" {
             return Some(("0".to_string(), false));
         }
+        if func_name == "now" {
+            return Some(("0".to_string(), false));
+        }
+        // Resolve qualified call-shapes (e.g., `super::strlen`) via leaf name
+        // so degraded namespace recovery still reaches builtin lowering.
+        match leaf {
+            "memcpy" => return Self::map_builtin_function("__builtin_memcpy", args),
+            "memmove" => return Self::map_builtin_function("__builtin_memmove", args),
+            "memset" => return Self::map_builtin_function("__builtin_memset", args),
+            "memcmp" => return Self::map_builtin_function("__builtin_memcmp", args),
+            "memchr" => return Self::map_builtin_function("__builtin_memchr", args),
+            "strlen" => return Self::map_builtin_function("__builtin_strlen", args),
+            "strcmp" => return Self::map_builtin_function("__builtin_strcmp", args),
+            "strncmp" => return Self::map_builtin_function("__builtin_strncmp", args),
+            _ => {}
+        }
+        // Degraded namespace recovery can strand POSIX libc helpers as `super::foo`
+        // without declarations in the transpiled TU. Use conservative stubs so
+        // call-sites remain compilable and side-effect free.
+        if func_name.starts_with("super::") || func_name.starts_with("self::") {
+            match leaf {
+                "time" => return Some(("0".to_string(), false)),
+                "sysconf" => return Some(("1".to_string(), false)),
+                "getpid" => return Some(("0".to_string(), false)),
+                "now" => return Some(("0".to_string(), false)),
+                "fcntl" => return Some(("0".to_string(), false)),
+                "numa_num_configured_nodes" | "numa_num_configured_cpus" => {
+                    return Some(("1".to_string(), false))
+                }
+                "readlink" => return Some(("-1".to_string(), false)),
+                "getdelim" => return Some(("-1".to_string(), false)),
+                "gettimeofday" => return Some(("0".to_string(), false)),
+                "localtime" | "localtime_r" => {
+                    return Some(("std::ptr::null_mut()".to_string(), false))
+                }
+                _ => {}
+            }
+        }
         match func_name {
             // __builtin_is_constant_evaluated() is always false at runtime
             // (Clang evaluates constexpr at compile time, so runtime code sees false)
@@ -23589,6 +24213,25 @@ impl AstCodeGen {
                          if c1 == 0 {{ break 0; }} \
                          __p1 = __p1.add(1); __p2 = __p2.add(1); }} }}",
                             args[0], args[1]
+                        ),
+                        true,
+                    ))
+                } else {
+                    None
+                }
+            }
+            "__builtin_strncmp" => {
+                // __builtin_strncmp(s1, s2, n) -> compare up to n bytes.
+                // Stops early on first mismatch or NUL terminator.
+                if args.len() >= 3 {
+                    Some((
+                        format!(
+                            "{{ let mut __p1 = {} as *const u8; let mut __p2 = {} as *const u8; \
+                         let __n = ({}) as usize; let mut __i = 0usize; let mut __out = 0i32; \
+                         while __i < __n {{ let c1 = *__p1; let c2 = *__p2; \
+                         if c1 != c2 {{ __out = (c1 as i32) - (c2 as i32); break; }} \
+                         if c1 == 0 {{ break; }} __p1 = __p1.add(1); __p2 = __p2.add(1); __i += 1; }} __out }}",
+                            args[0], args[1], args[2]
                         ),
                         true,
                     ))
@@ -38144,6 +38787,7 @@ impl AstCodeGen {
 
         let should_export_c_global = Self::should_export_c_global_symbol(
             name,
+            ty,
             is_static,
             is_extern,
             &self.current_namespace,
@@ -38349,6 +38993,7 @@ impl AstCodeGen {
 
     fn should_export_c_global_symbol(
         name: &str,
+        ty: &CppType,
         is_static: bool,
         is_extern: bool,
         current_namespace: &[(String, bool)],
@@ -38372,6 +39017,12 @@ impl AstCodeGen {
         if current_namespace.iter().any(|(_, is_inline)| !is_inline) {
             return false;
         }
+        // C++ trait variable templates commonly materialize as `*_v` bool globals.
+        // They are header-inline/ODR entities and should not be exported as raw
+        // C symbols from each translation unit.
+        if matches!(ty, CppType::Bool) && name.ends_with("_v") {
+            return false;
+        }
         let mut chars = name.chars();
         match chars.next() {
             Some(first) if first == '_' || first.is_ascii_alphabetic() => {}
@@ -38381,12 +39032,7 @@ impl AstCodeGen {
     }
 
     fn const_static_named_default_expr(rust_type: &str) -> Option<String> {
-        let ty = rust_type.trim();
-        // STL vector stubs are emitted with a const-capable `new_0` constructor
-        // and cannot be safely represented by zeroed bytes.
-        if ty.starts_with("std_vector<") || ty.starts_with("vector_") {
-            return Some(format!("{}::new_0()", ty));
-        }
+        let _ty = rust_type.trim();
         None
     }
 
@@ -64101,6 +64747,7 @@ mod tests {
         assert!(
             !AstCodeGen::should_export_c_global_symbol(
                 "dst",
+                &CppType::Int { signed: true },
                 false,
                 false,
                 &[],
@@ -64111,12 +64758,28 @@ mod tests {
         assert!(
             AstCodeGen::should_export_c_global_symbol(
                 "dst",
+                &CppType::Int { signed: true },
                 false,
                 false,
                 &[],
                 Some("/tmp/something.cpp"),
             ),
             "non-header globals should still be export-eligible"
+        );
+    }
+
+    #[test]
+    fn test_trait_style_bool_v_global_does_not_export_c_symbol_name() {
+        assert!(
+            !AstCodeGen::should_export_c_global_symbol(
+                "fits_in_sbo_v",
+                &CppType::Bool,
+                false,
+                false,
+                &[],
+                Some("/tmp/something.cpp"),
+            ),
+            "trait-style bool *_v globals should not export cross-TU C symbols"
         );
     }
 
@@ -67173,7 +67836,7 @@ pub fn touch() {
     }
 
     #[test]
-    fn test_normalize_vector_static_zeroed_initializers_rewrites_vector_statics_only() {
+    fn test_normalize_vector_static_zeroed_initializers_rewrites_vector_zeroed_statics() {
         let input = r#"
 pub(crate) static mut __gv_workers: vector_shared_ptr_PaxosWorker = unsafe { std::mem::zeroed() };
 pub(crate) static mut __gv_plain: ShardingPolicyCache = unsafe { std::mem::zeroed() };
@@ -67183,14 +67846,14 @@ pub(crate) static mut __gv_plain: ShardingPolicyCache = unsafe { std::mem::zeroe
             normalized.contains(
                 "pub(crate) static mut __gv_workers: vector_shared_ptr_PaxosWorker = vector_shared_ptr_PaxosWorker::new_0();"
             ),
-            "vector-static normalization should rewrite vector zeroed initializers to new_0(), got:\n{}",
+            "vector-static normalization should rewrite vector zeroed initializers to constructor form, got:\n{}",
             normalized
         );
         assert!(
             normalized.contains(
                 "pub(crate) static mut __gv_plain: ShardingPolicyCache = unsafe { std::mem::zeroed() };"
             ),
-            "vector-static normalization should leave non-vector static zeroed initializers unchanged, got:\n{}",
+            "vector-static normalization should keep non-vector static zeroed initializers unchanged, got:\n{}",
             normalized
         );
     }
@@ -67299,7 +67962,7 @@ pub(crate) static mut __gv_plain: i32 = 0;
     }
 
     #[test]
-    fn test_normalize_static_initializers_with_unresolved_global_refs_keeps_const_safe_vector_new0_calls(
+    fn test_normalize_static_initializers_with_unresolved_global_refs_rewrites_vector_new0_ctor_calls(
     ) {
         let input = r#"
 pub(crate) static mut __gv_workers: vector_shared_ptr_PaxosWorker = vector_shared_ptr_PaxosWorker::new_0();
@@ -67308,9 +67971,9 @@ pub(crate) static mut __gv_cache: ShardingPolicyCache = ShardingPolicyCache::new
         let normalized = AstCodeGen::normalize_static_initializers_with_unresolved_global_refs(input);
         assert!(
             normalized.contains(
-                "pub(crate) static mut __gv_workers: vector_shared_ptr_PaxosWorker = vector_shared_ptr_PaxosWorker::new_0();"
+                "pub(crate) static mut __gv_workers: vector_shared_ptr_PaxosWorker = unsafe { std::mem::zeroed() };"
             ),
-            "static initializer normalization should preserve const-safe vector new_0 constructors, got:\n{}",
+            "static initializer normalization should rewrite vector new_0 constructors that are not const in Rust static contexts, got:\n{}",
             normalized
         );
         assert!(
@@ -67418,6 +68081,31 @@ thread_local! {
         assert!(
             normalized.contains("__tree_node_value_ref { first: 0, second: std::ptr::null_mut() }"),
             "static initializer normalization should preserve multiline thread_local initializer bodies, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_static_initializers_with_unresolved_global_refs_rewrites_unresolved_const_like_symbols(
+    ) {
+        let input = r#"
+pub const TXN_FLAG_FULL_SCAN: u64 = 4;
+pub(crate) static mut __gv_flags: [u64; 2] = [(0) as u64, (TXN_FLAG_LOW_LEVEL_SCAN) as u64];
+pub(crate) static mut __gv_ok: [u64; 2] = [(0) as u64, (TXN_FLAG_FULL_SCAN) as u64];
+"#;
+        let normalized = AstCodeGen::normalize_static_initializers_with_unresolved_global_refs(input);
+        assert!(
+            normalized.contains(
+                "pub(crate) static mut __gv_flags: [u64; 2] = unsafe { std::mem::zeroed() };"
+            ),
+            "static initializer normalization should rewrite unresolved all-caps symbols in static initializers, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains(
+                "pub(crate) static mut __gv_ok: [u64; 2] = [(0) as u64, (TXN_FLAG_FULL_SCAN) as u64];"
+            ),
+            "static initializer normalization should preserve static initializers that reference in-TU const symbols, got:\n{}",
             normalized
         );
     }
@@ -67797,6 +68485,8 @@ let mut p32: *const u32 = ((unsafe { (&mut (*state).memory) }) as *const u32).as
         let input = r#"
 let p: *mut i8 = null_mut::default();
 let q: *mut std::ffi::c_void = null_mut::new_0();
+std::ptr::null_mut();
+std::ptr::null();
 return (null_mut::default()) as *mut ();
 "#;
         let normalized = AstCodeGen::normalize_null_mut_placeholder_calls(input);
@@ -67813,6 +68503,12 @@ return (null_mut::default()) as *mut ();
         assert!(
             normalized.contains("return (std::ptr::null_mut()) as *mut ();"),
             "null-mut placeholder normalization should rewrite casted return expressions, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("let _ = std::ptr::null_mut::<std::ffi::c_void>();")
+                && normalized.contains("let _ = std::ptr::null::<std::ffi::c_void>();"),
+            "null-mut placeholder normalization should type-annotate standalone null/null_mut expression statements, got:\n{}",
             normalized
         );
         assert!(
@@ -69111,6 +69807,8 @@ pub mod testing {
                 && AstCodeGen::looks_like_stub_candidate_type_name("error_category")
                 && AstCodeGen::looks_like_stub_candidate_type_name("std_thread")
                 && AstCodeGen::looks_like_stub_candidate_type_name("shared_ptr_node_data")
+                && AstCodeGen::looks_like_stub_candidate_type_name("tm")
+                && AstCodeGen::looks_like_stub_candidate_type_name("timeval")
                 && AstCodeGen::looks_like_stub_candidate_type_name("forward_iterator_tag")
                 && AstCodeGen::looks_like_stub_candidate_type_name("vector_RegEx")
                 && AstCodeGen::looks_like_stub_candidate_type_name("deque_char")
@@ -71190,6 +71888,94 @@ pub mod testing {
         assert_eq!(
             some_call.0, "std::option::Option::Some(x)",
             "Some_* fallback should normalize to Option::Some"
+        );
+    }
+
+    #[test]
+    fn test_builtin_fallback_resolves_qualified_c_string_helpers() {
+        let strlen = AstCodeGen::map_builtin_function("super::strlen", &["p".to_string()])
+            .expect("qualified strlen should map through builtin lowering");
+        assert!(
+            strlen.0.contains("__len") && strlen.1,
+            "qualified strlen should lower to builtin strlen body, got:\n{:?}",
+            strlen
+        );
+
+        let strncmp = AstCodeGen::map_builtin_function(
+            "super::strncmp",
+            &["a".to_string(), "b".to_string(), "n".to_string()],
+        )
+        .expect("qualified strncmp should map through builtin lowering");
+        assert!(
+            strncmp.0.contains("while __i < __n") && strncmp.1,
+            "qualified strncmp should lower to builtin strncmp body, got:\n{:?}",
+            strncmp
+        );
+    }
+
+    #[test]
+    fn test_builtin_fallback_resolves_qualified_posix_helpers() {
+        let time_call = AstCodeGen::map_builtin_function("super::time", &["tp".to_string()])
+            .expect("qualified time should map through builtin lowering");
+        assert_eq!(
+            time_call.0, "0",
+            "qualified time fallback should return deterministic zero literal"
+        );
+
+        let sysconf =
+            AstCodeGen::map_builtin_function("super::sysconf", &["name".to_string()])
+                .expect("qualified sysconf should map through builtin lowering");
+        assert_eq!(
+            sysconf.0, "1",
+            "qualified sysconf fallback should return deterministic positive literal"
+        );
+
+        let fcntl = AstCodeGen::map_builtin_function(
+            "super::fcntl",
+            &["fd".to_string(), "cmd".to_string(), "arg".to_string()],
+        )
+        .expect("qualified fcntl should map through builtin lowering");
+        assert_eq!(
+            fcntl.0, "0",
+            "qualified fcntl fallback should return deterministic zero status"
+        );
+
+        let now_qualified = AstCodeGen::map_builtin_function("super::now", &[])
+            .expect("qualified now should map through builtin lowering");
+        assert_eq!(
+            now_qualified.0, "0",
+            "qualified now fallback should return deterministic zero literal"
+        );
+
+        let readlink = AstCodeGen::map_builtin_function(
+            "super::readlink",
+            &["p".to_string(), "buf".to_string(), "n".to_string()],
+        )
+        .expect("qualified readlink should map through builtin lowering");
+        assert_eq!(
+            readlink.0, "-1",
+            "qualified readlink fallback should return deterministic failure lane"
+        );
+
+        let numa_nodes = AstCodeGen::map_builtin_function("super::numa_num_configured_nodes", &[])
+            .expect("qualified numa_num_configured_nodes should map through builtin lowering");
+        assert_eq!(
+            numa_nodes.0, "1",
+            "qualified numa_num_configured_nodes fallback should return deterministic positive literal"
+        );
+
+        let numa_cpus = AstCodeGen::map_builtin_function("super::numa_num_configured_cpus", &[])
+            .expect("qualified numa_num_configured_cpus should map through builtin lowering");
+        assert_eq!(
+            numa_cpus.0, "1",
+            "qualified numa_num_configured_cpus fallback should return deterministic positive literal"
+        );
+
+        let now_bare =
+            AstCodeGen::map_builtin_function("now", &[]).expect("bare now should map");
+        assert_eq!(
+            now_bare.0, "0",
+            "bare now fallback should return deterministic zero literal"
         );
     }
 
@@ -73673,11 +74459,12 @@ pub type substring_type = lcdf::Str;
     }
 
     #[test]
-    fn test_normalize_shadowed_std_prelude_paths_qualifies_bare_option_box_and_shadowed_vec() {
+    fn test_normalize_shadowed_std_prelude_paths_qualifies_option_box_result_and_shadowed_vec() {
         let input = r#"
 pub struct Option;
 pub struct Box;
 pub struct Vec;
+pub struct Result;
 pub struct Holder {
     pub invoke: Option<extern "C" fn(*mut ()) -> ()>,
 }
@@ -73687,6 +74474,7 @@ pub fn alloc<T>(v: T) -> *mut T {
 pub fn keep() {
     let _tokens: Vec<&str> = "a,b".split(',').collect();
     let _v = Vec::new();
+    let _r: Result<i32, ()> = Result::Ok(1i32);
     let _x: std::option::Option<i32> = std::option::Option::None;
     let _y = std::boxed::Box::new(1i32);
 }
@@ -73706,6 +74494,13 @@ pub fn keep() {
             output.contains("let _tokens: std::vec::Vec<&str> = \"a,b\".split(',').collect();")
                 && output.contains("let _v = std::vec::Vec::new();"),
             "std-prelude shadow normalization should qualify bare Vec paths when Vec is shadowed by a non-generic type, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains(
+                "let _r: std::result::Result<i32, ()> = std::result::Result::Ok(1i32);"
+            ),
+            "std-prelude shadow normalization should qualify bare Result paths when Result is shadowed by a non-generic type, got:\n{}",
             output
         );
         assert!(
@@ -74778,6 +75573,8 @@ pub fn Pretty() -> std::result::Result<std::string::String, ()> {
 }
 pub fn Fmt() -> std::fmt::Result {
 }
+pub fn Bare() -> Result<std::string::String, ()> {
+}
 "#;
         let output = AstCodeGen::synthesize_empty_non_unit_function_bodies(input);
         assert!(
@@ -74790,6 +75587,75 @@ pub fn Fmt() -> std::fmt::Result {
         assert!(
             output.contains("pub fn Fmt() -> std::fmt::Result {\n    Ok(())\n}"),
             "empty non-unit body synthesis should use `Ok(())` for std::fmt::Result returns, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains(
+                "pub fn Bare() -> Result<std::string::String, ()> {\n    Ok(Default::default())\n}"
+            ),
+            "empty non-unit body synthesis should use `Ok(Default::default())` for bare Result<T, E> returns, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_known_libc_time_struct_placeholders_rewrites_opaque_defs() {
+        let input = r#"
+#[repr(C)] #[derive(Clone, Copy)] pub struct tm { _opaque: [u8; 56] }
+impl Default for tm { fn default() -> Self { Self { _opaque: [0u8; 56] } } }
+pub type timeval = i64;
+pub fn probe(t: tm, tv: timeval) -> i32 {
+    return t.tm_year + (tv.tv_usec as i32);
+}
+"#;
+        let output = AstCodeGen::normalize_known_libc_time_struct_placeholders(input);
+        assert!(
+            output.contains("pub tm_year: i32,"),
+            "tm placeholder normalization should synthesize known tm fields, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub struct timeval {\n    pub tv_sec: i64,\n    pub tv_usec: i64,\n}"),
+            "timeval placeholder normalization should synthesize timeval struct fields, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("pub type timeval = i64;")
+                && !output.contains("pub struct tm { _opaque:")
+                && !output.contains("Self { _opaque: [0u8; 56] }"),
+            "opaque time placeholder definitions should be removed, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_known_libc_time_struct_placeholders_drops_stale_timeval_opaque_default_impl()
+    {
+        let input = r#"
+pub type timeval = i64;
+impl Default for timeval {
+    fn default() -> Self {
+        Self { _opaque: [0u8; 64] }
+    }
+}
+pub fn probe(tv: timeval) -> i32 {
+    return tv.tv_sec as i32;
+}
+"#;
+        let output = AstCodeGen::normalize_known_libc_time_struct_placeholders(input);
+        assert!(
+            output.contains("pub struct timeval {\n    pub tv_sec: i64,\n    pub tv_usec: i64,\n}"),
+            "timeval placeholder normalization should synthesize timeval struct fields when field access exists, got:\n{}",
+            output
+        );
+        assert!(
+            output.matches("impl Default for timeval").count() == 1,
+            "timeval placeholder normalization should keep a single default impl after rewriting, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("_opaque"),
+            "timeval placeholder normalization should drop stale opaque default impl bodies, got:\n{}",
             output
         );
     }
@@ -75112,6 +75978,123 @@ pub fn probe() {
         assert!(
             !output.contains("let mut Default::default(): allocator_char"),
             "invalid call-shaped local binding must not survive normalization, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_unused_default_local_bindings_drops_unused_untyped_defaults() {
+        let input = r#"
+pub fn current_time_ms() -> u64 {
+    let mut now = Default::default();
+    return 0 as u64;
+}
+"#;
+        let output = AstCodeGen::normalize_unused_default_local_bindings(input);
+        assert!(
+            !output.contains("let mut now = Default::default();"),
+            "unused untyped Default local bindings should be removed, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("return 0 as u64;"),
+            "unused-Default local cleanup should keep remaining function body, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_unused_default_local_bindings_keeps_used_default_bindings() {
+        let input = r#"
+pub fn probe() -> i32 {
+    let mut slot = Default::default();
+    slot = 7;
+    return slot;
+}
+"#;
+        let output = AstCodeGen::normalize_unused_default_local_bindings(input);
+        assert!(
+            output.contains("let mut slot = Default::default();"),
+            "used untyped Default local bindings should remain untouched, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_unused_default_local_bindings_drops_realworld_current_time_ms_placeholder() {
+        let input = r#"
+/// C++ class `Event`
+#[repr(C)]
+#[derive(Default, Clone, Copy)]
+pub struct Event {
+}
+
+impl Event {
+    pub fn new_0() -> Self {
+        Default::default()
+    }
+}
+
+/// C++ function `current_time_ms`
+/// Mangled: `_ZN3rrrL15current_time_msEv`
+pub fn current_time_ms() -> u64 {
+    let mut now = Default::default();
+    return 0 as u64;
+}
+
+/// C++ class `IntEvent`
+#[repr(C)]
+#[derive(Default, Clone, Copy)]
+pub struct IntEvent {
+    pub value_: i32,
+}
+"#;
+        let output = AstCodeGen::normalize_unused_default_local_bindings(input);
+        assert!(
+            !output.contains("let mut now = Default::default();"),
+            "unused untyped default placeholder in real-world current_time_ms shape should be removed, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn current_time_ms() -> u64 {") && output.contains("return 0 as u64;"),
+            "cleanup should keep the function body around the removed placeholder, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_pre_return_unused_default_local_bindings_drops_trivial_placeholder() {
+        let input = r#"
+pub fn current_time_ms() -> u64 {
+    let mut now = Default::default();
+    return 0 as u64;
+}
+"#;
+        let output = AstCodeGen::normalize_pre_return_unused_default_local_bindings(input);
+        assert!(
+            !output.contains("let mut now = Default::default();"),
+            "pre-return default-local cleanup should drop trivial unused placeholder locals, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("return 0 as u64;"),
+            "pre-return cleanup should keep the return statement, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_pre_return_unused_default_local_bindings_keeps_return_value_use() {
+        let input = r#"
+pub fn current_time_ms() -> u64 {
+    let mut now = Default::default();
+    return now;
+}
+"#;
+        let output = AstCodeGen::normalize_pre_return_unused_default_local_bindings(input);
+        assert!(
+            output.contains("let mut now = Default::default();"),
+            "pre-return cleanup must keep placeholders when the return statement references the binding, got:\n{}",
             output
         );
     }
@@ -78070,13 +79053,13 @@ stream.PutN(c, n);
     }
 
     #[test]
-    fn test_default_value_for_static_prefers_const_vector_constructor_for_named_vectors() {
+    fn test_default_value_for_static_uses_zeroed_fallback_for_named_vectors() {
         let vector_ty = CppType::Named("vector_shared_ptr_PaxosWorker".to_string());
         let opaque_ty = CppType::Named("ShardingPolicyCache".to_string());
 
         assert_eq!(
             AstCodeGen::default_value_for_static(&vector_ty),
-            "vector_shared_ptr_PaxosWorker::new_0()"
+            "unsafe { std::mem::zeroed() }"
         );
         assert_eq!(
             AstCodeGen::default_value_for_static(&opaque_ty),

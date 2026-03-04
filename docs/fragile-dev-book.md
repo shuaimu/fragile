@@ -4,6 +4,7 @@
 
 - [1. Purpose and Scope](#1-purpose-and-scope)
 - [2. End-to-End Architecture](#2-end-to-end-architecture)
+- [2.3 C++ `_v` trait globals and export linkage](#23-c-_v-trait-globals-and-export-linkage)
 - [3. Internal Data Models](#3-internal-data-models)
 - [4. C++ Declaration to Rust Item Mapping](#4-c-declaration-to-rust-item-mapping)
 - [5. C++ Type to Rust Type Mapping](#5-c-type-to-rust-type-mapping)
@@ -143,6 +144,23 @@ Outcome snapshot:
 - On March 4, 2026, `make clean && cmake --build . -j32` in `build_fragilec_dropin` completed to 100% after iterative generic fixes.
 - On March 4, 2026, `ctest -j32 --output-on-failure` hit one transient `rpcbench` kill in one run but passed on rerun (`117/117`) in `build_fragilec_dropin`; no deterministic compile-failure translation units remained in this loop.
 - On March 4, 2026 (revalidation pass), a fresh rerun in `build_fragilec_dropin` with `make clean`, `cmake --build . -j32`, and `ctest -j32 --output-on-failure` completed with `117/117` tests passed and no `fragile rustc object compile failed` translation units in the build log.
+
+### 2.3 C++ `_v` trait globals and export linkage
+
+Large C++23 codebases that include Rusty-C++ headers can surface trait-style variable templates such as:
+
+- `fits_in_sbo_v`
+
+These are C++ header-inline/ODR entities (usually `constexpr bool ..._v`) and should not be emitted as strong, raw C-linkage globals from each translation unit.
+
+Generic transpiler guard now applied in `AstCodeGen::should_export_c_global_symbol`:
+
+- if a global is `bool`-typed and its identifier ends with `_v`, Fragile suppresses raw symbol export (`#[export_name = "..."]`).
+
+Why this matters:
+
+- exporting these names as plain symbols can produce duplicate-symbol linker failures when many translation units instantiate the same header trait variable template.
+- keeping them as TU-local Rust-mangled statics preserves buildability without introducing mako-specific hacks.
 
 ## 3. Internal Data Models
 
