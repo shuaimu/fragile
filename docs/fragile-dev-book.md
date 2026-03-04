@@ -136,6 +136,7 @@ Generic normalizations added in this replay cycle:
   - for `Option<...>` element lanes, use `std::array::from_fn(|_| None)` to avoid array-repeat `Copy` constraints on non-`Copy` option payloads.
   - treat namespaced option spellings (`std::option::Option<...>`, `core::option::Option<...>`, `rusty::Option<...>`) equivalently for both top-level defaults (`None`) and sized-array lane synthesis.
   - treat `Result`-like lanes (`std/core/rusty Result<Ok, Err>` and `std::fmt::Result`) as `Ok`-first defaults (`Ok(<ok_default>)` / `Ok(())`) rather than relying on `Result::default()`.
+  - treat non-defaultable lanes (`&T`, `&mut T`, and function-pointer `fn(...)` types) as panic fallbacks, and propagate those safely through sized-array synthesis via `std::array::from_fn`.
   - retain zeroed fallback only when the element lane itself has no safe default synthesis (for example `c_void`-backed lanes).
 - `default_expr_for_empty_body_return_type` reference-lane refinement:
   - for `&T` / `&mut T` return lanes in synthesized stub bodies (including injected tail-returns and wildcard match-arm rewrites), use a `panic!(...)` fallback expression instead of `unsafe { std::mem::zeroed() }`.

@@ -109,6 +109,15 @@ fn is_option_rust_type(ty: &str) -> bool {
         || ty.starts_with("rusty::Option<")
 }
 
+/// Check whether a Rust type string is a function-pointer lane.
+fn is_function_pointer_rust_type(ty: &str) -> bool {
+    let ty = ty.trim();
+    ty.starts_with("fn(")
+        || ty.starts_with("unsafe fn(")
+        || ((ty.starts_with("extern \"") || ty.starts_with("unsafe extern \""))
+            && ty.contains(" fn("))
+}
+
 /// Split a generic argument list into exactly two top-level lanes at the first comma.
 fn split_top_level_pair_at_comma(s: &str) -> Option<(&str, &str)> {
     let mut angle_depth: isize = 0;
@@ -154,6 +163,104 @@ fn parse_result_rust_type(ty: &str) -> Option<(&str, &str)> {
         .or_else(|| ty.strip_prefix("::rusty::Result<"))?
         .strip_suffix('>')?;
     split_top_level_pair_at_comma(inner)
+}
+
+/// Find the `->` token at top-level in a Rust function signature line.
+fn find_top_level_return_arrow(signature_line: &str) -> Option<usize> {
+    let mut angle_depth: isize = 0;
+    let mut paren_depth: isize = 0;
+    let mut bracket_depth: isize = 0;
+    let mut brace_depth: isize = 0;
+    let chars: Vec<(usize, char)> = signature_line.char_indices().collect();
+
+    if chars.len() < 2 {
+        return None;
+    }
+
+    for idx in 0..(chars.len() - 1) {
+        let (byte_idx, ch) = chars[idx];
+        if ch == '-'
+            && chars[idx + 1].1 == '>'
+            && angle_depth == 0
+            && paren_depth == 0
+            && bracket_depth == 0
+            && brace_depth == 0
+        {
+            return Some(byte_idx);
+        }
+        match ch {
+            '<' => angle_depth += 1,
+            '>' if angle_depth > 0 => angle_depth -= 1,
+            '(' => paren_depth += 1,
+            ')' if paren_depth > 0 => paren_depth -= 1,
+            '[' => bracket_depth += 1,
+            ']' if bracket_depth > 0 => bracket_depth -= 1,
+            '{' => brace_depth += 1,
+            '}' if brace_depth > 0 => brace_depth -= 1,
+            _ => {}
+        }
+    }
+
+    None
+}
+
+/// Parse the return type from a Rust function signature line.
+fn parse_top_level_function_return_type(signature_line: &str) -> Option<String> {
+    fn find_top_level_signature_tail_cutoff(s: &str) -> usize {
+        let mut angle_depth: isize = 0;
+        let mut paren_depth: isize = 0;
+        let mut bracket_depth: isize = 0;
+        let mut brace_depth: isize = 0;
+
+        for (idx, ch) in s.char_indices() {
+            if angle_depth == 0 && paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 {
+                if ch == '{' || ch == ';' {
+                    return idx;
+                }
+                if ch == 'w' {
+                    let suffix = &s[idx..];
+                    let has_space_before =
+                        idx == 0 || s[..idx].chars().last().is_some_and(|c| c.is_whitespace());
+                    if has_space_before && suffix.starts_with("where ") {
+                        return idx;
+                    }
+                }
+            }
+
+            match ch {
+                '<' => angle_depth += 1,
+                '>' if angle_depth > 0 => angle_depth -= 1,
+                '(' => paren_depth += 1,
+                ')' if paren_depth > 0 => paren_depth -= 1,
+                '[' => bracket_depth += 1,
+                ']' if bracket_depth > 0 => bracket_depth -= 1,
+                '{' => brace_depth += 1,
+                '}' if brace_depth > 0 => brace_depth -= 1,
+                _ => {}
+            }
+        }
+
+        s.len()
+    }
+
+    let trimmed = signature_line.trim_end();
+    if !(trimmed.contains(" fn ") || trimmed.starts_with("fn ")) {
+        return None;
+    }
+
+    let arrow_idx = find_top_level_return_arrow(trimmed)?;
+    let ret_tail = trimmed[arrow_idx + 2..].trim();
+    if ret_tail.is_empty() {
+        return None;
+    }
+
+    let end = find_top_level_signature_tail_cutoff(ret_tail);
+    let ty = ret_tail[..end].trim();
+    if ty.is_empty() {
+        None
+    } else {
+        Some(ty.to_string())
+    }
 }
 
 /// Safe fallback expression for lanes where a reference value cannot be synthesized.
@@ -6161,7 +6268,9 @@ impl AstCodeGen {
             Some("Ok(())".to_string())
         } else {
             let ok_default = Self::get_default_value_for_type(ok_ty);
-            if should_use_unknown_return_panic_fallback(ok_ty, &ok_default) {
+            if ok_default.trim() == reference_fallback_panic_expr()
+                || should_use_unknown_return_panic_fallback(ok_ty, &ok_default)
+            {
                 Some(format!("Ok({})", unknown_return_fallback_panic_expr()))
             } else {
                 Some(format!("Ok({})", ok_default))
@@ -6218,18 +6327,16 @@ impl AstCodeGen {
                 && lines[i + 1].trim() == "}"
                 && trimmed.ends_with('{')
                 && (trimmed.contains(" fn ") || trimmed.starts_with("fn "))
-                && trimmed.contains("->")
             {
-                if let Some(arrow_idx) = trimmed.rfind("->") {
-                    let ret_ty = trimmed[arrow_idx + 2..trimmed.len() - 1].trim();
-                    if !ret_ty.is_empty() && ret_ty != "()" {
+                if let Some(ret_ty) = parse_top_level_function_return_type(trimmed) {
+                    if ret_ty != "()" {
                         out.push_str(line);
                         out.push('\n');
                         let indent_width =
                             line.chars().take_while(|c| c.is_whitespace()).count() + 4;
                         out.push_str(&" ".repeat(indent_width));
                         out.push_str(&Self::default_expr_for_empty_body_return_type_with_aliases(
-                            ret_ty,
+                            &ret_ty,
                             Some(&type_aliases),
                         ));
                         out.push('\n');
@@ -6269,7 +6376,7 @@ impl AstCodeGen {
             let trimmed = line.trim_end();
             let is_fn_start =
                 (trimmed.contains(" fn ") || trimmed.starts_with("fn ")) && trimmed.ends_with('{');
-            if !is_fn_start || !trimmed.contains("->") {
+            if !is_fn_start {
                 out.push_str(line);
                 if i + 1 < lines.len() || code.ends_with('\n') {
                     out.push('\n');
@@ -6278,7 +6385,7 @@ impl AstCodeGen {
                 continue;
             }
 
-            let Some(arrow_idx) = trimmed.rfind("->") else {
+            let Some(ret_ty_storage) = parse_top_level_function_return_type(trimmed) else {
                 out.push_str(line);
                 if i + 1 < lines.len() || code.ends_with('\n') {
                     out.push('\n');
@@ -6286,8 +6393,7 @@ impl AstCodeGen {
                 i += 1;
                 continue;
             };
-            let mut ret_ty = trimmed[arrow_idx + 2..].trim();
-            ret_ty = ret_ty.trim_end_matches('{').trim();
+            let ret_ty = ret_ty_storage.trim();
             if ret_ty.is_empty() || ret_ty == "()" {
                 out.push_str(line);
                 if i + 1 < lines.len() || code.ends_with('\n') {
@@ -7634,31 +7740,7 @@ impl AstCodeGen {
         }
 
         fn parse_function_return_type(line: &str) -> Option<String> {
-            let trimmed = line.trim_start();
-            let is_fn_signature = trimmed.starts_with("pub fn ")
-                || trimmed.starts_with("pub(crate) fn ")
-                || trimmed.starts_with("pub(super) fn ")
-                || trimmed.starts_with("fn ")
-                || trimmed.starts_with("extern \"C\" fn ")
-                || trimmed.starts_with("pub extern \"C\" fn ")
-                || trimmed.starts_with("pub(crate) extern \"C\" fn ")
-                || trimmed.starts_with("pub(super) extern \"C\" fn ");
-            if !is_fn_signature {
-                return None;
-            }
-            let (_, ret_tail) = trimmed.split_once("->")?;
-            let mut end = ret_tail.len();
-            for marker in [" where ", "{", ";"] {
-                if let Some(idx) = ret_tail.find(marker) {
-                    end = end.min(idx);
-                }
-            }
-            let ty = ret_tail[..end].trim();
-            if ty.is_empty() {
-                None
-            } else {
-                Some(ty.to_string())
-            }
+            parse_top_level_function_return_type(line)
         }
 
         fn collect_simple_type_aliases(code: &str) -> HashMap<String, String> {
@@ -7857,20 +7939,10 @@ impl AstCodeGen {
 
         fn parse_fn_return_type(line: &str) -> Option<String> {
             let trimmed = line.trim_end();
-            if !trimmed.ends_with('{') || !trimmed.contains("fn ") || !trimmed.contains("->") {
+            if !trimmed.ends_with('{') || !trimmed.contains("fn ") {
                 return None;
             }
-            let arrow_idx = trimmed.rfind("->")?;
-            let ret_ty = trimmed[arrow_idx + 2..]
-                .trim()
-                .trim_end_matches('{')
-                .trim()
-                .to_string();
-            if ret_ty.is_empty() {
-                None
-            } else {
-                Some(ret_ty)
-            }
+            parse_top_level_function_return_type(trimmed)
         }
 
         fn parse_reference_target_type(ret_ty: &str) -> Option<(bool, String)> {
@@ -12552,9 +12624,8 @@ impl AstCodeGen {
             if should_stub {
                 out.push_str(line);
                 out.push('\n');
-                if let Some(arrow_idx) = trimmed.rfind("->") {
-                    let mut ret_ty = trimmed[arrow_idx + 2..].trim();
-                    ret_ty = ret_ty.trim_end_matches('{').trim();
+                if let Some(ret_ty_storage) = parse_top_level_function_return_type(trimmed) {
+                    let ret_ty = ret_ty_storage.trim();
                     if !ret_ty.is_empty() && ret_ty != "()" {
                         let indent_width =
                             line.chars().take_while(|c| c.is_whitespace()).count() + 4;
@@ -13932,6 +14003,12 @@ impl AstCodeGen {
             ty if ty.starts_with("*const ") => "std::ptr::null()".to_string(),
             ty if ty.starts_with("*mut ") => "std::ptr::null_mut()".to_string(),
             ty if is_option_rust_type(ty) => "None".to_string(),
+            ty if ty.starts_with("&mut ") || ty.starts_with('&') => {
+                reference_fallback_panic_expr().to_string()
+            }
+            ty if is_function_pointer_rust_type(ty) => {
+                unknown_return_fallback_panic_expr().to_string()
+            }
             // c_void doesn't implement Default — use zeroed memory
             ty if ty.contains("c_void") => "unsafe { std::mem::zeroed() }".to_string(),
             _ => "Default::default()".to_string(),
@@ -17613,12 +17690,10 @@ impl AstCodeGen {
             if !(trimmed.contains(" fn ") || trimmed.starts_with("fn ")) {
                 continue;
             }
-            let Some((_, ret_part)) = trimmed.rsplit_once("->") else {
+            let Some(ret_ty_storage) = parse_top_level_function_return_type(trimmed) else {
                 continue;
             };
-            let mut ret_ty = ret_part.trim();
-            ret_ty = ret_ty.trim_end_matches('{').trim();
-            ret_ty = ret_ty.trim_end_matches(';').trim();
+            let ret_ty = ret_ty_storage.trim();
             if ret_ty.is_empty()
                 || ret_ty == "()"
                 || ret_ty.starts_with('&')
@@ -75499,6 +75574,16 @@ pub fn UnknownNamespaced() -> crate::UnknownTagAutoType {
     }
 
     #[test]
+    fn test_parse_top_level_function_return_type_ignores_nested_fn_pointer_arrows() {
+        let line = "pub fn FnPtrResult() -> std::result::Result<fn(i32) -> i32, i32> {";
+        assert_eq!(
+            parse_top_level_function_return_type(line).as_deref(),
+            Some("std::result::Result<fn(i32) -> i32, i32>"),
+            "top-level return parser should ignore nested `->` arrows inside function-pointer lanes"
+        );
+    }
+
+    #[test]
     fn test_synthesize_empty_non_unit_function_bodies_uses_ok_fallback_for_result_returns() {
         let input = r#"
 pub fn Pretty() -> std::result::Result<std::string::String, ()> {
@@ -75512,6 +75597,10 @@ pub fn CoreRooted() -> ::core::result::Result<i32, i32> {
 pub fn RefResult() -> std::result::Result<&'static i32, i32> {
 }
 pub fn RefResultMut() -> std::result::Result<&'static mut i32, i32> {
+}
+pub fn RefArrayResult() -> std::result::Result<[&'static i32; 2], i32> {
+}
+pub fn FnPtrResult() -> std::result::Result<fn(i32) -> i32, i32> {
 }
 pub fn OpaqueResult() -> std::result::Result<UnknownTagAutoType, i32> {
 }
@@ -75549,6 +75638,16 @@ pub fn OpaqueResultNamespaced() -> std::result::Result<crate::UnknownTagAutoType
         assert!(
             output.contains("pub fn RefResultMut() -> std::result::Result<&'static mut i32, i32> {\n    Ok(panic!(\"fragile: missing safe default for return type\"))\n}"),
             "empty non-unit body synthesis should avoid `Ok(Default::default())` for mutable-reference ok-lanes in Result<T, E>, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn RefArrayResult() -> std::result::Result<[&'static i32; 2], i32> {\n    Ok(std::array::from_fn(|_| panic!(\"fragile: missing safe default for reference return type\")))\n}"),
+            "empty non-unit body synthesis should synthesize safe array defaults for Result<T, E> ok-lanes that contain references, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn FnPtrResult() -> std::result::Result<fn(i32) -> i32, i32> {\n    Ok(panic!(\"fragile: missing safe default for return type\"))\n}"),
+            "empty non-unit body synthesis should avoid `Ok(Default::default())` for function-pointer ok-lanes in Result<T, E>, got:\n{}",
             output
         );
         assert!(
@@ -76025,6 +76124,12 @@ pub fn maybe_fmt() -> std::fmt::Result {
 pub fn maybe_ref_status() -> std::result::Result<&'static i32, i32> {
     return MISSING_REF_STATUS;
 }
+pub fn maybe_ref_array_status() -> std::result::Result<[&'static i32; 2], i32> {
+    return MISSING_REF_ARRAY_STATUS;
+}
+pub fn maybe_fnptr_status() -> std::result::Result<fn(i32) -> i32, i32> {
+    return MISSING_FNPTR_STATUS;
+}
 pub fn ref_mode() -> &'static i32 {
     return MISSING_REF;
 }
@@ -76096,6 +76201,16 @@ pub fn alias_result() -> AliasResult {
         assert!(
             output.contains("pub fn maybe_ref_status() -> std::result::Result<&'static i32, i32> {\n    return Ok(panic!(\"fragile: missing safe default for return type\"));\n}"),
             "Result<T, E> reference ok-lanes should degrade to Ok(panic!(...)) instead of Ok(Default::default()), got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn maybe_ref_array_status() -> std::result::Result<[&'static i32; 2], i32> {\n    return Ok(std::array::from_fn(|_| panic!(\"fragile: missing safe default for reference return type\")));\n}"),
+            "Result<T, E> reference-containing array ok-lanes should synthesize safe from_fn panic defaults, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn maybe_fnptr_status() -> std::result::Result<fn(i32) -> i32, i32> {\n    return Ok(panic!(\"fragile: missing safe default for return type\"));\n}"),
+            "Result<T, E> function-pointer ok-lanes should degrade to Ok(panic!(...)) instead of Ok(Default::default()), got:\n{}",
             output
         );
         assert!(
@@ -85409,6 +85524,30 @@ stream.PutN(c, n);
             AstCodeGen::get_default_value_for_type("std::fmt::Result"),
             "Ok(())",
             "std::fmt::Result defaults should synthesize Ok(())"
+        );
+    }
+
+    #[test]
+    fn test_get_default_value_for_type_non_defaultable_reference_and_fn_pointer_lanes_use_panic() {
+        assert_eq!(
+            AstCodeGen::get_default_value_for_type("&'static i32"),
+            "panic!(\"fragile: missing safe default for reference return type\")",
+            "reference lanes should degrade to panic fallback defaults instead of Default::default()"
+        );
+        assert_eq!(
+            AstCodeGen::get_default_value_for_type("fn(i32) -> i32"),
+            "panic!(\"fragile: missing safe default for return type\")",
+            "function-pointer lanes should degrade to panic fallback defaults instead of Default::default()"
+        );
+        assert_eq!(
+            AstCodeGen::get_default_value_for_type("[&'static i32; 2]"),
+            "std::array::from_fn(|_| panic!(\"fragile: missing safe default for reference return type\"))",
+            "sized arrays with reference lanes should synthesize safe from_fn panic defaults instead of repeat-default forms"
+        );
+        assert_eq!(
+            AstCodeGen::get_default_value_for_type("[fn(i32) -> i32; 2]"),
+            "std::array::from_fn(|_| panic!(\"fragile: missing safe default for return type\"))",
+            "sized arrays with function-pointer lanes should synthesize safe from_fn panic defaults"
         );
     }
 
