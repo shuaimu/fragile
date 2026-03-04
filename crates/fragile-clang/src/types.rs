@@ -501,7 +501,7 @@ impl CppType {
                     // Optional type
                     "nullopt_t" => "()".to_string(),
                     // Time value types
-                    "timeval" => "i64".to_string(),
+                    "timeval" => "timeval".to_string(),
                     // libc++ internal string representation types
                     "__long" | "__rep" | "rep" => "std::ffi::c_void".to_string(),
                     // Duration types
@@ -755,7 +755,8 @@ impl CppType {
                             .replace("=", "_") // Assignment/equality leftovers in dependent type spellings
                             .replace("?", "_cond_") // C++ ternary/conditional in template expressions
                             .replace("{", "_") // C++ initializer list / pack expansion
-                            .replace("}", "_"); // C++ initializer list / pack expansion
+                            .replace("}", "_") // C++ initializer list / pack expansion
+                            .replace("'", "_"); // C++ char literal template args (e.g., '_')
 
                         // Log diagnostic for complex type transformations
                         if result != cleaned && (cleaned.contains('<') || cleaned.contains("::")) {
@@ -1462,6 +1463,22 @@ mod tests {
     }
 
     #[test]
+    fn test_template_char_literal_type_name_sanitizes_apostrophes() {
+        let lowered =
+            CppType::Named("inline_str_fixed<10U, '_'>".to_string()).to_rust_type_str();
+        assert!(
+            !lowered.contains('\''),
+            "template char-literal lowered type names must not contain apostrophes, got: {}",
+            lowered
+        );
+        assert!(
+            lowered.starts_with("inline_str_fixed_10U_"),
+            "template char-literal lowered type names should preserve stem/lane information, got: {}",
+            lowered
+        );
+    }
+
+    #[test]
     fn test_named_array_size_static_cast_normalizes_to_rust_usize_expr() {
         assert_eq!(
             CppType::Named("char[static_cast<size_t>(ITEM_SIZE)]".to_string()).to_rust_type_str(),
@@ -1722,6 +1739,22 @@ mod tests {
             }
             .to_rust_type_str(),
             "*mut std::ffi::c_void"
+        );
+    }
+
+    #[test]
+    fn test_timeval_named_type_preserves_struct_type() {
+        assert_eq!(
+            CppType::Named("timeval".to_string()).to_rust_type_str(),
+            "timeval"
+        );
+        assert_eq!(
+            CppType::Pointer {
+                pointee: Box::new(CppType::Named("timeval".to_string())),
+                is_const: false,
+            }
+            .to_rust_type_str(),
+            "*mut timeval"
         );
     }
 

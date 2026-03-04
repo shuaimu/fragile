@@ -64,7 +64,7 @@ fn fragile_extract_input_bytes_from_stream<TInput>(is: &TInput) -> Vec<u8> {
     }
 }
 
-fn fragile_rapidjson_minify_json(input: &str) -> Result<std::string::String, ()> {
+fn fragile_rapidjson_minify_json(input: &str) -> std::result::Result<std::string::String, ()> {
     let mut out = std::string::String::with_capacity(input.len());
     let mut in_string = false;
     let mut escaped = false;
@@ -114,7 +114,7 @@ fn fragile_rapidjson_minify_json(input: &str) -> Result<std::string::String, ()>
     Ok(out)
 }
 
-fn fragile_rapidjson_pretty_json(minified: &str) -> Result<std::string::String, ()> {
+fn fragile_rapidjson_pretty_json(minified: &str) -> std::result::Result<std::string::String, ()> {
     let mut out = std::string::String::with_capacity(minified.len().saturating_mul(2));
     let mut in_string = false;
     let mut escaped = false;
@@ -175,7 +175,7 @@ fn fragile_rapidjson_pretty_json(minified: &str) -> Result<std::string::String, 
     Ok(out)
 }
 
-fn fragile_rapidjson_render_to_stdout_for_handler<THandler>(input: &str) -> Result<(), ()> {
+fn fragile_rapidjson_render_to_stdout_for_handler<THandler>(input: &str) -> std::result::Result<(), ()> {
     let minified = fragile_rapidjson_minify_json(input)?;
     let handler_name = std::any::type_name::<THandler>();
     let rendered = if handler_name.contains("PrettyWriter") {

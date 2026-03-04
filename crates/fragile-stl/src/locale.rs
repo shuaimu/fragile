@@ -307,8 +307,21 @@ pub type fpos___mbstate_t = fpos_mbstate_t;
 pub type fpos_t = fpos_mbstate_t;
 pub type fpos64_t = fpos_mbstate_t;
 
-#[repr(C)] #[derive(Clone, Copy)] pub struct tm { _opaque: [u8; 56] }
-impl Default for tm { fn default() -> Self { Self { _opaque: [0u8; 56] } } }
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct tm {
+    pub tm_sec: i32,
+    pub tm_min: i32,
+    pub tm_hour: i32,
+    pub tm_mday: i32,
+    pub tm_mon: i32,
+    pub tm_year: i32,
+    pub tm_wday: i32,
+    pub tm_yday: i32,
+    pub tm_isdst: i32,
+    pub tm_gmtoff: i64,
+    pub tm_zone: *const i8,
+}
 
 #[repr(C)] #[derive(Default, Clone, Copy)] pub struct string_view { pub __data: *const i8, pub __size: u64 }
 impl string_view {
@@ -570,4 +583,3 @@ pub static STD_CTYPE_BYNAME_WCHAR_T__VTABLE: ctype_wchar_t__vtable = ctype_wchar
     do_narrow_1: __ctype_wchar_t_stub_do_narrow_1,
     __destructor: __ctype_wchar_t_stub_destructor,
 };
-

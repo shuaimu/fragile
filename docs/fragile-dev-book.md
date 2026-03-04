@@ -144,6 +144,25 @@ Outcome snapshot:
 - On March 4, 2026, `ctest -j32 --output-on-failure` hit one transient `rpcbench` kill in one run but passed on rerun (`117/117`) in `build_fragilec_dropin`; no deterministic compile-failure translation units remained in this loop.
 - On March 4, 2026 (revalidation pass), a fresh rerun in `build_fragilec_dropin` with `make clean`, `cmake --build . -j32`, and `ctest -j32 --output-on-failure` completed with `117/117` tests passed and no `fragile rustc object compile failed` translation units in the build log.
 
+### 2.3 CTest `rpcbench` path assumption with non-default build directories
+
+When `vendor/mako` is configured with a non-default build directory (for example `build_fragilec_dropin`), one CTest entry may fail even when compilation succeeded:
+
+- test name: `rpcbench`
+- failure shape: `/usr/bin/bash: line 1: ./build/rpcbench: No such file or directory`
+
+Root cause:
+
+- The test command in generated `CTestTestfile.cmake` runs under `WORKING_DIRECTORY "<mako_source_root>"` and hardcodes `./build/rpcbench`, while the actual binary is produced in the active CMake binary directory (for example `<mako_source_root>/build_fragilec_dropin/rpcbench`).
+
+Operational workaround used during replay:
+
+1. Create a temporary symlink before running tests: `ln -sfn build_fragilec_dropin build` (from `vendor/mako`).
+2. Run `ctest -j32 --output-on-failure` in `build_fragilec_dropin`.
+3. Remove the symlink after the run if desired: `rm -f build`.
+
+This is a test-harness path issue in the project CMake test command, not a transpilation correctness failure.
+
 ## 3. Internal Data Models
 
 Core node model: `crates/fragile-clang/src/ast.rs`

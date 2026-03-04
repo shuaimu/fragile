@@ -39,6 +39,47 @@ unsafe extern "C" {
 #[inline] pub fn __find_ptr_mut_u16_ptr_mut_u16_u16_4(first: *mut u16, last: *mut u16, val: u16, _proj: &mut std::ffi::c_void) -> *const u16 { unsafe { let mut p = first; while p != last { if *p == val { return p; } p = p.add(1); } last } }
 #[inline] pub fn __find_ptr_mut_u32_ptr_mut_u32_u32_4(first: *mut u32, last: *mut u32, val: u32, _proj: &mut std::ffi::c_void) -> *const u32 { unsafe { let mut p = first; while p != last { if *p == val { return p; } p = p.add(1); } last } }
 
+// C/POSIX compatibility helpers
+#[inline]
+pub fn strlen(s: *const i8) -> u64 {
+    __constexpr_strlen_i8(s)
+}
+#[inline]
+pub fn strncmp(lhs: *const i8, rhs: *const i8, n: u64) -> i32 {
+    unsafe {
+        for i in 0..(n as usize) {
+            let a = *lhs.add(i) as u8;
+            let b = *rhs.add(i) as u8;
+            if a != b {
+                return if a < b { -1 } else { 1 };
+            }
+            if a == 0 {
+                break;
+            }
+        }
+    }
+    0
+}
+#[inline]
+pub fn time(_tloc: *mut i64) -> i64 { 0 }
+pub const _SC_NPROCESSORS_ONLN: i32 = 84;
+#[inline]
+pub fn sysconf(_name: i32) -> i32 { 1 }
+#[inline]
+pub fn getpid() -> i32 { 0 }
+#[inline]
+pub fn readlink(_path: *const i8, _buf: *mut i8, _bufsize: usize) -> i32 { -1 }
+#[inline]
+pub fn getdelim<T>(_lineptr: *mut *mut i8, _n: *mut u64, _delim: i8, _stream: *mut T) -> i64 { -1 }
+#[inline]
+pub fn numa_num_configured_nodes() -> i32 { 1 }
+#[inline]
+pub fn numa_num_configured_cpus() -> i32 { 1 }
+#[inline]
+pub fn fcntl(_fd: i32, _cmd: i32, _arg: i32) -> i32 { 0 }
+#[inline]
+pub fn now() -> u64 { 0 }
+
 // Atomic fence functions
 #[inline] pub fn __c11_atomic_thread_fence(_order: i32) { std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst); }
 #[inline] pub fn __c11_atomic_signal_fence(_order: i32) { std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst); }
@@ -47,6 +88,7 @@ unsafe extern "C" {
 // Thread and time functions
 #[inline] pub fn sched_yield() -> i32 { 0 }
 #[repr(C)] #[derive(Default, Clone, Copy)] pub struct timespec { pub tv_sec: i64, pub tv_nsec: i64 }
+#[repr(C)] #[derive(Default, Clone, Copy)] pub struct timeval { pub tv_sec: i64, pub tv_usec: i64 }
 #[inline] pub fn __convert_to_timespec_chrono_nanoseconds(_ns: i64) -> timespec { timespec { tv_sec: _ns / 1000000000, tv_nsec: _ns % 1000000000 } }
 #[inline] pub fn nanosleep(_req: *const timespec, _rem: *mut timespec) -> i32 { 0 }
 

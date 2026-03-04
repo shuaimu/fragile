@@ -30,7 +30,7 @@ impl<T: Clone> Clone for std_vector<T> {
 }
 
 impl<T> std_vector<T> {
-    pub fn new_0() -> Self {
+    pub const fn new_0() -> Self {
         Self { inner: Vec::new() }
     }
 

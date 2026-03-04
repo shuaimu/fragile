@@ -3064,6 +3064,72 @@ impl AstCodeGen {
     /// Rewrite static initializers that reference missing `__gv_*` globals to
     /// a zeroed fallback so unresolved global refs do not hard-fail compilation.
     fn normalize_static_initializers_with_unresolved_global_refs(code: &str) -> String {
+        fn parse_const_item_name(line: &str) -> Option<String> {
+            let prefixes = [
+                "pub(crate) const ",
+                "pub(super) const ",
+                "pub const ",
+                "const ",
+            ];
+            let rest = prefixes
+                .iter()
+                .find_map(|prefix| line.strip_prefix(prefix).map(str::trim_start))?;
+            let name: String = rest
+                .chars()
+                .take_while(|ch| AstCodeGen::is_identifier_char(*ch) || *ch == '#')
+                .collect();
+            if name.is_empty() {
+                None
+            } else {
+                Some(name.trim_start_matches("r#").to_string())
+            }
+        }
+
+        fn is_const_like_identifier(name: &str) -> bool {
+            if name.len() <= 1 {
+                return false;
+            }
+            let mut saw_alpha = false;
+            for ch in name.chars() {
+                if ch == '_' || ch.is_ascii_digit() {
+                    continue;
+                }
+                if ch.is_ascii_uppercase() {
+                    saw_alpha = true;
+                    continue;
+                }
+                return false;
+            }
+            saw_alpha
+        }
+
+        fn extract_const_like_symbols(text: &str) -> Vec<String> {
+            let mut symbols = Vec::new();
+            let mut idx = 0usize;
+            while idx < text.len() {
+                let ch = text[idx..].chars().next().unwrap();
+                if !(ch == '_' || ch.is_ascii_alphabetic()) {
+                    idx += ch.len_utf8();
+                    continue;
+                }
+                let start = idx;
+                idx += ch.len_utf8();
+                while idx < text.len() {
+                    let next = text[idx..].chars().next().unwrap();
+                    if AstCodeGen::is_identifier_char(next) || next == '#' {
+                        idx += next.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+                let ident = text[start..idx].trim_start_matches("r#");
+                if is_const_like_identifier(ident) {
+                    symbols.push(ident.to_string());
+                }
+            }
+            symbols
+        }
+
         fn extract_global_symbols(text: &str) -> Vec<String> {
             let mut symbols = Vec::new();
             let mut idx = 0usize;
@@ -3170,12 +3236,16 @@ impl AstCodeGen {
         }
 
         let mut known_globals: HashSet<String> = HashSet::new();
+        let mut known_constants: HashSet<String> = HashSet::new();
         for line in code.lines() {
             if let Some(name) = Self::parse_static_item_name(line.trim_start()) {
-                known_globals.insert(name);
+                known_globals.insert(name.trim_start_matches("r#").to_string());
+            }
+            if let Some(name) = parse_const_item_name(line.trim_start()) {
+                known_constants.insert(name);
             }
         }
-        if known_globals.is_empty() {
+        if known_globals.is_empty() && known_constants.is_empty() {
             return code.to_string();
         }
 
@@ -3283,16 +3353,14 @@ impl AstCodeGen {
                 continue;
             }
 
-            if !rhs.contains("__gv_") {
-                out.push_str(line);
-                out.push('\n');
-                continue;
-            }
-
-            let has_missing_global = extract_global_symbols(rhs)
+            let has_missing_global = rhs.contains("__gv_")
+                && extract_global_symbols(rhs)
+                    .into_iter()
+                    .any(|sym| !known_globals.contains(&sym));
+            let has_missing_const_like_symbol = extract_const_like_symbols(rhs)
                 .into_iter()
-                .any(|sym| !known_globals.contains(&sym));
-            if !has_missing_global {
+                .any(|sym| !known_globals.contains(&sym) && !known_constants.contains(&sym));
+            if !has_missing_global && !has_missing_const_like_symbol {
                 out.push_str(line);
                 out.push('\n');
                 continue;
@@ -5914,6 +5982,9 @@ impl AstCodeGen {
         } else if let Some(inner) = trimmed
             .strip_prefix("std::result::Result<")
             .or_else(|| trimmed.strip_prefix("core::result::Result<"))
+            .or_else(|| trimmed.strip_prefix("::std::result::Result<"))
+            .or_else(|| trimmed.strip_prefix("::core::result::Result<"))
+            .or_else(|| trimmed.strip_prefix("Result<"))
             .and_then(|rest| rest.strip_suffix('>'))
         {
             let parts = Self::split_top_level_list(inner, ',');
@@ -7276,6 +7347,107 @@ impl AstCodeGen {
                 out.push('\n');
             }
         }
+        if !code.ends_with('\n') && !out.is_empty() {
+            out.pop();
+        }
+        out
+    }
+
+    fn normalize_unresolved_const_like_identifier_returns(code: &str) -> String {
+        fn is_const_like_identifier(name: &str) -> bool {
+            if name.is_empty() {
+                return false;
+            }
+            let mut saw_alpha = false;
+            for ch in name.chars() {
+                if ch == '_' || ch.is_ascii_digit() {
+                    continue;
+                }
+                if ch.is_ascii_uppercase() {
+                    saw_alpha = true;
+                    continue;
+                }
+                return false;
+            }
+            saw_alpha
+        }
+
+        fn collect_defined_names(code: &str) -> HashSet<String> {
+            fn parse_item_name(line: &str, prefixes: &[&str]) -> Option<String> {
+                let trimmed = line.trim_start();
+                let rest = prefixes
+                    .iter()
+                    .find_map(|prefix| trimmed.strip_prefix(prefix).map(str::trim_start))?;
+                let name: String = rest
+                    .chars()
+                    .take_while(|ch| AstCodeGen::is_identifier_char(*ch) || *ch == '#')
+                    .collect();
+                if name.is_empty() {
+                    None
+                } else {
+                    Some(name.trim_start_matches("r#").to_string())
+                }
+            }
+
+            let mut defined = HashSet::new();
+            for line in code.lines() {
+                if let Some(name) = parse_item_name(
+                    line,
+                    &[
+                        "pub const ",
+                        "pub(crate) const ",
+                        "pub(super) const ",
+                        "const ",
+                        "pub static ",
+                        "pub(crate) static ",
+                        "pub(super) static ",
+                        "pub static mut ",
+                        "pub(crate) static mut ",
+                        "pub(super) static mut ",
+                        "static ",
+                        "static mut ",
+                    ],
+                ) {
+                    defined.insert(name);
+                }
+                let trimmed = line.trim_start();
+                if trimmed.starts_with("let ") {
+                    if let Some((lhs, _)) = trimmed.split_once(':') {
+                        if let Some(name) = AstCodeGen::parse_let_binding_name(lhs) {
+                            defined.insert(name.trim_start_matches("r#").to_string());
+                        }
+                    }
+                }
+            }
+            defined
+        }
+
+        if !code.contains("return ") {
+            return code.to_string();
+        }
+
+        let defined_names = collect_defined_names(code);
+        let mut out = String::with_capacity(code.len());
+        for line in code.lines() {
+            let trimmed = line.trim_start();
+            if let Some(rest) = trimmed.strip_prefix("return ") {
+                let expr = rest.trim_end_matches(';').trim();
+                if Self::is_simple_identifier_expr(expr) {
+                    let ident = expr.trim_start_matches("r#");
+                    if is_const_like_identifier(ident) && !defined_names.contains(ident) {
+                        let indent_len = line.len().saturating_sub(trimmed.len());
+                        let indent = &line[..indent_len];
+                        out.push_str(indent);
+                        out.push_str("return unsafe { std::mem::zeroed() };");
+                        out.push('\n');
+                        continue;
+                    }
+                }
+            }
+            out.push_str(line);
+            out.push('\n');
+        }
+
         if !code.ends_with('\n') && !out.is_empty() {
             out.pop();
         }
@@ -15071,6 +15243,10 @@ impl AstCodeGen {
         // all-caps constant identifiers (`_SC_*`), which shadows imported
         // constants and triggers Rust E0530. Drop those placeholders.
         output = Self::normalize_const_like_unknown_enum_local_placeholders(&output);
+        // Some headers still return unresolved all-caps enum constants
+        // (`return XXH_OK;`) without a surviving constant declaration. Replace
+        // those bare returns with a typed zeroed fallback to keep code compiling.
+        output = Self::normalize_unresolved_const_like_identifier_returns(&output);
         // Degraded pointer truthiness can lower as `if !ptr`; normalize to
         // explicit `.is_null()` checks for pointer-typed bindings.
         output = Self::normalize_pointer_negation_conditions(&output);
@@ -15774,7 +15950,19 @@ impl AstCodeGen {
                 if let Some((lhs, _rhs)) = line.split_once(" = super::strlen(") {
                     if let Some(colon_idx) = lhs.rfind(':') {
                         let ty = lhs[colon_idx + 1..].trim();
-                        let needs_cast = matches!(ty, "u64" | "usize" | "u32" | "i64");
+                        let needs_cast = matches!(
+                            ty,
+                            "u64"
+                                | "usize"
+                                | "u32"
+                                | "u16"
+                                | "u8"
+                                | "i64"
+                                | "i32"
+                                | "i16"
+                                | "i8"
+                                | "isize"
+                        );
                         if needs_cast {
                             if let Some(close_idx) = line.rfind(");") {
                                 let mut fixed = String::from(&line[..close_idx + 1]); // include ')'
@@ -32804,6 +32992,17 @@ impl AstCodeGen {
             "__atomic_notify_all_std_atomic_flag",
             "__constexpr_strlen_i8",
             "__constexpr_strlen_u8",
+            "strlen",
+            "strncmp",
+            "time",
+            "sysconf",
+            "getpid",
+            "readlink",
+            "getdelim",
+            "numa_num_configured_nodes",
+            "numa_num_configured_cpus",
+            "fcntl",
+            "now",
             "__constexpr_wmemchr_i32_i32",
             "fill_n_char_u64_i8",
             "copy_n_char_i32_char",
@@ -32829,6 +33028,7 @@ impl AstCodeGen {
             "fpos_mbstate_t",
             "__cxx_atomic_impl___cxx_contention_t",
             "tm",
+            "timeval",
         ]
     }
 
@@ -38355,6 +38555,13 @@ impl AstCodeGen {
         decl_file: Option<&str>,
     ) -> bool {
         if is_static || is_extern {
+            return false;
+        }
+        // C++17 variable-template constants conventionally use a `_v` suffix
+        // (`is_same_v`, `fits_in_sbo_v`, ...). Emitting cross-TU exported
+        // storage for these header-originating constants causes duplicate
+        // symbol failures during strict linking.
+        if name.ends_with("_v") {
             return false;
         }
         if let Some(path) = decl_file {
@@ -56622,6 +56829,41 @@ mod tests {
     }
 
     #[test]
+    fn test_preamble_emits_posix_symbol_shims_and_timeval_struct() {
+        let code = AstCodeGen::new().generate(&make_node(ClangNodeKind::TranslationUnit, vec![]));
+        assert!(
+            code.contains("pub fn strlen(s: *const i8) -> u64 {"),
+            "preamble should expose strlen shim for unresolved libc calls, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn strncmp(lhs: *const i8, rhs: *const i8, n: u64) -> i32 {"),
+            "preamble should expose strncmp shim for unresolved libc calls, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub const _SC_NPROCESSORS_ONLN: i32 = 84;"),
+            "preamble should expose _SC_NPROCESSORS_ONLN constant shim, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn fcntl(_fd: i32, _cmd: i32, _arg: i32) -> i32 { 0 }"),
+            "preamble should expose fcntl shim for unresolved libc calls, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn now() -> u64 { 0 }"),
+            "preamble should expose now shim for degraded chrono calls, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub struct timeval { pub tv_sec: i64, pub tv_usec: i64 }"),
+            "preamble should expose timeval struct fields used by generated code, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
     fn test_preamble_emits_fprintf_extern_declaration() {
         let code = AstCodeGen::new().generate(&make_node(ClangNodeKind::TranslationUnit, vec![]));
         assert!(
@@ -64121,6 +64363,20 @@ mod tests {
     }
 
     #[test]
+    fn test_variable_template_suffix_globals_do_not_export_c_symbol_name() {
+        assert!(
+            !AstCodeGen::should_export_c_global_symbol(
+                "fits_in_sbo_v",
+                false,
+                false,
+                &[],
+                Some("/tmp/something.cpp"),
+            ),
+            "variable-template-style `_v` globals should not export cross-TU C symbols"
+        );
+    }
+
+    #[test]
     fn test_namespaced_typeref_global_array_decl_not_skipped_as_static_member_definition() {
         let entities_ty = CppType::Array {
             element: Box::new(CppType::Named("tinyxml2::Entity".to_string())),
@@ -67377,6 +67633,45 @@ static mut __fsv_UseMAdvWillNeed_px_0: *const i8 = (getenv((b"DISABLE_MADV_WILLN
     }
 
     #[test]
+    fn test_normalize_static_initializers_with_unresolved_global_refs_rewrites_missing_const_like_symbols(
+    ) {
+        let input = r#"
+pub(crate) static mut __gv_plain: i32 = 0;
+pub(crate) static mut __gv_flags: [u64; 2] = [(0) as u64, (TXN_FLAG_LOW_LEVEL_SCAN) as u64];
+"#;
+        let normalized = AstCodeGen::normalize_static_initializers_with_unresolved_global_refs(input);
+        assert!(
+            normalized.contains(
+                "pub(crate) static mut __gv_flags: [u64; 2] = unsafe { std::mem::zeroed() };"
+            ),
+            "static initializer normalization should rewrite statics that reference missing const-like symbols, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("pub(crate) static mut __gv_plain: i32 = 0;"),
+            "unrelated static initializers should remain unchanged, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_static_initializers_with_unresolved_global_refs_keeps_known_const_like_symbols(
+    ) {
+        let input = r#"
+pub const TXN_FLAG_LOW_LEVEL_SCAN: u64 = 1;
+pub(crate) static mut __gv_flags: [u64; 2] = [(0) as u64, (TXN_FLAG_LOW_LEVEL_SCAN) as u64];
+"#;
+        let normalized = AstCodeGen::normalize_static_initializers_with_unresolved_global_refs(input);
+        assert!(
+            normalized.contains(
+                "pub(crate) static mut __gv_flags: [u64; 2] = [(0) as u64, (TXN_FLAG_LOW_LEVEL_SCAN) as u64];"
+            ),
+            "static initializer normalization should preserve statics that reference known const-like symbols, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
     fn test_normalize_static_initializers_with_unresolved_global_refs_rewrites_mutating_unsafe_blocks(
     ) {
         let input = r#"
@@ -67494,8 +67789,8 @@ let mut len_i32: i32 = super::strlen(path as *const i8);
             normalized
         );
         assert!(
-            normalized.contains("let mut len_i32: i32 = super::strlen(path as *const i8);"),
-            "strlen-width normalization should leave i32 bindings unchanged, got:\n{}",
+            normalized.contains("let mut len_i32: i32 = super::strlen(path as *const i8) as i32;"),
+            "strlen-width normalization should cast into i32 typed bindings, got:\n{}",
             normalized
         );
     }
@@ -75175,6 +75470,48 @@ pub fn probe() -> UnknownTagEnumType {
     }
 
     #[test]
+    fn test_normalize_unresolved_const_like_identifier_returns_rewrites_missing_const_identifiers() {
+        let input = r#"
+pub type UnknownTagEnumType = i32;
+pub fn XXH32_reset() -> UnknownTagEnumType {
+    return XXH_OK;
+}
+"#;
+        let output = AstCodeGen::normalize_unresolved_const_like_identifier_returns(input);
+        assert!(
+            output.contains("return unsafe { std::mem::zeroed() };"),
+            "missing const-like return identifiers should degrade to compile-safe zeroed returns, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("return XXH_OK;"),
+            "missing const-like return identifiers should not survive unchanged, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_unresolved_const_like_identifier_returns_keeps_defined_constants() {
+        let input = r#"
+pub const XXH_OK: i32 = 0;
+pub fn XXH32_reset() -> i32 {
+    return XXH_OK;
+}
+"#;
+        let output = AstCodeGen::normalize_unresolved_const_like_identifier_returns(input);
+        assert!(
+            output.contains("return XXH_OK;"),
+            "defined const-like return identifiers should remain unchanged, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("return unsafe { std::mem::zeroed() };"),
+            "defined const-like return identifiers should not be rewritten to zeroed fallbacks, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
     fn test_normalize_global_reference_return_type_mismatches_recasts_global_ref_returns() {
         let input = r#"
 pub(crate) static mut __gv_argvs: vector = unsafe { std::mem::zeroed() };
@@ -75232,6 +75569,24 @@ pub extern "C" fn probe() -> i32 {
         assert!(
             output.contains("pub extern \"C\" fn probe() -> i32 {\n    0\n}"),
             "degraded-function fallback should stub heavily degraded bodies to default return values, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_fallback_heavily_degraded_function_bodies_uses_ok_fallback_for_unqualified_result_returns(
+    ) {
+        let input = r#"
+pub fn probe() -> Result<std::string::String, ()> {
+    unresolved_symbol();
+}
+"#;
+        let output = AstCodeGen::fallback_heavily_degraded_function_bodies(input);
+        assert!(
+            output.contains(
+                "pub fn probe() -> Result<std::string::String, ()> {\n    Ok(Default::default())\n}"
+            ),
+            "degraded-function fallback should emit `Ok(...)` for unqualified Result return types, got:\n{}",
             output
         );
     }

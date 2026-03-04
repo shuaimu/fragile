@@ -1302,6 +1302,15 @@ fn link_requires_program_main(parsed: &ParsedInvocation) -> bool {
     true
 }
 
+fn linker_output_reports_missing_main(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    lower.contains("undefined reference to `main'")
+        || lower.contains("undefined reference to 'main'")
+        || lower.contains("undefined symbol: main")
+        || lower.contains("undefined symbol: _main")
+        || lower.contains("unresolved external symbol main")
+}
+
 fn run_fragile_link(parsed: &ParsedInvocation) -> Result<(), String> {
     if parsed.compile_only {
         return Err("internal error: run_fragile_link called for compile-only command".to_string());
@@ -1365,13 +1374,8 @@ fn run_fragile_link(parsed: &ParsedInvocation) -> Result<(), String> {
         collect_link_input_objects_for_main_scan(parsed, &compiled_positions, &cwd);
     let defining_objects = scan_main_defining_objects(&inspected_objects)?;
     let main_symbol_diag = format_main_symbol_diagnostic(&inspected_objects, &defining_objects);
-
-    if defining_objects.is_empty() && link_requires_program_main(parsed) {
-        return Err(format!(
-            "strict link requires a real `main` symbol for executable outputs\n{}",
-            main_symbol_diag
-        ));
-    }
+    let requires_main = link_requires_program_main(parsed);
+    let has_main_in_objects = !defining_objects.is_empty();
 
     let (runtime_archive, native_libs) = build_rust_runtime_link_support(&temp_root)?;
     link_args.push(OsString::from(
@@ -1385,11 +1389,19 @@ fn run_fragile_link(parsed: &ParsedInvocation) -> Result<(), String> {
         .output()
         .map_err(|e| format!("failed to run strict link driver `{}`: {}", driver, e))?;
     if !link_output.status.success() {
+        let stderr_text = String::from_utf8_lossy(&link_output.stderr);
+        if requires_main && !has_main_in_objects && linker_output_reports_missing_main(&stderr_text)
+        {
+            return Err(format!(
+                "strict link requires a real `main` symbol for executable outputs\n{}",
+                main_symbol_diag
+            ));
+        }
         return Err(format!(
             "strict link failed via `{}`\nstdout:\n{}\nstderr:\n{}\n{}",
             driver,
             String::from_utf8_lossy(&link_output.stdout),
-            String::from_utf8_lossy(&link_output.stderr),
+            stderr_text,
             main_symbol_diag
         ));
     }
@@ -1883,6 +1895,26 @@ mod tests {
             !link_requires_program_main(&parsed),
             "custom linker entrypoint should disable default main requirement"
         );
+    }
+
+    #[test]
+    fn linker_output_reports_missing_main_detects_common_linker_messages() {
+        assert!(linker_output_reports_missing_main(
+            "/usr/bin/ld: foo.o: undefined reference to `main'\ncollect2: error: ld returned 1 exit status"
+        ));
+        assert!(linker_output_reports_missing_main(
+            "ld.lld: error: undefined symbol: _main"
+        ));
+        assert!(linker_output_reports_missing_main(
+            "LINK : error LNK2001: unresolved external symbol main"
+        ));
+    }
+
+    #[test]
+    fn linker_output_reports_missing_main_ignores_unrelated_link_failures() {
+        assert!(!linker_output_reports_missing_main(
+            "/usr/bin/ld: foo.o: undefined reference to `puts'"
+        ));
     }
 
     #[test]
