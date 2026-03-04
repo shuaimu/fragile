@@ -138,6 +138,9 @@ Generic normalizations added in this replay cycle:
   - treat `Result`-like lanes (`std/core/rusty Result<Ok, Err>` and `std::fmt::Result`) as `Ok`-first defaults (`Ok(<ok_default>)` / `Ok(())`) rather than relying on `Result::default()`.
   - treat non-defaultable lanes (`&T`, `&mut T`, and function-pointer `fn(...)` types) as panic fallbacks, and propagate those safely through sized-array synthesis via `std::array::from_fn`.
   - retain zeroed fallback only when the element lane itself has no safe default synthesis (for example `c_void`-backed lanes).
+- `default_value_for_type(CppType)` refinement:
+  - treat C++ reference and function lanes as non-defaultable and use panic fallbacks instead of pointer/zeroed placeholders.
+  - for sized arrays, recurse on element lanes and use `std::array::from_fn` when element defaults are safe; keep zeroed fallback only when the element lane itself still requires zeroed.
 - `default_expr_for_empty_body_return_type` reference-lane refinement:
   - for `&T` / `&mut T` return lanes in synthesized stub bodies (including injected tail-returns and wildcard match-arm rewrites), use a `panic!(...)` fallback expression instead of `unsafe { std::mem::zeroed() }`.
   - when top-level return-lane default synthesis degrades to `unsafe { std::mem::zeroed() }` (unknown/non-inferable return type), rewrite to a `panic!(...)` fallback expression instead.

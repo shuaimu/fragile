@@ -56683,11 +56683,10 @@ fn default_value_for_type(ty: &CppType) -> String {
                 "std::ptr::null_mut()".to_string()
             }
         }
-        CppType::Reference { .. } => "std::ptr::null_mut()".to_string(),
+        CppType::Reference { .. } => reference_fallback_panic_expr().to_string(),
         CppType::Named(_) => "unsafe { std::mem::zeroed() }".to_string(),
+        CppType::Function { .. } => unknown_return_fallback_panic_expr().to_string(),
         CppType::Array { element, size } => {
-            // For arrays of non-primitive types, use zeroed() for the whole array
-            // since [elem_default; N] requires Copy but zeroed() for [T; N] works directly
             if let Some(n) = size {
                 match element.as_ref() {
                     CppType::Char { .. }
@@ -56707,8 +56706,14 @@ fn default_value_for_type(ty: &CppType) -> String {
                             format!("[std::ptr::null_mut(); {}]", n)
                         }
                     }
-                    // For struct arrays and other non-Copy types, zero the entire array
-                    _ => "unsafe { std::mem::zeroed() }".to_string(),
+                    _ => {
+                        let elem_default = default_value_for_type(element.as_ref());
+                        if is_unsafe_zeroed_expr(&elem_default) {
+                            "unsafe { std::mem::zeroed() }".to_string()
+                        } else {
+                            format!("std::array::from_fn(|_| {})", elem_default)
+                        }
+                    }
                 }
             } else {
                 "unsafe { std::mem::zeroed() }".to_string()
@@ -85548,6 +85553,59 @@ stream.PutN(c, n);
             AstCodeGen::get_default_value_for_type("[fn(i32) -> i32; 2]"),
             "std::array::from_fn(|_| panic!(\"fragile: missing safe default for return type\"))",
             "sized arrays with function-pointer lanes should synthesize safe from_fn panic defaults"
+        );
+    }
+
+    #[test]
+    fn test_default_value_for_cpp_type_non_defaultable_reference_and_function_lanes_use_panic() {
+        let ref_ty = CppType::Reference {
+            referent: Box::new(CppType::Int { signed: true }),
+            is_const: true,
+            is_rvalue: false,
+        };
+        assert_eq!(
+            default_value_for_type(&ref_ty),
+            "panic!(\"fragile: missing safe default for reference return type\")",
+            "CppType reference defaults should degrade to panic fallbacks instead of null_mut placeholders"
+        );
+
+        let fn_ty = CppType::Function {
+            return_type: Box::new(CppType::Int { signed: true }),
+            params: vec![CppType::Int { signed: true }],
+            is_variadic: false,
+        };
+        assert_eq!(
+            default_value_for_type(&fn_ty),
+            "panic!(\"fragile: missing safe default for return type\")",
+            "CppType function defaults should degrade to panic fallbacks instead of unsafe zeroed placeholders"
+        );
+    }
+
+    #[test]
+    fn test_default_value_for_cpp_type_sized_arrays_use_from_fn_for_safe_noncopy_lanes() {
+        let ref_elem_ty = CppType::Reference {
+            referent: Box::new(CppType::Int { signed: true }),
+            is_const: true,
+            is_rvalue: false,
+        };
+        let ref_array_ty = CppType::Array {
+            element: Box::new(ref_elem_ty),
+            size: Some(2),
+        };
+        assert_eq!(
+            default_value_for_type(&ref_array_ty),
+            "std::array::from_fn(|_| panic!(\"fragile: missing safe default for reference return type\"))",
+            "CppType reference arrays should synthesize safe from_fn panic defaults"
+        );
+
+        let opaque_array_ty = CppType::Array {
+            element: Box::new(CppType::Named("OpaqueType".to_string())),
+            size: Some(2),
+        };
+        assert_eq!(
+            default_value_for_type(&opaque_array_ty),
+            "unsafe { std::mem::zeroed() }",
+            "CppType arrays should preserve zeroed fallback when element defaults are still zeroed"
         );
     }
 
