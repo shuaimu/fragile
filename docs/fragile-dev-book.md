@@ -444,9 +444,12 @@ This removes shim-style constructor names from generated expressions and improve
 
 Source: `emit_namespace_type_aliases` and `normalize_namespace_alias_target` in `crates/fragile-clang/src/ast_codegen.rs`.
 
-Auto-exported namespace aliases are normalized before emission. Current rule:
+Auto-exported namespace aliases are normalized before emission. Representative rules:
 
 - `rusty::String` -> `std::string::String`
+- `rusty::Option<T>` / `rusty::Result<T, E>` -> `std::option::Option<T>` / `std::result::Result<T, E>`
+- `rusty::HashMap<K, V>` / `rusty::HashSet<T>` -> `std::collections::HashMap<K, V>` / `std::collections::HashSet<T>`
+- `rusty::RefCell<T>` / `rusty::UnsafeCell<T>` -> `std::cell::RefCell<T>` / `std::cell::UnsafeCell<T>`
 
 This keeps generated top-level aliases std-native and avoids re-introducing rusty-cpp wrapper names in otherwise safe/std lowered output.
 
@@ -462,6 +465,14 @@ Late degraded rewrites can produce mismatched typed-null returns such as:
 where `U` is not the function return pointee (for example a parameter-name artifact).
 
 The normalization pass walks emitted function bodies and rewrites typed `null`/`null_mut` return pointees to match the enclosing function signature pointee. This keeps fallback returns type-correct without adding source-project-specific rules.
+
+### 9.10 Global alias rewrite and `MaybeUninit` cleanup ordering
+
+Source: `generate` pass ordering in `crates/fragile-clang/src/ast_codegen.rs`.
+
+Some global references are emitted in rooted path form (`...::name`) and only later normalized to internal storage symbols (`...::__gv_name`) by `normalize_global_symbol_aliases_for_prefixed_statics`.
+
+To avoid false "unreferenced" classification, `normalize_unreferenced_static_mut_initializers` runs **after** global alias normalization in the late pipeline. This prevents live globals from being downgraded to `MaybeUninit<T>` before their `__gv_*` uses are visible.
 
 ## 10. Templates and Instantiation Strategy
 

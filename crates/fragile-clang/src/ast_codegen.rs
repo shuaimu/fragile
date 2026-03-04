@@ -15780,10 +15780,6 @@ impl AstCodeGen {
         output = Self::normalize_self_recursive_struct_fields(&output);
         // Rust unions cannot be empty; degraded lowering can emit shell unions.
         output = Self::normalize_empty_union_definitions(&output);
-        // Unreferenced mutable globals frequently carry invalid/non-const
-        // initializers from degraded lowering; keep symbol surface while
-        // deferring initialization through MaybeUninit.
-        output = Self::normalize_unreferenced_static_mut_initializers(&output);
         // Keep vector-like static zeroed fallbacks stable across the pipeline.
         output = Self::normalize_vector_static_zeroed_initializers(&output);
         // Some generated structs can miss `Default`/`Clone` impls under
@@ -16006,14 +16002,14 @@ impl AstCodeGen {
         output = Self::normalize_static_initializers_with_unresolved_global_refs(&output);
         // Keep vector-like static zeroed fallbacks stable after late rewrites.
         output = Self::normalize_vector_static_zeroed_initializers(&output);
-        // Re-run unreferenced static-mut cleanup at the end of the pipeline:
-        // late normalizations can remove residual references and expose globals
-        // whose zeroed/non-const initializers would otherwise fail const-eval.
-        output = Self::normalize_unreferenced_static_mut_initializers(&output);
         // Global lowering prefixes mutable/static symbols with `__gv_`; some
         // degraded qualified refs still use unprefixed tails (`...::name`).
         // Rewrite rooted path tails to the internal `...::__gv_name` symbol.
         output = Self::normalize_global_symbol_aliases_for_prefixed_statics(&output);
+        // Run unreferenced static-mut cleanup after global alias normalization:
+        // rooted-path rewrites can materialize additional `__gv_*` references
+        // (`...::name` -> `...::__gv_name`) that must count as live uses.
+        output = Self::normalize_unreferenced_static_mut_initializers(&output);
         // Late unresolved-type closure can still append empty union shells.
         output = Self::normalize_empty_union_definitions(&output);
         // Run a final degraded-body fallback after late unresolved-type closure
@@ -69405,6 +69401,41 @@ pub fn probe() {
     }
 
     #[test]
+    fn test_unreferenced_static_cleanup_keeps_globals_referenced_via_late_alias_rewrite() {
+        let input = r#"
+pub(crate) static mut __gv_pxs_workers_g: vector_shared_ptr_PaxosWorker = unsafe { std::mem::zeroed() };
+pub fn probe() {
+    for worker in super::janus::pxs_workers_g {
+        worker;
+    }
+}
+"#;
+        let normalized_aliases =
+            AstCodeGen::normalize_global_symbol_aliases_for_prefixed_statics(input);
+        assert!(
+            normalized_aliases.contains("super::janus::__gv_pxs_workers_g"),
+            "alias normalization should rewrite rooted global path before static-use analysis, got:\n{}",
+            normalized_aliases
+        );
+        let normalized =
+            AstCodeGen::normalize_unreferenced_static_mut_initializers(&normalized_aliases);
+        assert!(
+            normalized.contains(
+                "pub(crate) static mut __gv_pxs_workers_g: vector_shared_ptr_PaxosWorker = unsafe { std::mem::zeroed() };"
+            ),
+            "referenced global should keep concrete storage initializer, got:\n{}",
+            normalized
+        );
+        assert!(
+            !normalized.contains(
+                "pub(crate) static mut __gv_pxs_workers_g: std::mem::MaybeUninit<vector_shared_ptr_PaxosWorker> = std::mem::MaybeUninit::uninit();"
+            ),
+            "referenced global must not be downgraded to MaybeUninit after alias rewrite, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
     fn test_normalize_struct_default_clone_derives_rewrites_struct_derives_to_manual_impls() {
         let input = r#"
 #[derive(Default, Clone, Copy)]
@@ -76240,6 +76271,10 @@ pub mod rusty {
         assert_eq!(
             AstCodeGen::normalize_namespace_alias_target("rusty::HashMap<int, long>"),
             "std::collections::HashMap<i32, i64>"
+        );
+        assert_eq!(
+            AstCodeGen::normalize_namespace_alias_target("rusty::UnsafeCell<rusty::Vec<int>>"),
+            "std::cell::UnsafeCell<std::vec::Vec<i32>>"
         );
         assert_eq!(
             AstCodeGen::normalize_namespace_alias_target("testing::internal::Visible"),

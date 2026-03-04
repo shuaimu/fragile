@@ -364,6 +364,11 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
             "std::cell::RefCell",
             &["rusty::RefCell", "rusty::cell::RefCell"] as &[&str],
         ),
+        (
+            "UnsafeCell",
+            "std::cell::UnsafeCell",
+            &["rusty::UnsafeCell", "rusty::cell::UnsafeCell"] as &[&str],
+        ),
         ("Vec", "std::vec::Vec", &["rusty::Vec", "rusty::vec::Vec"] as &[&str]),
         (
             "VecDeque",
@@ -1890,6 +1895,10 @@ mod tests {
             "std::sync::mpsc::TryRecvError"
         );
         assert_eq!(
+            CppType::Named("rusty::UnsafeCell<int>".to_string()).to_rust_type_str(),
+            "std::cell::UnsafeCell<i32>"
+        );
+        assert_eq!(
             CppType::Named("rusty::thread::rusty_thread_JoinHandle_void_".to_string())
                 .to_rust_type_str(),
             "std::thread::JoinHandle<()>"
@@ -1945,6 +1954,10 @@ mod tests {
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::sync::mpsc::Sender<int>"),
             "std::sync::mpsc::Sender<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::UnsafeCell<rusty::Vec<int>>"),
+            "std::cell::UnsafeCell<std::vec::Vec<i32>>"
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::thread::rusty_thread_JoinHandle_void_"),
