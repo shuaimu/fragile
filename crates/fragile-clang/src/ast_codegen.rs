@@ -13609,7 +13609,15 @@ impl AstCodeGen {
                         elem if elem.starts_with("Option<") => {
                             format!("[None; {}]", size_expr)
                         }
-                        _ => "unsafe { std::mem::zeroed() }".to_string(),
+                        _ => {
+                            let elem_default = Self::get_default_value_for_type(elem_ty);
+                            if elem_default == "unsafe { std::mem::zeroed() }" {
+                                "unsafe { std::mem::zeroed() }".to_string()
+                            } else {
+                                // For non-Copy or unknown element lanes, synthesize each slot safely.
+                                format!("std::array::from_fn(|_| {})", elem_default)
+                            }
+                        }
                     }
                 } else {
                     "unsafe { std::mem::zeroed() }".to_string()
@@ -84774,6 +84782,29 @@ stream.PutN(c, n);
             AstCodeGen::get_default_value_for_type("[*mut i8; 4]"),
             "[std::ptr::null_mut(); 4]",
             "sized pointer arrays should lower to concrete null array defaults"
+        );
+    }
+
+    #[test]
+    fn test_get_default_value_for_type_sized_arrays_noncopy_elements_use_from_fn() {
+        assert_eq!(
+            AstCodeGen::get_default_value_for_type("[String; 2]"),
+            "std::array::from_fn(|_| Default::default())",
+            "non-Copy sized arrays should synthesize defaults with std::array::from_fn"
+        );
+        assert_eq!(
+            AstCodeGen::get_default_value_for_type("[[i8; 4]; 2]"),
+            "std::array::from_fn(|_| [0; 4])",
+            "nested sized arrays should recursively build safe element defaults"
+        );
+    }
+
+    #[test]
+    fn test_get_default_value_for_type_sized_arrays_keep_zeroed_when_element_default_is_zeroed() {
+        assert_eq!(
+            AstCodeGen::get_default_value_for_type("[std::ffi::c_void; 2]"),
+            "unsafe { std::mem::zeroed() }",
+            "arrays whose element lane requires zeroed fallback should preserve zeroed fallback"
         );
     }
 

@@ -126,6 +126,9 @@ Generic normalizations added in this replay cycle:
   - when unresolved all-caps identifiers are returned (`return XXH_OK;`) and no definition survives, prefer safe typed defaults for known return lanes (`0`, `false`, `std::ptr::null[_mut]()`, `None`) and only fall back to `unsafe { std::mem::zeroed() }` when no safe lane inference is available.
 - `get_default_value_for_type` pointer-lane refinement:
   - preserve raw-pointer mutability when synthesizing defaults (`*const T -> std::ptr::null()`, `*mut T -> std::ptr::null_mut()`), so const-pointer defaults remain type-correct safe values.
+- `get_default_value_for_type` sized-array refinement:
+  - for non-primitive/non-pointer/non-`Option` array element lanes, synthesize safe defaults with `std::array::from_fn(|_| <elem_default>)` instead of immediate `unsafe { std::mem::zeroed() }`.
+  - retain zeroed fallback only when the element lane itself has no safe default synthesis (for example `c_void`-backed lanes).
 - switch lowering (`generate_switch_stmt`) no-default fallback arm:
   - emits typed wildcard arm `_ => { unsafe { std::mem::zeroed::<_>() } }` instead of `_ => unsafe { std::mem::zeroed() },` to preserve Rust match arm typing.
 - `normalize_struct_default_clone_derives` refinement:
