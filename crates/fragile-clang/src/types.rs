@@ -184,7 +184,7 @@ fn map_single_template_alias_to_std(
     if args.len() != 1 {
         return None;
     }
-    let mapped = CppType::Named(args[0].clone()).to_rust_type_str();
+    let mapped = map_alias_template_arg_to_rust(&args[0]);
     Some(format!("{}<{}>", std_path, mapped))
 }
 
@@ -198,9 +198,63 @@ fn map_double_template_alias_to_std(
     if args.len() != 2 {
         return None;
     }
-    let left = CppType::Named(args[0].clone()).to_rust_type_str();
-    let right = CppType::Named(args[1].clone()).to_rust_type_str();
+    let left = map_alias_template_arg_to_rust(&args[0]);
+    let right = map_alias_template_arg_to_rust(&args[1]);
     Some(format!("{}<{}, {}>", std_path, left, right))
+}
+
+fn is_explicit_rust_function_pointer_type(arg: &str) -> bool {
+    let trimmed = arg.trim();
+    trimmed.contains("extern \"C\" fn(")
+        || trimmed.contains("extern \"C\" fn (")
+        || trimmed.starts_with("fn(")
+}
+
+fn map_alias_template_arg_to_rust(arg: &str) -> String {
+    let trimmed = arg.trim();
+    if is_explicit_rust_function_pointer_type(trimmed) {
+        // Preserve already-lowered Rust fn pointer spellings inside template args.
+        return trimmed.to_string();
+    }
+    CppType::Named(trimmed.to_string()).to_rust_type_str()
+}
+
+fn map_thread_join_handle_to_std(spelling: &str) -> Option<String> {
+    let inner = spelling
+        .strip_prefix("rusty::thread::JoinHandle<")?
+        .strip_suffix('>')?;
+    let args = parse_template_args(inner);
+    if args.len() != 1 {
+        return None;
+    }
+    let raw_arg = strip_cpp_type_tag_prefix(args[0].trim());
+    let normalized_arg = raw_arg
+        .trim_start_matches("const ")
+        .trim_start_matches("volatile ")
+        .trim();
+    let mapped = if normalized_arg == "void" {
+        "()".to_string()
+    } else {
+        CppType::Named(args[0].clone()).to_rust_type_str()
+    };
+    Some(format!("std::thread::JoinHandle<{}>", mapped))
+}
+
+fn map_lowered_thread_join_handle_to_std(spelling: &str) -> Option<String> {
+    let lowered = spelling
+        .strip_prefix("rusty::thread::rusty_thread_JoinHandle_")?
+        .strip_suffix('_')?;
+    if lowered.is_empty() {
+        return None;
+    }
+    let mapped = if lowered == "void" {
+        "()".to_string()
+    } else if lowered.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+        CppType::Named(lowered.to_string()).to_rust_type_str()
+    } else {
+        return None;
+    };
+    Some(format!("std::thread::JoinHandle<{}>", mapped))
 }
 
 fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
@@ -215,9 +269,30 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
     match cleaned {
         "rusty::String" => return Some("std::string::String".to_string()),
         "rusty::string::String" => return Some("std::string::String".to_string()),
+        "rusty::sync::mpsc::Unit" => return Some("()".to_string()),
+        "rusty::sync::mpsc::RecvError" => return Some("std::sync::mpsc::RecvError".to_string()),
+        "rusty::sync::mpsc::TryRecvError" => {
+            return Some("std::sync::mpsc::TryRecvError".to_string());
+        }
         // `using namespace rusty;` can leave aliases unqualified in Clang spellings.
         "String" => return Some("std::string::String".to_string()),
         _ => {}
+    }
+
+    if let Some(mapped) = map_thread_join_handle_to_std(cleaned) {
+        return Some(mapped);
+    }
+    if let Some(mapped) = map_lowered_thread_join_handle_to_std(cleaned) {
+        return Some(mapped);
+    }
+
+    for (prefix, std_path) in [
+        ("rusty::sync::mpsc::Sender<", "std::sync::mpsc::Sender"),
+        ("rusty::sync::mpsc::Receiver<", "std::sync::mpsc::Receiver"),
+    ] {
+        if let Some(mapped) = map_single_template_alias_to_std(cleaned, prefix, std_path) {
+            return Some(mapped);
+        }
     }
 
     for (alias, std_path, qualified_roots) in [
@@ -1744,6 +1819,43 @@ mod tests {
     }
 
     #[test]
+    fn test_rusty_thread_and_mpsc_types_map_to_std_library_types() {
+        assert_eq!(
+            CppType::Named("rusty::thread::JoinHandle<void>".to_string()).to_rust_type_str(),
+            "std::thread::JoinHandle<()>"
+        );
+        assert_eq!(
+            CppType::Named("rusty::thread::JoinHandle<int>".to_string()).to_rust_type_str(),
+            "std::thread::JoinHandle<i32>"
+        );
+        assert_eq!(
+            CppType::Named("rusty::sync::mpsc::Sender<int>".to_string()).to_rust_type_str(),
+            "std::sync::mpsc::Sender<i32>"
+        );
+        assert_eq!(
+            CppType::Named("rusty::sync::mpsc::Receiver<int>".to_string()).to_rust_type_str(),
+            "std::sync::mpsc::Receiver<i32>"
+        );
+        assert_eq!(
+            CppType::Named("rusty::sync::mpsc::Unit".to_string()).to_rust_type_str(),
+            "()"
+        );
+        assert_eq!(
+            CppType::Named("rusty::sync::mpsc::RecvError".to_string()).to_rust_type_str(),
+            "std::sync::mpsc::RecvError"
+        );
+        assert_eq!(
+            CppType::Named("rusty::sync::mpsc::TryRecvError".to_string()).to_rust_type_str(),
+            "std::sync::mpsc::TryRecvError"
+        );
+        assert_eq!(
+            CppType::Named("rusty::thread::rusty_thread_JoinHandle_void_".to_string())
+                .to_rust_type_str(),
+            "std::thread::JoinHandle<()>"
+        );
+    }
+
+    #[test]
     fn test_normalize_rusty_type_alias_to_std_maps_wrappers_and_preserves_non_rusty_paths() {
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::Option<rusty::String>"),
@@ -1760,6 +1872,24 @@ mod tests {
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::sync::Weak<int>"),
             "std::sync::Weak<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::thread::JoinHandle<void>"),
+            "std::thread::JoinHandle<()>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::sync::mpsc::Sender<int>"),
+            "std::sync::mpsc::Sender<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::thread::rusty_thread_JoinHandle_void_"),
+            "std::thread::JoinHandle<()>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std(
+                "Option<extern \"C\" fn(*mut ReqHandle, *mut ()) -> ()>"
+            ),
+            "std::option::Option<extern \"C\" fn(*mut ReqHandle, *mut ()) -> ()>"
         );
     }
 

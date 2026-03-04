@@ -4797,10 +4797,11 @@ impl AstCodeGen {
                     continue;
                 }
                 if let Some(target) = Self::resolve_container_alias_target(name, &defined) {
+                    let normalized_target = Self::normalize_namespace_alias_target(&target);
                     additions.push_str(
                         "\n/// Container/smart-pointer alias fallback for unresolved lowered type spelling\n",
                     );
-                    additions.push_str(&format!("pub type {} = {};\n", name, target));
+                    additions.push_str(&format!("pub type {} = {};\n", name, normalized_target));
                     defined.insert(name.clone());
                     progressed = true;
                     continue;
@@ -4809,10 +4810,11 @@ impl AstCodeGen {
                     .into_iter()
                     .find(|candidate| defined.contains(candidate))
                 {
+                    let normalized_target = Self::normalize_namespace_alias_target(&target);
                     additions.push_str(
                         "\n/// Qualifier-family alias fallback for unresolved type spelling\n",
                     );
-                    additions.push_str(&format!("pub type {} = {};\n", name, target));
+                    additions.push_str(&format!("pub type {} = {};\n", name, normalized_target));
                     defined.insert(name.clone());
                     progressed = true;
                 }
@@ -5638,8 +5640,9 @@ impl AstCodeGen {
             if out.contains(&prefix) {
                 continue;
             }
+            let normalized_target = Self::normalize_namespace_alias_target(&target);
             out.push_str("/// Lowercase unresolved type alias fallback\n");
-            out.push_str(&format!("pub type {} = {};\n", alias, target));
+            out.push_str(&format!("pub type {} = {};\n", alias, normalized_target));
         }
         out
     }
@@ -5824,8 +5827,9 @@ impl AstCodeGen {
             if out.contains(&prefix) {
                 continue;
             }
+            let normalized_target = Self::normalize_namespace_alias_target(&target);
             out.push_str("/// Namespaced unresolved type alias fallback\n");
-            out.push_str(&format!("pub type {} = {};\n", alias, target));
+            out.push_str(&format!("pub type {} = {};\n", alias, normalized_target));
         }
         out
     }
@@ -20397,6 +20401,8 @@ impl AstCodeGen {
         if let Some(container_alias_target) =
             Self::stl_container_alias_target_from_template_args(&rust_name, type_args)
         {
+            let normalized_container_alias_target =
+                Self::normalize_namespace_alias_target(&container_alias_target);
             if !self.generated_aliases.contains(&rust_name) {
                 self.writeln(&format!(
                     "/// Alias C++ template instantiation `{}` to generic STL stub",
@@ -20404,12 +20410,12 @@ impl AstCodeGen {
                 ));
                 self.writeln(&format!(
                     "pub type {} = {};",
-                    rust_name, container_alias_target
+                    rust_name, normalized_container_alias_target
                 ));
                 self.writeln("");
                 self.generated_aliases.insert(rust_name.clone());
                 self.type_alias_targets
-                    .insert(rust_name.clone(), container_alias_target);
+                    .insert(rust_name.clone(), normalized_container_alias_target);
                 if self.current_rust_module_path().is_empty() {
                     self.global_type_names.insert(rust_name.clone());
                 }
@@ -20427,15 +20433,19 @@ impl AstCodeGen {
         // Skip if already generated
         if self.generated_structs.contains(&rust_name) {
             if raw_rust_name != rust_name && !self.generated_aliases.contains(&raw_rust_name) {
+                let normalized_rust_name = Self::normalize_namespace_alias_target(&rust_name);
                 self.writeln(&format!(
                     "/// Alias C++ template instantiation `{}` to canonical template shape",
                     inst_name
                 ));
-                self.writeln(&format!("pub type {} = {};", raw_rust_name, rust_name));
+                self.writeln(&format!(
+                    "pub type {} = {};",
+                    raw_rust_name, normalized_rust_name
+                ));
                 self.writeln("");
                 self.generated_aliases.insert(raw_rust_name.clone());
                 self.type_alias_targets
-                    .insert(raw_rust_name.clone(), rust_name.clone());
+                    .insert(raw_rust_name.clone(), normalized_rust_name);
                 if self.current_rust_module_path().is_empty() {
                     self.global_type_names.insert(raw_rust_name.clone());
                 }
@@ -20839,15 +20849,19 @@ impl AstCodeGen {
         self.generate_template_impl(inst_name, &rust_name, children);
 
         if raw_rust_name != rust_name && !self.generated_aliases.contains(&raw_rust_name) {
+            let normalized_rust_name = Self::normalize_namespace_alias_target(&rust_name);
             self.writeln(&format!(
                 "/// Alias C++ template instantiation `{}` to canonical template shape",
                 inst_name
             ));
-            self.writeln(&format!("pub type {} = {};", raw_rust_name, rust_name));
+            self.writeln(&format!(
+                "pub type {} = {};",
+                raw_rust_name, normalized_rust_name
+            ));
             self.writeln("");
             self.generated_aliases.insert(raw_rust_name.clone());
             self.type_alias_targets
-                .insert(raw_rust_name.clone(), rust_name.clone());
+                .insert(raw_rust_name.clone(), normalized_rust_name);
             if self.current_rust_module_path().is_empty() {
                 self.global_type_names.insert(raw_rust_name.clone());
             }
@@ -38613,6 +38627,8 @@ impl AstCodeGen {
                 rust_type = target.clone();
             }
         }
+
+        rust_type = Self::normalize_namespace_alias_target(&rust_type);
 
         // Skip self-referential type aliases (e.g., typedef atomic<int> atomic_int
         // may generate pub type atomic_int = atomic_int when the template resolves to same name)
@@ -74445,6 +74461,33 @@ pub type vector_LogEntry = std_vector<LogEntry>;
     }
 
     #[test]
+    fn test_normalize_unresolved_namespaced_type_aliases_normalizes_rusty_mpsc_targets() {
+        let input = r#"
+pub mod rusty {
+    pub mod sync {
+        pub mod mpsc {
+            pub struct RecvError {
+                _opaque: [u8; 1],
+            }
+        }
+    }
+}
+pub type queue_RecvError = std_queue<RecvError>;
+"#;
+        let output = AstCodeGen::normalize_unresolved_namespaced_type_aliases(input);
+        assert!(
+            output.contains("pub type RecvError = std::sync::mpsc::RecvError;"),
+            "namespaced unresolved alias normalization should rewrite rusty mpsc aliases to std::sync::mpsc targets, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("pub type RecvError = rusty::sync::mpsc::RecvError;"),
+            "namespaced unresolved alias normalization should avoid unnormalized rusty mpsc alias targets, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
     fn test_normalize_unresolved_namespaced_type_aliases_skips_conflicted_leaf_names() {
         let input = r#"
 pub mod a {
@@ -75620,6 +75663,32 @@ pub mod rusty {
             AstCodeGen::normalize_namespace_alias_target("rusty::sync::Weak<int>"),
             "std::sync::Weak<i32>"
         );
+        assert_eq!(
+            AstCodeGen::normalize_namespace_alias_target("rusty::thread::JoinHandle<void>"),
+            "std::thread::JoinHandle<()>"
+        );
+        assert_eq!(
+            AstCodeGen::normalize_namespace_alias_target("rusty::sync::mpsc::Receiver<int>"),
+            "std::sync::mpsc::Receiver<i32>"
+        );
+        assert_eq!(
+            AstCodeGen::normalize_namespace_alias_target("rusty::sync::mpsc::RecvError"),
+            "std::sync::mpsc::RecvError"
+        );
+        assert_eq!(
+            AstCodeGen::normalize_namespace_alias_target("rusty::sync::mpsc::TryRecvError"),
+            "std::sync::mpsc::TryRecvError"
+        );
+        assert_eq!(
+            AstCodeGen::normalize_namespace_alias_target("rusty::sync::mpsc::Unit"),
+            "()"
+        );
+        assert_eq!(
+            AstCodeGen::normalize_namespace_alias_target(
+                "rusty::thread::rusty_thread_JoinHandle_void_"
+            ),
+            "std::thread::JoinHandle<()>"
+        );
     }
 
     #[test]
@@ -75656,6 +75725,29 @@ pub enum r#type {
         assert!(
             output.contains("pub enum r#type {"),
             "alias-enum collision normalization should preserve enum declarations, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_generate_type_alias_normalizes_namespace_alias_target_to_std() {
+        let mut codegen = AstCodeGen::new();
+        codegen.namespace_type_alias_targets.insert(
+            "RecvError".to_string(),
+            "rusty::sync::mpsc::RecvError".to_string(),
+        );
+
+        codegen.generate_type_alias("RecvErrorAlias", &CppType::Named("RecvError".to_string()));
+        let output = codegen.output;
+
+        assert!(
+            output.contains("pub type RecvErrorAlias = std::sync::mpsc::RecvError;"),
+            "type alias generation should normalize namespace-derived rusty mpsc aliases to std::sync::mpsc::RecvError, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("pub type RecvErrorAlias = rusty::sync::mpsc::RecvError;"),
+            "type alias generation should avoid emitting unnormalized rusty mpsc alias targets, got:\n{}",
             output
         );
     }

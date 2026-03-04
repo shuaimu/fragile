@@ -948,3 +948,8 @@ Namespace alias target normalization must reuse the same Rusty-wrapper mapping l
 - Wrapper aliases now normalize to Rust std paths consistently.
 - Non-rusty namespaced aliases (for example `testing::internal::Visible`) are preserved as-is, avoiding accidental namespace mangling.
 - Nested Rusty namespace spellings (for example `rusty::sync::Weak<T>`, `rusty::rc::Weak<T>`, `rusty::collections::HashMap<K, V>`) are normalized through the same shared path.
+- Rusty thread/channel spellings now normalize as well (for example `rusty::thread::JoinHandle<T>`, `rusty::sync::mpsc::{Sender<T>, Receiver<T>, Unit, RecvError, TryRecvError}`), with `JoinHandle<void>` mapped to `std::thread::JoinHandle<()>`.
+- Alias fallback emitters now also run the same normalization step (`generate_type_alias`, unresolved namespaced/lowercase alias synthesis, and template-instantiation alias bridges), so `pub type ... = rusty::...` RHS paths are normalized consistently wherever aliases are emitted.
+- Lowered Rusty thread spellings in namespace exports are normalized as well (for example `rusty::thread::rusty_thread_JoinHandle_void_ -> std::thread::JoinHandle<()>`).
+- Normalization preserves explicit Rust function-pointer template arguments (for example `Option<extern "C" fn(...) -> ...>`) instead of re-parsing/mangling them through C++ named-type lowering.
+- Debugging note: `CMakeFiles/**.fragile.rs` sidecars can be stale unless `FRAGILEC_KEEP_RS=1` is set for the build invocation; use that env var when validating freshly emitted Rust text.
