@@ -263,6 +263,10 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         .trim_start_matches("const ")
         .trim_start_matches("volatile ")
         .trim();
+    let mut cleaned = cleaned.trim_start_matches("::").trim();
+    if let Some(rest) = cleaned.strip_prefix("crate::") {
+        cleaned = rest.trim();
+    }
     let root_name = cleaned.split('<').next().unwrap_or(cleaned).trim();
     let root_is_unqualified = !root_name.contains("::");
 
@@ -1879,6 +1883,14 @@ mod tests {
             CppType::Named("rusty::WaitTimeoutResult".to_string()).to_rust_type_str(),
             "std::sync::WaitTimeoutResult"
         );
+        assert_eq!(
+            CppType::Named("::rusty::Barrier".to_string()).to_rust_type_str(),
+            "std::sync::Barrier"
+        );
+        assert_eq!(
+            CppType::Named("crate::rusty::sync::mpsc::RecvError".to_string()).to_rust_type_str(),
+            "std::sync::mpsc::RecvError"
+        );
     }
 
     #[test]
@@ -1932,6 +1944,14 @@ mod tests {
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::WaitTimeoutResult"),
             "std::sync::WaitTimeoutResult"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("::rusty::Option<rusty::String>"),
+            "std::option::Option<std::string::String>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("crate::rusty::sync::mpsc::RecvError"),
+            "std::sync::mpsc::RecvError"
         );
     }
 

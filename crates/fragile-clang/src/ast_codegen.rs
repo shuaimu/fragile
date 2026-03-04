@@ -75961,6 +75961,14 @@ pub mod rusty {
             AstCodeGen::normalize_namespace_alias_target("rusty::WaitTimeoutResult"),
             "std::sync::WaitTimeoutResult"
         );
+        assert_eq!(
+            AstCodeGen::normalize_namespace_alias_target("::rusty::Barrier"),
+            "std::sync::Barrier"
+        );
+        assert_eq!(
+            AstCodeGen::normalize_namespace_alias_target("crate::rusty::sync::mpsc::RecvError"),
+            "std::sync::mpsc::RecvError"
+        );
     }
 
     #[test]
