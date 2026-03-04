@@ -13607,7 +13607,8 @@ impl AstCodeGen {
                             format!("[std::ptr::null_mut(); {}]", size_expr)
                         }
                         elem if elem.starts_with("Option<") => {
-                            format!("[None; {}]", size_expr)
+                            // `Option<T>` is not always `Copy`; synthesize each slot safely.
+                            "std::array::from_fn(|_| None)".to_string()
                         }
                         _ => {
                             let elem_default = Self::get_default_value_for_type(elem_ty);
@@ -84796,6 +84797,15 @@ stream.PutN(c, n);
             AstCodeGen::get_default_value_for_type("[[i8; 4]; 2]"),
             "std::array::from_fn(|_| [0; 4])",
             "nested sized arrays should recursively build safe element defaults"
+        );
+    }
+
+    #[test]
+    fn test_get_default_value_for_type_sized_option_arrays_use_from_fn() {
+        assert_eq!(
+            AstCodeGen::get_default_value_for_type("[Option<String>; 2]"),
+            "std::array::from_fn(|_| None)",
+            "Option arrays should avoid repeat syntax and synthesize element defaults without Copy bounds"
         );
     }
 

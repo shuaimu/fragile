@@ -128,6 +128,7 @@ Generic normalizations added in this replay cycle:
   - preserve raw-pointer mutability when synthesizing defaults (`*const T -> std::ptr::null()`, `*mut T -> std::ptr::null_mut()`), so const-pointer defaults remain type-correct safe values.
 - `get_default_value_for_type` sized-array refinement:
   - for non-primitive/non-pointer/non-`Option` array element lanes, synthesize safe defaults with `std::array::from_fn(|_| <elem_default>)` instead of immediate `unsafe { std::mem::zeroed() }`.
+  - for `Option<...>` element lanes, use `std::array::from_fn(|_| None)` to avoid array-repeat `Copy` constraints on non-`Copy` option payloads.
   - retain zeroed fallback only when the element lane itself has no safe default synthesis (for example `c_void`-backed lanes).
 - switch lowering (`generate_switch_stmt`) no-default fallback arm:
   - emits typed wildcard arm `_ => { unsafe { std::mem::zeroed::<_>() } }` instead of `_ => unsafe { std::mem::zeroed() },` to preserve Rust match arm typing.
