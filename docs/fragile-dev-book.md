@@ -123,9 +123,9 @@ Generic normalizations added in this replay cycle:
 - `normalize_unresolved_join_method_calls`:
   - rewrites unresolved identifier `.join();` statements to no-op.
 - `normalize_unresolved_const_like_identifier_returns` refinement:
-  - when unresolved all-caps identifiers are returned (`return XXH_OK;`) and no definition survives, prefer safe typed defaults for known return lanes (`0`, `false`, `std::ptr::null[_mut]()`, `None`) and only fall back to `unsafe { std::mem::zeroed() }` when no safe lane inference is available.
+  - when unresolved all-caps identifiers are returned (`return XXH_OK;`) and no definition survives, prefer safe typed defaults for known return lanes (`0`, `false`, `std::ptr::null[_mut]()`, `None`) and fall back to `panic!(...)` when no safe lane inference is available.
   - recognize namespaced option lanes (`std::option::Option<...>`, `core::option::Option<...>`, `rusty::Option<...>`) as safe-`None` candidates so unresolved returns in those signatures avoid `unsafe { std::mem::zeroed() }`.
-  - recognize `Result`-like return lanes (`std/core/rusty Result<Ok, Err>` and `std::fmt::Result`) and rewrite unresolved const-like returns to `Ok(<safe_default>)` (or `Ok(())`) before considering unsafe fallback.
+  - recognize `Result`-like return lanes (`std/core/rusty Result<Ok, Err>` and `std::fmt::Result`) and rewrite unresolved const-like returns to `Ok(<safe_default>)` (or `Ok(())`), using `Ok(panic!(...))` when the `Ok` lane has no safe concrete default.
   - for reference return lanes (`&T`, `&mut T`) where no concrete safe value can be synthesized, rewrite to a `panic!(...)` fallback instead of `unsafe { std::mem::zeroed() }`.
 - `get_default_value_for_type` pointer-lane refinement:
   - preserve raw-pointer mutability when synthesizing defaults (`*const T -> std::ptr::null()`, `*mut T -> std::ptr::null_mut()`), so const-pointer defaults remain type-correct safe values.
@@ -137,6 +137,7 @@ Generic normalizations added in this replay cycle:
   - retain zeroed fallback only when the element lane itself has no safe default synthesis (for example `c_void`-backed lanes).
 - `default_expr_for_empty_body_return_type` reference-lane refinement:
   - for `&T` / `&mut T` return lanes in synthesized stub bodies (including injected tail-returns and wildcard match-arm rewrites), use a `panic!(...)` fallback expression instead of `unsafe { std::mem::zeroed() }`.
+  - when top-level return-lane default synthesis degrades to `unsafe { std::mem::zeroed() }` (unknown/non-inferable return type), rewrite to a `panic!(...)` fallback expression instead.
 - switch lowering (`generate_switch_stmt`) no-default fallback arm:
   - emits typed wildcard arm `_ => { unsafe { std::mem::zeroed::<_>() } }` instead of `_ => unsafe { std::mem::zeroed() },` to preserve Rust match arm typing.
 - `normalize_struct_default_clone_derives` refinement:

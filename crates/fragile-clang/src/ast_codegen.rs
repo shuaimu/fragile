@@ -161,6 +161,49 @@ fn reference_fallback_panic_expr() -> &'static str {
     "panic!(\"fragile: missing safe default for reference return type\")"
 }
 
+/// Safe fallback expression for lanes where a concrete return value cannot be synthesized.
+fn unknown_return_fallback_panic_expr() -> &'static str {
+    "panic!(\"fragile: missing safe default for return type\")"
+}
+
+fn is_unsafe_zeroed_expr(expr: &str) -> bool {
+    matches!(expr.trim(), "unsafe { std::mem::zeroed() }" | "std::mem::zeroed()")
+}
+
+/// Conservative nominal-type check used for return-lane fallbacks.
+///
+/// For plain nominal lanes (e.g. `FooType`), `Default::default()` can require
+/// trait impls that are often unavailable in degraded replay surfaces. In these
+/// lanes we prefer `panic!(...)` fallbacks to keep generated code safe and
+/// compilation-friendly.
+fn is_plain_nominal_rust_type(ty: &str) -> bool {
+    let ty = ty.trim();
+    if ty.is_empty() {
+        return false;
+    }
+    if ty.contains("::")
+        || ty.contains('<')
+        || ty.contains('>')
+        || ty.contains(' ')
+        || ty.contains('&')
+        || ty.contains('*')
+        || ty.contains('[')
+        || ty.contains(']')
+        || ty.contains('(')
+        || ty.contains(')')
+        || ty.contains(',')
+    {
+        return false;
+    }
+    ty.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+fn should_use_unknown_return_panic_fallback(return_ty: &str, default_expr: &str) -> bool {
+    let expr = default_expr.trim();
+    is_unsafe_zeroed_expr(expr)
+        || (expr == "Default::default()" && is_plain_nominal_rust_type(return_ty))
+}
+
 /// Check whether a Rust type string is an Option-wrapped function pointer.
 fn is_option_fn_rust_type(ty: &str) -> bool {
     ty.starts_with("Option<fn(")
@@ -6043,7 +6086,12 @@ impl AstCodeGen {
         if ok_ty == "()" {
             Some("Ok(())".to_string())
         } else {
-            Some(format!("Ok({})", Self::get_default_value_for_type(ok_ty)))
+            let ok_default = Self::get_default_value_for_type(ok_ty);
+            if should_use_unknown_return_panic_fallback(ok_ty, &ok_default) {
+                Some(format!("Ok({})", unknown_return_fallback_panic_expr()))
+            } else {
+                Some(format!("Ok({})", ok_default))
+            }
         }
     }
 
@@ -6058,7 +6106,12 @@ impl AstCodeGen {
         } else if let Some(default_result) = Self::default_expr_for_result_type(trimmed) {
             default_result
         } else {
-            Self::get_default_value_for_type(trimmed)
+            let fallback = Self::get_default_value_for_type(trimmed);
+            if should_use_unknown_return_panic_fallback(trimmed, &fallback) {
+                unknown_return_fallback_panic_expr().to_string()
+            } else {
+                fallback
+            }
         }
     }
 
@@ -7566,7 +7619,7 @@ impl AstCodeGen {
                             .and_then(|(_, return_ty)| {
                                 safe_default_expr_for_return_type(return_ty)
                             })
-                            .unwrap_or_else(|| "unsafe { std::mem::zeroed() }".to_string());
+                            .unwrap_or_else(|| unknown_return_fallback_panic_expr().to_string());
                         out.push_str(indent);
                         out.push_str("return ");
                         out.push_str(&fallback);
@@ -75244,6 +75297,20 @@ pub fn RefMut() -> &'static mut i32 {
     }
 
     #[test]
+    fn test_synthesize_empty_non_unit_function_bodies_uses_panic_for_unknown_returns() {
+        let input = r#"
+pub fn Unknown() -> UnknownTagAutoType {
+}
+"#;
+        let output = AstCodeGen::synthesize_empty_non_unit_function_bodies(input);
+        assert!(
+            output.contains("pub fn Unknown() -> UnknownTagAutoType {\n    panic!(\"fragile: missing safe default for return type\")\n}"),
+            "empty non-unit body synthesis should use panic fallback for unknown return types, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
     fn test_synthesize_empty_non_unit_function_bodies_uses_ok_fallback_for_result_returns() {
         let input = r#"
 pub fn Pretty() -> std::result::Result<std::string::String, ()> {
@@ -75253,6 +75320,8 @@ pub fn Fmt() -> std::fmt::Result {
 pub fn Rusty() -> rusty::Result<i32, i32> {
 }
 pub fn CoreRooted() -> ::core::result::Result<i32, i32> {
+}
+pub fn OpaqueResult() -> std::result::Result<UnknownTagAutoType, i32> {
 }
 "#;
         let output = AstCodeGen::synthesize_empty_non_unit_function_bodies(input);
@@ -75276,6 +75345,11 @@ pub fn CoreRooted() -> ::core::result::Result<i32, i32> {
         assert!(
             output.contains("pub fn CoreRooted() -> ::core::result::Result<i32, i32> {\n    Ok(0)\n}"),
             "empty non-unit body synthesis should use `Ok(...)` for rooted core::result::Result<T, E> returns, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn OpaqueResult() -> std::result::Result<UnknownTagAutoType, i32> {\n    Ok(panic!(\"fragile: missing safe default for return type\"))\n}"),
+            "empty non-unit body synthesis should avoid unsafe zeroed for unknown Result<T, E> ok lanes, got:\n{}",
             output
         );
     }
@@ -75670,8 +75744,8 @@ pub fn XXH32_reset() -> UnknownTagEnumType {
 "#;
         let output = AstCodeGen::normalize_unresolved_const_like_identifier_returns(input);
         assert!(
-            output.contains("return unsafe { std::mem::zeroed() };"),
-            "missing const-like return identifiers should degrade to compile-safe zeroed returns, got:\n{}",
+            output.contains("return panic!(\"fragile: missing safe default for return type\");"),
+            "missing const-like return identifiers should degrade to panic fallbacks when return lane inference is unavailable, got:\n{}",
             output
         );
         assert!(
@@ -75713,6 +75787,12 @@ pub fn ref_mode() -> &'static i32 {
 }
 pub fn ref_mode_mut() -> &'static mut i32 {
     return MISSING_REF_MUT;
+}
+pub fn opaque_mode() -> UnknownTagAutoType {
+    return MISSING_OPAQUE;
+}
+pub fn opaque_result() -> std::result::Result<UnknownTagAutoType, i32> {
+    return MISSING_OPAQUE_RESULT;
 }
 "#;
         let output = AstCodeGen::normalize_unresolved_const_like_identifier_returns(input);
@@ -75764,6 +75844,16 @@ pub fn ref_mode_mut() -> &'static mut i32 {
         assert!(
             output.contains("pub fn ref_mode_mut() -> &'static mut i32 {\n    return panic!(\"fragile: missing safe default for reference return type\");\n}"),
             "mutable reference return types should degrade to panic fallback defaults, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn opaque_mode() -> UnknownTagAutoType {\n    return panic!(\"fragile: missing safe default for return type\");\n}"),
+            "unknown return types should degrade to panic fallback defaults when lane inference is unavailable, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn opaque_result() -> std::result::Result<UnknownTagAutoType, i32> {\n    return Ok(panic!(\"fragile: missing safe default for return type\"));\n}"),
+            "Result<T, E> unknown ok lanes should degrade to Ok(panic!(...)) instead of unsafe zeroed, got:\n{}",
             output
         );
         assert!(
