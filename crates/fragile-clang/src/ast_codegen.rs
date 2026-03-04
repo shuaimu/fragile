@@ -13615,9 +13615,8 @@ impl AstCodeGen {
                     "unsafe { std::mem::zeroed() }".to_string()
                 }
             }
-            ty if ty.starts_with("*mut ") || ty.starts_with("*const ") => {
-                "std::ptr::null_mut()".to_string()
-            }
+            ty if ty.starts_with("*const ") => "std::ptr::null()".to_string(),
+            ty if ty.starts_with("*mut ") => "std::ptr::null_mut()".to_string(),
             // c_void doesn't implement Default — use zeroed memory
             ty if ty.contains("c_void") => "unsafe { std::mem::zeroed() }".to_string(),
             _ => "Default::default()".to_string(),
@@ -84775,6 +84774,20 @@ stream.PutN(c, n);
             AstCodeGen::get_default_value_for_type("[*mut i8; 4]"),
             "[std::ptr::null_mut(); 4]",
             "sized pointer arrays should lower to concrete null array defaults"
+        );
+    }
+
+    #[test]
+    fn test_get_default_value_for_type_preserves_pointer_constness() {
+        assert_eq!(
+            AstCodeGen::get_default_value_for_type("*const i8"),
+            "std::ptr::null()",
+            "const raw pointers should lower to const null defaults"
+        );
+        assert_eq!(
+            AstCodeGen::get_default_value_for_type("*mut i8"),
+            "std::ptr::null_mut()",
+            "mut raw pointers should lower to mut null defaults"
         );
     }
 
