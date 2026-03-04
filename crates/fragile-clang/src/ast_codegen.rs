@@ -6012,6 +6012,66 @@ impl AstCodeGen {
         out
     }
 
+    fn normalize_rusty_type_alias_rhs_paths(code: &str) -> String {
+        if !code.contains("type ") || !code.contains("rusty::") {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        for line in code.lines() {
+            let trimmed = line.trim_start();
+            let is_type_alias = trimmed.starts_with("pub type ")
+                || trimmed.starts_with("type ")
+                || trimmed.starts_with("pub(crate) type ")
+                || trimmed.starts_with("pub(super) type ")
+                || trimmed.starts_with("pub(self) type ");
+            if !is_type_alias {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+
+            let Some((lhs, rhs_with_tail)) = trimmed.split_once('=') else {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            };
+            let Some(semi_idx) = rhs_with_tail.find(';') else {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            };
+
+            let rhs = rhs_with_tail[..semi_idx].trim();
+            if rhs.is_empty() {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+
+            let normalized_rhs = Self::normalize_namespace_alias_target(rhs);
+            if normalized_rhs == rhs {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+
+            let indent_len = line.len().saturating_sub(trimmed.len());
+            out.push_str(&line[..indent_len]);
+            out.push_str(lhs.trim_end());
+            out.push_str(" = ");
+            out.push_str(&normalized_rhs);
+            out.push(';');
+            out.push_str(&rhs_with_tail[(semi_idx + 1)..]);
+            out.push('\n');
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
     fn normalize_placeholder_ctor_calls(code: &str) -> String {
         let needle = "_::new_0()";
         let mut out = String::with_capacity(code.len());
@@ -15612,6 +15672,9 @@ impl AstCodeGen {
         // is only imported from the parent scope. Rewrite such alias rhs paths
         // to `crate::Type` to keep public typedefs visible.
         output = Self::normalize_private_module_glob_import_type_alias_paths(&output);
+        // Normalize Rusty wrapper aliases in all emitted type alias RHS paths
+        // so per-emitter alias surfaces remain std-native consistently.
+        output = Self::normalize_rusty_type_alias_rhs_paths(&output);
         // Break trivial alias cycles produced by degraded typedef lowering.
         output = Self::normalize_recursive_type_alias_cycles(&output);
         // Resolve duplicate item emissions where degraded typedef lowering emits
@@ -74707,6 +74770,41 @@ pub type substring_type = lcdf::Str;
         assert!(
             !output.contains("pub type substring_type = crate::Str;"),
             "module-local public type paths should not be rewritten to crate roots, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rusty_type_alias_rhs_paths_rewrites_mapped_wrappers() {
+        let input = r#"
+pub type Barrier = rusty::Barrier;
+pub(crate) type Condvar = rusty::Condvar;
+type RecvError = rusty::sync::mpsc::RecvError;
+pub type WaitTimeoutResult = rusty::WaitTimeoutResult;
+"#;
+        let output = AstCodeGen::normalize_rusty_type_alias_rhs_paths(input);
+        assert!(
+            output.contains("pub type Barrier = std::sync::Barrier;")
+                && output.contains("pub(crate) type Condvar = std::sync::Condvar;")
+                && output.contains("type RecvError = std::sync::mpsc::RecvError;")
+                && output.contains("pub type WaitTimeoutResult = std::sync::WaitTimeoutResult;"),
+            "rusty alias rhs normalization should rewrite mapped wrapper aliases to std paths, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rusty_type_alias_rhs_paths_preserves_unmapped_rusty_targets() {
+        let input = r#"
+pub type Scope = rusty::thread::Scope;
+pub type TrySendError = rusty::sync::mpsc::TrySendError; // no std equivalent shape
+"#;
+        let output = AstCodeGen::normalize_rusty_type_alias_rhs_paths(input);
+        assert!(
+            output.contains("pub type Scope = rusty::thread::Scope;")
+                && output
+                    .contains("pub type TrySendError = rusty::sync::mpsc::TrySendError; // no std equivalent shape"),
+            "rusty alias rhs normalization should keep unmapped targets unchanged, got:\n{}",
             output
         );
     }
