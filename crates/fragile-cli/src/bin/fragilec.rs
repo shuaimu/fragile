@@ -1065,11 +1065,20 @@ fn run_fragile_compile(parsed: &ParsedInvocation) -> Result<(), String> {
     Ok(())
 }
 
-fn link_driver() -> String {
-    match std::env::var(FRAGILEC_LINKER_ENV) {
-        Ok(v) if !v.trim().is_empty() => v,
-        _ => "c++".to_string(),
+fn link_driver_command_from_value(linker_env: Option<&str>) -> (String, Vec<OsString>) {
+    if let Some(raw) = linker_env {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            return (trimmed.to_string(), Vec::new());
+        }
     }
+
+    ("clang++".to_string(), vec![OsString::from("-fuse-ld=lld")])
+}
+
+fn link_driver_command() -> (String, Vec<OsString>) {
+    let linker_env = std::env::var(FRAGILEC_LINKER_ENV).ok();
+    link_driver_command_from_value(linker_env.as_deref())
 }
 
 fn build_rust_runtime_link_support(temp_root: &Path) -> Result<(PathBuf, Vec<OsString>), String> {
@@ -1366,12 +1375,9 @@ fn run_fragile_link(parsed: &ParsedInvocation) -> Result<(), String> {
     let defining_objects = scan_main_defining_objects(&inspected_objects)?;
     let main_symbol_diag = format_main_symbol_diagnostic(&inspected_objects, &defining_objects);
 
-    if defining_objects.is_empty() && link_requires_program_main(parsed) {
-        return Err(format!(
-            "strict link requires a real `main` symbol for executable outputs\n{}",
-            main_symbol_diag
-        ));
-    }
+    // Do not reject early when direct object inputs lack `main`: linked archives/shared
+    // libraries (for example gtest_main) can legally provide the program entrypoint.
+    // Let the platform linker perform the full symbol resolution decision.
 
     let (runtime_archive, native_libs) = build_rust_runtime_link_support(&temp_root)?;
     link_args.push(OsString::from(
@@ -1379,18 +1385,34 @@ fn run_fragile_link(parsed: &ParsedInvocation) -> Result<(), String> {
     ));
     link_args.extend(native_libs);
 
-    let driver = link_driver();
+    let (driver, driver_args) = link_driver_command();
     let link_output = Command::new(&driver)
+        .args(&driver_args)
         .args(&link_args)
         .output()
         .map_err(|e| format!("failed to run strict link driver `{}`: {}", driver, e))?;
     if !link_output.status.success() {
+        let link_stdout = String::from_utf8_lossy(&link_output.stdout).to_string();
+        let link_stderr = String::from_utf8_lossy(&link_output.stderr).to_string();
+        let stderr_lower = link_stderr.to_ascii_lowercase();
+        let missing_main_after_resolution = defining_objects.is_empty()
+            && link_requires_program_main(parsed)
+            && (stderr_lower.contains("undefined reference to `main`")
+                || stderr_lower.contains("undefined symbol: _main")
+                || stderr_lower.contains("undefined symbol main")
+                || (stderr_lower.contains("symbol(s) not found")
+                    && stderr_lower.contains("_main")));
+        let maybe_main_hint = if missing_main_after_resolution {
+            format!(
+                "\nstrict link missing `main` (after full linker resolution)\n{}",
+                main_symbol_diag
+            )
+        } else {
+            String::new()
+        };
         return Err(format!(
-            "strict link failed via `{}`\nstdout:\n{}\nstderr:\n{}\n{}",
-            driver,
-            String::from_utf8_lossy(&link_output.stdout),
-            String::from_utf8_lossy(&link_output.stderr),
-            main_symbol_diag
+            "strict link failed via `{}`\nstdout:\n{}\nstderr:\n{}\n{}{}",
+            driver, link_stdout, link_stderr, main_symbol_diag, maybe_main_hint
         ));
     }
 
@@ -1419,7 +1441,7 @@ Environment:
   FRAGILEC_KEEP_RS=1                 Keep transpiled Rust sidecar next to output object
   FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=<path>
                                      Write transpile stage timing trace (parse/export/enrichment/codegen)
-  FRAGILEC_LINKER=<path>             Link-driver executable for strict link (default: c++)
+  FRAGILEC_LINKER=<path>             Link-driver executable for strict link (default: clang++ -fuse-ld=lld)
 "
     );
 }
@@ -1491,6 +1513,28 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<OsString> {
         list.iter().map(|s| OsString::from(*s)).collect()
+    }
+
+    #[test]
+    fn link_driver_command_defaults_to_clang_lld() {
+        let (driver, driver_args) = link_driver_command_from_value(None);
+        assert_eq!(driver, "clang++");
+        assert_eq!(driver_args, vec![OsString::from("-fuse-ld=lld")]);
+
+        let (driver, driver_args) = link_driver_command_from_value(Some("   "));
+        assert_eq!(driver, "clang++");
+        assert_eq!(driver_args, vec![OsString::from("-fuse-ld=lld")]);
+    }
+
+    #[test]
+    fn link_driver_command_honors_env_override_without_default_flags() {
+        let (driver, driver_args) =
+            link_driver_command_from_value(Some("/opt/toolchains/custom++"));
+        assert_eq!(driver, "/opt/toolchains/custom++");
+        assert!(
+            driver_args.is_empty(),
+            "custom linker override should not get implicit default args"
+        );
     }
 
     #[test]
