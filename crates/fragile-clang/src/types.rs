@@ -468,6 +468,16 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
             &["rusty::RefCell", "rusty::cell::RefCell"] as &[&str],
         ),
         (
+            "Ref",
+            "std::cell::Ref",
+            &["rusty::Ref", "rusty::cell::Ref"] as &[&str],
+        ),
+        (
+            "RefMut",
+            "std::cell::RefMut",
+            &["rusty::RefMut", "rusty::cell::RefMut"] as &[&str],
+        ),
+        (
             "UnsafeCell",
             "std::cell::UnsafeCell",
             &["rusty::UnsafeCell", "rusty::cell::UnsafeCell"] as &[&str],
@@ -481,6 +491,21 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
             "RwLock",
             "std::sync::RwLock",
             &["rusty::RwLock", "rusty::sync::RwLock"] as &[&str],
+        ),
+        (
+            "MutexGuard",
+            "std::sync::MutexGuard",
+            &["rusty::MutexGuard", "rusty::sync::MutexGuard"] as &[&str],
+        ),
+        (
+            "RwLockReadGuard",
+            "std::sync::RwLockReadGuard",
+            &["rusty::RwLockReadGuard", "rusty::sync::RwLockReadGuard"] as &[&str],
+        ),
+        (
+            "RwLockWriteGuard",
+            "std::sync::RwLockWriteGuard",
+            &["rusty::RwLockWriteGuard", "rusty::sync::RwLockWriteGuard"] as &[&str],
         ),
         (
             "PoisonError",
@@ -2185,6 +2210,26 @@ mod tests {
             "std::sync::TryLockResult<i32>"
         );
         assert_eq!(
+            CppType::Named("rusty::MutexGuard<int>".to_string()).to_rust_type_str(),
+            "std::sync::MutexGuard<i32>"
+        );
+        assert_eq!(
+            CppType::Named("rusty::sync::RwLockReadGuard<long>".to_string()).to_rust_type_str(),
+            "std::sync::RwLockReadGuard<i64>"
+        );
+        assert_eq!(
+            CppType::Named("RwLockWriteGuard<long>".to_string()).to_rust_type_str(),
+            "std::sync::RwLockWriteGuard<i64>"
+        );
+        assert_eq!(
+            CppType::Named("rusty::Ref<rusty::Vec<int>>".to_string()).to_rust_type_str(),
+            "std::cell::Ref<std::vec::Vec<i32>>"
+        );
+        assert_eq!(
+            CppType::Named("RefMut<rusty::String>".to_string()).to_rust_type_str(),
+            "std::cell::RefMut<std::string::String>"
+        );
+        assert_eq!(
             CppType::Named("rusty::UnsafeCell<int>".to_string()).to_rust_type_str(),
             "std::cell::UnsafeCell<i32>"
         );
@@ -2268,6 +2313,26 @@ mod tests {
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::sync::TryLockResult<int>"),
             "std::sync::TryLockResult<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::MutexGuard<int>"),
+            "std::sync::MutexGuard<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("RwLockReadGuard<long>"),
+            "std::sync::RwLockReadGuard<i64>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::sync::RwLockWriteGuard<long>"),
+            "std::sync::RwLockWriteGuard<i64>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::Ref<rusty::Vec<int>>"),
+            "std::cell::Ref<std::vec::Vec<i32>>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("RefMut<rusty::String>"),
+            "std::cell::RefMut<std::string::String>"
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::Boxed<int>"),
