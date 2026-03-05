@@ -210,6 +210,34 @@ fn map_single_template_alias_to_std(
     Some(format!("{}<{}>", std_path, mapped))
 }
 
+fn is_unresolved_placeholder_type_name(name: &str) -> bool {
+    let mut cleaned = strip_cv_qualifiers_and_tag_prefix(name).trim();
+    cleaned = cleaned.trim_start_matches("::").trim();
+    if let Some(rest) = cleaned.strip_prefix("crate::") {
+        cleaned = rest.trim();
+    }
+    matches!(cleaned, "_" | "__" | "auto")
+        || cleaned.starts_with("type-parameter-")
+        || cleaned.starts_with("type_parameter_")
+}
+
+fn map_single_template_alias_to_std_with_unit_placeholder_fallback(
+    spelling: &str,
+    alias_prefix: &str,
+    std_path: &str,
+) -> Option<String> {
+    let inner = spelling.strip_prefix(alias_prefix)?.strip_suffix('>')?;
+    let args = parse_template_args(inner);
+    if args.len() != 1 {
+        return None;
+    }
+    let mut mapped = map_alias_template_arg_to_rust(&args[0]);
+    if is_unresolved_placeholder_type_name(mapped.as_str()) {
+        mapped = "()".to_string();
+    }
+    Some(format!("{}<{}>", std_path, mapped))
+}
+
 fn map_single_template_alias_to_std_allow_extra_args(
     spelling: &str,
     alias_prefix: &str,
@@ -291,7 +319,8 @@ fn map_thread_join_handle_with_prefix_to_std(spelling: &str, prefix: &str) -> Op
         return None;
     }
     let normalized_arg = strip_cv_qualifiers_and_tag_prefix(args[0].trim());
-    let mapped = if normalized_arg == "void" {
+    let mapped = if normalized_arg == "void" || is_unresolved_placeholder_type_name(normalized_arg)
+    {
         "()".to_string()
     } else {
         CppType::Named(args[0].clone()).to_rust_type_str()
@@ -325,7 +354,7 @@ fn map_lowered_thread_join_handle_to_std(spelling: &str) -> Option<String> {
             {
                 continue;
             }
-            let mapped = if lowered == "void" {
+            let mapped = if lowered == "void" || is_unresolved_placeholder_type_name(lowered) {
                 "()".to_string()
             } else {
                 CppType::Named(lowered.to_string()).to_rust_type_str()
@@ -452,15 +481,22 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
     ] {
         for root in qualified_roots {
             let qualified_prefix = format!("{}<", root);
-            if let Some(mapped) =
-                map_single_template_alias_to_std(cleaned, &qualified_prefix, std_path)
+            if let Some(mapped) = map_single_template_alias_to_std_with_unit_placeholder_fallback(
+                cleaned,
+                &qualified_prefix,
+                std_path,
+            )
             {
                 return Some(mapped);
             }
         }
         if root_is_unqualified {
             let bare_prefix = format!("{}<", alias);
-            if let Some(mapped) = map_single_template_alias_to_std(cleaned, &bare_prefix, std_path)
+            if let Some(mapped) = map_single_template_alias_to_std_with_unit_placeholder_fallback(
+                cleaned,
+                &bare_prefix,
+                std_path,
+            )
             {
                 return Some(mapped);
             }
@@ -473,15 +509,22 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
     )] {
         for root in qualified_roots {
             let qualified_prefix = format!("{}<", root);
-            if let Some(mapped) =
-                map_single_template_alias_to_std(cleaned, &qualified_prefix, std_path)
+            if let Some(mapped) = map_single_template_alias_to_std_with_unit_placeholder_fallback(
+                cleaned,
+                &qualified_prefix,
+                std_path,
+            )
             {
                 return Some(mapped);
             }
         }
         if root_is_unqualified {
             let bare_prefix = format!("{}<", alias);
-            if let Some(mapped) = map_single_template_alias_to_std(cleaned, &bare_prefix, std_path)
+            if let Some(mapped) = map_single_template_alias_to_std_with_unit_placeholder_fallback(
+                cleaned,
+                &bare_prefix,
+                std_path,
+            )
             {
                 return Some(mapped);
             }
@@ -2432,6 +2475,10 @@ mod tests {
             "std::thread::JoinHandle<()>"
         );
         assert_eq!(
+            CppType::Named("rusty::thread::JoinHandle<__>".to_string()).to_rust_type_str(),
+            "std::thread::JoinHandle<()>"
+        );
+        assert_eq!(
             CppType::Named("rusty::Barrier".to_string()).to_rust_type_str(),
             "std::sync::Barrier"
         );
@@ -2454,6 +2501,10 @@ mod tests {
         assert_eq!(
             CppType::Named("crate::rusty::sync::mpsc::RecvError".to_string()).to_rust_type_str(),
             "std::sync::mpsc::RecvError"
+        );
+        assert_eq!(
+            CppType::Named("rusty::sync::mpsc::TrySendError<__>".to_string()).to_rust_type_str(),
+            "std::sync::mpsc::TrySendError<()>"
         );
     }
 
@@ -2492,8 +2543,24 @@ mod tests {
             "std::thread::JoinHandle<()>"
         );
         assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::thread::JoinHandle<__>"),
+            "std::thread::JoinHandle<()>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std::thread::JoinHandle<__>"),
+            "std::thread::JoinHandle<()>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("JoinHandle<__>"),
+            "std::thread::JoinHandle<()>"
+        );
+        assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::sync::mpsc::Sender<int>"),
             "std::sync::mpsc::Sender<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::sync::mpsc::Sender<__>"),
+            "std::sync::mpsc::Sender<()>"
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("std::sync::mpsc::Sender<int>"),
@@ -2504,8 +2571,16 @@ mod tests {
             "std::sync::mpsc::Receiver<i32>"
         );
         assert_eq!(
+            normalize_rusty_type_alias_to_std("std::sync::mpsc::Receiver<__>"),
+            "std::sync::mpsc::Receiver<()>"
+        );
+        assert_eq!(
             normalize_rusty_type_alias_to_std("std::sync::mpsc::SyncSender<int>"),
             "std::sync::mpsc::SyncSender<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std::sync::mpsc::SyncSender<__>"),
+            "std::sync::mpsc::SyncSender<()>"
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("Sender<int>"),
@@ -2557,6 +2632,10 @@ mod tests {
         assert_eq!(
             normalize_rusty_type_alias_to_std("TrySendError<int>"),
             "std::sync::mpsc::TrySendError<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("TrySendError<__>"),
+            "std::sync::mpsc::TrySendError<()>"
         );
         let mutex_member_guard = normalize_rusty_type_alias_to_std("rusty::sync::Mutex<int>::Guard");
         assert!(

@@ -6546,7 +6546,9 @@ impl AstCodeGen {
                 continue;
             }
 
-            let normalized_rhs = Self::normalize_namespace_alias_target(rhs);
+            let normalized_rhs = Self::normalize_std_wrapper_placeholder_type_args_to_unit(
+                &Self::normalize_namespace_alias_target(rhs),
+            );
             if normalized_rhs == rhs {
                 out.push_str(line);
                 out.push('\n');
@@ -6567,6 +6569,36 @@ impl AstCodeGen {
             out.pop();
         }
         out
+    }
+
+    fn normalize_std_wrapper_placeholder_type_args_to_unit(rhs: &str) -> String {
+        let trimmed = rhs.trim();
+        let placeholder_like = |arg: &str| {
+            let a = arg.trim();
+            a == "_" || a == "__" || a == "auto" || a.starts_with("type-parameter-") || a.starts_with("type_parameter_")
+        };
+
+        for wrapper in [
+            "std::thread::JoinHandle",
+            "std::sync::mpsc::Sender",
+            "std::sync::mpsc::Receiver",
+            "std::sync::mpsc::SyncSender",
+            "std::sync::mpsc::TrySendError",
+        ] {
+            let prefix = format!("{}<", wrapper);
+            let Some(inner) = trimmed
+                .strip_prefix(&prefix)
+                .and_then(|rest| rest.strip_suffix('>'))
+            else {
+                continue;
+            };
+            let args = parse_template_args(inner);
+            if args.len() == 1 && placeholder_like(args[0].as_str()) {
+                return format!("{}<()>", wrapper);
+            }
+        }
+
+        trimmed.to_string()
     }
 
     fn normalize_placeholder_ctor_calls(code: &str) -> String {
@@ -77133,6 +77165,8 @@ pub(crate) type Condvar = rusty::Condvar;
 type RecvError = rusty::sync::mpsc::RecvError;
 pub type WaitTimeoutResult = rusty::WaitTimeoutResult;
 pub type None_t = rusty::None_t;
+pub type JoinHandle_void_ = std::thread::JoinHandle<__>;
+pub type TrySendError = std::sync::mpsc::TrySendError<__>;
 "#;
         let output = AstCodeGen::normalize_rusty_type_alias_rhs_paths(input);
         assert!(
@@ -77140,7 +77174,9 @@ pub type None_t = rusty::None_t;
                 && output.contains("pub(crate) type Condvar = std::sync::Condvar;")
                 && output.contains("type RecvError = std::sync::mpsc::RecvError;")
                 && output.contains("pub type WaitTimeoutResult = std::sync::WaitTimeoutResult;")
-                && output.contains("pub type None_t = ();"),
+                && output.contains("pub type None_t = ();")
+                && output.contains("pub type JoinHandle_void_ = std::thread::JoinHandle<()>;")
+                && output.contains("pub type TrySendError = std::sync::mpsc::TrySendError<()>;"),
             "rusty alias rhs normalization should rewrite mapped wrapper aliases to std paths, got:\n{}",
             output
         );
