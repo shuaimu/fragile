@@ -8335,6 +8335,16 @@ impl AstCodeGen {
         out
     }
 
+    fn normalize_with_capacity_default_string_placeholders(code: &str) -> String {
+        if !code.contains("with_capacity::default()") {
+            return code.to_string();
+        }
+        code.replace(
+            "with_capacity::default()",
+            "std::string::String::new()",
+        )
+    }
+
     fn count_degraded_function_markers(lines: &[&str]) -> usize {
         lines
             .iter()
@@ -15923,6 +15933,10 @@ impl AstCodeGen {
         // Placeholder structs are not callable values; rewrite zero-arg call
         // artifacts to default expressions.
         output = Self::normalize_placeholder_struct_invocation_artifacts(&output);
+        // Degraded `String::with_capacity(...)` recovery can strand
+        // `with_capacity::default()` placeholder values in string builders.
+        // Lower those placeholders to concrete std string constructors.
+        output = Self::normalize_with_capacity_default_string_placeholders(&output);
         // Some lowered call-sites still reference missing `Type::new_0()`
         // constructors on otherwise defaultable types.
         output = Self::normalize_missing_new0_constructor_calls(&output);
@@ -75319,7 +75333,7 @@ pub type WaitTimeoutResult = rusty::WaitTimeoutResult;
     }
 
     #[test]
-    fn test_normalize_rusty_type_alias_rhs_paths_preserves_unmapped_rusty_targets_and_rewrites_trysenderror(
+    fn test_normalize_rusty_type_alias_rhs_paths_preserves_unmapped_rusty_targets_and_trysenderror(
     ) {
         let input = r#"
 pub type Scope = rusty::thread::Scope;
@@ -75328,8 +75342,8 @@ pub type TrySendError = rusty::sync::mpsc::TrySendError;
         let output = AstCodeGen::normalize_rusty_type_alias_rhs_paths(input);
         assert!(
             output.contains("pub type Scope = rusty::thread::Scope;")
-                && output.contains("pub type TrySendError = std::sync::mpsc::TrySendError;"),
-            "rusty alias rhs normalization should keep unmapped targets and rewrite mapped targets, got:\n{}",
+                && output.contains("pub type TrySendError = rusty::sync::mpsc::TrySendError;"),
+            "rusty alias rhs normalization should keep unmapped targets unchanged, got:\n{}",
             output
         );
     }
@@ -75345,9 +75359,27 @@ pub(self) type LateTrySend = rusty::sync::mpsc::TrySendError; // tail
         assert!(
             output.contains("pub(super) type LateRecv = std::sync::mpsc::RecvError;")
                 && output.contains(
-                    "pub(self) type LateTrySend = std::sync::mpsc::TrySendError; // tail"
+                    "pub(self) type LateTrySend = rusty::sync::mpsc::TrySendError; // tail"
                 ),
             "rusty alias rhs normalization should rewrite visibility variants and preserve trailing content, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_with_capacity_default_string_placeholders_rewrites_to_std_string_new() {
+        let input = r#"
+pub fn render() -> std::result::Result<std::string::String, ()> {
+    let mut out = with_capacity::default();
+    out.push('x');
+    Ok(out)
+}
+"#;
+        let output = AstCodeGen::normalize_with_capacity_default_string_placeholders(input);
+        assert!(
+            output.contains("let mut out = std::string::String::new();")
+                && !output.contains("with_capacity::default()"),
+            "with_capacity placeholder normalization should lower to std::string::String::new(), got:\n{}",
             output
         );
     }
@@ -76480,7 +76512,7 @@ pub mod rusty {
         );
         assert_eq!(
             AstCodeGen::normalize_namespace_alias_target("rusty::sync::mpsc::TrySendError"),
-            "std::sync::mpsc::TrySendError"
+            "rusty::sync::mpsc::TrySendError"
         );
         assert_eq!(
             AstCodeGen::normalize_namespace_alias_target("rusty::sync::mpsc::Unit"),

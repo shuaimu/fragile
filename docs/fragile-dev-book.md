@@ -156,6 +156,8 @@ Generic normalizations added in this replay cycle:
 - `normalize_rusty_type_alias_rhs_paths` late rerun:
   - `AstCodeGen::generate` now re-runs Rusty alias RHS normalization at the end of the pipeline.
   - this catches Rusty wrapper aliases appended by late unresolved-closure/degraded fallback passes and keeps final alias targets std-native where generic mapping exists.
+- `normalize_with_capacity_default_string_placeholders`:
+  - rewrites degraded `with_capacity::default()` placeholders (from failed `String::with_capacity` recovery) to `std::string::String::new()`.
 
 Outcome snapshot:
 
@@ -461,6 +463,7 @@ Auto-exported namespace aliases are normalized before emission. Representative r
 - `rusty::Option<T>` / `rusty::Result<T, E>` -> `std::option::Option<T>` / `std::result::Result<T, E>`
 - `rusty::HashMap<K, V>` / `rusty::HashSet<T>` -> `std::collections::HashMap<K, V>` / `std::collections::HashSet<T>`
 - `rusty::RefCell<T>` / `rusty::UnsafeCell<T>` -> `std::cell::RefCell<T>` / `std::cell::UnsafeCell<T>`
+- non-isomorphic Rusty sync/channel wrappers stay Rusty (for example `rusty::sync::mpsc::TrySendError`, guard aliases, and `PoisonError`/`LockResult`/`TryLockResult`) to avoid invalid std-generic or lifetime rewrites
 
 This keeps generated top-level aliases std-native and avoids re-introducing rusty-cpp wrapper names in otherwise safe/std lowered output.
 
@@ -986,7 +989,8 @@ Namespace alias target normalization must reuse the same Rusty-wrapper mapping l
 - Wrapper aliases now normalize to Rust std paths consistently.
 - Non-rusty namespaced aliases (for example `testing::internal::Visible`) are preserved as-is, avoiding accidental namespace mangling.
 - Nested Rusty namespace spellings (for example `rusty::sync::Weak<T>`, `rusty::rc::Weak<T>`, `rusty::collections::HashMap<K, V>`) are normalized through the same shared path.
-- Rusty thread/channel spellings now normalize as well (for example `rusty::thread::JoinHandle<T>`, `rusty::sync::mpsc::{Sender<T>, Receiver<T>, Unit, RecvError, TryRecvError, TrySendError}`), with `JoinHandle<void>` mapped to `std::thread::JoinHandle<()>`.
+- Rusty thread/channel spellings now normalize as well (for example `rusty::thread::JoinHandle<T>`, `rusty::sync::mpsc::{Sender<T>, Receiver<T>, Unit, RecvError, TryRecvError}`), with `JoinHandle<void>` mapped to `std::thread::JoinHandle<()>`.
+- `rusty::sync::mpsc::TrySendError` intentionally stays on the Rusty path: Rust std `TrySendError<T>` is payload-generic and is not isomorphic with Rusty’s non-generic surface.
 - Rusty collection wrappers now tolerate extra C++ comparator/hasher/allocator template arguments while mapping to Rust std primary parameters:
   - `rusty::{Vec, VecDeque, HashSet, BTreeSet}<T, ...>` -> std one-parameter forms
   - `rusty::{HashMap, BTreeMap}<K, V, ...>` -> std two-parameter forms
@@ -997,16 +1001,11 @@ Namespace alias target normalization must reuse the same Rusty-wrapper mapping l
   - `rusty::RefCounted<T>` / `RefCounted<T>` -> `std::rc::Rc<T>`
   - `rusty::Ptr<T>` / `Ptr<T>` -> `*const T`
   - `rusty::MutPtr<T>` / `MutPtr<T>` -> `*mut T`
-- Rusty sync guard/result wrappers now normalize to std sync types:
-  - `rusty::Mutex<T>::Guard` / `Mutex<T>::Guard` -> `std::sync::MutexGuard<T>`
-  - `rusty::RwLock<T>::ReadGuard` / `RwLock<T>::ReadGuard` -> `std::sync::RwLockReadGuard<T>`
-  - `rusty::RwLock<T>::WriteGuard` / `RwLock<T>::WriteGuard` -> `std::sync::RwLockWriteGuard<T>`
-  - `rusty::MutexGuard<T>` / `MutexGuard<T>` -> `std::sync::MutexGuard<T>`
-  - `rusty::RwLockReadGuard<T>` / `RwLockReadGuard<T>` -> `std::sync::RwLockReadGuard<T>`
-  - `rusty::RwLockWriteGuard<T>` / `RwLockWriteGuard<T>` -> `std::sync::RwLockWriteGuard<T>`
-  - `rusty::PoisonError<T>` / `PoisonError<T>` -> `std::sync::PoisonError<T>`
-  - `rusty::LockResult<T>` / `LockResult<T>` -> `std::sync::LockResult<T>`
-  - `rusty::TryLockResult<T>` / `TryLockResult<T>` -> `std::sync::TryLockResult<T>`
+- Non-isomorphic Rusty sync guard/result wrappers are intentionally kept on Rusty paths to avoid invalid std rewrites:
+  - member guard aliases remain Rusty (`rusty::Mutex<T>::Guard`, `rusty::RwLock<T>::ReadGuard`, `rusty::RwLock<T>::WriteGuard`)
+  - direct guard aliases remain Rusty (`rusty::MutexGuard<T>`, `rusty::RwLockReadGuard<T>`, `rusty::RwLockWriteGuard<T>`)
+  - result wrappers remain Rusty (`rusty::PoisonError<T>`, `rusty::LockResult<T>`, `rusty::TryLockResult<T>`)
+  - rationale: std guard/result types carry lifetimes/private internals that are not represented by these Rusty aliases; forced std rewrites create invalid arity/lifetime/private-path outputs.
 - Rusty RefCell borrow wrappers now normalize as well:
   - `rusty::Ref<T>` / `Ref<T>` -> `std::cell::Ref<T>`
   - `rusty::RefMut<T>` / `RefMut<T>` -> `std::cell::RefMut<T>`

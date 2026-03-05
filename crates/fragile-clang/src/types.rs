@@ -268,22 +268,6 @@ fn map_single_template_alias_to_pointer(
     Some(format!("{}{}", pointer_prefix, mapped))
 }
 
-fn map_single_template_member_alias_to_std(
-    spelling: &str,
-    owner_prefix: &str,
-    member_suffix: &str,
-    std_path: &str,
-) -> Option<String> {
-    let owner = spelling.strip_suffix(member_suffix)?;
-    let inner = owner.strip_prefix(owner_prefix)?.strip_suffix('>')?;
-    let args = parse_template_args(inner);
-    if args.len() != 1 {
-        return None;
-    }
-    let mapped = map_alias_template_arg_to_rust(&args[0]);
-    Some(format!("{}<{}>", std_path, mapped))
-}
-
 fn is_explicit_rust_function_pointer_type(arg: &str) -> bool {
     let trimmed = arg.trim();
     trimmed.contains("extern \"C\" fn(")
@@ -362,7 +346,10 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
             return Some("std::sync::mpsc::TryRecvError".to_string());
         }
         "rusty::sync::mpsc::TrySendError" => {
-            return Some("std::sync::mpsc::TrySendError".to_string());
+            // Rust std `TrySendError<T>` carries the unsent payload as a generic
+            // parameter, while Rusty exposes a non-generic enum. Keep the
+            // Rusty spelling to avoid introducing invalid missing-generic aliases.
+            return Some("rusty::sync::mpsc::TrySendError".to_string());
         }
         // `using namespace rusty;` can leave aliases unqualified in Clang spellings.
         "String" => return Some("std::string::String".to_string()),
@@ -376,49 +363,10 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         return Some(mapped);
     }
 
-    for (member_suffix, std_path, qualified_roots, unqualified_root) in [
-        (
-            "::Guard",
-            "std::sync::MutexGuard",
-            &["rusty::Mutex", "rusty::sync::Mutex"] as &[&str],
-            "Mutex",
-        ),
-        (
-            "::ReadGuard",
-            "std::sync::RwLockReadGuard",
-            &["rusty::RwLock", "rusty::sync::RwLock"] as &[&str],
-            "RwLock",
-        ),
-        (
-            "::WriteGuard",
-            "std::sync::RwLockWriteGuard",
-            &["rusty::RwLock", "rusty::sync::RwLock"] as &[&str],
-            "RwLock",
-        ),
-    ] {
-        for root in qualified_roots {
-            let owner_prefix = format!("{}<", root);
-            if let Some(mapped) = map_single_template_member_alias_to_std(
-                cleaned,
-                &owner_prefix,
-                member_suffix,
-                std_path,
-            ) {
-                return Some(mapped);
-            }
-        }
-        if root_is_unqualified {
-            let owner_prefix = format!("{}<", unqualified_root);
-            if let Some(mapped) = map_single_template_member_alias_to_std(
-                cleaned,
-                &owner_prefix,
-                member_suffix,
-                std_path,
-            ) {
-                return Some(mapped);
-            }
-        }
-    }
+    // Do not normalize nested guard aliases (`Mutex<T>::Guard`, etc.) here.
+    // Their Rusty lowering often resolves through non-generic placeholders in
+    // degraded output; forcing generic guard rewrites can introduce invalid
+    // arity/private-path failures.
 
     for (prefix, std_path) in [
         ("rusty::sync::mpsc::Sender<", "std::sync::mpsc::Sender"),
@@ -495,36 +443,6 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
             "std::sync::RwLock",
             &["rusty::RwLock", "rusty::sync::RwLock"] as &[&str],
         ),
-        (
-            "MutexGuard",
-            "std::sync::MutexGuard",
-            &["rusty::MutexGuard", "rusty::sync::MutexGuard"] as &[&str],
-        ),
-        (
-            "RwLockReadGuard",
-            "std::sync::RwLockReadGuard",
-            &["rusty::RwLockReadGuard", "rusty::sync::RwLockReadGuard"] as &[&str],
-        ),
-        (
-            "RwLockWriteGuard",
-            "std::sync::RwLockWriteGuard",
-            &["rusty::RwLockWriteGuard", "rusty::sync::RwLockWriteGuard"] as &[&str],
-        ),
-        (
-            "PoisonError",
-            "std::sync::PoisonError",
-            &["rusty::PoisonError", "rusty::sync::PoisonError"] as &[&str],
-        ),
-        (
-            "LockResult",
-            "std::sync::LockResult",
-            &["rusty::LockResult", "rusty::sync::LockResult"] as &[&str],
-        ),
-        (
-            "TryLockResult",
-            "std::sync::TryLockResult",
-            &["rusty::TryLockResult", "rusty::sync::TryLockResult"] as &[&str],
-        ),
     ] {
         for root in qualified_roots {
             let qualified_prefix = format!("{}<", root);
@@ -537,6 +455,58 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         if root_is_unqualified {
             let bare_prefix = format!("{}<", alias);
             if let Some(mapped) = map_single_template_alias_to_std(cleaned, &bare_prefix, std_path)
+            {
+                return Some(mapped);
+            }
+        }
+    }
+
+    // Keep non-isomorphic sync wrapper/result surfaces on Rusty paths to avoid
+    // introducing invalid std signatures (for example missing lifetimes on guards).
+    for (alias, mapped_path, qualified_roots) in [
+        (
+            "PoisonError",
+            "rusty::PoisonError",
+            &["rusty::PoisonError"] as &[&str],
+        ),
+        (
+            "PoisonError",
+            "rusty::sync::PoisonError",
+            &["rusty::sync::PoisonError"] as &[&str],
+        ),
+        (
+            "LockResult",
+            "rusty::LockResult",
+            &["rusty::LockResult"] as &[&str],
+        ),
+        (
+            "LockResult",
+            "rusty::sync::LockResult",
+            &["rusty::sync::LockResult"] as &[&str],
+        ),
+        (
+            "TryLockResult",
+            "rusty::TryLockResult",
+            &["rusty::TryLockResult"] as &[&str],
+        ),
+        (
+            "TryLockResult",
+            "rusty::sync::TryLockResult",
+            &["rusty::sync::TryLockResult"] as &[&str],
+        ),
+    ] {
+        for root in qualified_roots {
+            let qualified_prefix = format!("{}<", root);
+            if let Some(mapped) =
+                map_single_template_alias_to_std(cleaned, &qualified_prefix, mapped_path)
+            {
+                return Some(mapped);
+            }
+        }
+        if root_is_unqualified {
+            let bare_prefix = format!("{}<", alias);
+            if let Some(mapped) =
+                map_single_template_alias_to_std(cleaned, &bare_prefix, mapped_path)
             {
                 return Some(mapped);
             }
@@ -2190,43 +2160,67 @@ mod tests {
         );
         assert_eq!(
             CppType::Named("rusty::sync::mpsc::TrySendError".to_string()).to_rust_type_str(),
-            "std::sync::mpsc::TrySendError"
+            "rusty::sync::mpsc::TrySendError"
         );
-        assert_eq!(
-            CppType::Named("rusty::sync::Mutex<int>::Guard".to_string()).to_rust_type_str(),
-            "std::sync::MutexGuard<i32>"
+        let mutex_member_guard =
+            CppType::Named("rusty::sync::Mutex<int>::Guard".to_string()).to_rust_type_str();
+        assert!(
+            mutex_member_guard.contains("Guard")
+                && !mutex_member_guard.contains("std::sync::MutexGuard"),
+            "mutex member guard lowering should avoid invalid std::sync::MutexGuard lifetimes, got: {}",
+            mutex_member_guard
         );
-        assert_eq!(
-            CppType::Named("rusty::RwLock<long>::ReadGuard".to_string()).to_rust_type_str(),
-            "std::sync::RwLockReadGuard<i64>"
+        let rwlock_member_read =
+            CppType::Named("rusty::RwLock<long>::ReadGuard".to_string()).to_rust_type_str();
+        assert!(
+            rwlock_member_read.contains("ReadGuard")
+                && !rwlock_member_read.contains("std::sync::RwLockReadGuard"),
+            "rwlock member read-guard lowering should avoid invalid std::sync::RwLockReadGuard lifetimes, got: {}",
+            rwlock_member_read
         );
-        assert_eq!(
-            CppType::Named("RwLock<long>::WriteGuard".to_string()).to_rust_type_str(),
-            "std::sync::RwLockWriteGuard<i64>"
+        let rwlock_member_write =
+            CppType::Named("RwLock<long>::WriteGuard".to_string()).to_rust_type_str();
+        assert!(
+            rwlock_member_write.contains("WriteGuard")
+                && !rwlock_member_write.contains("std::sync::RwLockWriteGuard"),
+            "rwlock member write-guard lowering should avoid invalid std::sync::RwLockWriteGuard lifetimes, got: {}",
+            rwlock_member_write
         );
         assert_eq!(
             CppType::Named("rusty::sync::PoisonError<int>".to_string()).to_rust_type_str(),
-            "std::sync::PoisonError<i32>"
+            "rusty::sync::PoisonError<i32>"
         );
         assert_eq!(
             CppType::Named("rusty::LockResult<int>".to_string()).to_rust_type_str(),
-            "std::sync::LockResult<i32>"
+            "rusty::LockResult<i32>"
         );
         assert_eq!(
             CppType::Named("TryLockResult<int>".to_string()).to_rust_type_str(),
-            "std::sync::TryLockResult<i32>"
+            "rusty::TryLockResult<i32>"
         );
-        assert_eq!(
-            CppType::Named("rusty::MutexGuard<int>".to_string()).to_rust_type_str(),
-            "std::sync::MutexGuard<i32>"
+        let mutex_guard =
+            CppType::Named("rusty::MutexGuard<int>".to_string()).to_rust_type_str();
+        assert!(
+            mutex_guard.contains("MutexGuard")
+                && !mutex_guard.contains("std::sync::MutexGuard"),
+            "mutex guard lowering should avoid invalid std::sync::MutexGuard lifetime rewrites, got: {}",
+            mutex_guard
         );
-        assert_eq!(
-            CppType::Named("rusty::sync::RwLockReadGuard<long>".to_string()).to_rust_type_str(),
-            "std::sync::RwLockReadGuard<i64>"
+        let rwlock_read_guard =
+            CppType::Named("rusty::sync::RwLockReadGuard<long>".to_string()).to_rust_type_str();
+        assert!(
+            rwlock_read_guard.contains("RwLockReadGuard")
+                && !rwlock_read_guard.contains("std::sync::RwLockReadGuard"),
+            "rwlock read guard lowering should avoid invalid std::sync::RwLockReadGuard lifetime rewrites, got: {}",
+            rwlock_read_guard
         );
-        assert_eq!(
-            CppType::Named("RwLockWriteGuard<long>".to_string()).to_rust_type_str(),
-            "std::sync::RwLockWriteGuard<i64>"
+        let rwlock_write_guard =
+            CppType::Named("RwLockWriteGuard<long>".to_string()).to_rust_type_str();
+        assert!(
+            rwlock_write_guard.contains("RwLockWriteGuard")
+                && !rwlock_write_guard.contains("std::sync::RwLockWriteGuard"),
+            "rwlock write guard lowering should avoid invalid std::sync::RwLockWriteGuard lifetime rewrites, got: {}",
+            rwlock_write_guard
         );
         assert_eq!(
             CppType::Named("rusty::Ref<rusty::Vec<int>>".to_string()).to_rust_type_str(),
@@ -2299,43 +2293,63 @@ mod tests {
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::sync::mpsc::TrySendError"),
-            "std::sync::mpsc::TrySendError"
+            "rusty::sync::mpsc::TrySendError"
         );
-        assert_eq!(
-            normalize_rusty_type_alias_to_std("rusty::sync::Mutex<int>::Guard"),
-            "std::sync::MutexGuard<i32>"
+        let mutex_member_guard = normalize_rusty_type_alias_to_std("rusty::sync::Mutex<int>::Guard");
+        assert!(
+            mutex_member_guard.contains("Guard")
+                && !mutex_member_guard.contains("std::sync::MutexGuard"),
+            "alias normalization should avoid invalid std::sync::MutexGuard lifetime rewrites, got: {}",
+            mutex_member_guard
         );
-        assert_eq!(
-            normalize_rusty_type_alias_to_std("RwLock<long>::ReadGuard"),
-            "std::sync::RwLockReadGuard<i64>"
+        let rwlock_member_read = normalize_rusty_type_alias_to_std("RwLock<long>::ReadGuard");
+        assert!(
+            rwlock_member_read.contains("ReadGuard")
+                && !rwlock_member_read.contains("std::sync::RwLockReadGuard"),
+            "alias normalization should avoid invalid std::sync::RwLockReadGuard lifetime rewrites, got: {}",
+            rwlock_member_read
         );
-        assert_eq!(
-            normalize_rusty_type_alias_to_std("rusty::RwLock<long>::WriteGuard"),
-            "std::sync::RwLockWriteGuard<i64>"
+        let rwlock_member_write =
+            normalize_rusty_type_alias_to_std("rusty::RwLock<long>::WriteGuard");
+        assert!(
+            rwlock_member_write.contains("WriteGuard")
+                && !rwlock_member_write.contains("std::sync::RwLockWriteGuard"),
+            "alias normalization should avoid invalid std::sync::RwLockWriteGuard lifetime rewrites, got: {}",
+            rwlock_member_write
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::PoisonError<int>"),
-            "std::sync::PoisonError<i32>"
+            "rusty::PoisonError<i32>"
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("LockResult<int>"),
-            "std::sync::LockResult<i32>"
+            "rusty::LockResult<i32>"
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::sync::TryLockResult<int>"),
-            "std::sync::TryLockResult<i32>"
+            "rusty::sync::TryLockResult<i32>"
         );
-        assert_eq!(
-            normalize_rusty_type_alias_to_std("rusty::MutexGuard<int>"),
-            "std::sync::MutexGuard<i32>"
+        let mutex_guard = normalize_rusty_type_alias_to_std("rusty::MutexGuard<int>");
+        assert!(
+            mutex_guard.contains("MutexGuard")
+                && !mutex_guard.contains("std::sync::MutexGuard"),
+            "alias normalization should avoid invalid std::sync::MutexGuard lifetime rewrites, got: {}",
+            mutex_guard
         );
-        assert_eq!(
-            normalize_rusty_type_alias_to_std("RwLockReadGuard<long>"),
-            "std::sync::RwLockReadGuard<i64>"
+        let rwlock_read_guard = normalize_rusty_type_alias_to_std("RwLockReadGuard<long>");
+        assert!(
+            rwlock_read_guard.contains("RwLockReadGuard")
+                && !rwlock_read_guard.contains("std::sync::RwLockReadGuard"),
+            "alias normalization should avoid invalid std::sync::RwLockReadGuard lifetime rewrites, got: {}",
+            rwlock_read_guard
         );
-        assert_eq!(
-            normalize_rusty_type_alias_to_std("rusty::sync::RwLockWriteGuard<long>"),
-            "std::sync::RwLockWriteGuard<i64>"
+        let rwlock_write_guard =
+            normalize_rusty_type_alias_to_std("rusty::sync::RwLockWriteGuard<long>");
+        assert!(
+            rwlock_write_guard.contains("RwLockWriteGuard")
+                && !rwlock_write_guard.contains("std::sync::RwLockWriteGuard"),
+            "alias normalization should avoid invalid std::sync::RwLockWriteGuard lifetime rewrites, got: {}",
+            rwlock_write_guard
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::Ref<rusty::Vec<int>>"),
