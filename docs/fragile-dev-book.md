@@ -990,6 +990,9 @@ Namespace alias target normalization must reuse the same Rusty-wrapper mapping l
 - Non-rusty namespaced aliases (for example `testing::internal::Visible`) are preserved as-is, avoiding accidental namespace mangling.
 - Nested Rusty namespace spellings (for example `rusty::sync::Weak<T>`, `rusty::rc::Weak<T>`, `rusty::collections::HashMap<K, V>`) are normalized through the same shared path.
 - Rusty thread/channel spellings now normalize as well (for example `rusty::thread::JoinHandle<T>`, `rusty::sync::mpsc::{Sender<T>, Receiver<T>, Unit, RecvError, TryRecvError, TrySendError}`), with `JoinHandle<void>` mapped to `std::thread::JoinHandle<()>`.
+- Rusty option tag spellings now normalize to Rust unit as well (`rusty::None_t` / `None_t` -> `()`), which keeps alias surfaces free of Rusty-only none-marker types.
+- Missing-stub concrete alias emission now normalizes its alias target before writing `pub type` lines, so unresolved-fallback aliases also rewrite `rusty::None_t` to `()` instead of leaking Rusty-only rhs paths.
+- Verification note: when checking generated alias RHS values in drop-in builds, prefer `FRAGILEC_KEEP_RS=1` sidecar files (`*.fragile.rs`) over `/tmp/fragilec_*.rs`; `/tmp` may include stale outputs from unrelated prior invocations.
 - Bare/non-generic `TrySendError` spellings now normalize to `std::sync::mpsc::TrySendError<()>` as a conservative std fallback, and templated forms normalize to `std::sync::mpsc::TrySendError<T>`.
 - Rusty collection wrappers now tolerate extra C++ comparator/hasher/allocator template arguments while mapping to Rust std primary parameters:
   - `rusty::{Vec, VecDeque, HashSet, BTreeSet}<T, ...>` -> std one-parameter forms

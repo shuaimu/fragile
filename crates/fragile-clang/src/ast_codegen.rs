@@ -18554,11 +18554,16 @@ impl AstCodeGen {
             if let Some(enum_alias_target) =
                 self.resolve_missing_stub_enum_alias_target(&rust_name, &cpp_name)
             {
+                let normalized_enum_alias_target =
+                    Self::normalize_namespace_alias_target(&enum_alias_target);
                 self.writeln(&format!(
                     "/// Alias unresolved C++ `{}` to known enum",
                     cpp_name
                 ));
-                self.writeln(&format!("pub type {} = {};", rust_name, enum_alias_target));
+                self.writeln(&format!(
+                    "pub type {} = {};",
+                    rust_name, normalized_enum_alias_target
+                ));
                 self.writeln("");
                 self.generated_aliases.insert(rust_name.clone());
                 defined_type_like.insert(rust_name.clone());
@@ -18585,20 +18590,26 @@ impl AstCodeGen {
             if let Some(concrete_alias_target) =
                 self.resolve_missing_stub_concrete_alias_target(&rust_name, &cpp_name)
             {
+                let normalized_concrete_alias_target =
+                    Self::normalize_namespace_alias_target(&concrete_alias_target);
                 self.writeln(&format!(
                     "/// Alias unresolved C++ `{}` to concrete specialization",
                     cpp_name
                 ));
                 self.writeln(&format!(
                     "pub type {} = {};",
-                    rust_name, concrete_alias_target
+                    rust_name, normalized_concrete_alias_target
                 ));
                 self.writeln("");
                 self.generated_aliases.insert(rust_name.clone());
                 defined_type_like.insert(rust_name.clone());
                 self.type_alias_targets
-                    .insert(rust_name.clone(), concrete_alias_target.clone());
-                if let Some(fields) = self.class_fields.get(&concrete_alias_target).cloned() {
+                    .insert(rust_name.clone(), normalized_concrete_alias_target.clone());
+                if let Some(fields) = self
+                    .class_fields
+                    .get(&normalized_concrete_alias_target)
+                    .cloned()
+                {
                     self.class_fields.insert(rust_name.clone(), fields);
                 }
                 continue;
@@ -77121,13 +77132,15 @@ pub type Barrier = rusty::Barrier;
 pub(crate) type Condvar = rusty::Condvar;
 type RecvError = rusty::sync::mpsc::RecvError;
 pub type WaitTimeoutResult = rusty::WaitTimeoutResult;
+pub type None_t = rusty::None_t;
 "#;
         let output = AstCodeGen::normalize_rusty_type_alias_rhs_paths(input);
         assert!(
             output.contains("pub type Barrier = std::sync::Barrier;")
                 && output.contains("pub(crate) type Condvar = std::sync::Condvar;")
                 && output.contains("type RecvError = std::sync::mpsc::RecvError;")
-                && output.contains("pub type WaitTimeoutResult = std::sync::WaitTimeoutResult;"),
+                && output.contains("pub type WaitTimeoutResult = std::sync::WaitTimeoutResult;")
+                && output.contains("pub type None_t = ();"),
             "rusty alias rhs normalization should rewrite mapped wrapper aliases to std paths, got:\n{}",
             output
         );
@@ -78225,6 +78238,35 @@ pub mod rusty {
         assert!(
             !output.contains("pub type String = rusty::String;"),
             "namespace alias emission should avoid emitting rusty::String aliases, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_emit_namespace_type_aliases_normalizes_rusty_none_t_to_unit() {
+        let mut codegen = AstCodeGen::new();
+        codegen.output = r#"
+pub mod rusty {
+    pub struct None_t {
+    }
+}
+"#
+        .to_string();
+        codegen
+            .namespace_type_alias_targets
+            .insert("None_t".to_string(), "rusty::None_t".to_string());
+
+        codegen.emit_namespace_type_aliases();
+        let output = codegen.output;
+
+        assert!(
+            output.contains("pub type None_t = ();"),
+            "namespace alias emission should normalize rusty::None_t aliases to unit, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("pub type None_t = rusty::None_t;"),
+            "namespace alias emission should avoid emitting rusty::None_t aliases, got:\n{}",
             output
         );
     }

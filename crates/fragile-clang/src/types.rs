@@ -387,6 +387,7 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         "rusty::WaitTimeoutResult" | "rusty::sync::WaitTimeoutResult" => {
             return Some("std::sync::WaitTimeoutResult".to_string());
         }
+        "rusty::None_t" => return Some("()".to_string()),
         "rusty::sync::mpsc::Unit" => return Some("()".to_string()),
         "rusty::sync::mpsc::RecvError" => return Some("std::sync::mpsc::RecvError".to_string()),
         "rusty::sync::mpsc::TryRecvError" => {
@@ -404,6 +405,7 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         "Condvar" => return Some("std::sync::Condvar".to_string()),
         "Once" => return Some("std::sync::Once".to_string()),
         "WaitTimeoutResult" => return Some("std::sync::WaitTimeoutResult".to_string()),
+        "None_t" => return Some("()".to_string()),
         "Unit" => return Some("()".to_string()),
         "RecvError" => return Some("std::sync::mpsc::RecvError".to_string()),
         "TryRecvError" => return Some("std::sync::mpsc::TryRecvError".to_string()),
@@ -2314,6 +2316,11 @@ mod tests {
             CppType::Named("rusty::sync::mpsc::Unit".to_string()).to_rust_type_str(),
             "()"
         );
+        assert_eq!(
+            CppType::Named("rusty::None_t".to_string()).to_rust_type_str(),
+            "()"
+        );
+        assert_eq!(CppType::Named("None_t".to_string()).to_rust_type_str(), "()");
         assert_eq!(CppType::Named("Unit".to_string()).to_rust_type_str(), "()");
         assert_eq!(
             CppType::Named("rusty::sync::mpsc::RecvError".to_string()).to_rust_type_str(),
@@ -2528,6 +2535,8 @@ mod tests {
             normalize_rusty_type_alias_to_std("rusty_sync_mpsc_Sender_int"),
             "std::sync::mpsc::Sender<i32>"
         );
+        assert_eq!(normalize_rusty_type_alias_to_std("None_t"), "()");
+        assert_eq!(normalize_rusty_type_alias_to_std("rusty::None_t"), "()");
         assert_eq!(normalize_rusty_type_alias_to_std("Unit"), "()");
         assert_eq!(
             normalize_rusty_type_alias_to_std("Condvar"),
