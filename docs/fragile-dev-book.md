@@ -1068,3 +1068,32 @@ Namespace alias target normalization must reuse the same Rusty-wrapper mapping l
 - Lowered single-argument Rusty wrapper normalization now includes sync lock wrappers (`rusty_Mutex_*`/`Mutex_*`, `rusty_RwLock_*`/`RwLock_*`) in the same pass used for `Option`/`Box`/`Arc`/`Rc`/cell wrappers, allowing lowered aliases to land on `std::sync::{Mutex,RwLock}<...>` directly.
 - JoinHandle payload normalization now preserves explicit unit payloads (`()`) as unit; this avoids double-normalization regressions where already-normalized `std::thread::JoinHandle<()>` payloads were reprocessed into placeholder `std::thread::JoinHandle<__>` (for example through repeated namespace-alias target normalization).
 - Single-argument wrapper normalization now also treats explicit `void` payloads as unit for std-qualified, Rusty-qualified, and unqualified wrapper spellings (for example `std::option::Option<void>`, `rusty::Arc<void>`, `Option<void>`, `Shared<void>`), so these normalize to std wrappers with `()` payloads instead of preserving C++ `void` inside Rust generic arguments.
+
+## 15. Unused `c_void` Alias Pruning in Generated Rust (2026-03-05)
+
+### Problem
+
+Generated sidecar Rust files could accumulate large numbers of unused placeholder aliases like `pub type X = std::ffi::c_void;`. These aliases were primarily unresolved fallback artifacts and increased output noise without improving compileability.
+
+### Rule
+
+Drop top-level type aliases whose rhs is exactly `std::ffi::c_void` when the alias name is not referenced in emitted item type positions.
+
+### Implementation
+
+- Added `normalize_unused_c_void_type_aliases()` in `crates/fragile-clang/src/ast_codegen.rs`.
+- Wired the pass into `AstCodeGen::generate()` immediately after runtime-internal alias pruning.
+- The pass:
+  - scans `pub type`/`pub(crate) type`/`pub(super) type`/`type` aliases,
+  - removes aliases targeting `std::ffi::c_void` when unused,
+  - removes contiguous preceding `///` doc lines for dropped aliases,
+  - removes one following blank line for output compaction.
+
+### Guardrails
+
+- Referenced `std::ffi::c_void` aliases are preserved.
+- Non-`std::ffi::c_void` aliases are untouched.
+- Regression tests cover:
+  - unused alias removal with doc cleanup,
+  - used alias preservation,
+  - non-`c_void` alias passthrough.

@@ -6477,6 +6477,81 @@ impl AstCodeGen {
         out
     }
 
+    fn normalize_unused_c_void_type_aliases(code: &str) -> String {
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
+            return code.to_string();
+        }
+
+        let referenced = Self::collect_referenced_type_like_names(code);
+        let mut drop_line = vec![false; lines.len()];
+
+        for (idx, line) in lines.iter().enumerate() {
+            let trimmed = line.trim_start();
+            let Some(rest) = [
+                "pub type ",
+                "pub(crate) type ",
+                "pub(super) type ",
+                "type ",
+            ]
+            .iter()
+            .find_map(|prefix| trimmed.strip_prefix(prefix))
+            else {
+                continue;
+            };
+            let Some((lhs, rhs)) = rest.split_once('=') else {
+                continue;
+            };
+            let alias = lhs.trim();
+            if alias.is_empty() {
+                continue;
+            }
+            let target = rhs.trim().trim_end_matches(';').trim();
+            if target != "std::ffi::c_void" {
+                continue;
+            }
+
+            let alias_raw = alias.trim_start_matches("r#");
+            let alias_is_referenced = referenced.contains(alias)
+                || (!alias_raw.is_empty() && referenced.contains(alias_raw));
+            if alias_is_referenced {
+                continue;
+            }
+
+            drop_line[idx] = true;
+            let mut prev = idx;
+            while prev > 0 {
+                let candidate = lines[prev - 1].trim_start();
+                if candidate.starts_with("///") {
+                    drop_line[prev - 1] = true;
+                    prev -= 1;
+                    continue;
+                }
+                break;
+            }
+            if idx + 1 < lines.len() && lines[idx + 1].trim().is_empty() {
+                drop_line[idx + 1] = true;
+            }
+        }
+
+        if !drop_line.iter().any(|drop| *drop) {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        for (idx, line) in lines.iter().enumerate() {
+            if drop_line[idx] {
+                continue;
+            }
+            out.push_str(line);
+            out.push('\n');
+        }
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
     fn normalize_private_module_glob_import_type_alias_paths(code: &str) -> String {
         #[derive(Default)]
         struct ModuleInfo {
@@ -16500,6 +16575,9 @@ impl AstCodeGen {
         // alias is never referenced in the generated TU. Prune only the
         // unreferenced aliases to keep code smaller without changing semantics.
         output = Self::normalize_unused_runtime_internal_type_aliases(&output);
+        // Degraded lowering emits large numbers of placeholder c_void aliases.
+        // Keep only aliases that are actually referenced in item type slots.
+        output = Self::normalize_unused_c_void_type_aliases(&output);
         // Break trivial alias cycles produced by degraded typedef lowering.
         output = Self::normalize_recursive_type_alias_cycles(&output);
         // Resolve duplicate item emissions where degraded typedef lowering emits
@@ -77253,6 +77331,64 @@ pub struct Holder {
         assert!(
             output.contains("pub type ControlBlock = rusty::RcControlBlockBase;"),
             "runtime-internal alias used in item type positions should be preserved, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_unused_c_void_type_aliases_removes_unused_alias_and_docs() {
+        let input = r#"
+/// Alias C++ record `std::allocator<int>` to Rust std wrapper surface
+pub type allocator_type_parameter_0_0 = std::ffi::c_void;
+
+pub type Concrete = std::vec::Vec<i32>;
+"#;
+        let output = AstCodeGen::normalize_unused_c_void_type_aliases(input);
+        assert!(
+            !output.contains("pub type allocator_type_parameter_0_0 = std::ffi::c_void;"),
+            "unused c_void alias should be removed, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("Alias C++ record `std::allocator<int>`"),
+            "unused c_void alias docs should be removed with alias, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub type Concrete = std::vec::Vec<i32>;"),
+            "non-c_void aliases should remain untouched, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_unused_c_void_type_aliases_keeps_used_alias() {
+        let input = r#"
+pub type value_type = std::ffi::c_void;
+
+#[repr(C)]
+pub struct Holder {
+    pub inner: *mut value_type,
+}
+"#;
+        let output = AstCodeGen::normalize_unused_c_void_type_aliases(input);
+        assert!(
+            output.contains("pub type value_type = std::ffi::c_void;"),
+            "c_void alias referenced in item types should be preserved, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_unused_c_void_type_aliases_keeps_non_c_void_aliases() {
+        let input = r#"
+pub type MaybeInt = std::option::Option<i32>;
+"#;
+        let output = AstCodeGen::normalize_unused_c_void_type_aliases(input);
+        assert_eq!(
+            output.trim(),
+            input.trim(),
+            "non-c_void aliases should be unaffected, got:\n{}",
             output
         );
     }
