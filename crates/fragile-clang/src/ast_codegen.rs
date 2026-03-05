@@ -20770,6 +20770,61 @@ impl AstCodeGen {
             .unwrap_or(raw_rust_name.as_str())
             .to_string();
 
+        if let Some(wrapper_alias_target) =
+            Self::rusty_wrapper_alias_target_from_record_name(inst_name)
+        {
+            let normalized_wrapper_alias_target =
+                Self::normalize_namespace_alias_target(&wrapper_alias_target);
+            let wrapper_alias_name = if rust_name.contains("::") {
+                sanitize_identifier(inst_name)
+            } else {
+                rust_name.clone()
+            };
+            if !self.generated_aliases.contains(&wrapper_alias_name)
+                && !self.generated_structs.contains(&wrapper_alias_name)
+            {
+                self.writeln(&format!(
+                    "/// Alias C++ template instantiation `{}` to Rust std wrapper surface",
+                    inst_name
+                ));
+                self.writeln(&format!(
+                    "pub type {} = {};",
+                    wrapper_alias_name, normalized_wrapper_alias_target
+                ));
+                self.writeln("");
+                self.generated_aliases.insert(wrapper_alias_name.clone());
+                self.type_alias_targets
+                    .insert(wrapper_alias_name.clone(), normalized_wrapper_alias_target.clone());
+                if self.current_rust_module_path().is_empty() {
+                    self.global_type_names.insert(wrapper_alias_name.clone());
+                }
+                self.register_namespace_type_alias(&wrapper_alias_name);
+            }
+            if raw_rust_name != wrapper_alias_name
+                && !raw_rust_name.contains("::")
+                && !self.generated_aliases.contains(&raw_rust_name)
+                && !self.generated_structs.contains(&raw_rust_name)
+            {
+                self.writeln(&format!(
+                    "/// Alias C++ template instantiation `{}` to canonical wrapper alias",
+                    inst_name
+                ));
+                self.writeln(&format!(
+                    "pub type {} = {};",
+                    raw_rust_name, wrapper_alias_name
+                ));
+                self.writeln("");
+                self.generated_aliases.insert(raw_rust_name.clone());
+                self.type_alias_targets
+                    .insert(raw_rust_name.clone(), wrapper_alias_name.clone());
+                if self.current_rust_module_path().is_empty() {
+                    self.global_type_names.insert(raw_rust_name.clone());
+                }
+                self.register_namespace_type_alias(&raw_rust_name);
+            }
+            return;
+        }
+
         // Alias std::vector<T>/std::unique_ptr<T>/std::shared_ptr<T> instantiations
         // to the generic preamble stubs instead of emitting opaque monomorphic structs.
         if let Some(container_alias_target) =
@@ -70268,6 +70323,73 @@ pub mod testing {
         assert!(
             !codegen.generated_structs.contains(&rust_name),
             "marker-trait helper template instantiations should not be tracked as generated structs"
+        );
+    }
+
+    #[test]
+    fn test_template_struct_aliases_rusty_wrapper_instantiation_to_std() {
+        let mut codegen = AstCodeGen::new();
+        let inst_name = "rusty::Arc<class rrr::PollThread>";
+        let rust_name = sanitize_identifier(inst_name);
+
+        codegen.generate_template_struct(
+            inst_name,
+            &[String::from("T")],
+            &[String::from("class rrr::PollThread")],
+            &[],
+        );
+
+        assert!(
+            codegen
+                .output
+                .contains(&format!("pub type {} = std::sync::Arc<", rust_name)),
+            "rusty wrapper template instantiations should alias to Rust std surfaces, got:\n{}",
+            codegen.output
+        );
+        assert!(
+            !codegen
+                .output
+                .contains(&format!("pub struct {} {{", rust_name)),
+            "rusty wrapper template instantiations should not emit opaque structs, got:\n{}",
+            codegen.output
+        );
+        assert!(
+            codegen.generated_aliases.contains(&rust_name),
+            "rusty wrapper template instantiations should be tracked as aliases"
+        );
+        assert!(
+            !codegen.generated_structs.contains(&rust_name),
+            "rusty wrapper template instantiations should not be tracked as generated structs"
+        );
+    }
+
+    #[test]
+    fn test_template_struct_wrapper_alias_uses_sanitized_lhs_for_unqualified_wrappers() {
+        let mut codegen = AstCodeGen::new();
+        let inst_name = "Box<list>";
+        let rust_name = sanitize_identifier(inst_name);
+
+        codegen.generate_template_struct(
+            inst_name,
+            &[String::from("T")],
+            &[String::from("list")],
+            &[],
+        );
+
+        assert!(
+            codegen.output.contains(&format!(
+                "pub type {} = std::boxed::Box<list>;",
+                rust_name
+            )),
+            "unqualified Rusty-wrapper aliases should emit a sanitized lhs alias name, got:\n{}",
+            codegen.output
+        );
+        assert!(
+            !codegen
+                .output
+                .contains("pub type std::boxed::Box<list> = std::boxed::Box<list>;"),
+            "wrapper aliases must not emit path-based lhs names, got:\n{}",
+            codegen.output
         );
     }
 
