@@ -72283,6 +72283,16 @@ pub struct rusty_Arc_classrrr_Client_ {
     }
 
     #[test]
+    fn test_normalize_namespace_alias_target_preserves_join_handle_unit_payload() {
+        assert_eq!(
+            AstCodeGen::normalize_namespace_alias_target(
+                "std::sync::Mutex<std::option::Option<std::thread::JoinHandle<()>>>"
+            ),
+            "std::sync::Mutex<std::option::Option<std::thread::JoinHandle<()>>>"
+        );
+    }
+
+    #[test]
     fn test_rusty_wrapper_record_alias_helper_rejects_nested_rusty_only_paths() {
         let poisoned = AstCodeGen::rusty_wrapper_alias_target_from_record_name(
             "rusty::Result<rusty::MutexGuard<int>, rusty::PoisonError<int>>",

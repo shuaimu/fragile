@@ -320,7 +320,11 @@ fn map_alias_template_arg_to_rust(arg: &str) -> String {
 fn map_join_handle_payload_to_std(payload: &str) -> String {
     let payload = payload.trim();
     let normalized = strip_cv_qualifiers_and_tag_prefix(payload).trim_end_matches('_');
-    if normalized.is_empty() || normalized == "void" || is_unresolved_placeholder_type_name(normalized)
+    if normalized == "()" {
+        "()".to_string()
+    } else if normalized.is_empty()
+        || normalized == "void"
+        || is_unresolved_placeholder_type_name(normalized)
     {
         "()".to_string()
     } else {
@@ -2543,6 +2547,10 @@ mod tests {
             "std::thread::JoinHandle<()>"
         );
         assert_eq!(
+            CppType::Named("std::thread::JoinHandle<()>".to_string()).to_rust_type_str(),
+            "std::thread::JoinHandle<()>"
+        );
+        assert_eq!(
             CppType::Named("std_thread_JoinHandle_void_".to_string()).to_rust_type_str(),
             "std::thread::JoinHandle<()>"
         );
@@ -2797,6 +2805,10 @@ mod tests {
             "std::thread::JoinHandle<()>"
         );
         assert_eq!(
+            normalize_rusty_type_alias_to_std("std::thread::JoinHandle<()>"),
+            "std::thread::JoinHandle<()>"
+        );
+        assert_eq!(
             normalize_rusty_type_alias_to_std("std_thread_JoinHandle_void_"),
             "std::thread::JoinHandle<()>"
         );
@@ -2947,6 +2959,12 @@ mod tests {
                 "std::sync::Mutex<std::option::Option<rusty_Rc_class_rrr_Reactor__>>"
             ),
             "std::sync::Mutex<std::option::Option<std::rc::Rc<rrr_Reactor>>>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std(
+                "std::sync::Mutex<std::option::Option<std::thread::JoinHandle<()>>>"
+            ),
+            "std::sync::Mutex<std::option::Option<std::thread::JoinHandle<()>>>"
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("Mutex_Option_JoinHandle_void___"),
