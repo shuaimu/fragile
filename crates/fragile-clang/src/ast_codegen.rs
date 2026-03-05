@@ -34864,6 +34864,64 @@ impl AstCodeGen {
         Some((key, value))
     }
 
+    fn stl_set_element_suffix_from_suffix(suffix: &str) -> Option<String> {
+        let trimmed = suffix.trim_matches('_');
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        // Simple lowered spellings (e.g., `set_unsigned_long`, `unordered_set_int`).
+        if !trimmed.contains("__") {
+            return Some(trimmed.to_string());
+        }
+
+        // Handle lowered full template spellings such as:
+        //   set_K__struct_std_less_K__class_std_allocator_...
+        //   unordered_set_K__struct_std_hash_K__struct_std_equal_to_K__class_std_allocator_...
+        let (element_suffix, rest) = trimmed.split_once("__")?;
+        if element_suffix.is_empty() || rest.is_empty() {
+            return None;
+        }
+
+        let recognized_tail = [
+            "__struct_std_hash_",
+            "__class_std_hash_",
+            "__std_hash_",
+            "__struct_std_equal_to_",
+            "__class_std_equal_to_",
+            "__std_equal_to_",
+            "__struct_std_less_",
+            "__class_std_less_",
+            "__std_less_",
+            "__class_std_allocator_",
+            "__struct_std_allocator_",
+            "__std_allocator_",
+        ]
+        .iter()
+        .any(|marker| rest.contains(marker));
+        if !recognized_tail {
+            return None;
+        }
+
+        if element_suffix.contains("__") {
+            return None;
+        }
+
+        Some(element_suffix.to_string())
+    }
+
+    fn stl_simple_set_element_rust_type_from_suffix(suffix: &str) -> Option<String> {
+        let element_suffix = Self::stl_set_element_suffix_from_suffix(suffix)?;
+        let element = Self::stl_container_element_rust_type_from_suffix(&element_suffix)?;
+        if element.is_empty()
+            || Self::has_unresolved_template_placeholder(&element)
+            || !Self::is_supported_associative_map_component_type(&element)
+        {
+            return None;
+        }
+        Some(element)
+    }
+
     fn is_supported_associative_map_component_type(ty: &str) -> bool {
         let trimmed = ty.trim();
         if trimmed.is_empty() {
@@ -34961,6 +35019,23 @@ impl AstCodeGen {
             }
             return Some(format!("{}<{}, {}>", target_base, key, value));
         }
+
+        for (prefix, target_base) in [
+            ("std_unordered_set_", "std::collections::HashSet"),
+            ("unordered_set_", "std::collections::HashSet"),
+            ("std_set_", "std::collections::BTreeSet"),
+            ("set_", "std::collections::BTreeSet"),
+        ] {
+            let Some(suffix) = rust_name.strip_prefix(prefix) else {
+                continue;
+            };
+            let element = Self::stl_simple_set_element_rust_type_from_suffix(suffix)?;
+            if !Self::is_supported_associative_map_key_type(&element) {
+                continue;
+            }
+            return Some(format!("{}<{}>", target_base, element));
+        }
+
         None
     }
 
@@ -72868,6 +72943,70 @@ pub mod testing {
         assert!(
             code.contains("pub struct map_ALock__unsigned_long {"),
             "missing stub generation should keep an opaque placeholder for lowered map names with non-conservative key types, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_simple_unordered_set_aliases_to_std_hashset() {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "unordered_set_int".to_string(),
+            "unordered_set<int>".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            code.contains("pub type unordered_set_int = std::collections::HashSet<i32>;"),
+            "missing stub generation should alias lowered unordered_set names with conservative element types to std::collections::HashSet, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct unordered_set_int {"),
+            "missing stub generation should avoid opaque placeholders for unordered_set aliases when std HashSet targets can be formed, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_simple_set_aliases_to_std_btreeset() {
+        let mut codegen = AstCodeGen::new();
+        codegen
+            .used_types
+            .insert("set_unsigned_short".to_string(), "set<unsigned short>".to_string());
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            code.contains("pub type set_unsigned_short = std::collections::BTreeSet<u16>;"),
+            "missing stub generation should alias lowered set names with conservative element types to std::collections::BTreeSet, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct set_unsigned_short {"),
+            "missing stub generation should avoid opaque placeholders for set aliases when std BTreeSet targets can be formed, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_set_with_non_conservative_element_keeps_placeholder() {
+        let mut codegen = AstCodeGen::new();
+        codegen
+            .used_types
+            .insert("set_Arc_Job".to_string(), "set<Arc<Job>>".to_string());
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            !code.contains("pub type set_Arc_Job = std::collections::BTreeSet"),
+            "missing stub generation should not force std::collections::BTreeSet aliases for lowered set names with non-conservative element types, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub struct set_Arc_Job {"),
+            "missing stub generation should keep an opaque placeholder for lowered set names with non-conservative element types, got:\n{}",
             code
         );
     }

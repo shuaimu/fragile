@@ -1172,3 +1172,38 @@ Only emit lowered map aliases when both key/value components are valid concrete 
 - Simple lowered ordered-map spellings with conservative keys (for example `map_unsigned_int__bool`) now alias to `std::collections::BTreeMap<...>`.
 - Ordered maps with non-conservative keys (for example `map_ALock__unsigned_long`) remain opaque placeholders to avoid introducing trait-bound regressions from forced std container semantics.
 - Unusable lowered `unordered_map_*` spellings now remain opaque, preventing invalid Rust type aliases and preserving build stability.
+
+## 17. Safe Lowered `set` / `unordered_set` -> std Set Alias Gating (2026-03-05)
+
+### Problem
+
+Lowered unresolved set spellings show up in both simple and full-signature forms (for example `set_unsigned_short`, `unordered_set_long__struct_std_hash_long__struct_std_equal_to_long__class_std_allocator_long`). A naive rewrite can force invalid aliases when element types are unresolved or non-conservative (for example `set_Arc_Job`).
+
+### Rule
+
+Only emit lowered set aliases when the recovered element type is conservative and suitable for std set semantics. Otherwise keep the unresolved lowered set name as an opaque placeholder.
+
+### Implementation
+
+- In `crates/fragile-clang/src/ast_codegen.rs`, added:
+  - `stl_set_element_suffix_from_suffix()`
+  - `stl_simple_set_element_rust_type_from_suffix()`
+- The parser handles:
+  - simple lowered forms (for example `set_unsigned_short`, `unordered_set_int`),
+  - lowered full-signature tails with hash/equal/less/allocator markers.
+- Extended associative alias targets to include:
+  - `std_unordered_set_*` / `unordered_set_*` -> `std::collections::HashSet<T>`
+  - `std_set_*` / `set_*` -> `std::collections::BTreeSet<T>`
+- Reused conservative gating:
+  - `is_supported_associative_map_component_type()` for element validity,
+  - `is_supported_associative_map_key_type()` for set element suitability.
+- Added regression tests:
+  - `test_missing_stub_simple_unordered_set_aliases_to_std_hashset`
+  - `test_missing_stub_simple_set_aliases_to_std_btreeset`
+  - `test_missing_stub_set_with_non_conservative_element_keeps_placeholder`
+
+### Guardrails
+
+- Conservative lowered set spellings now alias to std containers (`HashSet`/`BTreeSet`) in missing-type stubs and drop-in sidecars.
+- Full-signature lowered unordered-set spellings with recognized std tail markers alias when element extraction is unambiguous.
+- Non-conservative lowered set spellings (for example `set_Arc_Job`) remain opaque placeholders, avoiding forced std trait-bound regressions.
