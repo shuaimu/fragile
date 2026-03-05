@@ -1241,3 +1241,46 @@ Treat lowered `basic_string<char>` spellings as conservative associative keys an
 - Lowered string-like concrete types still canonicalize to `std_string` when they are truly string spellings.
 - Lowered associative container spellings with `basic_string<char>` keys now stay container-shaped (`HashMap`), avoiding accidental scalar alias collapse.
 - Full `mako` clean build (`make clean`, `cmake --build . -j32`) and `ctest -j32 --output-on-failure` remain green after the change.
+
+## 19. Conservative Sequence-Valued Map Aliasing + `c_void` Template Arg Normalization (2026-03-05)
+
+### Problem
+
+Some lowered map spellings carry safe sequence values (for example `vector<unsigned long>`), but previous gating left those maps opaque. Separately, alias normalization could still emit `std_shared_ptr<std_ffi_c_void>` / `std_unique_ptr<std_ffi_c_void>` in generated Rust, which fails to compile.
+
+### Rule
+
+- Allow lowered map values to alias to std map surfaces when the value is a conservative lowered sequence type.
+- Normalize `std_ffi_c_void` template arguments to `std::ffi::c_void` in alias/template normalization paths.
+
+### Implementation
+
+- In `crates/fragile-clang/src/ast_codegen.rs`:
+  - Added `stl_simple_sequence_component_rust_type_from_suffix()` for conservative lowered sequence spellings:
+    - `std_vector_` / `vector_` -> `std_vector<T>`
+    - `std_deque_` / `deque_` -> `std_deque<T>`
+    - `std_collections_VecDeque_` -> `std::collections::VecDeque<T>`
+  - Added `is_supported_associative_map_value_type()` and switched map-value gating to use it.
+  - Extended `stl_associative_component_rust_type_from_suffix()` to recover sequence-valued components before scalar fallback.
+- In `crates/fragile-clang/src/types.rs`:
+  - `map_alias_template_arg_to_rust()` now checks `map_rusty_type_to_std()` before raw `CppType::Named(...).to_rust_type_str()`.
+  - `map_rusty_type_to_std()` now canonicalizes:
+    - `std::ffi::c_void`, `core::ffi::c_void`, `c_void`, `std_ffi_c_void` -> `std::ffi::c_void`
+  - Preserves prebuilt generic spellings during normalization for:
+    - `std_vector<...>`, `std_deque<...>`, `std_queue<...>`, `std_stack<...>`,
+    - `std_unique_ptr<...>`, `std_shared_ptr<...>`.
+- Added regression tests for:
+  - conservative/non-conservative vector-valued map alias behavior,
+  - nested map/template normalization preserving prebuilt wrappers and canonical `c_void`.
+
+### Guardrails
+
+- Map aliases only become std map aliases when keys remain conservative and values are conservative leaves or conservative sequence types.
+- `std_shared_ptr<std_ffi_c_void>` and `std_unique_ptr<std_ffi_c_void>` no longer appear in generated drop-in Rust output.
+- Remaining `mut_std_ffi_c_void` appearances are placeholder-struct lanes (for opaque unresolved by-value surfaces), not broken template-arg aliases.
+
+### Build workflow note
+
+`vendor/mako` uses `/target/release/fragilec` via the compiler wrapper and does not rebuild it automatically during `cmake --build`. After transpiler edits, rebuild the compiler first:
+
+`cargo build --release --bin fragilec`

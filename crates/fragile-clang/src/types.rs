@@ -335,6 +335,9 @@ fn map_alias_template_arg_to_rust(arg: &str) -> String {
         // Preserve already-lowered Rust fn pointer spellings inside template args.
         return trimmed.to_string();
     }
+    if let Some(mapped) = map_rusty_type_to_std(trimmed) {
+        return mapped;
+    }
     CppType::Named(trimmed.to_string()).to_rust_type_str()
 }
 
@@ -666,6 +669,9 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
     let root_is_unqualified = !root_name.contains("::");
 
     match cleaned {
+        "std::ffi::c_void" | "core::ffi::c_void" | "std_ffi_c_void" | "c_void" => {
+            return Some("std::ffi::c_void".to_string());
+        }
         "rusty::String" => return Some("std::string::String".to_string()),
         "rusty::string::String" => return Some("std::string::String".to_string()),
         "rusty::Barrier" | "rusty::sync::Barrier" => {
@@ -818,6 +824,20 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
     }
     if let Some(mapped) = map_lowered_set_unit_marker_to_std(cleaned) {
         return Some(mapped);
+    }
+    for (prefix, prebuilt_base) in [
+        ("std_vector<", "std_vector"),
+        ("std_deque<", "std_deque"),
+        ("std_queue<", "std_queue"),
+        ("std_stack<", "std_stack"),
+        ("std_unique_ptr<", "std_unique_ptr"),
+        ("std_shared_ptr<", "std_shared_ptr"),
+    ] {
+        if let Some(mapped) =
+            map_single_template_alias_to_std_allow_extra_args(cleaned, prefix, prebuilt_base)
+        {
+            return Some(mapped);
+        }
     }
     if let Some(mapped) = map_lowered_rusty_single_template_alias_to_std(cleaned) {
         return Some(mapped);
@@ -3414,6 +3434,22 @@ mod tests {
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::HashMap<int, long, std::hash<int>>"),
             "std::collections::HashMap<i32, i64>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std_vector<u64>"),
+            "std_vector<u64>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std(
+                "std::collections::HashMap<u64, std_vector<u64>>"
+            ),
+            "std::collections::HashMap<u64, std_vector<u64>>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std(
+                "std::collections::HashMap<u64, std_shared_ptr<std::ffi::c_void>>"
+            ),
+            "std::collections::HashMap<u64, std_shared_ptr<std::ffi::c_void>>"
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::Option<int, long>"),

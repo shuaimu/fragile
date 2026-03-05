@@ -34857,11 +34857,39 @@ impl AstCodeGen {
             || Self::has_unresolved_template_placeholder(&key)
             || Self::has_unresolved_template_placeholder(&value)
             || !Self::is_supported_associative_map_component_type(&key)
-            || !Self::is_supported_associative_map_component_type(&value)
+            || !Self::is_supported_associative_map_value_type(&value)
         {
             return None;
         }
         Some((key, value))
+    }
+
+    fn stl_simple_sequence_component_rust_type_from_suffix(suffix: &str) -> Option<String> {
+        let normalized = suffix.trim_matches('_');
+        if normalized.is_empty() {
+            return None;
+        }
+
+        for (prefix, target_base) in [
+            ("std_vector_", "std_vector"),
+            ("vector_", "std_vector"),
+            ("std_deque_", "std_deque"),
+            ("deque_", "std_deque"),
+            ("std_collections_VecDeque_", "std::collections::VecDeque"),
+        ] {
+            let Some(element_suffix) = normalized.strip_prefix(prefix) else {
+                continue;
+            };
+            let element = Self::stl_container_element_rust_type_from_suffix(element_suffix)?;
+            // Keep nested sequence recovery conservative so value payloads stay
+            // on simple scalar/string-like surfaces.
+            if !Self::is_supported_associative_map_key_type(&element) {
+                continue;
+            }
+            return Some(format!("{}<{}>", target_base, element));
+        }
+
+        None
     }
 
     fn stl_associative_component_rust_type_from_suffix(suffix: &str) -> Option<String> {
@@ -34884,6 +34912,11 @@ impl AstCodeGen {
                 continue;
             }
             return Some(format!("{}<{}>", target_base, element));
+        }
+
+        if let Some(sequence) = Self::stl_simple_sequence_component_rust_type_from_suffix(normalized)
+        {
+            return Some(sequence);
         }
 
         Self::stl_container_element_rust_type_from_suffix(normalized)
@@ -35010,6 +35043,32 @@ impl AstCodeGen {
         }
 
         true
+    }
+
+    fn is_supported_associative_map_value_type(ty: &str) -> bool {
+        let trimmed = ty.trim();
+        if trimmed.is_empty() {
+            return false;
+        }
+        if Self::is_supported_associative_map_component_type(trimmed) {
+            return true;
+        }
+
+        for prefix in ["std_vector<", "std_deque<", "std::collections::VecDeque<"] {
+            let Some(inner) = trimmed
+                .strip_prefix(prefix)
+                .and_then(|rest| rest.strip_suffix('>'))
+            else {
+                continue;
+            };
+            let args = parse_template_args(inner);
+            if args.len() != 1 {
+                return false;
+            }
+            return Self::is_supported_associative_map_key_type(args[0].trim());
+        }
+
+        false
     }
 
     fn is_supported_associative_map_key_type(ty: &str) -> bool {
@@ -73050,6 +73109,58 @@ pub mod testing {
         assert!(
             !code.contains("pub struct unordered_map_unsigned_int__set_unsigned_long {"),
             "missing stub generation should avoid opaque placeholders for unordered_map aliases when set-valued std HashMap targets can be formed, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_unordered_map_with_conservative_vector_value_aliases_to_std_hashmap() {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "unordered_map_unsigned_long__vector_unsigned_long".to_string(),
+            "unordered_map<unsigned long, vector<unsigned long>>".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            code.contains(
+                "pub type unordered_map_unsigned_long__vector_unsigned_long = std::collections::HashMap<u64, std_vector<u64>>;"
+            ) || code.contains(
+                "pub type unordered_map_unsigned_long__vector_unsigned_long = std::collections::HashMap<u64, std_vector_u64>;"
+            ) || code.contains(
+                "pub type unordered_map_unsigned_long__vector_unsigned_long = std::collections::HashMap<u64, std_vector_unsigned_long>;"
+            ),
+            "missing stub generation should alias lowered unordered_map names with conservative vector values to std HashMap targets, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct unordered_map_unsigned_long__vector_unsigned_long {"),
+            "missing stub generation should avoid opaque placeholders for unordered_map aliases when conservative vector-valued std HashMap targets can be formed, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_unordered_map_with_non_conservative_vector_value_keeps_placeholder() {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "unordered_map_unsigned_long__vector_Arc_Job".to_string(),
+            "unordered_map<unsigned long, vector<Arc<Job>>>".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            !code.contains(
+                "pub type unordered_map_unsigned_long__vector_Arc_Job = std::collections::HashMap"
+            ),
+            "missing stub generation should not force std HashMap aliases for lowered unordered_map names with non-conservative vector values, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub struct unordered_map_unsigned_long__vector_Arc_Job {"),
+            "missing stub generation should keep an opaque placeholder for lowered unordered_map names with non-conservative vector values, got:\n{}",
             code
         );
     }
