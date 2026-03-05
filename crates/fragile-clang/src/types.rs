@@ -365,6 +365,120 @@ fn map_lowered_thread_join_handle_to_std(spelling: &str) -> Option<String> {
     None
 }
 
+fn strip_lowered_cpp_prefix_tokens(name: &str) -> &str {
+    let mut current = name;
+    loop {
+        let mut changed = false;
+        for qualifier in ["const", "volatile"] {
+            if let Some(rest) = current.strip_prefix(qualifier) {
+                current = rest;
+                changed = true;
+            }
+        }
+        for tag in ["class", "struct", "enum", "union"] {
+            if let Some(rest) = current.strip_prefix(tag) {
+                current = rest;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    current
+}
+
+fn map_lowered_mpsc_unit_to_std(spelling: &str) -> Option<String> {
+    let cleaned = strip_lowered_cpp_prefix_tokens(spelling.strip_suffix('_').unwrap_or(spelling));
+    if matches!(
+        cleaned,
+        "Unit" | "sync_mpsc_Unit" | "rusty_sync_mpsc_Unit" | "std_sync_mpsc_Unit"
+    ) {
+        Some("()".to_string())
+    } else {
+        None
+    }
+}
+
+fn map_lowered_mpsc_error_enum_to_std(spelling: &str) -> Option<String> {
+    let cleaned = strip_lowered_cpp_prefix_tokens(spelling.strip_suffix('_').unwrap_or(spelling));
+    match cleaned {
+        "rusty_sync_mpsc_RecvError" | "std_sync_mpsc_RecvError" => {
+            Some("std::sync::mpsc::RecvError".to_string())
+        }
+        "rusty_sync_mpsc_TryRecvError" | "std_sync_mpsc_TryRecvError" => {
+            Some("std::sync::mpsc::TryRecvError".to_string())
+        }
+        "rusty_sync_mpsc_TrySendError" | "std_sync_mpsc_TrySendError" => {
+            Some("std::sync::mpsc::TrySendError<()>".to_string())
+        }
+        _ => None,
+    }
+}
+
+fn map_lowered_result_with_mpsc_error_to_std(spelling: &str) -> Option<String> {
+    let error_bases = [
+        "rusty_sync_mpsc_RecvError",
+        "std_sync_mpsc_RecvError",
+        "rusty_sync_mpsc_TryRecvError",
+        "std_sync_mpsc_TryRecvError",
+        "rusty_sync_mpsc_TrySendError",
+        "std_sync_mpsc_TrySendError",
+    ];
+    let tag_prefixes = [
+        "",
+        "enum",
+        "class",
+        "struct",
+        "constenum",
+        "constclass",
+        "conststruct",
+        "volatileenum",
+        "volatileclass",
+        "volatilestruct",
+    ];
+
+    for prefix in ["rusty_Result_", "Result_"] {
+        let Some(rest) = spelling.strip_prefix(prefix) else {
+            continue;
+        };
+        let lowered = rest.strip_suffix('_').unwrap_or(rest);
+        if !lowered
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        {
+            continue;
+        }
+
+        for base in error_bases {
+            let Some(err_mapped) = map_lowered_mpsc_error_enum_to_std(base) else {
+                continue;
+            };
+            for tag_prefix in tag_prefixes {
+                let suffix = format!("{tag_prefix}{base}");
+                let Some(ok_raw) = lowered.strip_suffix(&suffix) else {
+                    continue;
+                };
+                let Some(ok_lowered) = ok_raw.strip_suffix('_') else {
+                    continue;
+                };
+                let ok_mapped = if ok_lowered.is_empty()
+                    || ok_lowered == "void"
+                    || is_unresolved_placeholder_type_name(ok_lowered)
+                {
+                    "()".to_string()
+                } else if let Some(unit) = map_lowered_mpsc_unit_to_std(ok_lowered) {
+                    unit
+                } else {
+                    CppType::Named(ok_lowered.to_string()).to_rust_type_str()
+                };
+                return Some(format!("std::result::Result<{}, {}>", ok_mapped, err_mapped));
+            }
+        }
+    }
+    None
+}
+
 fn map_lowered_mpsc_endpoint_to_std(spelling: &str) -> Option<String> {
     for (prefix, std_path) in [
         ("std_sync_mpsc_Sender_", "std::sync::mpsc::Sender"),
@@ -392,6 +506,8 @@ fn map_lowered_mpsc_endpoint_to_std(spelling: &str) -> Option<String> {
                 || is_unresolved_placeholder_type_name(lowered)
             {
                 "()".to_string()
+            } else if let Some(unit) = map_lowered_mpsc_unit_to_std(lowered) {
+                unit
             } else {
                 CppType::Named(lowered.to_string()).to_rust_type_str()
             };
@@ -461,6 +577,12 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         }
     }
     if let Some(mapped) = map_lowered_thread_join_handle_to_std(cleaned) {
+        return Some(mapped);
+    }
+    if let Some(mapped) = map_lowered_mpsc_error_enum_to_std(cleaned) {
+        return Some(mapped);
+    }
+    if let Some(mapped) = map_lowered_result_with_mpsc_error_to_std(cleaned) {
         return Some(mapped);
     }
 
@@ -2632,6 +2754,34 @@ mod tests {
         assert_eq!(
             normalize_rusty_type_alias_to_std("std_sync_mpsc_TrySendError_"),
             "std::sync::mpsc::TrySendError<()>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("enumrusty_sync_mpsc_RecvError"),
+            "std::sync::mpsc::RecvError"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("enumrusty_sync_mpsc_TryRecvError"),
+            "std::sync::mpsc::TryRecvError"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("enumrusty_sync_mpsc_TrySendError"),
+            "std::sync::mpsc::TrySendError<()>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std(
+                "rusty_Result_structrusty_sync_mpsc_Unit_enumrusty_sync_mpsc_TrySendError_"
+            ),
+            "std::result::Result<(), std::sync::mpsc::TrySendError<()>>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty_Result_int_enumrusty_sync_mpsc_RecvError_"),
+            "std::result::Result<i32, std::sync::mpsc::RecvError>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std(
+                "rusty_Result_long_constenumrusty_sync_mpsc_TryRecvError_"
+            ),
+            "std::result::Result<i64, std::sync::mpsc::TryRecvError>"
         );
         assert_eq!(normalize_rusty_type_alias_to_std("None_t"), "()");
         assert_eq!(normalize_rusty_type_alias_to_std("rusty::None_t"), "()");
