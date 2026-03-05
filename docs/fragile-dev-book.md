@@ -2239,3 +2239,52 @@ distort lexical depth and prevent otherwise valid alias-chain collapses.
 - test run:
   - `ctest -j32 --output-on-failure`
   - 117/117 tests passed.
+
+## 38. Non-Enum Terminal Preference for Missing-Stub Qualifier Families (2026-03-05)
+
+### Problem
+
+Some degraded qualifier-family spellings (`struct`/`conststruct`, merged separators) were still
+falling back to enum-shadow aliases like `... = State` in missing-stub generation, even when a
+safe concrete alias chain existed (for example to `std::sync::MutexGuard` /
+`std::sync::PoisonError`).
+
+### Rule
+
+- When resolving missing-stub qualifier-family candidates, prefer the deepest emitted alias in the
+  chain when its terminal target is non-enum.
+- Reject candidates whose terminal target resolves to a known enum alias target.
+- Keep expression-like safe terminal targets (such as `std::sync::*`) valid without forcing a
+  placeholder/enum fallback.
+
+### Implementation
+
+- In `crates/fragile-clang/src/ast_codegen.rs`:
+  - Replaced terminal-target-only chain probing with
+    `resolve_emitted_alias_terminal(...) -> (terminal_alias_name, terminal_target)`.
+  - Updated `select_preferred_concrete_alias_candidate(...)` to:
+    - collapse through alias chains to the deepest concrete alias surface,
+    - filter enum-terminal chains,
+    - preserve non-enum std-expression terminals.
+
+### Tests
+
+- Added/updated coverage:
+  - `test_missing_stub_qualifier_family_dense_key_aliases_conststruct_variant_to_compact_sibling`
+  - `test_missing_stub_qualifier_family_dense_key_prefers_non_enum_alias_when_enum_shadow_exists`
+  - `test_missing_stub_qualifier_family_dense_key_resolves_mixed_mutexguard_poisonerror_variants_to_compact_std_aliases`
+
+### Validation
+
+- Targeted tests:
+  - `cargo test -p fragile-clang test_missing_stub_qualifier_family_dense_key -- --nocapture`
+- clean mako rebuild (`vendor/mako/build_fragilec_dropin`):
+  - `make clean`
+  - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
+- test run:
+  - `ctest -j32 --output-on-failure`
+  - 117/117 tests passed.
+- Artifact spot-check:
+  - `test_rpc_circuit_breaker_integration` generated aliases now resolve
+    `rusty_MutexGuard_*Future_State` / `rusty_PoisonError_*Future_State` to `std::sync::*`
+    targets (no `= State` fallback for this family).

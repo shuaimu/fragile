@@ -5035,6 +5035,23 @@ impl AstCodeGen {
         siblings
     }
 
+    fn qualifier_family_dense_key(name: &str) -> Option<String> {
+        let normalized = name
+            .trim()
+            .trim_start_matches("r#")
+            .trim_end_matches('_')
+            .replace("constclass", "class")
+            .replace("conststruct", "struct")
+            .replace('_', "");
+        if normalized.is_empty() {
+            return None;
+        }
+        if !(normalized.contains("class") || normalized.contains("struct")) {
+            return None;
+        }
+        Some(normalized)
+    }
+
     fn degraded_function_signature_siblings(name: &str) -> Vec<String> {
         // Degraded spellings can encode repeated scope separators (`::::`) as
         // repeated underscores. Prefer already-emitted sibling spellings with
@@ -15767,6 +15784,99 @@ impl AstCodeGen {
             Some(target)
         }
 
+        fn collect_arc_wrapped_type_names(lines: &[&str]) -> HashSet<String> {
+            let mut wrapped = HashSet::new();
+            for line in lines {
+                let trimmed = line.trim_start();
+                if !trimmed.starts_with("pub type ") {
+                    continue;
+                }
+                let Some((_, rhs_raw)) = trimmed.split_once('=') else {
+                    continue;
+                };
+                let rhs = rhs_raw.trim().trim_end_matches(';').trim();
+                let Some(inner_raw) = rhs
+                    .strip_prefix("std::sync::Arc<")
+                    .and_then(|s| s.strip_suffix('>'))
+                else {
+                    continue;
+                };
+                let inner = inner_raw.trim();
+                if inner.is_empty() {
+                    continue;
+                }
+                wrapped.insert(inner.to_string());
+                if let Some(leaf) = inner.rsplit("::").next() {
+                    wrapped.insert(leaf.to_string());
+                }
+                if let Some(stripped) = inner.strip_prefix("rrr_") {
+                    wrapped.insert(stripped.to_string());
+                }
+            }
+            wrapped
+        }
+
+        fn rewrite_missing_create_calls_for_type(
+            line: &str,
+            ty: &str,
+            wrap_in_arc: bool,
+        ) -> String {
+            let needle = format!("{ty}::create()");
+            if !line.contains(&needle) {
+                return line.to_string();
+            }
+
+            let mut out = String::with_capacity(line.len() + 48);
+            let mut cursor = 0usize;
+            while let Some(rel_idx) = line[cursor..].find(&needle) {
+                let start = cursor + rel_idx;
+                let end = start + needle.len();
+
+                // Avoid rewriting embedded suffix matches (e.g., MyPollThread::create()).
+                let prev_char = line[..start].chars().next_back();
+                if prev_char.is_some_and(AstCodeGen::is_identifier_char) {
+                    out.push_str(&line[cursor..end]);
+                    cursor = end;
+                    continue;
+                }
+
+                // Extend to include namespace/module qualifiers directly preceding `ty`.
+                let mut type_start = start;
+                loop {
+                    if type_start < 2 || &line[type_start - 2..type_start] != "::" {
+                        break;
+                    }
+                    let seg_end = type_start - 2;
+                    let mut seg_start = seg_end;
+                    while seg_start > 0 {
+                        let ch = line[..seg_start].chars().next_back().unwrap();
+                        if AstCodeGen::is_identifier_char(ch) {
+                            seg_start -= ch.len_utf8();
+                        } else {
+                            break;
+                        }
+                    }
+                    if seg_start == seg_end {
+                        break;
+                    }
+                    type_start = seg_start;
+                }
+
+                let full_type_path = &line[type_start..start + ty.len()];
+                let replacement = if wrap_in_arc {
+                    format!("std::sync::Arc::new({full_type_path}::new_0())")
+                } else {
+                    format!("{full_type_path}::new_0()")
+                };
+
+                out.push_str(&line[cursor..type_start]);
+                out.push_str(&replacement);
+                cursor = end;
+            }
+            out.push_str(&line[cursor..]);
+            out
+        }
+
         let lines: Vec<&str> = code.lines().collect();
         if lines.is_empty() {
             return code.to_string();
@@ -15845,15 +15955,16 @@ impl AstCodeGen {
             return code.to_string();
         }
 
+        let arc_wrapped_type_names = collect_arc_wrapped_type_names(&lines);
         let mut out = String::with_capacity(code.len());
         for line in code.lines() {
             let mut rewritten = line.to_string();
             for ty in &rewrite_targets {
-                let needle = format!("{ty}::create()");
-                let replacement = format!("{ty}::new_0()");
-                if rewritten.contains(&needle) {
-                    rewritten = rewritten.replace(&needle, &replacement);
-                }
+                rewritten = rewrite_missing_create_calls_for_type(
+                    &rewritten,
+                    ty,
+                    arc_wrapped_type_names.contains(ty),
+                );
             }
             out.push_str(&rewritten);
             out.push('\n');
@@ -20144,6 +20255,34 @@ impl AstCodeGen {
             {
                 continue;
             }
+            if let Some(concrete_alias_target) =
+                self.resolve_missing_stub_concrete_alias_target(&rust_name, &cpp_name)
+            {
+                let normalized_concrete_alias_target =
+                    Self::normalize_namespace_alias_target(&concrete_alias_target);
+                self.writeln(&format!(
+                    "/// Alias unresolved C++ `{}` to concrete specialization",
+                    cpp_name
+                ));
+                self.writeln(&format!(
+                    "pub type {} = {};",
+                    rust_name, normalized_concrete_alias_target
+                ));
+                self.writeln("");
+                self.generated_aliases.insert(rust_name.clone());
+                defined_type_like.insert(rust_name.clone());
+                self.type_alias_targets
+                    .insert(rust_name.clone(), normalized_concrete_alias_target.clone());
+                if let Some(fields) = self
+                    .class_fields
+                    .get(&normalized_concrete_alias_target)
+                    .cloned()
+                {
+                    self.class_fields.insert(rust_name.clone(), fields);
+                }
+                continue;
+            }
+
             if let Some(enum_alias_target) =
                 self.resolve_missing_stub_enum_alias_target(&rust_name, &cpp_name)
             {
@@ -20178,34 +20317,6 @@ impl AstCodeGen {
                     self.writeln("");
                     continue;
                 }
-            }
-
-            if let Some(concrete_alias_target) =
-                self.resolve_missing_stub_concrete_alias_target(&rust_name, &cpp_name)
-            {
-                let normalized_concrete_alias_target =
-                    Self::normalize_namespace_alias_target(&concrete_alias_target);
-                self.writeln(&format!(
-                    "/// Alias unresolved C++ `{}` to concrete specialization",
-                    cpp_name
-                ));
-                self.writeln(&format!(
-                    "pub type {} = {};",
-                    rust_name, normalized_concrete_alias_target
-                ));
-                self.writeln("");
-                self.generated_aliases.insert(rust_name.clone());
-                defined_type_like.insert(rust_name.clone());
-                self.type_alias_targets
-                    .insert(rust_name.clone(), normalized_concrete_alias_target.clone());
-                if let Some(fields) = self
-                    .class_fields
-                    .get(&normalized_concrete_alias_target)
-                    .cloned()
-                {
-                    self.class_fields.insert(rust_name.clone(), fields);
-                }
-                continue;
             }
 
             // Check if we have specialization field data for this type
@@ -36324,6 +36435,162 @@ impl AstCodeGen {
         }
     }
 
+    fn emitted_type_alias_target_for_name(&self, alias_name: &str) -> Option<String> {
+        if let Some(target) = self.type_alias_targets.get(alias_name) {
+            return Some(target.clone());
+        }
+
+        let marker = format!("pub type {} =", alias_name);
+        for line in self.output.lines() {
+            let trimmed = line.trim_start();
+            let Some(rest) = trimmed.strip_prefix(&marker) else {
+                continue;
+            };
+            let target = rest.trim().trim_end_matches(';').trim();
+            if !target.is_empty() {
+                return Some(target.to_string());
+            }
+        }
+
+        None
+    }
+
+    fn is_known_enum_alias_target(&self, target: &str) -> bool {
+        let normalized = Self::normalize_namespace_alias_target(target);
+        let leaf = normalized.rsplit("::").next().unwrap_or(normalized.as_str());
+
+        if self.generated_enums.contains(&normalized) || self.generated_enums.contains(leaf) {
+            return true;
+        }
+
+        self.enum_variant_map
+            .keys()
+            .any(|(enum_name, _)| enum_name == &normalized || enum_name == leaf)
+    }
+
+    fn resolve_emitted_alias_terminal(&self, alias_name: &str) -> Option<(String, String)> {
+        let mut current_alias = alias_name.to_string();
+        let mut seen_aliases: HashSet<String> = HashSet::new();
+
+        // Alias chains are typically short; keep the bound conservative and deterministic.
+        for _ in 0..16 {
+            if !seen_aliases.insert(current_alias.clone()) {
+                return None;
+            }
+
+            let target = self.emitted_type_alias_target_for_name(&current_alias)?;
+            let normalized_target = Self::normalize_namespace_alias_target(&target);
+            let target_leaf = normalized_target
+                .rsplit("::")
+                .next()
+                .unwrap_or(normalized_target.as_str());
+
+            if target_leaf == current_alias {
+                return Some((current_alias, normalized_target));
+            }
+
+            let target_leaf_is_alias_name = !target_leaf.contains('<')
+                && !target_leaf.contains(' ')
+                && !target_leaf.contains('&')
+                && !target_leaf.contains('*')
+                && !target_leaf.contains('[')
+                && !target_leaf.contains(']')
+                && Self::is_valid_rust_item_identifier(target_leaf)
+                && self.emitted_type_alias_target_for_name(target_leaf).is_some();
+            if !target_leaf_is_alias_name {
+                return Some((current_alias, normalized_target));
+            }
+
+            current_alias = target_leaf.to_string();
+        }
+
+        None
+    }
+
+    fn select_preferred_concrete_alias_candidate(
+        &self,
+        candidate_names: Vec<String>,
+    ) -> Option<String> {
+        let mut acceptable: Vec<String> = Vec::new();
+        let mut trailing_leaf_preferred: Vec<String> = Vec::new();
+
+        for candidate in candidate_names {
+            let resolved = if let Some(path) = self.resolve_unique_public_type_item_path(&candidate) {
+                path
+            } else if self.missing_stub_alias_target_is_emitted(&candidate) {
+                candidate.clone()
+            } else {
+                continue;
+            };
+
+            let leaf = resolved.rsplit("::").next().unwrap_or(resolved.as_str());
+            if Self::is_rusty_marker_trait_alias_name(leaf)
+                || Self::is_well_known_rust_trait_name(leaf)
+            {
+                continue;
+            }
+
+            let mut preferred_resolved = resolved.clone();
+            let mut preferred_leaf = leaf.to_string();
+            if let Some((terminal_alias, terminal_target)) =
+                self.resolve_emitted_alias_terminal(leaf)
+            {
+                if self.is_known_enum_alias_target(&terminal_target) {
+                    continue;
+                }
+
+                if terminal_alias != leaf && self.missing_stub_alias_target_is_emitted(&terminal_alias)
+                {
+                    preferred_resolved = self
+                        .resolve_unique_public_type_item_path(&terminal_alias)
+                        .unwrap_or_else(|| terminal_alias.to_string());
+                    preferred_leaf = preferred_resolved
+                        .rsplit("::")
+                        .next()
+                        .unwrap_or(preferred_resolved.as_str())
+                        .to_string();
+                } else {
+                    let terminal_leaf = terminal_target
+                        .rsplit("::")
+                        .next()
+                        .unwrap_or(terminal_target.as_str());
+                    if self.missing_stub_alias_target_is_emitted(terminal_leaf)
+                        && !terminal_leaf.contains('<')
+                        && !terminal_leaf.contains(' ')
+                    {
+                        preferred_resolved = self
+                            .resolve_unique_public_type_item_path(terminal_leaf)
+                            .unwrap_or_else(|| terminal_leaf.to_string());
+                        preferred_leaf = preferred_resolved
+                            .rsplit("::")
+                            .next()
+                            .unwrap_or(preferred_resolved.as_str())
+                            .to_string();
+                    }
+                }
+            }
+
+            acceptable.push(preferred_resolved.clone());
+            if preferred_leaf.ends_with('_') {
+                trailing_leaf_preferred.push(preferred_resolved);
+            }
+        }
+
+        acceptable.sort();
+        acceptable.dedup();
+        if acceptable.len() == 1 {
+            return acceptable.into_iter().next();
+        }
+
+        trailing_leaf_preferred.sort();
+        trailing_leaf_preferred.dedup();
+        if trailing_leaf_preferred.len() == 1 {
+            return trailing_leaf_preferred.into_iter().next();
+        }
+
+        None
+    }
+
     fn resolve_missing_stub_concrete_alias_target(
         &self,
         rust_name: &str,
@@ -36351,9 +36618,32 @@ impl AstCodeGen {
         // Keep this after STL/container alias resolution so lowered container
         // spellings like `std_unordered_map_*` map to std surfaces directly
         // instead of aliasing to sibling placeholders.
-        for candidate in Self::qualifier_family_siblings(rust_name) {
-            if let Some(path) = self.resolve_unique_public_type_item_path(&candidate) {
-                return Some(path);
+        if let Some(candidate) =
+            self.select_preferred_concrete_alias_candidate(Self::qualifier_family_siblings(
+                rust_name,
+            ))
+        {
+            return Some(candidate);
+        }
+
+        // Degraded qualifier spellings can merge/split separators
+        // (`struct_rrr` vs `structrrr`). If a unique emitted sibling shares
+        // the same qualifier-family dense key, alias to that concrete surface.
+        if let Some(key) = Self::qualifier_family_dense_key(rust_name) {
+            let dense_candidates: Vec<String> = Self::collect_defined_type_like_names(
+                self.output.as_str(),
+            )
+            .into_iter()
+            .filter(|candidate| candidate != rust_name)
+            .filter(|candidate| {
+                Self::qualifier_family_dense_key(candidate)
+                    .is_some_and(|candidate_key| candidate_key == key)
+            })
+            .collect();
+            if let Some(candidate) =
+                self.select_preferred_concrete_alias_candidate(dense_candidates)
+            {
+                return Some(candidate);
             }
         }
 
@@ -73887,6 +74177,44 @@ pub mod testing {
     }
 
     #[test]
+    fn test_missing_stub_prefers_concrete_specialization_over_known_enum_fallback() {
+        let mut codegen = AstCodeGen::new();
+        codegen.writeln(
+            "pub type rusty_MutexGuard_conststruct_rrr_Future_State = std::sync::MutexGuard<'static, rrr_Future_State>;",
+        );
+        codegen.writeln("");
+        codegen
+            .generated_aliases
+            .insert("rusty_MutexGuard_conststruct_rrr_Future_State".to_string());
+
+        codegen.generated_enums.insert("State".to_string());
+        codegen
+            .enum_variant_map
+            .insert(("State".to_string(), 0), "Idle".to_string());
+
+        codegen.used_types.insert(
+            "rusty_MutexGuard_struct_rrr_Future_State".to_string(),
+            "rusty::MutexGuard::struct::rrr::Future::State".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+
+        assert!(
+            code.contains(
+                "pub type rusty_MutexGuard_struct_rrr_Future_State = rusty_MutexGuard_conststruct_rrr_Future_State;",
+            ),
+            "missing-stub generation should prefer concrete specialization aliases before known-enum fallback matching, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub type rusty_MutexGuard_struct_rrr_Future_State = State;"),
+            "missing-stub generation should avoid replacing concrete specialization aliases with enum fallback targets when both are available, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
     fn test_template_struct_std_vector_instantiation_emits_generic_alias() {
         let mut codegen = AstCodeGen::new();
         codegen.generate_template_struct(
@@ -75049,6 +75377,177 @@ pub struct rusty_Arc_classrrr_Client_ {
         assert!(
             !code.contains("pub struct rusty_Arc_constclassrrr_Client_ {"),
             "missing stub generation should avoid opaque placeholders when a qualifier-family sibling type exists, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_qualifier_family_dense_key_aliases_conststruct_variant_to_compact_sibling()
+    {
+        let mut codegen = AstCodeGen::new();
+        codegen.output = r#"
+pub type rusty_MutexGuard_structrrr_Future_State_ = std::sync::MutexGuard<'static, rrr_Future_State>;
+"#
+        .to_string();
+        codegen
+            .generated_aliases
+            .insert("rusty_MutexGuard_structrrr_Future_State_".to_string());
+        codegen.generated_enums.insert("State".to_string());
+        codegen
+            .enum_variant_map
+            .insert(("State".to_string(), 0), "Idle".to_string());
+        codegen.used_types.insert(
+            "rusty_MutexGuard_conststruct_rrr_Future_State".to_string(),
+            "rusty::MutexGuard::conststruct::rrr::Future::State".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            code.contains(
+                "pub type rusty_MutexGuard_conststruct_rrr_Future_State = rusty_MutexGuard_structrrr_Future_State_;",
+            ),
+            "missing stub generation should resolve conststruct degraded variants to compact emitted siblings via qualifier-family dense keys, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub type rusty_MutexGuard_conststruct_rrr_Future_State = State;"),
+            "missing stub generation should not fall back to known-enum aliases when a unique compact qualifier-family sibling is available, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_qualifier_family_dense_key_prefers_non_enum_alias_when_enum_shadow_exists()
+    {
+        let mut codegen = AstCodeGen::new();
+        codegen.output = r#"
+pub type rusty_PoisonError_structrrr_Future_State_ = std::sync::PoisonError<rrr_Future_State>;
+pub type rusty_PoisonError_structrrr_Future_State = State;
+"#
+        .to_string();
+        codegen
+            .generated_aliases
+            .insert("rusty_PoisonError_structrrr_Future_State_".to_string());
+        codegen
+            .generated_aliases
+            .insert("rusty_PoisonError_structrrr_Future_State".to_string());
+        codegen.type_alias_targets.insert(
+            "rusty_PoisonError_structrrr_Future_State_".to_string(),
+            "std::sync::PoisonError<rrr_Future_State>".to_string(),
+        );
+        codegen.type_alias_targets.insert(
+            "rusty_PoisonError_structrrr_Future_State".to_string(),
+            "State".to_string(),
+        );
+        codegen.generated_enums.insert("State".to_string());
+        codegen
+            .enum_variant_map
+            .insert(("State".to_string(), 0), "Idle".to_string());
+        codegen.used_types.insert(
+            "rusty_PoisonError_conststructrrr_Future_State".to_string(),
+            "rusty::PoisonError::conststructrrr::Future::State".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            code.contains(
+                "pub type rusty_PoisonError_conststructrrr_Future_State = rusty_PoisonError_structrrr_Future_State_;",
+            ),
+            "dense-key qualifier-family matching should prefer non-enum concrete aliases even when enum-shadow aliases exist, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub type rusty_PoisonError_conststructrrr_Future_State = State;"),
+            "dense-key qualifier-family matching should not select enum-shadow aliases when a concrete alias is available, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_qualifier_family_dense_key_resolves_mixed_mutexguard_poisonerror_variants_to_compact_std_aliases(
+    ) {
+        let mut codegen = AstCodeGen::new();
+        codegen.output = r#"
+pub type rusty_MutexGuard_structrrr_Future_State_ = std::sync::MutexGuard<'static, rrr_Future_State>;
+pub type rusty_PoisonError_structrrr_Future_State_ = std::sync::PoisonError<rrr_Future_State>;
+pub type rrr_Future_State = State;
+"#
+        .to_string();
+        codegen.generated_aliases.extend([
+            "rusty_MutexGuard_structrrr_Future_State_".to_string(),
+            "rusty_PoisonError_structrrr_Future_State_".to_string(),
+            "rrr_Future_State".to_string(),
+        ]);
+        codegen.type_alias_targets.insert(
+            "rusty_MutexGuard_structrrr_Future_State_".to_string(),
+            "std::sync::MutexGuard<'static, rrr_Future_State>".to_string(),
+        );
+        codegen.type_alias_targets.insert(
+            "rusty_PoisonError_structrrr_Future_State_".to_string(),
+            "std::sync::PoisonError<rrr_Future_State>".to_string(),
+        );
+        codegen
+            .type_alias_targets
+            .insert("rrr_Future_State".to_string(), "State".to_string());
+        codegen.generated_enums.insert("State".to_string());
+        codegen
+            .enum_variant_map
+            .insert(("State".to_string(), 0), "Idle".to_string());
+        codegen.used_types.insert(
+            "rusty_MutexGuard_conststruct_rrr_Future_State".to_string(),
+            "rusty::MutexGuard::conststruct::rrr::Future::State".to_string(),
+        );
+        codegen.used_types.insert(
+            "rusty_MutexGuard_struct_rrr_Future_State".to_string(),
+            "rusty::MutexGuard::struct::rrr::Future::State".to_string(),
+        );
+        codegen.used_types.insert(
+            "rusty_PoisonError_conststructrrr_Future_State".to_string(),
+            "rusty::PoisonError::conststructrrr::Future::State".to_string(),
+        );
+        codegen.used_types.insert(
+            "rusty_PoisonError_structrrr_Future_State".to_string(),
+            "rusty::PoisonError::structrrr::Future::State".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            code.contains(
+                "pub type rusty_MutexGuard_conststruct_rrr_Future_State = rusty_MutexGuard_structrrr_Future_State_;",
+            ),
+            "mixed qualifier-family variants should resolve conststruct mutex-guard spellings to compact std aliases, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains(
+                "pub type rusty_MutexGuard_struct_rrr_Future_State = rusty_MutexGuard_structrrr_Future_State_;",
+            ),
+            "mixed qualifier-family variants should resolve struct mutex-guard spellings to compact std aliases, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains(
+                "pub type rusty_PoisonError_conststructrrr_Future_State = rusty_PoisonError_structrrr_Future_State_;",
+            ),
+            "mixed qualifier-family variants should resolve conststruct poison-error spellings to compact std aliases, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains(
+                "pub type rusty_PoisonError_structrrr_Future_State = rusty_PoisonError_structrrr_Future_State_;",
+            ),
+            "mixed qualifier-family variants should resolve struct poison-error spellings to compact std aliases, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub type rusty_MutexGuard_conststruct_rrr_Future_State = State;")
+                && !code.contains("pub type rusty_MutexGuard_struct_rrr_Future_State = State;")
+                && !code.contains("pub type rusty_PoisonError_conststructrrr_Future_State = State;")
+                && !code.contains("pub type rusty_PoisonError_structrrr_Future_State = State;"),
+            "mixed qualifier-family variants should not fall back to enum shadow aliases when compact std aliases exist, got:\n{}",
             code
         );
     }
@@ -82044,6 +82543,26 @@ pub fn probe() {
         assert!(
             output.contains("let _x = super::rrr::PollThread::new_0();"),
             "missing-create normalization should rewrite zero-arg create() calls to new_0() when create is absent, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_missing_create_constructor_calls_wraps_in_arc_when_arc_alias_exists() {
+        let input = r#"
+pub type Arc_PollThread_ = std::sync::Arc<PollThread>;
+pub struct PollThread {}
+impl PollThread {
+    pub fn new_0() -> Self { Self {} }
+}
+pub fn probe() {
+    let _x = super::rrr::PollThread::create();
+}
+"#;
+        let output = AstCodeGen::normalize_missing_create_constructor_calls(input);
+        assert!(
+            output.contains("let _x = std::sync::Arc::new(super::rrr::PollThread::new_0());"),
+            "missing-create normalization should wrap rewritten create() calls in Arc::new when an Arc<T> alias surface exists, got:\n{}",
             output
         );
     }
