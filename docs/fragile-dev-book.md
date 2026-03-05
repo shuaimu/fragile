@@ -1133,3 +1133,29 @@ Drop top-level type aliases whose rhs is exactly `std::ffi::c_void` when the ali
   - `pub type` -> `pub use` rewrite behavior and collision guards,
   - unresolved-type collection with `pub use` aliases,
   - identifier-reference inlining and `pub use` alias pruning.
+
+## 16. Safe Lowered `unordered_map` -> `HashMap` Alias Gating (2026-03-05)
+
+### Problem
+
+Lowered unresolved map spellings can include unusable components (for example `unordered_map<void *, unordered_map>`). A naive `unordered_map_*` -> `std::collections::HashMap<...>` rewrite can emit invalid Rust aliases (`std_ffi_c_void` keys, unresolved bare container component types) and break drop-in builds.
+
+### Rule
+
+Only emit lowered map aliases when both key/value components are valid concrete Rust component types for `HashMap`. Otherwise keep the unresolved map as an opaque placeholder.
+
+### Implementation
+
+- In `crates/fragile-clang/src/ast_codegen.rs`, added `is_supported_associative_map_component_type()`.
+- `stl_simple_map_key_value_rust_types_from_suffix()` now requires both parsed key/value components to pass this guard.
+- Guard rejects:
+  - unresolved template placeholders,
+  - `std::ffi::c_void`/`std_ffi_c_void`,
+  - bare lowered container base names (for example `unordered_map`, `map`, `vector`, `set`, `queue`, `stack`, and std-prefixed counterparts).
+- Added regression test:
+  - `test_missing_stub_unordered_map_with_unusable_component_types_keeps_placeholder`
+
+### Guardrails
+
+- Simple lowered `std_unordered_map_*` spellings with concrete components (for example `long` -> `i64`, `constclass_rusty_Arc_class_rrr_Future_` -> `std::sync::Arc<rrr_Future>`) still alias to `std::collections::HashMap<...>`.
+- Unusable lowered `unordered_map_*` spellings now remain opaque, preventing invalid Rust type aliases and preserving build stability.

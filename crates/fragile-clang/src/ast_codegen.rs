@@ -5045,7 +5045,9 @@ impl AstCodeGen {
         name: &str,
         defined: &HashSet<String>,
     ) -> Option<String> {
-        if let Some(target) = Self::stl_container_alias_target_from_rust_name(name) {
+        if let Some(target) = Self::stl_associative_container_alias_target_from_rust_name(name)
+            .or_else(|| Self::stl_container_alias_target_from_rust_name(name))
+        {
             let generic_base = target.split('<').next().unwrap_or("").trim();
             if !generic_base.is_empty()
                 && (defined.contains(generic_base) || generic_base.starts_with("std::"))
@@ -34783,6 +34785,109 @@ impl AstCodeGen {
         Some(rust)
     }
 
+    fn stl_simple_map_key_value_rust_types_from_suffix(
+        suffix: &str,
+    ) -> Option<(String, String)> {
+        let trimmed = suffix.trim_matches('_');
+        if trimmed.is_empty() {
+            return None;
+        }
+        if trimmed.matches("__").count() != 1 {
+            return None;
+        }
+        let (key_suffix, value_suffix) = trimmed.split_once("__")?;
+        let key = Self::stl_container_element_rust_type_from_suffix(key_suffix)?;
+        let value = Self::stl_container_element_rust_type_from_suffix(value_suffix)?;
+        if key.is_empty()
+            || value.is_empty()
+            || Self::has_unresolved_template_placeholder(&key)
+            || Self::has_unresolved_template_placeholder(&value)
+            || !Self::is_supported_associative_map_component_type(&key)
+            || !Self::is_supported_associative_map_component_type(&value)
+        {
+            return None;
+        }
+        Some((key, value))
+    }
+
+    fn is_supported_associative_map_component_type(ty: &str) -> bool {
+        let trimmed = ty.trim();
+        if trimmed.is_empty() {
+            return false;
+        }
+
+        // Reject unresolved/opaque markers and c_void payloads that do not
+        // produce valid Rust HashMap key/value component types.
+        if Self::has_unresolved_template_placeholder(trimmed)
+            || trimmed == "std::ffi::c_void"
+            || trimmed == "std_ffi_c_void"
+        {
+            return false;
+        }
+
+        let mut base = trimmed.split('<').next().unwrap_or(trimmed).trim();
+        if let Some(stripped) = base.strip_prefix("*const ") {
+            base = stripped.trim();
+        } else if let Some(stripped) = base.strip_prefix("*mut ") {
+            base = stripped.trim();
+        } else if let Some(stripped) = base.strip_prefix('&') {
+            base = stripped.trim();
+            if let Some(mut_stripped) = base.strip_prefix("mut ") {
+                base = mut_stripped.trim();
+            }
+        }
+
+        let blocked_base_names = [
+            "unordered_map",
+            "std_unordered_map",
+            "map",
+            "std_map",
+            "multimap",
+            "std_multimap",
+            "unordered_set",
+            "std_unordered_set",
+            "set",
+            "std_set",
+            "multiset",
+            "std_multiset",
+            "vector",
+            "std_vector",
+            "deque",
+            "std_deque",
+            "queue",
+            "std_queue",
+            "stack",
+            "std_stack",
+            "list",
+            "std_list",
+            "forward_list",
+            "std_forward_list",
+        ];
+
+        if blocked_base_names.contains(&base)
+            || blocked_base_names
+                .iter()
+                .any(|blocked| base.starts_with(&format!("{blocked}_")))
+        {
+            return false;
+        }
+
+        true
+    }
+
+    fn stl_associative_container_alias_target_from_rust_name(
+        rust_name: &str,
+    ) -> Option<String> {
+        for prefix in ["std_unordered_map_", "unordered_map_"] {
+            let Some(suffix) = rust_name.strip_prefix(prefix) else {
+                continue;
+            };
+            let (key, value) = Self::stl_simple_map_key_value_rust_types_from_suffix(suffix)?;
+            return Some(format!("std::collections::HashMap<{}, {}>", key, value));
+        }
+        None
+    }
+
     fn stl_container_alias_target_from_rust_name(rust_name: &str) -> Option<String> {
         let (prefix, generic_base) = Self::stl_generic_container_base_for_rust_name(rust_name)?;
         let suffix = rust_name.strip_prefix(prefix)?;
@@ -34919,16 +35024,13 @@ impl AstCodeGen {
         rust_name: &str,
         cpp_name: &str,
     ) -> Option<String> {
-        // Treat qualifier-family variants as aliases of the canonical emitted
-        // surface whenever a sibling spelling is available.
-        for candidate in Self::qualifier_family_siblings(rust_name) {
-            if let Some(path) = self.resolve_unique_public_type_item_path(&candidate) {
-                return Some(path);
-            }
-        }
-
         if let Some(container_alias_target) =
             Self::unqualified_vector_alias_target_from_rust_cpp_name(rust_name, cpp_name)
+        {
+            return Some(container_alias_target);
+        }
+        if let Some(container_alias_target) =
+            Self::stl_associative_container_alias_target_from_rust_name(rust_name)
         {
             return Some(container_alias_target);
         }
@@ -34936,6 +35038,18 @@ impl AstCodeGen {
             Self::stl_container_alias_target_from_rust_name(rust_name)
         {
             return Some(container_alias_target);
+        }
+
+        // Treat qualifier-family variants as aliases of the canonical emitted
+        // surface whenever a sibling spelling is available.
+        //
+        // Keep this after STL/container alias resolution so lowered container
+        // spellings like `std_unordered_map_*` map to std surfaces directly
+        // instead of aliasing to sibling placeholders.
+        for candidate in Self::qualifier_family_siblings(rust_name) {
+            if let Some(path) = self.resolve_unique_public_type_item_path(&candidate) {
+                return Some(path);
+            }
         }
 
         // Canonicalize common `basic_string<char, ...>` spellings to the prebuilt
@@ -72524,6 +72638,94 @@ pub mod testing {
     }
 
     #[test]
+    fn test_missing_stub_simple_std_unordered_map_aliases_to_std_hashmap() {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "std_unordered_map_long__class_rusty_Arc_class_rrr_Future_".to_string(),
+            "std::unordered_map<long, rusty::Arc<rrr::Future>>".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            code.contains(
+                "pub type std_unordered_map_long__class_rusty_Arc_class_rrr_Future_ = std::collections::HashMap<i64, std::sync::Arc<rrr_Future>>;"
+            ),
+            "missing stub generation should alias simple lowered std_unordered_map names to std::collections::HashMap, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct std_unordered_map_long__class_rusty_Arc_class_rrr_Future_ {"),
+            "missing stub generation should avoid emitting opaque simple std_unordered_map placeholders when std HashMap targets can be formed, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_simple_std_unordered_map_qualifier_variants_alias_to_std_hashmap() {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "std_unordered_map_long__class_rusty_Arc_class_rrr_Future_".to_string(),
+            "std::unordered_map<long, rusty::Arc<rrr::Future>>".to_string(),
+        );
+        codegen.used_types.insert(
+            "std_unordered_map_long__constclass_rusty_Arc_class_rrr_Future_".to_string(),
+            "std::unordered_map<long, const rusty::Arc<rrr::Future>>".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            code.contains(
+                "pub type std_unordered_map_long__class_rusty_Arc_class_rrr_Future_ = std::collections::HashMap<i64, std::sync::Arc<rrr_Future>>;"
+            ),
+            "missing stub generation should alias class-qualified simple lowered std_unordered_map names to std::collections::HashMap, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains(
+                "pub type std_unordered_map_long__constclass_rusty_Arc_class_rrr_Future_ = std::collections::HashMap<i64, std::sync::Arc<rrr_Future>>;"
+            ),
+            "missing stub generation should alias constclass-qualified simple lowered std_unordered_map names to std::collections::HashMap, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct std_unordered_map_long__class_rusty_Arc_class_rrr_Future_ {"),
+            "missing stub generation should avoid emitting opaque class-qualified simple std_unordered_map placeholders when std HashMap targets can be formed, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains(
+                "pub struct std_unordered_map_long__constclass_rusty_Arc_class_rrr_Future_ {"
+            ),
+            "missing stub generation should avoid emitting opaque constclass-qualified simple std_unordered_map placeholders when std HashMap targets can be formed, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_unordered_map_with_unusable_component_types_keeps_placeholder() {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "unordered_map_void__unordered_map".to_string(),
+            "unordered_map<void *, unordered_map>".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            !code.contains("pub type unordered_map_void__unordered_map = std::collections::HashMap"),
+            "missing stub generation should avoid forcing std HashMap aliases when lowered unordered_map key/value components are unresolved or unusable, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub struct unordered_map_void__unordered_map {"),
+            "missing stub generation should keep an opaque placeholder for unresolved/unusable unordered_map component spellings, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
     fn test_missing_stub_unqualified_vector_aliases_to_generic_stub() {
         let mut codegen = AstCodeGen::new();
         codegen
@@ -78615,6 +78817,39 @@ pub struct Holder {
             !output.contains("pub struct std_collections_VecDeque_std_shared_ptr_Event {")
                 && !output.contains("pub struct std_collections_BTreeSet_std_rc_Rc_rrr_Fiber {"),
             "std_collections lowered aliases should not degrade into opaque placeholders when std container targets can be formed, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_close_unresolved_type_reference_gaps_adds_simple_std_unordered_map_aliases() {
+        let input = r#"
+pub struct Holder {
+    pub pending: std_unordered_map_long__class_rusty_Arc_class_rrr_Future_,
+    pub pending_const: std_unordered_map_long__constclass_rusty_Arc_class_rrr_Future_,
+}
+"#;
+        let output = AstCodeGen::close_unresolved_type_reference_gaps(input);
+        assert!(
+            output.contains(
+                "pub type std_unordered_map_long__class_rusty_Arc_class_rrr_Future_ = std::collections::HashMap<i64, std::sync::Arc<rrr_Future>>;"
+            ),
+            "closure pass should alias simple lowered std_unordered_map names to std::collections::HashMap, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains(
+                "pub type std_unordered_map_long__constclass_rusty_Arc_class_rrr_Future_ = std::collections::HashMap<i64, std::sync::Arc<rrr_Future>>;"
+            ),
+            "closure pass should alias const-qualified simple lowered std_unordered_map names to std::collections::HashMap, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("pub struct std_unordered_map_long__class_rusty_Arc_class_rrr_Future_ {")
+                && !output.contains(
+                    "pub struct std_unordered_map_long__constclass_rusty_Arc_class_rrr_Future_ {"
+                ),
+            "simple lowered std_unordered_map aliases should not degrade into opaque placeholders when std HashMap targets can be formed, got:\n{}",
             output
         );
     }
