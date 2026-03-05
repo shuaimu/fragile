@@ -1670,3 +1670,63 @@ template syntax (`<...>`), so they bypassed the prior alias lane.
   - `make clean`
   - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
   - `ctest -j32 --output-on-failure`
+
+## 28. Recover `MutexGuard`/`RwLock*Guard` Wrapper Records to std Guard Alias Targets (2026-03-05)
+
+### Problem
+
+After `PoisonError` recovery, many sidecars still emitted large numbers of `rusty_MutexGuard_*`
+opaque structs. Canonical and degraded guard spellings were still treated as non-mappable wrappers,
+even though they are Rusty wrappers around std guard surfaces.
+
+### Rule
+
+- Map wrapper-record guard forms to std sync guards during alias emission:
+  - `MutexGuard<T>` -> `std::sync::MutexGuard<'static, T>`
+  - `RwLockReadGuard<T>` -> `std::sync::RwLockReadGuard<'static, T>`
+  - `RwLockWriteGuard<T>` -> `std::sync::RwLockWriteGuard<'static, T>`
+- Support both canonical template spellings (`<...>`) and degraded scoped spellings (`::...`).
+- Inject explicit `'static` lifetimes only in wrapper-record alias targets so generated alias items
+  remain well-formed.
+
+### Implementation
+
+- In `crates/fragile-clang/src/ast_codegen.rs`:
+  - Extended `map_non_isomorphic_sync_wrapper_alias_target()` to normalize and map:
+    - `rusty::MutexGuard<...>` / `rusty::sync::MutexGuard<...>` / `MutexGuard<...>`
+    - `rusty::RwLockReadGuard<...>` / `rusty::sync::RwLockReadGuard<...>` / `RwLockReadGuard<...>`
+    - `rusty::RwLockWriteGuard<...>` / `rusty::sync::RwLockWriteGuard<...>` / `RwLockWriteGuard<...>`
+    - and their degraded `::...` counterparts.
+  - Reused the same payload normalization path used by `PoisonError` recovery, including compact
+    cv/tag prefix stripping.
+  - Extended alias-target lifetime injection to include:
+    - `std::sync::MutexGuard`
+    - `std::sync::RwLockReadGuard`
+    - `std::sync::RwLockWriteGuard`
+  - Added these std guard prefixes to wrapper alias allowlist.
+  - Updated wrapper trait detectors so std guard lanes are treated as non-`Default`,
+    non-`Clone`, and non-`Copy`.
+
+### Tests
+
+- Extended `test_rusty_wrapper_record_alias_helper_supports_option_and_result` with:
+  - direct guard spellings (`rusty::MutexGuard<int>`, `rusty::sync::RwLockReadGuard<long>`,
+    `RwLockWriteGuard<long>`)
+  - degraded scoped spellings (`rusty::MutexGuard::conststruct...`,
+    `rusty::RwLockReadGuard::classrusty::Option::...`)
+- Extended `test_wrapper_trait_detectors_normalize_rusty_alias_spellings` with std guard checks.
+- Re-ran guardrail regression:
+  - `test_rusty_wrapper_record_alias_helper_maps_result_with_poison_error_to_generated_record_companions`
+
+### Guardrails
+
+- Scope is still wrapper-record alias emission; global type normalization policy remains unchanged.
+- Companion-record normalization for `Result<..., PoisonError<...>>` remains intact.
+- Fresh validation remains green:
+  - `cargo test -p fragile-clang --lib test_rusty_wrapper_record_alias_helper_supports_option_and_result`
+  - `cargo test -p fragile-clang --lib test_wrapper_trait_detectors_normalize_rusty_alias_spellings`
+  - `cargo test -p fragile-clang --lib maps_result_with_poison_error_to_generated_record_companions`
+  - `cargo build --release --bin fragilec`
+  - `make clean`
+  - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
+  - `ctest -j32 --output-on-failure`

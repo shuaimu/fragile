@@ -36073,12 +36073,44 @@ impl AstCodeGen {
         let mut normalized = target.to_string();
         let sentinel_refmut = "__FRAGILE_REFMUT_STATIC_SENTINEL__";
         let sentinel_ref = "__FRAGILE_REF_STATIC_SENTINEL__";
+        let sentinel_mutex_guard = "__FRAGILE_MUTEX_GUARD_STATIC_SENTINEL__";
+        let sentinel_rwlock_read_guard = "__FRAGILE_RWLOCK_READ_GUARD_STATIC_SENTINEL__";
+        let sentinel_rwlock_write_guard = "__FRAGILE_RWLOCK_WRITE_GUARD_STATIC_SENTINEL__";
         normalized = normalized.replace("std::cell::RefMut<'static, ", sentinel_refmut);
         normalized = normalized.replace("std::cell::Ref<'static, ", sentinel_ref);
+        normalized =
+            normalized.replace("std::sync::MutexGuard<'static, ", sentinel_mutex_guard);
+        normalized = normalized.replace(
+            "std::sync::RwLockReadGuard<'static, ",
+            sentinel_rwlock_read_guard,
+        );
+        normalized = normalized.replace(
+            "std::sync::RwLockWriteGuard<'static, ",
+            sentinel_rwlock_write_guard,
+        );
         normalized = normalized.replace("std::cell::RefMut<", "std::cell::RefMut<'static, ");
         normalized = normalized.replace("std::cell::Ref<", "std::cell::Ref<'static, ");
+        normalized =
+            normalized.replace("std::sync::MutexGuard<", "std::sync::MutexGuard<'static, ");
+        normalized = normalized.replace(
+            "std::sync::RwLockReadGuard<",
+            "std::sync::RwLockReadGuard<'static, ",
+        );
+        normalized = normalized.replace(
+            "std::sync::RwLockWriteGuard<",
+            "std::sync::RwLockWriteGuard<'static, ",
+        );
         normalized = normalized.replace(sentinel_refmut, "std::cell::RefMut<'static, ");
         normalized = normalized.replace(sentinel_ref, "std::cell::Ref<'static, ");
+        normalized = normalized.replace(sentinel_mutex_guard, "std::sync::MutexGuard<'static, ");
+        normalized = normalized.replace(
+            sentinel_rwlock_read_guard,
+            "std::sync::RwLockReadGuard<'static, ",
+        );
+        normalized = normalized.replace(
+            sentinel_rwlock_write_guard,
+            "std::sync::RwLockWriteGuard<'static, ",
+        );
         normalized
     }
 
@@ -36162,36 +36194,104 @@ impl AstCodeGen {
             direct
         }
 
+        fn map_single_payload_wrapper_alias_target(
+            cleaned: &str,
+            canonical_prefixes: &[&str],
+            scope_prefixes: &[&str],
+            std_path: &str,
+        ) -> Option<String> {
+            for prefix in canonical_prefixes {
+                let Some(inner) = cleaned
+                    .strip_prefix(prefix)
+                    .and_then(|suffix| suffix.strip_suffix('>'))
+                else {
+                    continue;
+                };
+                let args = parse_template_args(inner);
+                if args.len() != 1 {
+                    continue;
+                }
+                let mapped = map_wrapper_payload(&args[0]);
+                return Some(format!("{}<{}>", std_path, mapped));
+            }
+
+            for prefix in scope_prefixes {
+                let Some(raw_arg) = cleaned.strip_prefix(prefix) else {
+                    continue;
+                };
+                let mapped = map_wrapper_payload(raw_arg);
+                return Some(format!("{}<{}>", std_path, mapped));
+            }
+
+            None
+        }
+
         let mut cleaned = record_name.trim();
         cleaned = cleaned.trim_start_matches("crate::").trim();
         cleaned = cleaned.trim_start_matches("::").trim();
 
-        for prefix in [
-            "rusty::PoisonError<",
-            "rusty::sync::PoisonError<",
-            "PoisonError<",
+        for (canonical_prefixes, scope_prefixes, std_path) in [
+            (
+                &[
+                    "rusty::PoisonError<",
+                    "rusty::sync::PoisonError<",
+                    "PoisonError<",
+                ] as &[&str],
+                &[
+                    "rusty::PoisonError::",
+                    "rusty::sync::PoisonError::",
+                    "PoisonError::",
+                ] as &[&str],
+                "std::sync::PoisonError",
+            ),
+            (
+                &[
+                    "rusty::MutexGuard<",
+                    "rusty::sync::MutexGuard<",
+                    "MutexGuard<",
+                ] as &[&str],
+                &[
+                    "rusty::MutexGuard::",
+                    "rusty::sync::MutexGuard::",
+                    "MutexGuard::",
+                ] as &[&str],
+                "std::sync::MutexGuard",
+            ),
+            (
+                &[
+                    "rusty::RwLockReadGuard<",
+                    "rusty::sync::RwLockReadGuard<",
+                    "RwLockReadGuard<",
+                ] as &[&str],
+                &[
+                    "rusty::RwLockReadGuard::",
+                    "rusty::sync::RwLockReadGuard::",
+                    "RwLockReadGuard::",
+                ] as &[&str],
+                "std::sync::RwLockReadGuard",
+            ),
+            (
+                &[
+                    "rusty::RwLockWriteGuard<",
+                    "rusty::sync::RwLockWriteGuard<",
+                    "RwLockWriteGuard<",
+                ] as &[&str],
+                &[
+                    "rusty::RwLockWriteGuard::",
+                    "rusty::sync::RwLockWriteGuard::",
+                    "RwLockWriteGuard::",
+                ] as &[&str],
+                "std::sync::RwLockWriteGuard",
+            ),
         ] {
-            let Some(inner) = cleaned.strip_prefix(prefix).and_then(|s| s.strip_suffix('>')) else {
-                continue;
-            };
-            let args = parse_template_args(inner);
-            if args.len() != 1 {
-                continue;
+            if let Some(target) = map_single_payload_wrapper_alias_target(
+                cleaned,
+                canonical_prefixes,
+                scope_prefixes,
+                std_path,
+            ) {
+                return Some(target);
             }
-            let mapped = map_wrapper_payload(&args[0]);
-            return Some(format!("std::sync::PoisonError<{}>", mapped));
-        }
-
-        for prefix in [
-            "rusty::PoisonError::",
-            "rusty::sync::PoisonError::",
-            "PoisonError::",
-        ] {
-            let Some(raw_arg) = cleaned.strip_prefix(prefix) else {
-                continue;
-            };
-            let mapped = map_wrapper_payload(raw_arg);
-            return Some(format!("std::sync::PoisonError<{}>", mapped));
         }
 
         None
@@ -36217,6 +36317,9 @@ impl AstCodeGen {
             "std::cell::UnsafeCell<",
             "std::sync::Mutex<",
             "std::sync::RwLock<",
+            "std::sync::MutexGuard<",
+            "std::sync::RwLockReadGuard<",
+            "std::sync::RwLockWriteGuard<",
             "std::sync::PoisonError<",
             "std::sync::mpsc::Sender<",
             "std::sync::mpsc::Receiver<",
@@ -36274,6 +36377,9 @@ impl AstCodeGen {
             || normalized.starts_with("std::thread::JoinHandle<")
             || normalized.starts_with("std::cell::Ref<")
             || normalized.starts_with("std::cell::RefMut<")
+            || normalized.starts_with("std::sync::MutexGuard<")
+            || normalized.starts_with("std::sync::RwLockReadGuard<")
+            || normalized.starts_with("std::sync::RwLockWriteGuard<")
             || normalized == "std::sync::Barrier"
             || normalized == "std::sync::Once"
             || normalized == "std::sync::WaitTimeoutResult"
@@ -36283,6 +36389,9 @@ impl AstCodeGen {
             || compact.starts_with("std_thread_JoinHandle_")
             || compact.starts_with("std_cell_Ref_")
             || compact.starts_with("std_cell_RefMut_")
+            || compact.starts_with("std_sync_MutexGuard_")
+            || compact.starts_with("std_sync_RwLockReadGuard_")
+            || compact.starts_with("std_sync_RwLockWriteGuard_")
             || compact == "std_sync_Barrier"
             || compact == "std_sync_Once"
             || compact == "std_sync_WaitTimeoutResult"
@@ -36300,6 +36409,9 @@ impl AstCodeGen {
             || normalized.starts_with("std::cell::RefMut<")
             || normalized.starts_with("std::sync::Mutex<")
             || normalized.starts_with("std::sync::RwLock<")
+            || normalized.starts_with("std::sync::MutexGuard<")
+            || normalized.starts_with("std::sync::RwLockReadGuard<")
+            || normalized.starts_with("std::sync::RwLockWriteGuard<")
             || normalized == "std::sync::Barrier"
             || normalized == "std::sync::Condvar"
             || normalized == "std::sync::Once"
@@ -36308,6 +36420,9 @@ impl AstCodeGen {
             || compact.starts_with("std_cell_RefMut_")
             || compact.starts_with("std_sync_Mutex_")
             || compact.starts_with("std_sync_RwLock_")
+            || compact.starts_with("std_sync_MutexGuard_")
+            || compact.starts_with("std_sync_RwLockReadGuard_")
+            || compact.starts_with("std_sync_RwLockWriteGuard_")
             || compact == "std_sync_Barrier"
             || compact == "std_sync_Condvar"
             || compact == "std_sync_Once"
@@ -36329,6 +36444,9 @@ impl AstCodeGen {
             || normalized.starts_with("std::cell::RefCell<")
             || normalized.starts_with("std::sync::Mutex<")
             || normalized.starts_with("std::sync::RwLock<")
+            || normalized.starts_with("std::sync::MutexGuard<")
+            || normalized.starts_with("std::sync::RwLockReadGuard<")
+            || normalized.starts_with("std::sync::RwLockWriteGuard<")
             || normalized == "std::sync::Barrier"
             || normalized == "std::sync::Condvar"
             || normalized == "std::sync::Once"
@@ -36347,6 +36465,9 @@ impl AstCodeGen {
             || compact.starts_with("std_cell_RefCell_")
             || compact.starts_with("std_sync_Mutex_")
             || compact.starts_with("std_sync_RwLock_")
+            || compact.starts_with("std_sync_MutexGuard_")
+            || compact.starts_with("std_sync_RwLockReadGuard_")
+            || compact.starts_with("std_sync_RwLockWriteGuard_")
             || compact == "std_sync_Barrier"
             || compact == "std_sync_Condvar"
             || compact == "std_sync_Once"
@@ -72075,6 +72196,15 @@ pub struct RustyReceiverHolder {
         assert!(AstCodeGen::is_non_default_std_wrapper_type(
             "rusty::RefMut<class Foo>"
         ));
+        assert!(AstCodeGen::is_non_default_std_wrapper_type(
+            "std::sync::MutexGuard<'static, i32>"
+        ));
+        assert!(AstCodeGen::is_non_default_std_wrapper_type(
+            "std::sync::RwLockReadGuard<'static, i32>"
+        ));
+        assert!(AstCodeGen::is_non_default_std_wrapper_type(
+            "std::sync::RwLockWriteGuard<'static, i32>"
+        ));
         assert!(AstCodeGen::is_non_default_std_wrapper_type("rusty::Once"));
         assert!(AstCodeGen::is_non_default_std_wrapper_type(
             "rusty::WaitTimeoutResult"
@@ -72085,6 +72215,15 @@ pub struct RustyReceiverHolder {
         assert!(AstCodeGen::is_non_clone_std_wrapper_type(
             "rusty::RefMut<class Foo>"
         ));
+        assert!(AstCodeGen::is_non_clone_std_wrapper_type(
+            "std::sync::MutexGuard<'static, i32>"
+        ));
+        assert!(AstCodeGen::is_non_clone_std_wrapper_type(
+            "std::sync::RwLockReadGuard<'static, i32>"
+        ));
+        assert!(AstCodeGen::is_non_clone_std_wrapper_type(
+            "std::sync::RwLockWriteGuard<'static, i32>"
+        ));
         assert!(AstCodeGen::is_non_clone_std_wrapper_type("rusty::Mutex<i32>"));
         assert!(AstCodeGen::is_non_clone_std_wrapper_type("rusty::Condvar"));
         assert!(AstCodeGen::is_non_copy_std_wrapper_type(
@@ -72092,6 +72231,15 @@ pub struct RustyReceiverHolder {
         ));
         assert!(AstCodeGen::is_non_copy_std_wrapper_type(
             "rusty::RefMut<class Foo>"
+        ));
+        assert!(AstCodeGen::is_non_copy_std_wrapper_type(
+            "std::sync::MutexGuard<'static, i32>"
+        ));
+        assert!(AstCodeGen::is_non_copy_std_wrapper_type(
+            "std::sync::RwLockReadGuard<'static, i32>"
+        ));
+        assert!(AstCodeGen::is_non_copy_std_wrapper_type(
+            "std::sync::RwLockWriteGuard<'static, i32>"
         ));
         assert!(AstCodeGen::is_non_copy_std_wrapper_type(
             "rusty::HashMap<i32, i32>"
@@ -74241,6 +74389,23 @@ pub struct rusty_Arc_classrrr_Client_ {
             Some("std::sync::PoisonError<i32>")
         );
         assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name("rusty::MutexGuard<int>")
+                .as_deref(),
+            Some("std::sync::MutexGuard<'static, i32>")
+        );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name(
+                "rusty::sync::RwLockReadGuard<long>"
+            )
+            .as_deref(),
+            Some("std::sync::RwLockReadGuard<'static, i64>")
+        );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name("RwLockWriteGuard<long>")
+                .as_deref(),
+            Some("std::sync::RwLockWriteGuard<'static, i64>")
+        );
+        assert_eq!(
             AstCodeGen::rusty_wrapper_alias_target_from_record_name(
                 "rusty::PoisonError::conststructrrr::Future::State"
             )
@@ -74249,10 +74414,26 @@ pub struct rusty_Arc_classrrr_Client_ {
         );
         assert_eq!(
             AstCodeGen::rusty_wrapper_alias_target_from_record_name(
+                "rusty::MutexGuard::conststructrrr::Future::State"
+            )
+            .as_deref(),
+            Some("std::sync::MutexGuard<'static, rrr_Future_State>")
+        );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name(
                 "rusty::PoisonError::classrusty::Option::classrusty::thread::JoinHandle::void"
             )
             .as_deref(),
             Some("std::sync::PoisonError<std::option::Option<std::thread::JoinHandle<()>>>")
+        );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name(
+                "rusty::RwLockReadGuard::classrusty::Option::classrusty::thread::JoinHandle::void"
+            )
+            .as_deref(),
+            Some(
+                "std::sync::RwLockReadGuard<'static, std::option::Option<std::thread::JoinHandle<()>>>",
+            )
         );
         assert_eq!(
             AstCodeGen::rusty_wrapper_alias_target_from_record_name("rusty::Ref<class Foo>")
