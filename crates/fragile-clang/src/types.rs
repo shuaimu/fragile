@@ -792,7 +792,9 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         ("std::sync::mpsc::SyncSender<", "std::sync::mpsc::SyncSender"),
         ("std::sync::mpsc::TrySendError<", "std::sync::mpsc::TrySendError"),
     ] {
-        if let Some(mapped) = map_single_template_alias_to_std(cleaned, prefix, std_path) {
+        if let Some(mapped) =
+            map_single_template_alias_to_std_with_unit_payload_fallback(cleaned, prefix, std_path)
+        {
             return Some(mapped);
         }
     }
@@ -885,15 +887,22 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
     ] {
         for root in qualified_roots {
             let qualified_prefix = format!("{}<", root);
-            if let Some(mapped) =
-                map_single_template_alias_to_std(cleaned, &qualified_prefix, std_path)
+            if let Some(mapped) = map_single_template_alias_to_std_with_unit_payload_fallback(
+                cleaned,
+                &qualified_prefix,
+                std_path,
+            )
             {
                 return Some(mapped);
             }
         }
         if root_is_unqualified {
             let bare_prefix = format!("{}<", alias);
-            if let Some(mapped) = map_single_template_alias_to_std(cleaned, &bare_prefix, std_path)
+            if let Some(mapped) = map_single_template_alias_to_std_with_unit_payload_fallback(
+                cleaned,
+                &bare_prefix,
+                std_path,
+            )
             {
                 return Some(mapped);
             }
@@ -958,8 +967,11 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
             ("Shared<", "std::sync::Arc"),
             ("RefCounted<", "std::rc::Rc"),
         ] {
-            if let Some(mapped) =
-                map_single_template_alias_to_std(cleaned, bare_alias_prefix, std_path)
+            if let Some(mapped) = map_single_template_alias_to_std_with_unit_payload_fallback(
+                cleaned,
+                bare_alias_prefix,
+                std_path,
+            )
             {
                 return Some(mapped);
             }
@@ -2445,6 +2457,10 @@ mod tests {
             "std::option::Option<std::string::String>"
         );
         assert_eq!(
+            CppType::Named("rusty::Option<void>".to_string()).to_rust_type_str(),
+            "std::option::Option<()>"
+        );
+        assert_eq!(
             CppType::Named("rusty::Result<int, rusty::String>".to_string()).to_rust_type_str(),
             "std::result::Result<i32, std::string::String>"
         );
@@ -2455,6 +2471,10 @@ mod tests {
         assert_eq!(
             CppType::Named("rusty::Arc<int>".to_string()).to_rust_type_str(),
             "std::sync::Arc<i32>"
+        );
+        assert_eq!(
+            CppType::Named("rusty::Arc<void>".to_string()).to_rust_type_str(),
+            "std::sync::Arc<()>"
         );
         assert_eq!(
             CppType::Named("rusty::Shared<int>".to_string()).to_rust_type_str(),
@@ -2501,6 +2521,10 @@ mod tests {
         assert_eq!(
             CppType::Named("Option<String>".to_string()).to_rust_type_str(),
             "std::option::Option<std::string::String>"
+        );
+        assert_eq!(
+            CppType::Named("Option<void>".to_string()).to_rust_type_str(),
+            "std::option::Option<()>"
         );
         assert_eq!(
             CppType::Named("Result<int, String>".to_string()).to_rust_type_str(),
@@ -3092,6 +3116,14 @@ mod tests {
             "std::option::Option<()>"
         );
         assert_eq!(
+            normalize_rusty_type_alias_to_std("std::option::Option<void>"),
+            "std::option::Option<()>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("Option<void>"),
+            "std::option::Option<()>"
+        );
+        assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::Result<void, int>"),
             "std::result::Result<(), i32>"
         );
@@ -3227,6 +3259,10 @@ mod tests {
             "std::cell::Ref<std::vec::Vec<i32>>"
         );
         assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::Arc<void>"),
+            "std::sync::Arc<()>"
+        );
+        assert_eq!(
             normalize_rusty_type_alias_to_std("RefMut<rusty::String>"),
             "std::cell::RefMut<std::string::String>"
         );
@@ -3237,6 +3273,10 @@ mod tests {
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::Shared<int>"),
             "std::sync::Arc<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("Shared<void>"),
+            "std::sync::Arc<()>"
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::RefCounted<int>"),
