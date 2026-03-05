@@ -7334,7 +7334,7 @@ impl AstCodeGen {
                 || trimmed.starts_with("pub(self) type ")
         }
 
-        fn parse_type_alias_line(trimmed: &str) -> Option<(String, String, usize)> {
+        fn parse_type_alias_line(trimmed: &str) -> Option<(String, String)> {
             let (lhs, rhs_with_tail) = trimmed.split_once('=')?;
             let semi_idx = rhs_with_tail.find(';')?;
             let rhs = rhs_with_tail[..semi_idx].trim();
@@ -7352,7 +7352,7 @@ impl AstCodeGen {
             {
                 return None;
             }
-            Some((alias_name.to_string(), rhs.to_string(), semi_idx))
+            Some((alias_name.to_string(), rhs.to_string()))
         }
 
         fn is_simple_alias_identifier(expr: &str) -> bool {
@@ -7398,56 +7398,158 @@ impl AstCodeGen {
             )
         }
 
+        fn scan_alias_definitions_by_scope(
+            code: &str,
+        ) -> (
+            Vec<usize>,
+            Vec<Option<usize>>,
+            HashMap<usize, HashMap<String, String>>,
+        ) {
+            let mut line_scopes: Vec<usize> = Vec::with_capacity(code.lines().count());
+            let mut parent_scope: Vec<Option<usize>> = vec![None];
+            let mut scope_stack: Vec<usize> = vec![0];
+            let mut next_scope_id = 1usize;
+            let mut aliases_by_scope: HashMap<usize, HashMap<String, String>> = HashMap::new();
+
+            for line in code.lines() {
+                let trimmed = line.trim_start();
+
+                // Closing braces at line start apply before items on the same line.
+                let mut leading_closes = 0usize;
+                for ch in trimmed.chars() {
+                    if ch == '}' {
+                        leading_closes += 1;
+                    } else {
+                        break;
+                    }
+                }
+                for _ in 0..leading_closes {
+                    if scope_stack.len() > 1 {
+                        scope_stack.pop();
+                    }
+                }
+
+                let scope_id = *scope_stack.last().unwrap_or(&0);
+                line_scopes.push(scope_id);
+
+                if is_type_alias_line(trimmed) {
+                    if let Some((alias_name, rhs)) = parse_type_alias_line(trimmed) {
+                        aliases_by_scope
+                            .entry(scope_id)
+                            .or_default()
+                            .insert(alias_name, rhs);
+                    }
+                }
+
+                let mut consumed = 0usize;
+                for (idx, ch) in trimmed.char_indices() {
+                    if ch == '}' {
+                        consumed = idx + ch.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+
+                for ch in trimmed[consumed..].chars() {
+                    match ch {
+                        '{' => {
+                            let parent = *scope_stack.last().unwrap_or(&0);
+                            parent_scope.push(Some(parent));
+                            scope_stack.push(next_scope_id);
+                            next_scope_id += 1;
+                        }
+                        '}' => {
+                            if scope_stack.len() > 1 {
+                                scope_stack.pop();
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            (line_scopes, parent_scope, aliases_by_scope)
+        }
+
+        fn lookup_visible_alias(
+            ident: &str,
+            mut scope_id: usize,
+            parent_scope: &[Option<usize>],
+            aliases_by_scope: &HashMap<usize, HashMap<String, String>>,
+        ) -> Option<(String, usize)> {
+            let key = ident.trim().trim_start_matches("r#");
+            if key.is_empty() {
+                return None;
+            }
+            loop {
+                if let Some(scope_aliases) = aliases_by_scope.get(&scope_id) {
+                    if let Some(rhs) = scope_aliases.get(key) {
+                        return Some((rhs.clone(), scope_id));
+                    }
+                }
+                match parent_scope.get(scope_id).copied().flatten() {
+                    Some(parent) => scope_id = parent,
+                    None => return None,
+                }
+            }
+        }
+
         fn resolve_transitive_alias_target(
             ident: &str,
-            alias_map: &HashMap<String, String>,
+            start_scope: usize,
+            parent_scope: &[Option<usize>],
+            aliases_by_scope: &HashMap<usize, HashMap<String, String>>,
         ) -> Option<String> {
             if !is_simple_alias_identifier(ident) {
                 return None;
             }
-            let mut current = ident.trim_start_matches("r#").to_string();
-            let mut seen: HashSet<String> = HashSet::new();
+            let mut current_ident = ident.trim_start_matches("r#").to_string();
+            let mut lookup_scope = start_scope;
+            let mut seen: HashSet<(usize, String)> = HashSet::new();
+
             loop {
-                if !seen.insert(current.clone()) {
+                if !seen.insert((lookup_scope, current_ident.clone())) {
                     return None;
                 }
-                let rhs = alias_map.get(&current)?.trim().to_string();
-                if !is_simple_alias_identifier(&rhs) {
-                    return Some(rhs);
+
+                let (rhs, def_scope) = lookup_visible_alias(
+                    &current_ident,
+                    lookup_scope,
+                    parent_scope,
+                    aliases_by_scope,
+                )?;
+                let rhs_trimmed = rhs.trim().to_string();
+                if !is_simple_alias_identifier(&rhs_trimmed) {
+                    return Some(rhs_trimmed);
                 }
-                let next = rhs.trim_start_matches("r#").to_string();
-                if !alias_map.contains_key(&next) {
-                    return Some(rhs);
+
+                let next_ident = rhs_trimmed.trim_start_matches("r#").to_string();
+                if lookup_visible_alias(&next_ident, def_scope, parent_scope, aliases_by_scope)
+                    .is_none()
+                {
+                    return Some(rhs_trimmed);
                 }
-                current = next;
+
+                current_ident = next_ident;
+                lookup_scope = def_scope;
             }
         }
 
-        // Restrict to top-level aliases to avoid cross-module shadowing ambiguities.
-        let mut alias_map: HashMap<String, String> = HashMap::new();
-        for line in code.lines() {
-            let trimmed = line.trim_start();
-            if trimmed.len() != line.len() || !is_type_alias_line(trimmed) {
-                continue;
-            }
-            let Some((alias_name, rhs, _)) = parse_type_alias_line(trimmed) else {
-                continue;
-            };
-            alias_map.insert(alias_name, rhs);
-        }
-        if alias_map.is_empty() {
+        let (line_scopes, parent_scope, aliases_by_scope) = scan_alias_definitions_by_scope(code);
+        if aliases_by_scope.is_empty() {
             return code.to_string();
         }
 
         let mut out = String::with_capacity(code.len());
-        for line in code.lines() {
+        for (line_idx, line) in code.lines().enumerate() {
             let trimmed = line.trim_start();
-            if trimmed.len() != line.len() || !is_type_alias_line(trimmed) {
+            if !is_type_alias_line(trimmed) {
                 out.push_str(line);
                 out.push('\n');
                 continue;
             }
-            let Some((_, rhs, semi_idx)) = parse_type_alias_line(trimmed) else {
+
+            let Some((_, rhs)) = parse_type_alias_line(trimmed) else {
                 out.push_str(line);
                 out.push('\n');
                 continue;
@@ -7457,7 +7559,14 @@ impl AstCodeGen {
                 out.push('\n');
                 continue;
             }
-            let Some(resolved_rhs) = resolve_transitive_alias_target(&rhs, &alias_map) else {
+
+            let scope_id = *line_scopes.get(line_idx).unwrap_or(&0);
+            let Some(resolved_rhs) = resolve_transitive_alias_target(
+                &rhs,
+                scope_id,
+                &parent_scope,
+                &aliases_by_scope,
+            ) else {
                 out.push_str(line);
                 out.push('\n');
                 continue;
@@ -7468,11 +7577,17 @@ impl AstCodeGen {
                 continue;
             }
 
-            let Some((lhs, rhs_with_tail)) = trimmed.split_once('=') else {
+            let Some((lhs, rhs_with_tail)) = line.split_once('=') else {
                 out.push_str(line);
                 out.push('\n');
                 continue;
             };
+            let Some(semi_idx) = rhs_with_tail.find(';') else {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            };
+
             out.push_str(lhs.trim_end());
             out.push_str(" = ");
             out.push_str(&resolved_rhs);
@@ -80931,22 +81046,25 @@ pub type AliasMid = i64;
     }
 
     #[test]
-    fn test_normalize_transitive_std_type_alias_rhs_paths_avoids_non_std_module_aliases() {
+    fn test_normalize_transitive_std_type_alias_rhs_paths_resolves_module_scope_without_sibling_leakage(
+    ) {
         let input = r#"
-pub type Foo = Bar;
-pub type Bar = LocalOpaque;
-pub struct LocalOpaque;
-pub mod inner {
-    pub type A = B;
-    pub type B = std::sync::Barrier;
+pub mod left {
+    pub type Target = std::sync::Barrier;
+    pub type Alias = Target;
+}
+pub mod right {
+    pub struct LocalOpaque;
+    pub type Target = LocalOpaque;
+    pub type Alias = Target;
 }
 "#;
         let output = AstCodeGen::normalize_transitive_std_type_alias_rhs_paths(input);
         assert!(
-            output.contains("pub type Foo = Bar;")
-                && output.contains("pub type Bar = LocalOpaque;")
-                && output.contains("    pub type A = B;"),
-            "transitive alias normalization should avoid cross-module/non-std rewrites, got:\n{}",
+            output.contains("    pub type Alias = std::sync::Barrier;")
+                && output.contains("pub mod right {\n    pub struct LocalOpaque;")
+                && output.contains("    pub type Alias = Target;"),
+            "transitive alias normalization should resolve module-local chains while avoiding sibling-module leakage, got:\n{}",
             output
         );
     }

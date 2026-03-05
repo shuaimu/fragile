@@ -2148,3 +2148,47 @@ regions.
   - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
 - test run:
   - `ctest -j32 --output-on-failure`
+
+## 36. Scope-Aware Transitive Alias Collapse for Module-Local Safe Lanes (2026-03-05)
+
+### Problem
+
+Section 35 collapsed only top-level alias chains. Nested module aliases that were still purely
+safe/std-native (for example `Alias -> Target -> std::sync::Barrier`) remained uncollapsed.
+
+### Rule
+
+- Resolve alias chains using lexical scope visibility:
+  - current scope first, then ancestors.
+- Preserve alias-definition scope during transitive hops so sibling modules cannot leak names into
+  each other.
+- Rewrite only when the terminal target remains in the same safe lanes as Section 35
+  (`std/core/alloc`, primitive/unit/never, raw/reference pointer).
+
+### Implementation
+
+- In `crates/fragile-clang/src/ast_codegen.rs`:
+  - `normalize_transitive_std_type_alias_rhs_paths(...)` now:
+    - scans aliases by lexical scope and records per-line scope ids,
+    - resolves visible aliases with ancestor fallback,
+    - tracks definition scope through transitive resolution,
+    - rewrites indented/module-local alias lines (not just top-level lines).
+
+### Tests
+
+- Updated module behavior coverage:
+  - `test_normalize_transitive_std_type_alias_rhs_paths_resolves_module_scope_without_sibling_leakage`
+- Existing chain collapse coverage remains:
+  - `test_normalize_transitive_std_type_alias_rhs_paths_collapses_std_and_primitive_chains`
+
+### Validation
+
+- Targeted tests:
+  - `cargo test -p fragile-clang normalize_transitive_std_type_alias_rhs_paths -- --nocapture`
+  - `cargo test -p fragile-clang normalize_rusty_type_alias_rhs_paths -- --nocapture`
+- clean mako rebuild (`vendor/mako/build_fragilec_dropin`):
+  - `make clean`
+  - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
+- test run:
+  - `ctest -j32 --output-on-failure`
+  - 117/117 tests passed.
