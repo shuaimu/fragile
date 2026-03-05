@@ -1956,3 +1956,60 @@ These are trait-marker-like surfaces with no runtime payload and should map to a
   - `rg -n "pub type std_is_error_code_enum_" -g "*.fragile.rs" .`
   - confirms marker records now emit `pub type ... = ();`
 - `ctest -j32 --output-on-failure` (only failure remains `rpcbench` path `./build/rpcbench`)
+
+## 33. Preserve Lowered Namespace Wrappers and Canonicalize Compact STL Integer Suffixes (2026-03-05)
+
+### Problem
+
+Two degraded-lowering behaviors were producing avoidable non-std-safe surfaces:
+
+- Lowered namespace wrapper tokens (for example `std_function_void__void_`) could be rewritten by
+  lowercase fallback normalization into `u128` lanes.
+- Lowered STL container suffixes with compact integral spellings (for example `unsignedint`) could
+  remain unresolved, yielding aliases like `std_vector<unsignedint>` instead of canonical Rust
+  integer lanes.
+
+During clean mako replay, this surfaced as:
+
+- `error[E0425]: cannot find type 'unsignedint'` on
+  `pub type std_vector_unsignedint = std_vector<unsignedint>;`
+
+### Rule
+
+- Treat lowered namespace wrappers (`std_*`, `core_*`, `alloc_*`, `rusty_*`, `crate_*`) as
+  preservable type tokens in lowercase unresolved-type fallback normalization.
+- Canonicalize compact lowered integral suffix spellings to Rust integer lanes in STL element
+  mapping (for example `unsignedint -> u32`, `longlong -> i64`).
+
+### Implementation
+
+- In `crates/fragile-clang/src/ast_codegen.rs`:
+  - Updated `normalize_unresolved_lowercase_item_type_tokens(...)` to skip rewriting unresolved
+    lowered namespace wrapper names with prefixes:
+    - `std_`, `core_`, `alloc_`, `rusty_`, `crate_`
+  - Extended `stl_container_element_rust_type_from_suffix(...)` to normalize compact integral
+    spellings:
+    - `signedchar`, `unsignedchar`
+    - `signedshort`, `unsignedshort`
+    - `signedint`, `unsignedint`
+    - `signedlong`, `unsignedlong`
+    - `longlong`, `unsignedlonglong`
+
+### Tests
+
+- Added:
+  - `test_normalize_unresolved_lowercase_item_type_tokens_preserves_lowered_namespace_wrappers`
+  - `test_missing_stub_std_vector_alias_normalizes_compact_unsigned_int_suffix`
+
+### Validation
+
+- `cargo test -p fragile-clang --lib test_normalize_unresolved_lowercase_item_type_tokens_preserves_lowered_namespace_wrappers`
+- `cargo test -p fragile-clang --lib test_missing_stub_std_vector_alias_normalizes_compact_unsigned_int_suffix`
+- `cargo build --release --bin fragilec`
+- clean rebuild (`vendor/mako/build_fragilec_dropin`):
+  - `make clean`
+  - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
+- sidecar spot checks:
+  - `rg -n "std_vector_unsignedint = std_vector<u32>" CMakeFiles/test_client_service.dir/test/test_client_service.cc.fragile.rs`
+  - confirms compact `unsignedint` suffix canonicalizes to `u32`
+- `ctest -j32 --output-on-failure` (only failure remains `rpcbench` path `./build/rpcbench`)

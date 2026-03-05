@@ -6201,6 +6201,14 @@ impl AstCodeGen {
                     && name
                         .chars()
                         .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+                    // Preserve lowered namespace wrapper spellings (for example
+                    // `std_function_void__void_`) so they can resolve to later
+                    // alias/stub passes instead of collapsing to scalar fallbacks.
+                    && !name.starts_with("std_")
+                    && !name.starts_with("core_")
+                    && !name.starts_with("alloc_")
+                    && !name.starts_with("rusty_")
+                    && !name.starts_with("crate_")
                     && !Self::is_primitive_type_name(name)
                     && !RUST_KEYWORDS.contains(&name.as_str())
                     && !reserved_module_like.contains(name.as_str())
@@ -34822,15 +34830,25 @@ impl AstCodeGen {
             "void" => "std::ffi::c_void",
             "bool" => "bool",
             "char" | "signed_char" => "i8",
+            "signedchar" => "i8",
             "unsigned_char" => "u8",
+            "unsignedchar" => "u8",
             "short" => "i16",
+            "signedshort" => "i16",
             "unsigned_short" => "u16",
+            "unsignedshort" => "u16",
             "int" => "i32",
+            "signedint" => "i32",
             "unsigned_int" => "u32",
+            "unsignedint" => "u32",
             "long" => "i64",
+            "signedlong" => "i64",
             "unsigned_long" => "u64",
+            "unsignedlong" => "u64",
             "long_long" => "i64",
+            "longlong" => "i64",
             "unsigned_long_long" => "u64",
+            "unsignedlonglong" => "u64",
             "float" => "f32",
             "double" | "long_double" => "f64",
             _ => normalized,
@@ -74117,6 +74135,28 @@ pub mod testing {
     }
 
     #[test]
+    fn test_missing_stub_std_vector_alias_normalizes_compact_unsigned_int_suffix() {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "std_vector_unsignedint".to_string(),
+            "std::vector<unsigned int>".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            code.contains("pub type std_vector_unsignedint = std_vector<u32>;"),
+            "missing stub generation should normalize compact lowered unsignedint suffixes to u32 element lanes, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub type std_vector_unsignedint = std_vector<unsignedint>;"),
+            "missing stub generation must avoid unresolved compact unsignedint element aliases, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
     fn test_missing_stub_unqualified_vector_void_ptr_alias_preserves_pointer_shape() {
         let mut codegen = AstCodeGen::new();
         codegen
@@ -79545,6 +79585,39 @@ pub fn passthrough(raw: *mut c_void, named: *const std::ffi::c_void) -> *const c
         assert!(
             !output.contains("std::ffi::u128") && !output.contains("*mut u128"),
             "c_void type paths should not be rewritten to u128 fallback types, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_unresolved_lowercase_item_type_tokens_preserves_lowered_namespace_wrappers()
+    {
+        let input = r#"
+pub type CallbackAlias = std_function_void__void_;
+pub fn invoke(callbacks: std_vector<std_function_void__void_>) -> std_function_void__void_ {
+    unimplemented!()
+}
+"#;
+        let output = AstCodeGen::normalize_unresolved_lowercase_item_type_tokens(input);
+        assert!(
+            output.contains("pub type CallbackAlias = std_function_void__void_;"),
+            "lowered namespace wrapper aliases should be preserved by lowercase fallback normalization, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains(
+                "pub fn invoke(callbacks: std_vector<std_function_void__void_>) -> std_function_void__void_"
+            ) || output.contains(
+                "pub fn invoke(callbacks: std_vector<std_function_void__void_>) -> std_function_void__void_ {"
+            ),
+            "lowered namespace wrapper tokens in function signatures should be preserved, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("std_vector<u128>")
+                && !output.contains("-> u128")
+                && !output.contains("= u128;"),
+            "lowered namespace wrappers should not degrade to u128 fallback tokens, got:\n{}",
             output
         );
     }
