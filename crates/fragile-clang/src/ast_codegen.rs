@@ -5583,6 +5583,7 @@ impl AstCodeGen {
                 | "layout"
                 | "len"
                 | "mul"
+                | "mut"
                 | "name"
                 | "nan"
                 | "new"
@@ -5605,6 +5606,10 @@ impl AstCodeGen {
         )
     }
 
+    fn is_numeric_path_segment(segment: &str) -> bool {
+        !segment.is_empty() && segment.chars().all(|ch| ch.is_ascii_digit())
+    }
+
     fn is_expression_like_cpp_type_spelling(cpp_name: &str) -> bool {
         let cleaned = cpp_name.trim();
         if cleaned.is_empty()
@@ -5623,8 +5628,13 @@ impl AstCodeGen {
         }
 
         let segments: Vec<&str> = cleaned.split("::").filter(|seg| !seg.is_empty()).collect();
-        if segments.len() < 2 {
+        if segments.is_empty() {
             return false;
+        }
+        // Keep `c::u128`-like spellings eligible as real type candidates while
+        // still suppressing the obvious pseudo-type `c::void`.
+        if segments.len() == 2 && segments[0] == "c" {
+            return segments[1] == "void";
         }
         if segments
             .iter()
@@ -5633,9 +5643,9 @@ impl AstCodeGen {
             return false;
         }
 
-        segments
-            .iter()
-            .all(|seg| Self::is_expression_like_path_segment(seg))
+        segments.iter().all(|seg| {
+            Self::is_expression_like_path_segment(seg) || Self::is_numeric_path_segment(seg)
+        })
     }
 
     fn is_expression_like_lowered_type_name(rust_name: &str) -> bool {
@@ -5655,9 +5665,9 @@ impl AstCodeGen {
             return false;
         }
 
-        segments
-            .iter()
-            .all(|seg| Self::is_expression_like_path_segment(seg))
+        segments.iter().all(|seg| {
+            Self::is_expression_like_path_segment(seg) || Self::is_numeric_path_segment(seg)
+        })
     }
 
     fn normalize_unresolved_type_spelling_variants(code: &str) -> String {
@@ -74863,6 +74873,24 @@ pub mod rusty {
             .insert("align_of".to_string(), "align::of".to_string());
         codegen
             .used_types
+            .insert("new_0".to_string(), "new::0".to_string());
+        codegen
+            .used_types
+            .insert("from_raw_parts_mut".to_string(), "from::raw::parts::mut".to_string());
+        codegen
+            .used_types
+            .insert("size".to_string(), "::size".to_string());
+        codegen
+            .used_types
+            .insert("ptr".to_string(), "::ptr".to_string());
+        codegen
+            .used_types
+            .insert("c_void".to_string(), "c::void".to_string());
+        codegen
+            .used_types
+            .insert("c_u128".to_string(), "c::u128".to_string());
+        codegen
+            .used_types
             .insert("mutex".to_string(), "mutex".to_string());
         codegen.generate_missing_type_stubs();
         let code = codegen.output;
@@ -74870,13 +74898,18 @@ pub mod rusty {
             !code.contains("pub struct size_of")
                 && !code.contains("pub struct type_name")
                 && !code.contains("pub struct from_utf8")
-                && !code.contains("pub struct align_of"),
+                && !code.contains("pub struct align_of")
+                && !code.contains("pub struct new_0")
+                && !code.contains("pub struct from_raw_parts_mut")
+                && !code.contains("pub struct size")
+                && !code.contains("pub struct ptr")
+                && !code.contains("pub struct c_void"),
             "missing stub generation should ignore expression-like path tokens leaked as type names, got:\n{}",
             code
         );
         assert!(
-            code.contains("pub struct mutex"),
-            "known lowercase type surfaces should remain eligible when they are real type spellings, got:\n{}",
+            code.contains("pub struct mutex") && code.contains("pub struct c_u128"),
+            "known lowercase type surfaces should remain eligible when they are real type spellings (for example c::u128), got:\n{}",
             code
         );
     }
@@ -74895,13 +74928,21 @@ pub mod rusty {
             .insert("from_utf8".to_string());
         codegen
             .referenced_but_undefined_structs
+            .insert("new_0".to_string());
+        codegen
+            .referenced_but_undefined_structs
+            .insert("from_raw_parts_mut".to_string());
+        codegen
+            .referenced_but_undefined_structs
             .insert("thread_id".to_string());
         codegen.generate_missing_type_stubs();
         let code = codegen.output;
         assert!(
             !code.contains("pub struct size_of")
                 && !code.contains("pub struct type_name")
-                && !code.contains("pub struct from_utf8"),
+                && !code.contains("pub struct from_utf8")
+                && !code.contains("pub struct new_0")
+                && !code.contains("pub struct from_raw_parts_mut"),
             "referenced-but-undefined expression-like names should be ignored as type stubs, got:\n{}",
             code
         );

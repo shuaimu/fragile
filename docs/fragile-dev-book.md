@@ -169,6 +169,8 @@ Generic normalizations added in this replay cycle:
 - expression-like pseudo-type stub suppression (`generate_missing_type_stubs`):
   - detects leaked expression path spellings used as fake type names (for example `size::of`, `type::name`, `from::utf8`) and skips emitting fallback `pub struct ...` stubs for them.
   - applies to both `used_types` and `referenced_but_undefined_structs` recovery paths, while preserving real lowercase type candidates.
+  - recognizes numeric leaf segments and global-scope singleton paths in leaked pseudo types (for example `new::0`, `::size`, `::ptr`) and includes `from::raw::parts::mut`-style paths.
+  - keeps `c::u128`-style surfaces eligible while still suppressing `c::void` in this pseudo-type filter.
 
 Outcome snapshot:
 
@@ -178,6 +180,7 @@ Outcome snapshot:
 - On March 5, 2026, after adding runtime-internal alias rewrite+suppression, a fresh `make clean`, `cmake --build . -j32`, and `ctest -j32 --output-on-failure` rerun again passed (`117/117`) while removing generated fallback aliases for `BorrowState`/`Group`/`ProbeSeq`/`RcControlBlockBase` in `build_fragilec_dropin` sidecar `.fragile.rs` outputs.
 - On March 5, 2026, after adding unused runtime-internal typedef pruning, another fresh `make clean`, `cmake --build . -j32`, and `ctest -j32 --output-on-failure` rerun passed (`117/117`) and reduced remaining `pub type ... = rusty::...;` sidecar aliases in `build_fragilec_dropin` from 74 to 0.
 - On March 5, 2026, after adding expression-like pseudo-type stub suppression for leaked paths (for example `size::of`), a fresh `make clean`, `cmake --build . -j32`, and `ctest -j32 --output-on-failure` rerun passed (`117/117`) and removed invalid fallback struct emissions for those path-like pseudo types.
+- On March 5, 2026, after broadening expression-like pseudo-type detection (`new::0`, `from::raw::parts::mut`, global-scope singleton path leaks), a fresh `make clean`, `cmake --build . -j32`, and `ctest -j32 --output-on-failure` rerun again passed (`117/117`), with `from::raw::parts::mut` and `new::0` placeholder emissions reduced to 0 in `build_fragilec_dropin` sidecar outputs.
 
 ### 2.3 C++ `_v` trait globals and export linkage
 
