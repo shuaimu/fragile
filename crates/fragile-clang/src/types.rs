@@ -370,20 +370,27 @@ fn map_lowered_mpsc_endpoint_to_std(spelling: &str) -> Option<String> {
         ("std_sync_mpsc_Sender_", "std::sync::mpsc::Sender"),
         ("std_sync_mpsc_Receiver_", "std::sync::mpsc::Receiver"),
         ("std_sync_mpsc_SyncSender_", "std::sync::mpsc::SyncSender"),
+        ("std_sync_mpsc_TrySendError_", "std::sync::mpsc::TrySendError"),
         ("rusty_sync_mpsc_Sender_", "std::sync::mpsc::Sender"),
         ("rusty_sync_mpsc_Receiver_", "std::sync::mpsc::Receiver"),
         ("rusty_sync_mpsc_SyncSender_", "std::sync::mpsc::SyncSender"),
+        (
+            "rusty_sync_mpsc_TrySendError_",
+            "std::sync::mpsc::TrySendError",
+        ),
     ] {
         if let Some(rest) = spelling.strip_prefix(prefix) {
             let lowered = rest.strip_suffix('_').unwrap_or(rest);
-            if lowered.is_empty()
-                || !lowered
-                    .chars()
-                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+            if !lowered
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
             {
                 continue;
             }
-            let mapped = if lowered == "void" {
+            let mapped = if lowered.is_empty()
+                || lowered == "void"
+                || is_unresolved_placeholder_type_name(lowered)
+            {
                 "()".to_string()
             } else {
                 CppType::Named(lowered.to_string()).to_rust_type_str()
@@ -2609,6 +2616,22 @@ mod tests {
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty_sync_mpsc_Sender_int"),
             "std::sync::mpsc::Sender<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std_sync_mpsc_TrySendError_int"),
+            "std::sync::mpsc::TrySendError<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty_sync_mpsc_TrySendError_int"),
+            "std::sync::mpsc::TrySendError<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std_sync_mpsc_TrySendError__"),
+            "std::sync::mpsc::TrySendError<()>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std_sync_mpsc_TrySendError_"),
+            "std::sync::mpsc::TrySendError<()>"
         );
         assert_eq!(normalize_rusty_type_alias_to_std("None_t"), "()");
         assert_eq!(normalize_rusty_type_alias_to_std("rusty::None_t"), "()");
