@@ -20770,9 +20770,20 @@ impl AstCodeGen {
             .unwrap_or(raw_rust_name.as_str())
             .to_string();
 
-        if let Some(wrapper_alias_target) =
-            Self::rusty_wrapper_alias_target_from_record_name(inst_name)
-        {
+        let mut wrapper_alias_source_name = inst_name.to_string();
+        let mut wrapper_alias_target = Self::rusty_wrapper_alias_target_from_record_name(inst_name);
+        if wrapper_alias_target.is_none() {
+            if let Some(qualified_inst_name) = self.qualify_cpp_name_in_current_namespace(inst_name)
+            {
+                if let Some(target) =
+                    Self::rusty_wrapper_alias_target_from_record_name(&qualified_inst_name)
+                {
+                    wrapper_alias_source_name = qualified_inst_name;
+                    wrapper_alias_target = Some(target);
+                }
+            }
+        }
+        if let Some(wrapper_alias_target) = wrapper_alias_target {
             let normalized_wrapper_alias_target =
                 Self::normalize_namespace_alias_target(&wrapper_alias_target);
             let wrapper_alias_name = if rust_name.contains("::") {
@@ -20785,7 +20796,7 @@ impl AstCodeGen {
             {
                 self.writeln(&format!(
                     "/// Alias C++ template instantiation `{}` to Rust std wrapper surface",
-                    inst_name
+                    wrapper_alias_source_name
                 ));
                 self.writeln(&format!(
                     "pub type {} = {};",
@@ -20807,7 +20818,7 @@ impl AstCodeGen {
             {
                 self.writeln(&format!(
                     "/// Alias C++ template instantiation `{}` to canonical wrapper alias",
-                    inst_name
+                    wrapper_alias_source_name
                 ));
                 self.writeln(&format!(
                     "pub type {} = {};",
@@ -33971,6 +33982,27 @@ impl AstCodeGen {
             .collect()
     }
 
+    fn qualify_cpp_name_in_current_namespace(&self, name: &str) -> Option<String> {
+        if name.is_empty() || name.contains("::") || name.starts_with("(anonymous") {
+            return None;
+        }
+        let namespace_path: Vec<&str> = self
+            .current_namespace
+            .iter()
+            .filter_map(|(ns, is_inline)| {
+                if *is_inline || ns.is_empty() || ns.starts_with("(anonymous") {
+                    None
+                } else {
+                    Some(ns.as_str())
+                }
+            })
+            .collect();
+        if namespace_path.is_empty() {
+            return None;
+        }
+        Some(format!("{}::{}", namespace_path.join("::"), name))
+    }
+
     fn preamble_owned_helper_function_names() -> &'static [&'static str] {
         &[
             "__libcpp_atomic_refcount_increment_i64",
@@ -36858,14 +36890,24 @@ impl AstCodeGen {
         {
             return;
         }
-        if let Some(wrapper_alias_target) = Self::rusty_wrapper_alias_target_from_record_name(name)
-        {
+        let mut wrapper_alias_source_name = name.to_string();
+        let mut wrapper_alias_target = Self::rusty_wrapper_alias_target_from_record_name(name);
+        if wrapper_alias_target.is_none() {
+            if let Some(qualified_name) = self.qualify_cpp_name_in_current_namespace(name) {
+                if let Some(target) = Self::rusty_wrapper_alias_target_from_record_name(&qualified_name)
+                {
+                    wrapper_alias_source_name = qualified_name;
+                    wrapper_alias_target = Some(target);
+                }
+            }
+        }
+        if let Some(wrapper_alias_target) = wrapper_alias_target {
             if !self.generated_aliases.contains(&rust_name)
                 && !self.generated_structs.contains(&rust_name)
             {
                 self.writeln(&format!(
                     "/// Alias C++ record `{}` to Rust std wrapper surface",
-                    name
+                    wrapper_alias_source_name
                 ));
                 self.writeln(&format!("pub type {} = {};", rust_name, wrapper_alias_target));
                 self.writeln("");
@@ -70436,6 +70478,38 @@ pub mod testing {
     }
 
     #[test]
+    fn test_template_struct_aliases_rusty_join_handle_instantiation_in_namespace_context() {
+        let mut codegen = AstCodeGen::new();
+        codegen.current_namespace.push(("rusty".to_string(), false));
+        codegen.current_namespace.push(("thread".to_string(), false));
+        let inst_name = "JoinHandle<void>";
+        let rust_name = CppType::Named(inst_name.to_string()).to_rust_type_str();
+
+        codegen.generate_template_struct(
+            inst_name,
+            &[String::from("T")],
+            &[String::from("void")],
+            &[],
+        );
+
+        assert!(
+            codegen.output.contains(&format!(
+                "pub type {} = std::thread::JoinHandle<()>;",
+                rust_name
+            )),
+            "namespace-qualified wrapper template instantiations should alias to std surfaces, got:\n{}",
+            codegen.output
+        );
+        assert!(
+            !codegen
+                .output
+                .contains(&format!("pub struct {} {{", rust_name)),
+            "namespace-qualified wrapper template instantiations should not emit opaque structs, got:\n{}",
+            codegen.output
+        );
+    }
+
+    #[test]
     fn test_template_struct_skips_extern_template_instantiation_declarations() {
         let mut codegen = AstCodeGen::new();
         let inst_name = "Widget<int>";
@@ -70819,6 +70893,31 @@ pub struct rusty_Arc_classrrr_Client_ {
                 .output
                 .contains(&format!("pub struct {} {{", rust_name)),
             "non-generic rusty wrapper records should not emit opaque structs, got:\n{}",
+            codegen.output
+        );
+    }
+
+    #[test]
+    fn test_generate_struct_aliases_rusty_wrapper_record_in_namespace_context() {
+        let mut codegen = AstCodeGen::new();
+        codegen.current_namespace.push(("rusty".to_string(), false));
+        let cpp_name = "Barrier";
+        let rust_name = sanitize_identifier(cpp_name);
+
+        codegen.generate_struct(cpp_name, true, &[]);
+
+        assert!(
+            codegen
+                .output
+                .contains(&format!("pub type {} = std::sync::Barrier;", rust_name)),
+            "namespace-qualified wrapper records should alias to std surfaces, got:\n{}",
+            codegen.output
+        );
+        assert!(
+            !codegen
+                .output
+                .contains(&format!("pub struct {} {{", rust_name)),
+            "namespace-qualified wrapper records should not emit opaque structs, got:\n{}",
             codegen.output
         );
     }
