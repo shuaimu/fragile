@@ -837,6 +837,55 @@ fn map_lowered_std_single_template_alias_to_std(spelling: &str) -> Option<String
     None
 }
 
+fn map_std_hash_to_default_hasher(spelling: &str, root_is_unqualified: bool) -> Option<String> {
+    let default_hasher = "std::collections::hash_map::DefaultHasher";
+
+    for prefix in ["std::hash<", "std::functional::hash<"] {
+        let Some(inner) = spelling
+            .strip_prefix(prefix)
+            .and_then(|rest| rest.strip_suffix('>'))
+        else {
+            continue;
+        };
+        if !parse_template_args(inner).is_empty() {
+            return Some(default_hasher.to_string());
+        }
+    }
+
+    if root_is_unqualified {
+        if let Some(inner) = spelling
+            .strip_prefix("hash<")
+            .and_then(|rest| rest.strip_suffix('>'))
+        {
+            if !parse_template_args(inner).is_empty() {
+                return Some(default_hasher.to_string());
+            }
+        }
+    }
+
+    if spelling.starts_with("std::hash::")
+        || spelling.starts_with("std::functional::hash::")
+        || (root_is_unqualified && spelling.starts_with("hash::"))
+    {
+        return Some(default_hasher.to_string());
+    }
+
+    if let Some(rest) = spelling.strip_prefix("std_hash_") {
+        if !rest.is_empty() && spelling.ends_with('_') {
+            return Some(default_hasher.to_string());
+        }
+    }
+    if root_is_unqualified {
+        if let Some(rest) = spelling.strip_prefix("hash_") {
+            if !rest.is_empty() && spelling.ends_with('_') {
+                return Some(default_hasher.to_string());
+            }
+        }
+    }
+
+    None
+}
+
 fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
     let mut cleaned = strip_cv_qualifiers_and_tag_prefix(spelling);
     cleaned = cleaned.trim_start_matches("::").trim();
@@ -924,6 +973,9 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         return Some(mapped);
     }
     if let Some(mapped) = map_lowered_result_alias_to_std(cleaned) {
+        return Some(mapped);
+    }
+    if let Some(mapped) = map_std_hash_to_default_hasher(cleaned, root_is_unqualified) {
         return Some(mapped);
     }
 
@@ -3498,6 +3550,22 @@ mod tests {
         assert_eq!(
             normalize_rusty_type_alias_to_std("TrySendError<__>"),
             "std::sync::mpsc::TrySendError<()>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std::hash<class rusty::String>"),
+            "std::collections::hash_map::DefaultHasher"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("hash<class rusty::String>"),
+            "std::collections::hash_map::DefaultHasher"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std::hash::constclassrusty::String::"),
+            "std::collections::hash_map::DefaultHasher"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std_hash_classrusty_String_"),
+            "std::collections::hash_map::DefaultHasher"
         );
         let mutex_member_guard = normalize_rusty_type_alias_to_std("rusty::sync::Mutex<int>::Guard");
         assert!(

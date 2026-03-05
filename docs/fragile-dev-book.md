@@ -1844,3 +1844,59 @@ module std::ffi`).
 - `cmake -S .. -B .` (from `vendor/mako/build_fragilec_dropin`)
 - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
 - `ctest -j32 --output-on-failure` (only failure: `rpcbench` path expects `./build/rpcbench`)
+
+## 31. Normalize `std::hash<...>` Record Surfaces to Rust `DefaultHasher` (2026-03-05)
+
+### Problem
+
+Generated sidecars still emitted opaque placeholder structs for C++ hasher record spellings, for
+example:
+
+- `std::hash<class rusty::String>` -> `pub struct std_hash_classrusty_String_ { ... }`
+
+These are Rusty-safe/std-backed hasher surfaces and can be represented by Rust std hasher types.
+
+### Rule
+
+- Normalize recognized C++ `std::hash` spellings to Rust std hasher surface:
+  - `std::hash<...>`
+  - degraded scoped spellings like `std::hash::...`
+  - lowered spellings like `std_hash_..._`
+- Map them conservatively to:
+  - `std::collections::hash_map::DefaultHasher`
+
+### Implementation
+
+- In `crates/fragile-clang/src/types.rs`:
+  - Added `map_std_hash_to_default_hasher(...)`.
+  - Wired it into `map_rusty_type_to_std(...)` before generic wrapper fallbacks.
+- In `crates/fragile-clang/src/ast_codegen.rs`:
+  - Added `std::collections::hash_map::DefaultHasher` to wrapper-alias exact allowlist so
+    record-level alias emission can emit `pub type ... = DefaultHasher` instead of placeholder
+    structs.
+
+### Tests
+
+- Extended `types` normalization regression:
+  - `std::hash<class rusty::String>`
+  - `hash<class rusty::String>`
+  - `std::hash::constclassrusty::String::`
+  - `std_hash_classrusty_String_`
+- Extended wrapper alias helper regression:
+  - `std::hash<class rusty::String>`
+  - `std::hash::constclassrusty::String::`
+
+### Validation
+
+- `cargo test -p fragile-clang --lib test_normalize_rusty_type_alias_to_std_maps_wrappers_and_preserves_non_rusty_paths`
+- `cargo test -p fragile-clang --lib test_rusty_wrapper_record_alias_helper_supports_join_handle_and_non_generic_wrappers`
+- `cargo test -p fragile-clang --lib test_normalize_unresolved_lowercase_item_type_tokens_preserves_c_void_paths`
+- `cargo build --release --bin fragilec`
+- `make clean`
+- `cmake -S .. -B .` (from `vendor/mako/build_fragilec_dropin`)
+- `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
+- targeted regeneration check:
+  - `cmake --build . -j32 --target test_rpc`
+  - confirms `std::hash<class rusty::String>` now emits alias to
+    `std::collections::hash_map::DefaultHasher`
+- `ctest -j32 --output-on-failure` (only failure remains `rpcbench` path `./build/rpcbench`)

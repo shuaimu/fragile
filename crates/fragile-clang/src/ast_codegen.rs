@@ -36495,6 +36495,7 @@ impl AstCodeGen {
             "std::sync::Condvar",
             "std::sync::Once",
             "std::sync::WaitTimeoutResult",
+            "std::collections::hash_map::DefaultHasher",
             "std::sync::mpsc::RecvError",
             "std::sync::mpsc::TryRecvError",
         ];
@@ -74703,6 +74704,25 @@ pub struct rusty_Function_void_void__ {
             AstCodeGen::rusty_wrapper_alias_target_from_record_name("rusty::sync::mpsc::Unit")
                 .as_deref(),
             Some("()")
+        );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name(
+                "std::hash<class rusty::String>"
+            )
+            .as_deref(),
+            Some("std::collections::hash_map::DefaultHasher")
+        );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name(
+                "std::hash::constclassrusty::String::"
+            )
+            .as_deref(),
+            Some("std::collections::hash_map::DefaultHasher")
+        );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name("std_hash_classrusty_String_")
+                .as_deref(),
+            Some("std::collections::hash_map::DefaultHasher")
         );
     }
 
