@@ -34262,6 +34262,44 @@ impl AstCodeGen {
         name.starts_with("rusty_is_send_") || name.starts_with("rusty_is_sync_")
     }
 
+    fn rusty_wrapper_alias_target_from_record_name(record_name: &str) -> Option<String> {
+        let normalized = Self::normalize_namespace_alias_target(record_name);
+        let allowlisted_prefixes = [
+            "std::option::Option<",
+            "std::result::Result<",
+            "std::boxed::Box<",
+            "std::sync::Arc<",
+            "std::sync::Weak<",
+            "std::rc::Rc<",
+            "std::rc::Weak<",
+            "std::cell::Cell<",
+            "std::cell::RefCell<",
+            "std::cell::UnsafeCell<",
+            "std::sync::Mutex<",
+            "std::sync::RwLock<",
+            "std::sync::mpsc::Sender<",
+            "std::sync::mpsc::Receiver<",
+            "std::vec::Vec<",
+            "std::collections::VecDeque<",
+            "std::collections::HashSet<",
+            "std::collections::BTreeSet<",
+            "std::collections::HashMap<",
+            "std::collections::BTreeMap<",
+        ];
+        if normalized == record_name
+            || normalized.contains("rusty::")
+            || normalized.contains("crate::rusty::")
+            || normalized.contains("::rusty::")
+            || Self::has_unresolved_template_placeholder(&normalized)
+            || !allowlisted_prefixes
+                .iter()
+                .any(|prefix| normalized.starts_with(prefix))
+        {
+            return None;
+        }
+        Some(normalized)
+    }
+
     fn normalize_namespace_alias_target(target: &str) -> String {
         normalize_rusty_type_alias_to_std(target)
     }
@@ -36751,6 +36789,27 @@ impl AstCodeGen {
             || name.contains("rusty::is::send::")
             || name.contains("rusty::is::sync::")
         {
+            return;
+        }
+        if let Some(wrapper_alias_target) = Self::rusty_wrapper_alias_target_from_record_name(name)
+        {
+            if !self.generated_aliases.contains(&rust_name)
+                && !self.generated_structs.contains(&rust_name)
+            {
+                self.writeln(&format!(
+                    "/// Alias C++ record `{}` to Rust std wrapper surface",
+                    name
+                ));
+                self.writeln(&format!("pub type {} = {};", rust_name, wrapper_alias_target));
+                self.writeln("");
+                self.generated_aliases.insert(rust_name.clone());
+                self.type_alias_targets
+                    .insert(rust_name.clone(), wrapper_alias_target);
+                if self.current_rust_module_path().is_empty() {
+                    self.global_type_names.insert(rust_name.clone());
+                }
+                self.register_namespace_type_alias(&rust_name);
+            }
             return;
         }
 
@@ -70540,6 +70599,73 @@ pub struct rusty_Arc_classrrr_Client_ {
         assert!(
             !codegen.generated_structs.contains(&rust_name),
             "marker-trait helper records should not be tracked as generated structs"
+        );
+    }
+
+    #[test]
+    fn test_generate_struct_aliases_rusty_wrapper_record_to_std() {
+        let mut codegen = AstCodeGen::new();
+        let cpp_name = "rusty::Arc<class rrr::PollThread>";
+        let rust_name = sanitize_identifier(cpp_name);
+        let alias_target = AstCodeGen::normalize_namespace_alias_target(cpp_name);
+
+        codegen.generate_struct(cpp_name, true, &[]);
+
+        assert!(
+            codegen
+                .output
+                .contains(&format!("pub type {} = {};", rust_name, alias_target)),
+            "rusty wrapper records should alias to Rust std surfaces, got:\n{}",
+            codegen.output
+        );
+        assert!(
+            !codegen
+                .output
+                .contains(&format!("pub struct {} {{", rust_name)),
+            "rusty wrapper records should not emit opaque structs, got:\n{}",
+            codegen.output
+        );
+        assert!(
+            codegen.generated_aliases.contains(&rust_name),
+            "rusty wrapper records should be tracked as aliases"
+        );
+        assert!(
+            !codegen.generated_structs.contains(&rust_name),
+            "rusty wrapper records should not be tracked as generated structs"
+        );
+    }
+
+    #[test]
+    fn test_rusty_wrapper_record_alias_helper_supports_option_and_result() {
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name("rusty::Option<int>")
+                .as_deref(),
+            Some("std::option::Option<i32>")
+        );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name("rusty::Result<int, long>")
+                .as_deref(),
+            Some("std::result::Result<i32, i64>")
+        );
+    }
+
+    #[test]
+    fn test_rusty_wrapper_record_alias_helper_rejects_nested_rusty_paths() {
+        let poisoned = AstCodeGen::rusty_wrapper_alias_target_from_record_name(
+            "rusty::Result<rusty::MutexGuard<int>, rusty::PoisonError<int>>",
+        );
+        assert!(
+            poisoned.is_none(),
+            "result aliases with nested rusty-only wrappers should not collapse into std aliases, got: {:?}",
+            poisoned
+        );
+        let try_send = AstCodeGen::rusty_wrapper_alias_target_from_record_name(
+            "rusty::Option<rusty::sync::mpsc::TrySendError>",
+        );
+        assert!(
+            try_send.is_none(),
+            "option aliases with nested rusty-only wrappers should not collapse into std aliases, got: {:?}",
+            try_send
         );
     }
 
