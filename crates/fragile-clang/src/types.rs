@@ -305,6 +305,11 @@ fn is_explicit_rust_function_pointer_type(arg: &str) -> bool {
 
 fn map_alias_template_arg_to_rust(arg: &str) -> String {
     let trimmed = arg.trim();
+    if trimmed == "()" {
+        // Preserve explicit unit lanes when normalizing already-lowered Rust
+        // wrapper spellings (for example recursive std-wrapper normalization).
+        return "()".to_string();
+    }
     if is_explicit_rust_function_pointer_type(trimmed) {
         // Preserve already-lowered Rust fn pointer spellings inside template args.
         return trimmed.to_string();
@@ -517,6 +522,20 @@ fn map_lowered_mpsc_endpoint_to_std(spelling: &str) -> Option<String> {
     None
 }
 
+fn map_lowered_set_unit_marker_to_std(spelling: &str) -> Option<String> {
+    let cleaned = strip_lowered_cpp_prefix_tokens(spelling.trim_end_matches('_'));
+    let is_set_unit = (cleaned.starts_with("rusty_BTreeSet_")
+        || cleaned.starts_with("BTreeSet_")
+        || cleaned.starts_with("rusty_HashSet_")
+        || cleaned.starts_with("HashSet_"))
+        && cleaned.ends_with("_Unit");
+    if is_set_unit {
+        Some("()".to_string())
+    } else {
+        None
+    }
+}
+
 fn map_lowered_rusty_single_template_alias_to_std(spelling: &str) -> Option<String> {
     for lowered_spelling in [spelling, strip_lowered_cpp_prefix_tokens(spelling)] {
         for (prefix, std_path) in [
@@ -707,6 +726,9 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         }
     }
     if let Some(mapped) = map_lowered_mpsc_endpoint_to_std(cleaned) {
+        return Some(mapped);
+    }
+    if let Some(mapped) = map_lowered_set_unit_marker_to_std(cleaned) {
         return Some(mapped);
     }
     if let Some(mapped) = map_lowered_rusty_single_template_alias_to_std(cleaned) {
@@ -2882,6 +2904,36 @@ mod tests {
                 "std::sync::Mutex<std::option::Option<rusty_Rc_class_rrr_Reactor__>>"
             ),
             "std::sync::Mutex<std::option::Option<std::rc::Rc<rrr_Reactor>>>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty_BTreeSet_class_rusty_Rc_class_rrr_Fiber__Unit"),
+            "()"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("constclassrusty_BTreeSet_classrusty_Rc_classrrr_Fiber___Unit_"),
+            "()"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std(
+                "std::option::Option<rusty_BTreeSet_class_rusty_Rc_class_rrr_Fiber__Unit>"
+            ),
+            "std::option::Option<()>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std(
+                "std::collections::BTreeMap<rusty_Rc_class_rrr_Fiber__, rusty_BTreeSet_class_rusty_Rc_class_rrr_Fiber__Unit>"
+            ),
+            "std::collections::BTreeMap<std::rc::Rc<rrr_Fiber>, ()>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std(
+                "std::collections::BTreeMap<std::rc::Rc<rrr_Fiber>, ()>"
+            ),
+            "std::collections::BTreeMap<std::rc::Rc<rrr_Fiber>, ()>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std::option::Option<()>"),
+            "std::option::Option<()>"
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("enumrusty_sync_mpsc_RecvError"),
