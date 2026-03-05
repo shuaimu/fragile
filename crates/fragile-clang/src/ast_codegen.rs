@@ -72227,6 +72227,20 @@ pub struct rusty_Arc_classrrr_Client_ {
             Some("std::thread::JoinHandle<()>")
         );
         assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name(
+                "Mutex<std::option::Option<JoinHandle<void>>>"
+            )
+            .as_deref(),
+            Some("std::sync::Mutex<std::option::Option<std::thread::JoinHandle<()>>>")
+        );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name(
+                "Mutex<class rusty::Option<class rusty::thread::JoinHandle<void> >>"
+            )
+            .as_deref(),
+            Some("std::sync::Mutex<std::option::Option<std::thread::JoinHandle<()>>>")
+        );
+        assert_eq!(
             AstCodeGen::rusty_wrapper_alias_target_from_record_name("rusty::Barrier").as_deref(),
             Some("std::sync::Barrier")
         );
