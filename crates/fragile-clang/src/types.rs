@@ -649,6 +649,15 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
             // default that keeps the path on std surfaces.
             return Some("std::sync::mpsc::TrySendError<()>".to_string());
         }
+        "std::sync::mpsc::RecvError" => return Some("std::sync::mpsc::RecvError".to_string()),
+        "std::sync::mpsc::TryRecvError" => {
+            return Some("std::sync::mpsc::TryRecvError".to_string());
+        }
+        "std::sync::mpsc::TrySendError" => {
+            // Preserve std path for the non-generic spelling with the same
+            // conservative unit payload used for unqualified/rusty spellings.
+            return Some("std::sync::mpsc::TrySendError<()>".to_string());
+        }
         // `using namespace rusty;` can leave aliases unqualified in Clang spellings.
         "String" => return Some("std::string::String".to_string()),
         "Barrier" => return Some("std::sync::Barrier".to_string()),
@@ -2684,6 +2693,10 @@ mod tests {
             "std::sync::mpsc::RecvError"
         );
         assert_eq!(
+            CppType::Named("std::sync::mpsc::RecvError".to_string()).to_rust_type_str(),
+            "std::sync::mpsc::RecvError"
+        );
+        assert_eq!(
             CppType::Named("RecvError".to_string()).to_rust_type_str(),
             "std::sync::mpsc::RecvError"
         );
@@ -2692,11 +2705,19 @@ mod tests {
             "std::sync::mpsc::TryRecvError"
         );
         assert_eq!(
+            CppType::Named("std::sync::mpsc::TryRecvError".to_string()).to_rust_type_str(),
+            "std::sync::mpsc::TryRecvError"
+        );
+        assert_eq!(
             CppType::Named("TryRecvError".to_string()).to_rust_type_str(),
             "std::sync::mpsc::TryRecvError"
         );
         assert_eq!(
             CppType::Named("rusty::sync::mpsc::TrySendError".to_string()).to_rust_type_str(),
+            "std::sync::mpsc::TrySendError<()>"
+        );
+        assert_eq!(
+            CppType::Named("std::sync::mpsc::TrySendError".to_string()).to_rust_type_str(),
             "std::sync::mpsc::TrySendError<()>"
         );
         assert_eq!(
@@ -3118,7 +3139,19 @@ mod tests {
             "std::sync::mpsc::RecvError"
         );
         assert_eq!(
+            normalize_rusty_type_alias_to_std("std::sync::mpsc::RecvError"),
+            "std::sync::mpsc::RecvError"
+        );
+        assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::sync::mpsc::TrySendError"),
+            "std::sync::mpsc::TrySendError<()>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std::sync::mpsc::TryRecvError"),
+            "std::sync::mpsc::TryRecvError"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std::sync::mpsc::TrySendError"),
             "std::sync::mpsc::TrySendError<()>"
         );
         assert_eq!(

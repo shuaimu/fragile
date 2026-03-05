@@ -285,6 +285,7 @@ Large codebases that include `rusty-cpp` headers frequently surface both fully q
 - mpsc wrapper aliases:
   - `Sender<T>` / `Receiver<T>` / `SyncSender<T>` / `TrySendError<T>` normalize to the corresponding `std::sync::mpsc::*` wrappers
   - explicit `void` and unresolved payload placeholders in those wrappers normalize to unit `()`
+  - bare mpsc error enums (`RecvError`, `TryRecvError`, `TrySendError`) preserve `std::sync::mpsc::*` paths instead of degrading to sanitized identifiers
 
 This keeps generated Rust in safe/std-native form instead of preserving rusty-cpp wrapper type names in emitted signatures.
 
