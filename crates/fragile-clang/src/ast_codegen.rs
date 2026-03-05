@@ -3917,13 +3917,17 @@ impl AstCodeGen {
             Some((lhs.to_string(), ty))
         }
 
+        fn field_prefers_zeroed_default(field_ty: &str) -> bool {
+            AstCodeGen::is_non_default_std_wrapper_type(field_ty)
+        }
+
         fn collect_struct_field_names_for_default(
             lines: &[&str],
             struct_decl_idx: usize,
-        ) -> Option<Vec<String>> {
+        ) -> Option<Vec<(String, String)>> {
             fn parse_inline_field_segment(
                 segment: &str,
-                field_names: &mut Vec<String>,
+                field_entries: &mut Vec<(String, String)>,
             ) -> Option<()> {
                 for chunk in segment.split(',') {
                     let trimmed = chunk.trim();
@@ -3936,7 +3940,7 @@ impl AstCodeGen {
                         if field_ty.contains('&') {
                             return None;
                         }
-                        field_names.push(field_name);
+                        field_entries.push((field_name, field_ty));
                     } else if trimmed.contains(':') {
                         // Field-like fragment we failed to parse safely.
                         return None;
@@ -3952,18 +3956,18 @@ impl AstCodeGen {
 
             let mut brace_depth = start_line.chars().filter(|&ch| ch == '{').count() as i32
                 - start_line.chars().filter(|&ch| ch == '}').count() as i32;
-            let mut field_names: Vec<String> = Vec::new();
+            let mut field_entries: Vec<(String, String)> = Vec::new();
 
             if let Some(open_idx) = start_line.find('{') {
                 let inline_end = start_line.rfind('}').unwrap_or(start_line.len());
                 if inline_end > open_idx + 1 {
                     let inline_segment = &start_line[(open_idx + 1)..inline_end];
-                    parse_inline_field_segment(inline_segment, &mut field_names)?;
+                    parse_inline_field_segment(inline_segment, &mut field_entries)?;
                 }
             }
 
             if brace_depth <= 0 {
-                return Some(field_names);
+                return Some(field_entries);
             }
 
             let mut idx = struct_decl_idx + 1;
@@ -3977,7 +3981,7 @@ impl AstCodeGen {
                     if let Some(close_idx) = segment.find('}') {
                         segment = segment.get(..close_idx).unwrap_or("");
                     }
-                    parse_inline_field_segment(segment, &mut field_names)?;
+                    parse_inline_field_segment(segment, &mut field_entries)?;
                 }
                 brace_depth += line.chars().filter(|&ch| ch == '{').count() as i32
                     - line.chars().filter(|&ch| ch == '}').count() as i32;
@@ -3987,7 +3991,7 @@ impl AstCodeGen {
             if brace_depth != 0 {
                 return None;
             }
-            Some(field_names)
+            Some(field_entries)
         }
 
         let lines: Vec<&str> = code.lines().collect();
@@ -3999,7 +4003,8 @@ impl AstCodeGen {
         let mut derived_traits_for_next_struct: Option<HashSet<String>> = None;
         let mut needs_default: BTreeSet<String> = BTreeSet::new();
         let mut needs_clone: BTreeSet<String> = BTreeSet::new();
-        let mut struct_default_field_names: HashMap<String, Vec<String>> = HashMap::new();
+        let mut struct_default_field_names: HashMap<String, Vec<(String, String)>> =
+            HashMap::new();
         let mut existing_default_impls: HashSet<String> = HashSet::new();
         let mut existing_clone_impls: HashSet<String> = HashSet::new();
         let mut depth: i32 = 0;
@@ -4093,17 +4098,17 @@ impl AstCodeGen {
                             && module_path_root_accessible
                             && !canonical_struct_is_external
                         {
-                            if let Some(field_names) =
+                            if let Some(field_entries) =
                                 collect_struct_field_names_for_default(&lines, line_idx)
                             {
                                 let should_insert = struct_default_field_names
                                     .get(&canonical_struct_name)
                                     .is_none_or(|existing| {
-                                        existing.is_empty() && !field_names.is_empty()
+                                        existing.is_empty() && !field_entries.is_empty()
                                     });
                                 if should_insert {
                                     struct_default_field_names
-                                        .insert(canonical_struct_name.clone(), field_names);
+                                        .insert(canonical_struct_name.clone(), field_entries);
                                 }
                             }
                         }
@@ -4166,15 +4171,21 @@ impl AstCodeGen {
             out.push_str(&struct_name);
             out.push_str(" {\n");
             out.push_str("    fn default() -> Self {\n");
-            if let Some(field_names) = struct_default_field_names.get(&struct_name) {
-                if field_names.is_empty() {
+            if let Some(field_entries) = struct_default_field_names.get(&struct_name) {
+                if field_entries.is_empty() {
                     out.push_str("        unsafe { std::mem::zeroed() }\n");
                 } else {
                     out.push_str("        Self {\n");
-                    for field_name in field_names {
+                    for (field_name, field_ty) in field_entries {
                         out.push_str("            ");
                         out.push_str(field_name);
-                        out.push_str(": Default::default(),\n");
+                        out.push_str(": ");
+                        if field_prefers_zeroed_default(field_ty) {
+                            out.push_str("unsafe { std::mem::zeroed() }");
+                        } else {
+                            out.push_str("Default::default()");
+                        }
+                        out.push_str(",\n");
                     }
                     out.push_str("        }\n");
                 }
@@ -34335,7 +34346,9 @@ impl AstCodeGen {
             cleaned = rest.trim();
         }
         let is_marker_target = cleaned.starts_with("rusty::rusty_is_send_")
-            || cleaned.starts_with("rusty::rusty_is_sync_");
+            || cleaned.starts_with("rusty::rusty_is_sync_")
+            || cleaned.starts_with("rusty_rusty_is_send_")
+            || cleaned.starts_with("rusty_rusty_is_sync_");
         let is_marker_alias = Self::is_rusty_marker_trait_alias_name(alias);
         is_marker_target || is_marker_alias
     }
@@ -34436,6 +34449,22 @@ impl AstCodeGen {
 
     fn normalize_namespace_alias_target(target: &str) -> String {
         normalize_rusty_type_alias_to_std(target)
+    }
+
+    fn is_non_default_std_wrapper_type(type_name: &str) -> bool {
+        let normalized = type_name
+            .trim()
+            .trim_start_matches("crate::")
+            .trim_start_matches("::");
+        let compact = normalized.replace(' ', "");
+        normalized.starts_with("std::sync::mpsc::Sender<")
+            || normalized.starts_with("std::sync::mpsc::Receiver<")
+            || normalized.starts_with("std::sync::mpsc::SyncSender<")
+            || normalized.starts_with("std::thread::JoinHandle<")
+            || compact.starts_with("std_sync_mpsc_Sender_")
+            || compact.starts_with("std_sync_mpsc_Receiver_")
+            || compact.starts_with("std_sync_mpsc_SyncSender_")
+            || compact.starts_with("std_thread_JoinHandle_")
     }
 
     /// Generate Rust stubs (signatures only, no bodies) from a Clang AST.
@@ -37070,6 +37099,13 @@ impl AstCodeGen {
                 if *is_static {
                     return false;
                 }
+                let type_str = ty.to_rust_type_str();
+                // Some normalized std wrapper surfaces intentionally remain non-Default.
+                // Falling back to a manual zeroed Default impl for the parent record
+                // avoids derive-time trait bound failures in generated output.
+                if Self::is_non_default_std_wrapper_type(&type_str) {
+                    return true;
+                }
                 // Check for large arrays (Default only impl'd up to [T; 32])
                 if let CppType::Array { size: Some(n), .. } = ty {
                     if *n > 32 {
@@ -37079,7 +37115,6 @@ impl AstCodeGen {
                 // Check for c_void fields (c_void doesn't implement Default).
                 // Bare "std::ffi::c_void" fields are replaced with [u8; 1] during emission,
                 // so they no longer prevent Default derives.
-                let type_str = ty.to_rust_type_str();
                 if type_str != "std::ffi::c_void"
                     && (type_str.ends_with("c_void")
                         || c_void_type_aliases.iter().any(|alias| type_str == *alias))
@@ -39261,6 +39296,15 @@ impl AstCodeGen {
         }
 
         rust_type = Self::normalize_namespace_alias_target(&rust_type);
+
+        // Skip Rusty send/sync marker helper aliases from direct typedef/using
+        // emission as well. These are internal trait-probe artifacts and should
+        // not surface as public Rust type aliases.
+        if Self::is_rusty_marker_trait_namespace_alias(&safe_name, &rust_type)
+            || self.is_rusty_marker_trait_name_in_context(name, Some(&safe_name))
+        {
+            return;
+        }
 
         // Skip self-referential type aliases (e.g., typedef atomic<int> atomic_int
         // may generate pub type atomic_int = atomic_int when the template resolves to same name)
@@ -69943,6 +69987,34 @@ pub struct mbta_wrapper {
     }
 
     #[test]
+    fn test_normalize_add_missing_struct_default_clone_impls_zeroes_non_default_mpsc_fields() {
+        let input = r#"
+pub struct PollThread {
+    pub sender_: std::sync::mpsc::Sender<i32>,
+    pub receiver_: std::sync::mpsc::Receiver<i32>,
+    pub mode_: i32,
+}
+"#;
+        let normalized = AstCodeGen::normalize_add_missing_struct_default_clone_impls(input);
+        assert!(
+            normalized.contains("impl Default for PollThread {"),
+            "missing Default impl should still be synthesized for structs with mpsc fields, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("sender_: unsafe { std::mem::zeroed() },")
+                && normalized.contains("receiver_: unsafe { std::mem::zeroed() },"),
+            "mpsc sender/receiver fields should use zeroed fallback instead of Default::default(), got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("mode_: Default::default(),"),
+            "non-mpsc fields should continue using Default::default() in field-wise synthesis, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
     fn test_normalize_add_missing_struct_default_clone_impls_handles_inline_fields() {
         let input = r#"
 pub struct __to_string_result { data: [i8; 32], len: usize }
@@ -71049,6 +71121,47 @@ pub struct rusty_Arc_classrrr_Client_ {
                 .contains(&format!("pub struct {} {{", rust_name)),
             "namespace-qualified TrySendError wrappers should not emit opaque structs, got:\n{}",
             codegen.output
+        );
+    }
+
+    #[test]
+    fn test_generate_struct_uses_manual_default_for_std_mpsc_fields() {
+        let mut codegen = AstCodeGen::new();
+        let children = vec![
+            make_node(
+                ClangNodeKind::FieldDecl {
+                    name: "sender_".to_string(),
+                    ty: CppType::Named("std::sync::mpsc::Sender<int>".to_string()),
+                    access: AccessSpecifier::Public,
+                    is_static: false,
+                    bit_field_width: None,
+                },
+                vec![],
+            ),
+            make_node(
+                ClangNodeKind::FieldDecl {
+                    name: "receiver_".to_string(),
+                    ty: CppType::Named("std::sync::mpsc::Receiver<int>".to_string()),
+                    access: AccessSpecifier::Public,
+                    is_static: false,
+                    bit_field_width: None,
+                },
+                vec![],
+            ),
+        ];
+
+        codegen.generate_struct("PollThread", true, &children);
+        let output = codegen.output;
+        assert!(
+            !output.contains("#[derive(Default"),
+            "std mpsc sender/receiver fields should not derive Default, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl Default for PollThread {")
+                && output.contains("unsafe { std::mem::zeroed() }"),
+            "std mpsc sender/receiver fields should use manual zeroed Default fallback, got:\n{}",
+            output
         );
     }
 
@@ -77295,6 +77408,41 @@ pub enum r#type {
         assert!(
             !output.contains("pub type RecvErrorAlias = rusty::sync::mpsc::RecvError;"),
             "type alias generation should avoid emitting unnormalized rusty mpsc alias targets, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_generate_type_alias_skips_rusty_send_sync_marker_aliases() {
+        let mut codegen = AstCodeGen::new();
+
+        codegen.generate_type_alias(
+            "rusty_is_send_constclassrrr_PollThread_",
+            &CppType::Named("rusty::rusty_is_send_classrrr_PollThread_".to_string()),
+        );
+        codegen.generate_type_alias(
+            "rusty_is_sync_constclassrrr_PollThread_",
+            &CppType::Named("rusty::rusty_is_sync_classrrr_PollThread_".to_string()),
+        );
+        codegen.generate_type_alias(
+            "MarkerAliasShouldAlsoSkip",
+            &CppType::Named("rusty::rusty_is_send_classrrr_PollThread_".to_string()),
+        );
+
+        let output = codegen.output;
+        assert!(
+            !output.contains("pub type rusty_is_send_constclassrrr_PollThread_ ="),
+            "type alias generation should skip rusty send marker helper aliases, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("pub type rusty_is_sync_constclassrrr_PollThread_ ="),
+            "type alias generation should skip rusty sync marker helper aliases, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("pub type MarkerAliasShouldAlsoSkip ="),
+            "type alias generation should skip aliases whose targets are rusty marker helper types, got:\n{}",
             output
         );
     }
