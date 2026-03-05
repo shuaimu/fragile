@@ -34375,6 +34375,7 @@ impl AstCodeGen {
             "std::collections::BTreeMap<",
         ];
         let allowlisted_exacts = [
+            "()",
             "std::sync::Barrier",
             "std::sync::Condvar",
             "std::sync::Once",
@@ -70923,6 +70924,33 @@ pub struct rusty_Arc_classrrr_Client_ {
     }
 
     #[test]
+    fn test_generate_struct_aliases_rusty_mpsc_unit_record_in_namespace_context() {
+        let mut codegen = AstCodeGen::new();
+        codegen.current_namespace.push(("rusty".to_string(), false));
+        codegen.current_namespace.push(("sync".to_string(), false));
+        codegen.current_namespace.push(("mpsc".to_string(), false));
+        let cpp_name = "Unit";
+        let rust_name = sanitize_identifier(cpp_name);
+
+        codegen.generate_struct(cpp_name, true, &[]);
+
+        assert!(
+            codegen
+                .output
+                .contains(&format!("pub type {} = ();", rust_name)),
+            "namespace-qualified mpsc Unit wrappers should alias to (), got:\n{}",
+            codegen.output
+        );
+        assert!(
+            !codegen
+                .output
+                .contains(&format!("pub struct {} {{", rust_name)),
+            "namespace-qualified mpsc Unit wrappers should not emit opaque structs, got:\n{}",
+            codegen.output
+        );
+    }
+
+    #[test]
     fn test_rusty_wrapper_record_alias_helper_supports_option_and_result() {
         assert_eq!(
             AstCodeGen::rusty_wrapper_alias_target_from_record_name("rusty::Option<int>")
@@ -70955,6 +70983,11 @@ pub struct rusty_Arc_classrrr_Client_ {
             )
             .as_deref(),
             Some("std::sync::mpsc::RecvError")
+        );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name("rusty::sync::mpsc::Unit")
+                .as_deref(),
+            Some("()")
         );
     }
 
