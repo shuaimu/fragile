@@ -36083,6 +36083,85 @@ impl AstCodeGen {
     }
 
     fn map_non_isomorphic_sync_wrapper_alias_target(record_name: &str) -> Option<String> {
+        fn map_wrapper_payload(raw_arg: &str) -> String {
+            fn strip_compact_cv_tag_prefix(name: &str) -> &str {
+                let mut current = name.trim();
+                loop {
+                    let mut changed = false;
+                    for prefix in [
+                        "constclass",
+                        "conststruct",
+                        "constenum",
+                        "volatileclass",
+                        "volatilestruct",
+                        "volatileenum",
+                        "class",
+                        "struct",
+                        "enum",
+                    ] {
+                        if let Some(rest) = current.strip_prefix(prefix) {
+                            current = rest.trim_start_matches('_').trim();
+                            changed = true;
+                        }
+                    }
+                    if !changed {
+                        break;
+                    }
+                }
+                current
+            }
+
+            let cleaned = raw_arg.trim().trim_end_matches("::");
+            if cleaned.is_empty() {
+                return "()".to_string();
+            }
+
+            let normalized = normalize_rusty_type_alias_to_std(cleaned);
+            if normalized != cleaned {
+                return normalized;
+            }
+
+            let lowered = cleaned.trim_matches('_').replace("::", "_");
+            let normalized_lowered = normalize_rusty_type_alias_to_std(&lowered);
+            if normalized_lowered != lowered {
+                return normalized_lowered;
+            }
+            let stripped_lowered = strip_compact_cv_tag_prefix(&lowered).to_string();
+            if stripped_lowered != lowered {
+                let normalized_stripped_lowered =
+                    normalize_rusty_type_alias_to_std(&stripped_lowered);
+                if normalized_stripped_lowered != stripped_lowered {
+                    return normalized_stripped_lowered;
+                }
+            }
+
+            let direct = CppType::Named(cleaned.to_string()).to_rust_type_str();
+            let normalized_direct = normalize_rusty_type_alias_to_std(&direct);
+            if normalized_direct != direct {
+                return normalized_direct;
+            }
+            let stripped_direct =
+                CppType::Named(stripped_lowered.clone()).to_rust_type_str();
+            let normalized_stripped_direct = normalize_rusty_type_alias_to_std(&stripped_direct);
+            if normalized_stripped_direct != stripped_direct {
+                return normalized_stripped_direct;
+            }
+            if !stripped_direct.is_empty() {
+                return stripped_direct;
+            }
+
+            let lowered_direct = CppType::Named(lowered).to_rust_type_str();
+            let normalized_lowered_direct = normalize_rusty_type_alias_to_std(&lowered_direct);
+            if normalized_lowered_direct != lowered_direct {
+                return normalized_lowered_direct;
+            }
+
+            if !lowered_direct.is_empty() {
+                return lowered_direct;
+            }
+            direct
+        }
+
         let mut cleaned = record_name.trim();
         cleaned = cleaned.trim_start_matches("crate::").trim();
         cleaned = cleaned.trim_start_matches("::").trim();
@@ -36099,13 +36178,19 @@ impl AstCodeGen {
             if args.len() != 1 {
                 continue;
             }
-            let raw_arg = args[0].trim();
-            let normalized_arg = normalize_rusty_type_alias_to_std(raw_arg);
-            let mapped = if normalized_arg == raw_arg {
-                CppType::Named(raw_arg.to_string()).to_rust_type_str()
-            } else {
-                normalized_arg
+            let mapped = map_wrapper_payload(&args[0]);
+            return Some(format!("std::sync::PoisonError<{}>", mapped));
+        }
+
+        for prefix in [
+            "rusty::PoisonError::",
+            "rusty::sync::PoisonError::",
+            "PoisonError::",
+        ] {
+            let Some(raw_arg) = cleaned.strip_prefix(prefix) else {
+                continue;
             };
+            let mapped = map_wrapper_payload(raw_arg);
             return Some(format!("std::sync::PoisonError<{}>", mapped));
         }
 
@@ -74154,6 +74239,20 @@ pub struct rusty_Arc_classrrr_Client_ {
             AstCodeGen::rusty_wrapper_alias_target_from_record_name("rusty::PoisonError<int>")
                 .as_deref(),
             Some("std::sync::PoisonError<i32>")
+        );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name(
+                "rusty::PoisonError::conststructrrr::Future::State"
+            )
+            .as_deref(),
+            Some("std::sync::PoisonError<rrr_Future_State>")
+        );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name(
+                "rusty::PoisonError::classrusty::Option::classrusty::thread::JoinHandle::void"
+            )
+            .as_deref(),
+            Some("std::sync::PoisonError<std::option::Option<std::thread::JoinHandle<()>>>")
         );
         assert_eq!(
             AstCodeGen::rusty_wrapper_alias_target_from_record_name("rusty::Ref<class Foo>")

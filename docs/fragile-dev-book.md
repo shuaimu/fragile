@@ -1618,3 +1618,55 @@ Even after broad Rusty-wrapper aliasing, many direct `rusty::PoisonError<T>` rec
   - `make clean`
   - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
   - `ctest -j32 --output-on-failure`
+
+## 27. Recover Degraded `PoisonError::...` Record Spellings to std Alias Targets (2026-03-05)
+
+### Problem
+
+After direct `PoisonError<T>` wrapper aliasing, many generated sidecars still emitted opaque
+`rusty_PoisonError_*` structs for degraded C++ spellings such as:
+
+- `rusty::PoisonError::conststructrrr::Future::State`
+- `rusty::PoisonError::classrusty::Option::classrusty::thread::JoinHandle::void`
+
+These are non-template degraded forms that use scope separators (`::`) instead of canonical
+template syntax (`<...>`), so they bypassed the prior alias lane.
+
+### Rule
+
+- Treat `PoisonError::...` degraded record spellings as non-isomorphic wrapper forms and map
+  them to `std::sync::PoisonError<...>` during wrapper-record alias emission.
+- Normalize degraded payload lanes through the same std/identifier recovery path:
+  - normalize direct alias spellings first,
+  - recover compact `constclass`/`conststruct`-style prefixes,
+  - fallback through lowered identifier normalization and `CppType::Named` conversion.
+
+### Implementation
+
+- In `crates/fragile-clang/src/ast_codegen.rs`:
+  - Extended `map_non_isomorphic_sync_wrapper_alias_target()` with:
+    - `PoisonError::`-style prefix handling for:
+      - `rusty::PoisonError::...`
+      - `rusty::sync::PoisonError::...`
+      - unqualified `PoisonError::...`
+    - local payload mapper that strips compact cv/tag prefixes (`constclass`, `conststruct`,
+      etc.) before normalized fallback lowering.
+  - Reused this payload mapper for both canonical `<...>` and degraded `::...` forms.
+
+### Tests
+
+- Extended `test_rusty_wrapper_record_alias_helper_supports_option_and_result` with:
+  - `rusty::PoisonError::conststructrrr::Future::State -> std::sync::PoisonError<rrr_Future_State>`
+  - `rusty::PoisonError::classrusty::Option::classrusty::thread::JoinHandle::void -> std::sync::PoisonError<std::option::Option<std::thread::JoinHandle<()>>>`
+
+### Guardrails
+
+- Scope remains wrapper-record alias emission only.
+- Existing `Result<..., PoisonError<...>>` companion-record behavior is preserved.
+- Fresh validation remains green:
+  - `cargo test -p fragile-clang --lib test_rusty_wrapper_record_alias_helper_supports_option_and_result`
+  - `cargo test -p fragile-clang --lib maps_result_with_poison_error_to_generated_record_companions`
+  - `cargo build --release --bin fragilec`
+  - `make clean`
+  - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
+  - `ctest -j32 --output-on-failure`
