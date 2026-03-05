@@ -156,6 +156,10 @@ Generic normalizations added in this replay cycle:
 - `normalize_rusty_type_alias_rhs_paths` late rerun:
   - `AstCodeGen::generate` now re-runs Rusty alias RHS normalization at the end of the pipeline.
   - this catches Rusty wrapper aliases appended by late unresolved-closure/degraded fallback passes and keeps final alias targets std-native where generic mapping exists.
+- runtime-internal Rusty namespace alias handling (`normalize_unresolved_namespaced_type_aliases` + `emit_namespace_type_aliases`):
+  - treat `rusty::BorrowState`, `rusty::Group`, `rusty::ProbeSeq`, and `rusty::RcControlBlockBase` as runtime-internal alias targets.
+  - rewrite bare item-type references to these names (for example `type X = RcControlBlockBase;`) to fully-qualified `rusty::...` paths.
+  - suppress fallback/auto-export alias emission for these internals once references are rewritten, so generated TU sidecars avoid redundant top-level runtime-internal aliases.
 - `normalize_with_capacity_default_string_placeholders`:
   - rewrites degraded `with_capacity::default()` placeholders (from failed `String::with_capacity` recovery) to `std::string::String::new()`.
 
@@ -164,6 +168,7 @@ Outcome snapshot:
 - On March 4, 2026, `make clean && cmake --build . -j32` in `build_fragilec_dropin` completed to 100% after iterative generic fixes.
 - On March 4, 2026, `ctest -j32 --output-on-failure` hit one transient `rpcbench` kill in one run but passed on rerun (`117/117`) in `build_fragilec_dropin`; no deterministic compile-failure translation units remained in this loop.
 - On March 4, 2026 (revalidation pass), a fresh rerun in `build_fragilec_dropin` with `make clean`, `cmake --build . -j32`, and `ctest -j32 --output-on-failure` completed with `117/117` tests passed and no `fragile rustc object compile failed` translation units in the build log.
+- On March 5, 2026, after adding runtime-internal alias rewrite+suppression, a fresh `make clean`, `cmake --build . -j32`, and `ctest -j32 --output-on-failure` rerun again passed (`117/117`) while removing generated fallback aliases for `BorrowState`/`Group`/`ProbeSeq`/`RcControlBlockBase` in `build_fragilec_dropin` sidecar `.fragile.rs` outputs.
 
 ### 2.3 C++ `_v` trait globals and export linkage
 

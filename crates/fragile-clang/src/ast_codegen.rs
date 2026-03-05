@@ -6304,6 +6304,7 @@ impl AstCodeGen {
 
         let mut aliases: BTreeMap<String, String> = BTreeMap::new();
         let mut anon_namespace_rewrites: BTreeMap<String, String> = BTreeMap::new();
+        let mut runtime_internal_rewrites: BTreeMap<String, String> = BTreeMap::new();
         for referenced_name in referenced {
             let canonical_name = referenced_name.trim_start_matches("r#").to_string();
             if canonical_name.is_empty()
@@ -6336,22 +6337,33 @@ impl AstCodeGen {
                 if !Self::is_root_accessible_module_path(target_module_path, &module_visibility) {
                     continue;
                 }
-                if Self::is_rusty_marker_trait_namespace_alias(&canonical_name, target) {
+                let normalized_target = Self::normalize_namespace_alias_target(target);
+                if Self::is_rusty_marker_trait_namespace_alias(&canonical_name, &normalized_target) {
+                    continue;
+                }
+                if Self::is_rusty_runtime_internal_namespace_alias_target(&normalized_target) {
+                    runtime_internal_rewrites
+                        .entry(canonical_name.clone())
+                        .or_insert(normalized_target);
                     continue;
                 }
                 aliases
                     .entry(canonical_name.clone())
-                    .or_insert_with(|| target.clone());
+                    .or_insert(normalized_target);
             }
         }
 
         let mut out = String::with_capacity(code.len() + 256);
-        if anon_namespace_rewrites.is_empty() {
+        if anon_namespace_rewrites.is_empty() && runtime_internal_rewrites.is_empty() {
             out.push_str(code);
         } else {
             for line in code.lines() {
                 let mut rewritten = line.to_string();
                 for (alias, target) in &anon_namespace_rewrites {
+                    rewritten =
+                        Self::rewrite_shadowed_ident_in_item_type_positions(&rewritten, alias, target);
+                }
+                for (alias, target) in &runtime_internal_rewrites {
                     rewritten =
                         Self::rewrite_shadowed_ident_in_item_type_positions(&rewritten, alias, target);
                 }
@@ -6378,9 +6390,11 @@ impl AstCodeGen {
             if Self::is_rusty_marker_trait_namespace_alias(&alias, &target) {
                 continue;
             }
-            let normalized_target = Self::normalize_namespace_alias_target(&target);
+            if Self::is_rusty_runtime_internal_namespace_alias_target(&target) {
+                continue;
+            }
             out.push_str("/// Namespaced unresolved type alias fallback\n");
-            out.push_str(&format!("pub type {} = {};\n", alias, normalized_target));
+            out.push_str(&format!("pub type {} = {};\n", alias, target));
         }
         out
     }
@@ -34805,6 +34819,9 @@ impl AstCodeGen {
                 continue;
             }
             let normalized_target = Self::normalize_namespace_alias_target(&target);
+            if Self::is_rusty_runtime_internal_namespace_alias_target(&normalized_target) {
+                continue;
+            }
             let alias_decl = format!("pub type {} =", alias);
             if self.output.contains(&alias_decl) {
                 continue;
@@ -34855,6 +34872,21 @@ impl AstCodeGen {
 
     fn is_rusty_marker_trait_alias_name(name: &str) -> bool {
         name.starts_with("rusty_is_send_") || name.starts_with("rusty_is_sync_")
+    }
+
+    fn is_rusty_runtime_internal_namespace_alias_target(target: &str) -> bool {
+        let mut cleaned = target.trim();
+        cleaned = cleaned.trim_start_matches("::").trim();
+        if let Some(rest) = cleaned.strip_prefix("crate::") {
+            cleaned = rest.trim();
+        }
+        let Some((module_path, leaf)) = cleaned.rsplit_once("::") else {
+            return false;
+        };
+        if module_path != "rusty" {
+            return false;
+        }
+        matches!(leaf, "BorrowState" | "Group" | "ProbeSeq" | "RcControlBlockBase")
     }
 
     fn is_rusty_marker_trait_cpp_path(name: &str) -> bool {
@@ -77004,7 +77036,7 @@ pub type queue_RecvError = std_queue<RecvError>;
     }
 
     #[test]
-    fn test_normalize_unresolved_namespaced_type_aliases_skips_rusty_send_sync_marker_aliases() {
+    fn test_normalize_unresolved_namespaced_type_aliases_skips_rusty_internal_and_marker_aliases() {
         let input = r#"
 pub mod rusty {
     pub struct rusty_is_send_classrrr_PollThread_ {
@@ -77016,10 +77048,18 @@ pub mod rusty {
     pub struct Group {
         _opaque: [u8; 1],
     }
+    pub struct ProbeSeq {
+        _opaque: [u8; 1],
+    }
+    pub struct RcControlBlockBase {
+        _opaque: [u8; 1],
+    }
 }
 pub type vector_rusty_is_send_classrrr_PollThread_ = std_vector<rusty_is_send_classrrr_PollThread_>;
 pub type vector_rusty_is_sync_classrrr_PollThread_ = std_vector<rusty_is_sync_classrrr_PollThread_>;
 pub type vector_Group = std_vector<Group>;
+pub type vector_ProbeSeq = std_vector<ProbeSeq>;
+pub type vector_RcControlBlockBase = std_vector<RcControlBlockBase>;
 "#;
         let output = AstCodeGen::normalize_unresolved_namespaced_type_aliases(input);
         assert!(
@@ -77033,8 +77073,59 @@ pub type vector_Group = std_vector<Group>;
             output
         );
         assert!(
-            output.contains("pub type Group = rusty::Group;"),
-            "namespaced unresolved alias normalization should keep non-marker rusty aliases, got:\n{}",
+            !output.contains("pub type Group = rusty::Group;"),
+            "namespaced unresolved alias normalization should skip rusty runtime-internal Group alias, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("pub type ProbeSeq = rusty::ProbeSeq;"),
+            "namespaced unresolved alias normalization should skip rusty runtime-internal ProbeSeq alias, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("pub type RcControlBlockBase = rusty::RcControlBlockBase;"),
+            "namespaced unresolved alias normalization should skip rusty runtime-internal RcControlBlockBase alias, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_unresolved_namespaced_type_aliases_keeps_non_internal_unmapped_rusty_aliases() {
+        let input = r#"
+pub mod rusty {
+    pub struct VisibleUserType {
+        _opaque: [u8; 1],
+    }
+}
+pub type vector_VisibleUserType = std_vector<VisibleUserType>;
+"#;
+        let output = AstCodeGen::normalize_unresolved_namespaced_type_aliases(input);
+        assert!(
+            output.contains("pub type VisibleUserType = rusty::VisibleUserType;"),
+            "namespaced unresolved alias normalization should preserve non-internal unresolved rusty aliases, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_unresolved_namespaced_type_aliases_rewrites_runtime_internal_rhs_references() {
+        let input = r#"
+pub mod rusty {
+    pub struct RcControlBlockBase {
+        _opaque: [u8; 1],
+    }
+}
+pub type ControlBlock = RcControlBlockBase;
+"#;
+        let output = AstCodeGen::normalize_unresolved_namespaced_type_aliases(input);
+        assert!(
+            output.contains("pub type ControlBlock = rusty::RcControlBlockBase;"),
+            "namespaced unresolved alias normalization should rewrite runtime-internal bare type references to namespaced targets, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("pub type RcControlBlockBase = rusty::RcControlBlockBase;"),
+            "namespaced unresolved alias normalization should avoid emitting runtime-internal fallback aliases when rewrite is sufficient, got:\n{}",
             output
         );
     }
@@ -78372,8 +78463,33 @@ pub mod rusty {
             output
         );
         assert!(
-            output.contains("pub type Group = rusty::Group;"),
-            "namespace alias emission should keep non-marker rusty aliases unchanged when no std mapping exists, got:\n{}",
+            !output.contains("pub type Group = rusty::Group;"),
+            "namespace alias emission should skip unresolved aliases that point to rusty runtime internals, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_emit_namespace_type_aliases_keeps_non_internal_unmapped_rusty_aliases() {
+        let mut codegen = AstCodeGen::new();
+        codegen.output = r#"
+pub mod rusty {
+    pub struct VisibleUserType {
+    }
+}
+"#
+        .to_string();
+        codegen.namespace_type_alias_targets.insert(
+            "VisibleUserType".to_string(),
+            "rusty::VisibleUserType".to_string(),
+        );
+
+        codegen.emit_namespace_type_aliases();
+        let output = codegen.output;
+
+        assert!(
+            output.contains("pub type VisibleUserType = rusty::VisibleUserType;"),
+            "namespace alias emission should retain unresolved rusty aliases that are not known runtime internals, got:\n{}",
             output
         );
     }
