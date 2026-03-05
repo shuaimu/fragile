@@ -3445,11 +3445,180 @@ impl AstCodeGen {
                 || trimmed.starts_with("* mut ")
         }
 
-        fn type_text_mentions_known_c_void_name(
+        fn token_is_within_fn_pointer_signature(ty: &str, token_start: usize) -> bool {
+            fn is_ident_char(ch: char) -> bool {
+                ch.is_ascii_alphanumeric() || ch == '_' || ch == ':'
+            }
+
+            fn find_matching_paren(s: &str, open_idx: usize) -> Option<usize> {
+                let mut depth: i32 = 0;
+                let mut i = open_idx;
+                while i < s.len() {
+                    let ch = s[i..].chars().next().unwrap();
+                    match ch {
+                        '(' => depth += 1,
+                        ')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                return Some(i);
+                            }
+                        }
+                        _ => {}
+                    }
+                    i += ch.len_utf8();
+                }
+                None
+            }
+
+            if token_start > ty.len() {
+                return false;
+            }
+
+            let mut fn_open_paren: Option<usize> = None;
+            let mut i = 0usize;
+            while i < token_start {
+                if ty[i..].starts_with("fn") {
+                    let prev = ty[..i].chars().next_back();
+                    let prev_is_ident = prev.is_some_and(is_ident_char);
+                    if !prev_is_ident {
+                        let mut after_fn = i + 2;
+                        while after_fn < token_start {
+                            let ch = ty[after_fn..].chars().next().unwrap();
+                            if ch.is_whitespace() {
+                                after_fn += ch.len_utf8();
+                                continue;
+                            }
+                            if ch == '(' {
+                                fn_open_paren = Some(after_fn);
+                            }
+                            break;
+                        }
+                    }
+                }
+                i += ty[i..].chars().next().unwrap().len_utf8();
+            }
+
+            let Some(open_paren_idx) = fn_open_paren else {
+                return false;
+            };
+            let Some(close_paren_idx) = find_matching_paren(ty, open_paren_idx) else {
+                return false;
+            };
+
+            if token_start > open_paren_idx && token_start < close_paren_idx {
+                return true;
+            }
+            if token_start <= close_paren_idx {
+                return false;
+            }
+
+            let mut ret_scan_idx = close_paren_idx + 1;
+            while ret_scan_idx < ty.len() {
+                let ch = ty[ret_scan_idx..].chars().next().unwrap();
+                if ch.is_whitespace() {
+                    ret_scan_idx += ch.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            if !ty[ret_scan_idx..].starts_with("->") {
+                return false;
+            }
+            ret_scan_idx += 2;
+            while ret_scan_idx < ty.len() {
+                let ch = ty[ret_scan_idx..].chars().next().unwrap();
+                if ch.is_whitespace() {
+                    ret_scan_idx += ch.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            if token_start < ret_scan_idx {
+                return false;
+            }
+
+            let mut i = ret_scan_idx;
+            let mut paren_depth: i32 = 0;
+            let mut angle_depth: i32 = 0;
+            let mut bracket_depth: i32 = 0;
+            while i < ty.len() {
+                let ch = ty[i..].chars().next().unwrap();
+                match ch {
+                    '(' => paren_depth += 1,
+                    ')' => {
+                        if paren_depth == 0 {
+                            break;
+                        }
+                        paren_depth -= 1;
+                    }
+                    '<' => angle_depth += 1,
+                    '>' => {
+                        if angle_depth > 0 {
+                            angle_depth -= 1;
+                        }
+                    }
+                    '[' => bracket_depth += 1,
+                    ']' => {
+                        if bracket_depth > 0 {
+                            bracket_depth -= 1;
+                        }
+                    }
+                    ',' | ';'
+                        if paren_depth == 0 && angle_depth == 0 && bracket_depth == 0 =>
+                    {
+                        break;
+                    }
+                    _ => {}
+                }
+                i += ch.len_utf8();
+            }
+
+            token_start < i
+        }
+
+        fn type_text_mentions_non_pointer_c_void_name(
             ty: &str,
             c_void_backed_type_names: &HashSet<String>,
         ) -> bool {
-            type_text_mentions_known_type_name(ty, c_void_backed_type_names)
+            let mut token = String::new();
+            let mut token_start: usize = 0;
+            for (idx, ch) in ty
+                .char_indices()
+                .chain(std::iter::once((ty.len(), ' ')))
+            {
+                if ch.is_ascii_alphanumeric() || ch == '_' || ch == ':' {
+                    if token.is_empty() {
+                        token_start = idx;
+                    }
+                    token.push(ch);
+                    continue;
+                }
+                if token.is_empty() {
+                    continue;
+                }
+                let leaf = token.rsplit("::").next().unwrap_or("");
+                let is_c_void_name = token == "std::ffi::c_void"
+                    || token == "core::ffi::c_void"
+                    || token == "c_void"
+                    || c_void_backed_type_names.contains(&token)
+                    || c_void_backed_type_names.contains(leaf);
+                if is_c_void_name {
+                    if token_is_within_fn_pointer_signature(ty, token_start) {
+                        token.clear();
+                        continue;
+                    }
+                    let prefix = ty[..token_start].trim_end();
+                    let pointer_indirected = prefix.ends_with("*const")
+                        || prefix.ends_with("*mut")
+                        || prefix.ends_with("* const")
+                        || prefix.ends_with("* mut");
+                    if !pointer_indirected {
+                        return true;
+                    }
+                }
+                token.clear();
+            }
+            false
         }
 
         fn field_type_mentions_known_c_void_struct(
@@ -3464,7 +3633,7 @@ impl AstCodeGen {
             if ty.is_empty() {
                 return false;
             }
-            type_text_mentions_known_c_void_name(ty, c_void_backed_type_names)
+            type_text_mentions_non_pointer_c_void_name(ty, c_void_backed_type_names)
         }
 
         fn field_type_mentions_non_default_wrapper(
@@ -3540,9 +3709,6 @@ impl AstCodeGen {
                         continue;
                     }
                     saw_open = true;
-                }
-                if line.contains("std::ffi::c_void") {
-                    return true;
                 }
                 if field_type_mentions_known_c_void_struct(line, c_void_backed_type_names) {
                     return true;
@@ -3692,10 +3858,7 @@ impl AstCodeGen {
         let mut non_clone_wrapper_type_names: HashSet<String> = HashSet::new();
         let mut non_copy_wrapper_type_names: HashSet<String> = HashSet::new();
         for (alias, rhs) in &type_aliases {
-            if rhs.contains("std::ffi::c_void")
-                || rhs.contains("core::ffi::c_void")
-                || rhs == "c_void"
-            {
+            if type_text_mentions_non_pointer_c_void_name(rhs, &HashSet::new()) {
                 c_void_backed_type_names.insert(alias.clone());
             }
             if Self::is_non_default_std_wrapper_type(rhs) {
@@ -3730,7 +3893,12 @@ impl AstCodeGen {
             for (alias, rhs) in &type_aliases {
                 let rhs_is_raw_pointer = type_text_is_raw_pointer(rhs);
                 if c_void_backed_type_names.contains(alias) {
-                } else if type_text_mentions_known_c_void_name(rhs, &c_void_backed_type_names) {
+                } else if !rhs_is_raw_pointer
+                    && type_text_mentions_non_pointer_c_void_name(
+                        rhs,
+                        &c_void_backed_type_names,
+                    )
+                {
                     c_void_backed_type_names.insert(alias.clone());
                     changed = true;
                 }
@@ -3900,7 +4068,7 @@ impl AstCodeGen {
                     let remove_default =
                         struct_has_c_void_field || struct_has_non_default_wrapper_field;
                     let remove_clone = struct_has_c_void_field || struct_has_non_clone_wrapper_field;
-                    let remove_copy = struct_has_non_copy_wrapper_field;
+                    let remove_copy = struct_has_c_void_field || struct_has_non_copy_wrapper_field;
                     if has_generics
                         || disallowed_struct_name
                         || (!remove_default && !remove_clone && !remove_copy)
@@ -70287,7 +70455,7 @@ pub fn probe() {
     }
 
     #[test]
-    fn test_normalize_struct_default_clone_derives_rewrites_struct_derives_to_manual_impls() {
+    fn test_normalize_struct_default_clone_derives_preserves_raw_pointer_c_void_derives() {
         let input = r#"
 #[derive(Default, Clone, Copy)]
 pub struct Alarm {
@@ -70296,18 +70464,81 @@ pub struct Alarm {
 "#;
         let normalized = AstCodeGen::normalize_struct_default_clone_derives(input);
         assert!(
-            normalized.contains("#[derive(Copy)]"),
-            "struct derive normalization should retain non-Default/Clone traits, got:\n{}",
+            normalized.contains("#[derive(Default, Clone, Copy)]"),
+            "struct derive normalization should preserve derives for raw-pointer c_void fields, got:\n{}",
             normalized
         );
         assert!(
-            normalized.contains("impl Default for Alarm {"),
-            "struct derive normalization should synthesize manual Default impl, got:\n{}",
+            !normalized.contains("impl Default for Alarm {")
+                && !normalized.contains("impl Clone for Alarm {"),
+            "struct derive normalization should avoid fallback impl synthesis for raw-pointer c_void fields, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_struct_default_clone_derives_preserves_fn_pointer_c_void_derives() {
+        let input = r#"
+#[derive(Clone, Copy)]
+pub struct LocaleFacetVTable {
+    pub do_transform: unsafe fn(*const i32, *const i32) -> std::ffi::c_void,
+}
+"#;
+        let normalized = AstCodeGen::normalize_struct_default_clone_derives(input);
+        assert!(
+            normalized.contains("#[derive(Clone, Copy)]"),
+            "derive normalization should preserve derives for function-pointer c_void signatures, got:\n{}",
             normalized
         );
         assert!(
-            normalized.contains("impl Clone for Alarm {"),
-            "struct derive normalization should synthesize manual Clone impl, got:\n{}",
+            !normalized.contains("impl Clone for LocaleFacetVTable {"),
+            "derive normalization should not synthesize fallback Clone for function-pointer c_void signatures, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_struct_default_clone_derives_preserves_fn_pointer_c_void_alias_derives() {
+        let input = r#"
+pub type TransformFn = unsafe fn(*const i32, *const i32) -> std::ffi::c_void;
+
+#[derive(Clone, Copy)]
+pub struct LocaleFacetVTable {
+    pub do_transform: TransformFn,
+}
+"#;
+        let normalized = AstCodeGen::normalize_struct_default_clone_derives(input);
+        assert!(
+            normalized.contains("#[derive(Clone, Copy)]"),
+            "derive normalization should preserve derives for function-pointer aliases returning c_void, got:\n{}",
+            normalized
+        );
+        assert!(
+            !normalized.contains("impl Clone for LocaleFacetVTable {"),
+            "derive normalization should not synthesize fallback Clone for function-pointer aliases returning c_void, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_struct_default_clone_derives_rewrites_direct_c_void_and_strips_copy() {
+        let input = r#"
+#[derive(Default, Clone, Copy)]
+pub struct OpaqueValue {
+    pub inner: std::ffi::c_void,
+}
+"#;
+        let normalized = AstCodeGen::normalize_struct_default_clone_derives(input);
+        assert!(
+            !normalized.contains("#[derive(Default, Clone, Copy)]\npub struct OpaqueValue {")
+                && !normalized.contains("#[derive(Copy)]\npub struct OpaqueValue {"),
+            "derive normalization should strip invalid Copy for direct c_void fields, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("impl Default for OpaqueValue {")
+                && normalized.contains("impl Clone for OpaqueValue {"),
+            "derive normalization should synthesize manual Default/Clone for direct c_void fields, got:\n{}",
             normalized
         );
     }
