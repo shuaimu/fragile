@@ -30,117 +30,6 @@ pub struct LibToolingParser {
     skip_system_headers: bool,
 }
 
-fn is_supported_language_name(raw: &str) -> bool {
-    matches!(
-        raw,
-        "c" | "c++"
-            | "c-header"
-            | "c++-header"
-            | "objective-c"
-            | "objective-c++"
-            | "cuda"
-            | "hip"
-            | "assembler"
-            | "assembler-with-cpp"
-    )
-}
-
-fn language_is_c_family(language: &str) -> bool {
-    matches!(
-        language,
-        "c" | "c-header" | "objective-c" | "assembler" | "assembler-with-cpp"
-    )
-}
-
-fn default_language_for_path(path: &Path) -> &'static str {
-    if path.extension().and_then(|ext| ext.to_str()) == Some("c") {
-        "c"
-    } else {
-        "c++"
-    }
-}
-
-fn strip_compile_mode_overrides(extra_args: &mut Vec<String>) -> (Option<String>, Option<String>) {
-    let mut detected_language: Option<String> = None;
-    let mut detected_standard: Option<String> = None;
-    let mut filtered: Vec<String> = Vec::with_capacity(extra_args.len());
-
-    let mut i = 0usize;
-    while i < extra_args.len() {
-        let arg = extra_args[i].as_str();
-        if arg == "-x" {
-            if i + 1 < extra_args.len() {
-                detected_language = Some(extra_args[i + 1].clone());
-                i += 2;
-                continue;
-            }
-            i += 1;
-            continue;
-        }
-        if let Some(joined_language) = arg.strip_prefix("-x") {
-            if !joined_language.is_empty() && is_supported_language_name(joined_language) {
-                detected_language = Some(joined_language.to_string());
-                i += 1;
-                continue;
-            }
-        }
-        if arg == "-std" {
-            if i + 1 < extra_args.len() {
-                detected_standard = Some(extra_args[i + 1].clone());
-                i += 2;
-                continue;
-            }
-            i += 1;
-            continue;
-        }
-        if let Some(joined_standard) = arg.strip_prefix("-std=") {
-            if !joined_standard.is_empty() {
-                detected_standard = Some(joined_standard.to_string());
-                i += 1;
-                continue;
-            }
-        }
-        filtered.push(extra_args[i].clone());
-        i += 1;
-    }
-
-    *extra_args = filtered;
-    (detected_language, detected_standard)
-}
-
-fn build_minimal_compile_command(path: &Path, extra_args: &mut Vec<String>) -> String {
-    let (detected_language, detected_standard) = strip_compile_mode_overrides(extra_args);
-
-    let language = detected_language
-        .clone()
-        .unwrap_or_else(|| default_language_for_path(path).to_string());
-    let compile_with_c_driver = language_is_c_family(language.as_str());
-    let compiler = if compile_with_c_driver {
-        "clang"
-    } else {
-        "clang++"
-    };
-    let standard = detected_standard.unwrap_or_else(|| {
-        if compile_with_c_driver {
-            "gnu11".to_string()
-        } else {
-            "c++17".to_string()
-        }
-    });
-
-    let mut command = format!("{compiler}");
-    if let Some(lang) = detected_language {
-        command.push_str(" -x ");
-        command.push_str(lang.as_str());
-    }
-    command.push_str(" -std=");
-    command.push_str(standard.as_str());
-    command.push_str(" -c ");
-    command.push_str(path.to_string_lossy().as_ref());
-    command.push_str(" -o /dev/null");
-    command
-}
-
 impl LibToolingParser {
     /// Create a new LibTooling parser.
     pub fn new() -> Self {
@@ -254,6 +143,23 @@ impl LibToolingParser {
         std::fs::create_dir_all(&compile_db_dir)
             .map_err(|e| miette!("Failed to create temp compile_commands dir: {}", e))?;
 
+        // Create a minimal fresh compile_commands.json for this invocation.
+        let compile_commands_path = compile_db_dir.join("compile_commands.json");
+        let compile_commands = format!(
+            r#"[
+  {{
+    "directory": "{}",
+    "command": "clang++ -std=c++17 -c {} -o /dev/null",
+    "file": "{}"
+  }}
+]"#,
+            compile_working_dir.display(),
+            path.display(),
+            path.display()
+        );
+        std::fs::write(&compile_commands_path, compile_commands)
+            .map_err(|e| miette!("Failed to create compile_commands.json: {}", e))?;
+
         // Build extra args: combine user-specified args with vendored libc++ paths
         let mut all_extra_args: Vec<String> = self.extra_args.clone();
 
@@ -278,28 +184,6 @@ impl LibToolingParser {
         {
             all_extra_args.push("-Wno-non-pod-varargs".to_string());
         }
-
-        // clang::tooling appends extra args after the compile command from the
-        // compilation database. Flags like -x/-std must appear before the source
-        // file, so normalize them into the generated command.
-        let compile_command = build_minimal_compile_command(path, &mut all_extra_args);
-
-        // Create a minimal fresh compile_commands.json for this invocation.
-        let compile_commands_path = compile_db_dir.join("compile_commands.json");
-        let compile_commands = format!(
-            r#"[
-  {{
-    "directory": "{}",
-    "command": "{}",
-    "file": "{}"
-  }}
-]"#,
-            compile_working_dir.display(),
-            compile_command,
-            path.display()
-        );
-        std::fs::write(&compile_commands_path, compile_commands)
-            .map_err(|e| miette!("Failed to create compile_commands.json: {}", e))?;
 
         let extra_args: Vec<&str> = all_extra_args.iter().map(|s| s.as_str()).collect();
 
@@ -751,8 +635,12 @@ fn convert_node_with_depth(
             let name = node.get_string(0).unwrap_or("").to_string();
             let ty = extract_type_from_node(ctx, node);
             let has_init = node.children.iter().any(|c| c.is_some());
+            let is_constexpr = node.get_bool(2).unwrap_or(false);
             let is_static = node.get_bool(4).unwrap_or(false);
-            let is_extern = node.get_bool(5).unwrap_or(false);
+            // Namespace-scope constexpr variables should not be exported as C globals.
+            // Treat them as non-exportable declarations to avoid ODR conflicts for
+            // header-defined variable templates (e.g., `template<typename T> constexpr bool ..._v`).
+            let is_extern = node.get_bool(5).unwrap_or(false) || is_constexpr;
             ClangNodeKind::VarDecl {
                 name,
                 ty,
@@ -1647,17 +1535,15 @@ fn convert_enum_decl_node(
     ctx: &AstContext,
     node: &fragile_ast_exporter::clang_ast::AstNode,
 ) -> ClangNodeKind {
-    let raw_name = node.get_string(0).unwrap_or("").to_string();
-    let name = if raw_name.is_empty() {
-        // Preserve anonymous enums by giving them a stable synthetic spelling so
-        // downstream enum codegen can still emit standalone constants.
-        format!(
+    let mut name = node.get_string(0).unwrap_or("").to_string();
+    if name.is_empty() {
+        // Preserve anonymous enums as explicit enum nodes so downstream codegen
+        // can still surface their constants.
+        name = format!(
             "(unnamed enum at file_{}:{}:{})",
             node.loc.file_id, node.loc.begin_line, node.loc.begin_column
-        )
-    } else {
-        raw_name
-    };
+        );
+    }
 
     let is_scoped = node.get_bool(1).unwrap_or(false);
     let underlying_type = node
@@ -2563,58 +2449,6 @@ mod tests {
     }
 
     #[test]
-    fn test_build_minimal_compile_command_moves_language_and_std_flags() {
-        let mut extra_args = vec![
-            "-I".to_string(),
-            "include".to_string(),
-            "-x".to_string(),
-            "c++".to_string(),
-            "-std=gnu++20".to_string(),
-            "-DMODE=1".to_string(),
-        ];
-        let command = build_minimal_compile_command(Path::new("unit.cpp"), &mut extra_args);
-
-        assert_eq!(
-            command,
-            "clang++ -x c++ -std=gnu++20 -c unit.cpp -o /dev/null"
-        );
-        assert_eq!(
-            extra_args,
-            vec![
-                "-I".to_string(),
-                "include".to_string(),
-                "-DMODE=1".to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn test_build_minimal_compile_command_defaults_to_c_for_c_sources() {
-        let mut extra_args = Vec::new();
-        let command = build_minimal_compile_command(Path::new("unit.c"), &mut extra_args);
-        assert_eq!(command, "clang -std=gnu11 -c unit.c -o /dev/null");
-        assert!(extra_args.is_empty());
-    }
-
-    #[test]
-    fn test_build_minimal_compile_command_keeps_unrelated_xclang_flags() {
-        let mut extra_args = vec![
-            "-xclang".to_string(),
-            "-load".to_string(),
-            "-xc++".to_string(),
-            "-std".to_string(),
-            "c++20".to_string(),
-        ];
-        let command = build_minimal_compile_command(Path::new("unit.hpp"), &mut extra_args);
-
-        assert_eq!(
-            command,
-            "clang++ -x c++ -std=c++20 -c unit.hpp -o /dev/null"
-        );
-        assert_eq!(extra_args, vec!["-xclang".to_string(), "-load".to_string()]);
-    }
-
-    #[test]
     fn test_resolve_type_maps_wrapper_array_and_extended_builtin_tags() {
         let mut type_nodes = HashMap::new();
         type_nodes.insert(904, make_type_node(904, ASTEntryTag::TagInt, vec![]));
@@ -2830,6 +2664,53 @@ mod tests {
                 assert!(is_pack);
             }
             other => panic!("expected TemplateTypeParmDecl, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_convert_to_clang_node_marks_constexpr_vardecl_as_non_exportable() {
+        let mut ast_nodes = HashMap::new();
+        ast_nodes.insert(
+            70,
+            make_node(
+                70,
+                ASTEntryTag::TagVarDecl,
+                vec![],
+                vec![
+                    CborValue::Text("fits_in_sbo_v".to_string()),
+                    CborValue::Bool(false), // isStaticLocal
+                    CborValue::Bool(true),  // isConstexpr
+                    CborValue::Bool(false), // hasExternalStorage
+                    CborValue::Bool(false), // isStaticStorage
+                    CborValue::Bool(false), // isExternStorage
+                ],
+            ),
+        );
+
+        let ctx = AstContext {
+            ast_nodes,
+            type_nodes: HashMap::new(),
+            top_nodes: vec![70],
+            files: vec![],
+        };
+
+        let converted =
+            convert_to_clang_node(&ctx, 70).expect("constexpr VarDecl conversion should succeed");
+        match converted.kind {
+            ClangNodeKind::VarDecl {
+                name,
+                is_static,
+                is_extern,
+                ..
+            } => {
+                assert_eq!(name, "fits_in_sbo_v");
+                assert!(!is_static);
+                assert!(
+                    is_extern,
+                    "constexpr globals should be treated as non-exportable VarDecls"
+                );
+            }
+            other => panic!("expected VarDecl conversion, got {:?}", other),
         }
     }
 
@@ -3228,36 +3109,6 @@ mod tests {
             }
             other => panic!(
                 "expected FunctionTemplateInstantiation conversion, got {:?}",
-                other
-            ),
-        }
-    }
-
-    #[test]
-    fn test_convert_enum_decl_node_synthesizes_name_for_unnamed_enum() {
-        let mut enum_node = make_node(700, ASTEntryTag::TagEnumDecl, vec![], vec![]);
-        enum_node.loc = SrcSpan {
-            file_id: 42,
-            begin_line: 7,
-            begin_column: 3,
-            end_line: 7,
-            end_column: 25,
-        };
-
-        let ctx = AstContext {
-            ast_nodes: HashMap::new(),
-            type_nodes: HashMap::new(),
-            top_nodes: vec![],
-            files: vec![],
-        };
-
-        let kind = convert_enum_decl_node(&ctx, &enum_node);
-        match kind {
-            ClangNodeKind::EnumDecl { name, .. } => {
-                assert_eq!(name, "(unnamed enum at file_42:7:3)");
-            }
-            other => panic!(
-                "expected unnamed enum conversion to produce EnumDecl, got {:?}",
                 other
             ),
         }

@@ -6,19 +6,18 @@ impl<T> std_vector_push_arg<T> for T {
     fn into_std_vector_value(self) -> T { self }
 }
 
-impl<T> std_vector_push_arg<T> for &T {
+impl<T: Clone> std_vector_push_arg<T> for &T {
     fn into_std_vector_value(self) -> T {
-        // Best-effort by-value copy for transpiled C++ `push_back(const T&)`
-        // call sites where `T` may not implement Rust `Clone`.
-        unsafe { std::ptr::read(self as *const T) }
+        // Prefer safe clone semantics when available (e.g. `String`).
+        self.clone()
     }
 }
 
-// Generic std::vector<T> stub implementation backed by Vec<T>.
+// Generic std::vector<T> stub implementation backed by std::vec::Vec<T>.
 #[repr(C)]
 #[derive(Default)]
 pub struct std_vector<T> {
-    inner: Vec<T>,
+    inner: std::vec::Vec<T>,
 }
 
 impl<T: Clone> Clone for std_vector<T> {
@@ -31,7 +30,9 @@ impl<T: Clone> Clone for std_vector<T> {
 
 impl<T> std_vector<T> {
     pub const fn new_0() -> Self {
-        Self { inner: Vec::new() }
+        Self {
+            inner: std::vec::Vec::new(),
+        }
     }
 
     pub fn push_back<V>(&mut self, val: V)

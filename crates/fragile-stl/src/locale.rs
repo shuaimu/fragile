@@ -142,10 +142,20 @@ pub type pthread_key_t = u32;
 pub fn __cloc() -> locale_t { std::ptr::null_mut() }
 
 // Additional pthread functions
-pub unsafe fn pthread_once(_once_control: *mut pthread_once_t, _init_routine: Option<extern "C" fn()>) -> i32 { 0 }
+pub unsafe fn pthread_once(
+    _once_control: *mut pthread_once_t,
+    _init_routine: std::option::Option<extern "C" fn()>,
+) -> i32 {
+    0
+}
 pub unsafe fn pthread_setspecific(_key: pthread_key_t, _value: *const std::ffi::c_void) -> i32 { 0 }
 pub unsafe fn pthread_getspecific(_key: pthread_key_t) -> *mut std::ffi::c_void { std::ptr::null_mut() }
-pub unsafe fn pthread_key_create(_key: *mut pthread_key_t, _destructor: Option<extern "C" fn(*mut std::ffi::c_void)>) -> i32 { 0 }
+pub unsafe fn pthread_key_create(
+    _key: *mut pthread_key_t,
+    _destructor: std::option::Option<extern "C" fn(*mut std::ffi::c_void)>,
+) -> i32 {
+    0
+}
 pub unsafe fn pthread_key_delete(_key: pthread_key_t) -> i32 { 0 }
 
 // ctype specialization stubs
@@ -307,8 +317,21 @@ pub type fpos___mbstate_t = fpos_mbstate_t;
 pub type fpos_t = fpos_mbstate_t;
 pub type fpos64_t = fpos_mbstate_t;
 
-#[repr(C)] #[derive(Clone, Copy)] pub struct tm { _opaque: [u8; 56] }
-impl Default for tm { fn default() -> Self { Self { _opaque: [0u8; 56] } } }
+#[repr(C)]
+#[derive(Default, Clone, Copy)]
+pub struct tm {
+    pub tm_sec: i32,
+    pub tm_min: i32,
+    pub tm_hour: i32,
+    pub tm_mday: i32,
+    pub tm_mon: i32,
+    pub tm_year: i32,
+    pub tm_wday: i32,
+    pub tm_yday: i32,
+    pub tm_isdst: i32,
+    pub tm_gmtoff: i64,
+    pub tm_zone: *const i8,
+}
 
 #[repr(C)] #[derive(Default, Clone, Copy)] pub struct string_view { pub __data: *const i8, pub __size: u64 }
 impl string_view {
@@ -570,4 +593,3 @@ pub static STD_CTYPE_BYNAME_WCHAR_T__VTABLE: ctype_wchar_t__vtable = ctype_wchar
     do_narrow_1: __ctype_wchar_t_stub_do_narrow_1,
     __destructor: __ctype_wchar_t_stub_destructor,
 };
-

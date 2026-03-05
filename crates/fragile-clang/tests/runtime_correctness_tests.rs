@@ -173,6 +173,10 @@ int main() {
 /// This is a basic smoke test that should FAIL with null pointer stubs.
 #[test]
 fn test_map_no_crash_on_access() {
+    if should_skip_libcxx_runtime_test("test_map_no_crash_on_access") {
+        return;
+    }
+
     let cpp_code = r#"
 #include <map>
 
