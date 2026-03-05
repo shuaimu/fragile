@@ -1197,13 +1197,18 @@ Only emit lowered set aliases when the recovered element type is conservative an
 - Reused conservative gating:
   - `is_supported_associative_map_component_type()` for element validity,
   - `is_supported_associative_map_key_type()` for set element suitability.
+- Added associative-component suffix normalization for map key/value parsing:
+  - lowered map value components that are conservative lowered set spellings are now normalized to safe std set targets (for example `set_unsigned_short` -> `std_collections_BTreeSet_u16` -> `std::collections::BTreeSet<u16>`).
 - Added regression tests:
   - `test_missing_stub_simple_unordered_set_aliases_to_std_hashset`
   - `test_missing_stub_simple_set_aliases_to_std_btreeset`
   - `test_missing_stub_set_with_non_conservative_element_keeps_placeholder`
+  - `test_missing_stub_map_with_conservative_set_value_aliases_to_std_btreemap`
+  - `test_missing_stub_unordered_map_with_conservative_set_value_aliases_to_std_hashmap`
 
 ### Guardrails
 
 - Conservative lowered set spellings now alias to std containers (`HashSet`/`BTreeSet`) in missing-type stubs and drop-in sidecars.
 - Full-signature lowered unordered-set spellings with recognized std tail markers alias when element extraction is unambiguous.
+- Lowered map spellings with conservative lowered set values now alias to std map surfaces instead of remaining opaque placeholders (for example `map_unsigned_long__set_unsigned_short` -> `std::collections::BTreeMap<u64, std_collections_BTreeSet_u16>` with `std_collections_BTreeSet_u16` aliasing to `std::collections::BTreeSet<u16>`).
 - Non-conservative lowered set spellings (for example `set_Arc_Job`) remain opaque placeholders, avoiding forced std trait-bound regressions.

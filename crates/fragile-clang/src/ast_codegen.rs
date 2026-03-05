@@ -34850,8 +34850,8 @@ impl AstCodeGen {
         suffix: &str,
     ) -> Option<(String, String)> {
         let (key_suffix, value_suffix) = Self::stl_map_key_value_suffix_parts_from_suffix(suffix)?;
-        let key = Self::stl_container_element_rust_type_from_suffix(&key_suffix)?;
-        let value = Self::stl_container_element_rust_type_from_suffix(&value_suffix)?;
+        let key = Self::stl_associative_component_rust_type_from_suffix(&key_suffix)?;
+        let value = Self::stl_associative_component_rust_type_from_suffix(&value_suffix)?;
         if key.is_empty()
             || value.is_empty()
             || Self::has_unresolved_template_placeholder(&key)
@@ -34862,6 +34862,31 @@ impl AstCodeGen {
             return None;
         }
         Some((key, value))
+    }
+
+    fn stl_associative_component_rust_type_from_suffix(suffix: &str) -> Option<String> {
+        let normalized = suffix.trim_matches('_');
+        if normalized.is_empty() {
+            return None;
+        }
+
+        for (prefix, target_base) in [
+            ("std_unordered_set_", "std::collections::HashSet"),
+            ("unordered_set_", "std::collections::HashSet"),
+            ("std_set_", "std::collections::BTreeSet"),
+            ("set_", "std::collections::BTreeSet"),
+        ] {
+            let Some(element_suffix) = normalized.strip_prefix(prefix) else {
+                continue;
+            };
+            let element = Self::stl_simple_set_element_rust_type_from_suffix(element_suffix)?;
+            if !Self::is_supported_associative_map_key_type(&element) {
+                continue;
+            }
+            return Some(format!("{}<{}>", target_base, element));
+        }
+
+        Self::stl_container_element_rust_type_from_suffix(normalized)
     }
 
     fn stl_set_element_suffix_from_suffix(suffix: &str) -> Option<String> {
@@ -72943,6 +72968,58 @@ pub mod testing {
         assert!(
             code.contains("pub struct map_ALock__unsigned_long {"),
             "missing stub generation should keep an opaque placeholder for lowered map names with non-conservative key types, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_map_with_conservative_set_value_aliases_to_std_btreemap() {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "map_unsigned_long__set_unsigned_short".to_string(),
+            "map<unsigned long, set<unsigned short>>".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            code.contains(
+                "pub type map_unsigned_long__set_unsigned_short = std::collections::BTreeMap<u64, std::collections::BTreeSet<u16>>;"
+            ) || code.contains(
+                "pub type map_unsigned_long__set_unsigned_short = std::collections::BTreeMap<u64, std_collections_BTreeSet_u16>;"
+            ),
+            "missing stub generation should alias lowered map names with conservative set values to std BTreeMap set-valued targets, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct map_unsigned_long__set_unsigned_short {"),
+            "missing stub generation should avoid opaque placeholders for map aliases when set-valued std BTreeMap targets can be formed, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_unordered_map_with_conservative_set_value_aliases_to_std_hashmap() {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "unordered_map_unsigned_int__set_unsigned_long".to_string(),
+            "unordered_map<unsigned int, set<unsigned long>>".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            code.contains(
+                "pub type unordered_map_unsigned_int__set_unsigned_long = std::collections::HashMap<u32, std::collections::BTreeSet<u64>>;"
+            ) || code.contains(
+                "pub type unordered_map_unsigned_int__set_unsigned_long = std::collections::HashMap<u32, std_collections_BTreeSet_u64>;"
+            ),
+            "missing stub generation should alias lowered unordered_map names with conservative set values to std HashMap set-valued targets, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct unordered_map_unsigned_int__set_unsigned_long {"),
+            "missing stub generation should avoid opaque placeholders for unordered_map aliases when set-valued std HashMap targets can be formed, got:\n{}",
             code
         );
     }
