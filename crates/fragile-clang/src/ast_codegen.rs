@@ -3924,6 +3924,20 @@ impl AstCodeGen {
             AstCodeGen::is_non_default_std_wrapper_type(&resolved)
         }
 
+        fn field_blocks_clone(field_ty: &str, alias_targets: &HashMap<String, String>) -> bool {
+            let normalized = field_ty.trim();
+            if AstCodeGen::is_non_clone_std_wrapper_type(normalized) {
+                return true;
+            }
+            let resolved = resolve_alias_target(normalized, alias_targets);
+            if AstCodeGen::is_non_clone_std_wrapper_type(&resolved) {
+                return true;
+            }
+            resolved == "std::ffi::c_void"
+                || resolved.ends_with("::c_void")
+                || resolved.ends_with("_c_void")
+        }
+
         fn collect_struct_field_names_for_default(
             lines: &[&str],
             struct_decl_idx: usize,
@@ -4008,6 +4022,7 @@ impl AstCodeGen {
         let mut needs_clone: BTreeSet<String> = BTreeSet::new();
         let mut struct_default_field_names: HashMap<String, Vec<(String, String)>> =
             HashMap::new();
+        let mut clone_blocked_structs: HashSet<String> = HashSet::new();
         let mut existing_default_impls: HashSet<String> = HashSet::new();
         let mut existing_clone_impls: HashSet<String> = HashSet::new();
         let mut depth: i32 = 0;
@@ -4085,25 +4100,26 @@ impl AstCodeGen {
                             && module_path_root_accessible
                             && !canonical_struct_is_external
                         {
+                            let parsed_field_entries =
+                                collect_struct_field_names_for_default(&lines, line_idx);
+                            let has_clone_blocking_field =
+                                parsed_field_entries.as_ref().is_some_and(|field_entries| {
+                                    field_entries.iter().any(|(_, field_ty)| {
+                                        field_blocks_clone(field_ty, &alias_targets)
+                                    })
+                                });
                             let derives_default = derived.contains("Default");
                             let derives_clone = derived.contains("Clone");
                             if !derives_default {
                                 needs_default.insert(canonical_struct_name.clone());
                             }
-                            if !derives_clone {
+                            if has_clone_blocking_field {
+                                clone_blocked_structs.insert(canonical_struct_name.clone());
+                            }
+                            if !derives_clone && !has_clone_blocking_field {
                                 needs_clone.insert(canonical_struct_name.clone());
                             }
-                        }
-
-                        if !has_generics
-                            && !disallowed_struct_name
-                            && !is_private_struct
-                            && module_path_root_accessible
-                            && !canonical_struct_is_external
-                        {
-                            if let Some(field_entries) =
-                                collect_struct_field_names_for_default(&lines, line_idx)
-                            {
+                            if let Some(field_entries) = parsed_field_entries {
                                 let should_insert = struct_default_field_names
                                     .get(&canonical_struct_name)
                                     .is_none_or(|existing| {
@@ -4201,6 +4217,9 @@ impl AstCodeGen {
 
         for struct_name in needs_clone {
             if Self::resolves_to_external_std_core_alloc_type_path(&struct_name) {
+                continue;
+            }
+            if clone_blocked_structs.contains(&struct_name) {
                 continue;
             }
             if existing_clone_impls.contains(&struct_name)
@@ -70106,6 +70125,11 @@ pub struct PollThread {
             "non-mpsc fields should continue using Default::default() in field-wise synthesis, got:\n{}",
             normalized
         );
+        assert!(
+            !normalized.contains("impl Clone for PollThread {"),
+            "receiver-backed structs should not get fallback Clone synthesis, got:\n{}",
+            normalized
+        );
     }
 
     #[test]
@@ -70131,6 +70155,11 @@ pub struct PollThreadAlias {
         assert!(
             normalized.contains("mode_: Default::default(),"),
             "ordinary fields should continue using Default::default() in field-wise synthesis, got:\n{}",
+            normalized
+        );
+        assert!(
+            !normalized.contains("impl Clone for PollThreadAlias {"),
+            "alias-backed receiver structs should not get fallback Clone synthesis, got:\n{}",
             normalized
         );
     }
