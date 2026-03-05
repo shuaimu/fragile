@@ -1078,6 +1078,7 @@ Namespace alias target normalization must reuse the same Rusty-wrapper mapping l
 - Missing-stub qualifier-family alias recovery also skips Rusty marker-trait helper exports (`rusty_is_send_*` / `rusty_is_sync_*`) instead of synthesizing `pub type` bridges for `rusty::is::send::...` / `rusty::is::sync::...` unresolved spellings.
 - Record/template emission marker-helper suppression now resolves names through active namespace context too, so unqualified helper declarations inside `namespace rusty { ... }` (for example `is_send<...>` / `is_sync<...>`) are skipped just like fully-qualified `rusty::...` spellings.
 - Record and template-instantiation emission now aliases a conservative allowlist of Rusty wrapper surfaces directly to normalized Rust std targets (for example `rusty::Arc<T>` -> `std::sync::Arc<T>`, `rusty::Option<T>` -> `std::option::Option<T>`, `rusty::thread::JoinHandle<T>` -> `std::thread::JoinHandle<T>`, `rusty::Vec<T>` -> `std::vec::Vec<T>`, `rusty::sync::mpsc::Unit` -> `()`, and non-generic wrappers like `rusty::Barrier`/`rusty::Condvar` -> `std::sync::...`) instead of emitting opaque wrapper structs; alias lookup also considers the active namespace path so unqualified declarations inside `namespace rusty { ... }` still normalize to std aliases, template aliases sanitize the emitted lhs name when normalized lowering yields a Rust path, aliasing is rejected if any nested `rusty::` path remains after normalization, and `Ref`/`RefMut` alias targets are now emitted with explicit `'static` lifetime lanes when materialized as `type` aliases.
+- Wrapper-record aliasing now also maps direct Rusty poison-error wrappers to std surfaces when payload normalization is fully resolvable (`rusty::PoisonError<T>` / `rusty::sync::PoisonError<T>` -> `std::sync::PoisonError<T>`). Cases that still normalize to nested `rusty::...` payload lanes remain non-aliased to avoid unresolved std alias targets.
 - Missing-stub concrete alias recovery now reuses the same Rusty-wrapper mapping path before opaque fallback, including namespace-qualified lookup for unqualified names. This keeps degraded unresolved spellings (for example `rusty::Arc::constclass::...`) on std alias surfaces instead of emitting placeholder structs.
 - Fallback `Default`/`Clone` synthesis now treats Rusty wrapper paths that normalize to external std/core/alloc targets as external too, avoiding unsafe fallback impls on wrappers like `rusty::Barrier`/`rusty::Once`; lowered Rusty thread JoinHandle wrapper spellings (`rusty::thread::rusty_thread_JoinHandle_*`) remain eligible for local fallback impls because generated field-wise defaults still depend on them.
 - Fallback `Default`/`Clone` synthesis must not emit impls for external `std::`/`core::`/`alloc::` targets after alias resolution; additionally, qualified local type paths must only resolve through exact alias keys (not unrelated leaf-name aliases) to avoid orphan impls such as `impl Clone for std::sync::Barrier`.
@@ -1570,6 +1571,49 @@ because `type` aliases cannot use lifetime elision in `std::cell::Ref<...>` / `s
 - Fresh validation remains green:
   - `cargo test -p fragile-clang --lib rusty_wrapper_record_alias_helper_supports_option_and_result`
   - `cargo test -p fragile-clang --lib wrapper_trait_detectors_normalize_rusty_alias_spellings`
+  - `cargo build --release --bin fragilec`
+  - `make clean`
+  - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
+  - `ctest -j32 --output-on-failure`
+
+## 26. Direct `PoisonError<T>` Wrapper Record Aliasing to `std::sync::PoisonError<T>` (2026-03-05)
+
+### Problem
+
+Even after broad Rusty-wrapper aliasing, many direct `rusty::PoisonError<T>` record wrappers were still emitted as opaque structs in sidecars, despite having a direct std counterpart.
+
+### Rule
+
+- For wrapper-record alias emission, map direct Rusty poison-error wrappers to std:
+  - `rusty::PoisonError<T>`
+  - `rusty::sync::PoisonError<T>`
+  - unqualified `PoisonError<T>` in Rusty namespace contexts
+- Keep aliasing conservative: if the normalized payload still carries nested unresolved `rusty::...` paths, reject alias emission and keep existing wrapper-struct fallback.
+
+### Implementation
+
+- In `crates/fragile-clang/src/ast_codegen.rs`:
+  - Added `map_non_isomorphic_sync_wrapper_alias_target()`:
+    - detects direct poison-error wrapper spellings,
+    - normalizes payload lanes through existing type normalization and C++-to-Rust named-type lowering,
+    - returns `std::sync::PoisonError<...>` alias targets.
+  - Wired this helper into `rusty_wrapper_alias_target_from_record_name()` before generic namespace alias normalization.
+  - Added `std::sync::PoisonError<` to wrapper alias allowlisted prefixes.
+
+### Tests
+
+- Extended `test_rusty_wrapper_record_alias_helper_supports_option_and_result` with:
+  - `rusty::PoisonError<int> -> std::sync::PoisonError<i32>`
+- Re-ran existing result-lane companion mapping regression:
+  - `test_rusty_wrapper_record_alias_helper_maps_result_with_poison_error_to_generated_record_companions`
+
+### Guardrails
+
+- This change is scoped to wrapper-record alias emission; it does not globally rewrite all `PoisonError` type normalization surfaces.
+- Existing `Result<..., PoisonError<...>>` companion-record behavior remains intact.
+- Fresh validation remains green:
+  - `cargo test -p fragile-clang --lib rusty_wrapper_record_alias_helper_supports_option_and_result`
+  - `cargo test -p fragile-clang --lib maps_result_with_poison_error_to_generated_record_companions`
   - `cargo build --release --bin fragilec`
   - `make clean`
   - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`

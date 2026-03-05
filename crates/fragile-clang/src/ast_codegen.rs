@@ -36082,8 +36082,39 @@ impl AstCodeGen {
         normalized
     }
 
+    fn map_non_isomorphic_sync_wrapper_alias_target(record_name: &str) -> Option<String> {
+        let mut cleaned = record_name.trim();
+        cleaned = cleaned.trim_start_matches("crate::").trim();
+        cleaned = cleaned.trim_start_matches("::").trim();
+
+        for prefix in [
+            "rusty::PoisonError<",
+            "rusty::sync::PoisonError<",
+            "PoisonError<",
+        ] {
+            let Some(inner) = cleaned.strip_prefix(prefix).and_then(|s| s.strip_suffix('>')) else {
+                continue;
+            };
+            let args = parse_template_args(inner);
+            if args.len() != 1 {
+                continue;
+            }
+            let raw_arg = args[0].trim();
+            let normalized_arg = normalize_rusty_type_alias_to_std(raw_arg);
+            let mapped = if normalized_arg == raw_arg {
+                CppType::Named(raw_arg.to_string()).to_rust_type_str()
+            } else {
+                normalized_arg
+            };
+            return Some(format!("std::sync::PoisonError<{}>", mapped));
+        }
+
+        None
+    }
+
     fn rusty_wrapper_alias_target_from_record_name(record_name: &str) -> Option<String> {
-        let normalized = Self::normalize_namespace_alias_target(record_name);
+        let normalized = Self::map_non_isomorphic_sync_wrapper_alias_target(record_name)
+            .unwrap_or_else(|| Self::normalize_namespace_alias_target(record_name));
         let normalized_with_lifetimes =
             Self::normalize_ref_like_lifetimes_in_alias_target(&normalized);
         let allowlisted_prefixes = [
@@ -36101,6 +36132,7 @@ impl AstCodeGen {
             "std::cell::UnsafeCell<",
             "std::sync::Mutex<",
             "std::sync::RwLock<",
+            "std::sync::PoisonError<",
             "std::sync::mpsc::Sender<",
             "std::sync::mpsc::Receiver<",
             "std::sync::mpsc::SyncSender<",
@@ -74117,6 +74149,11 @@ pub struct rusty_Arc_classrrr_Client_ {
             AstCodeGen::rusty_wrapper_alias_target_from_record_name("rusty::Result<int, long>")
                 .as_deref(),
             Some("std::result::Result<i32, i64>")
+        );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name("rusty::PoisonError<int>")
+                .as_deref(),
+            Some("std::sync::PoisonError<i32>")
         );
         assert_eq!(
             AstCodeGen::rusty_wrapper_alias_target_from_record_name("rusty::Ref<class Foo>")
