@@ -3419,10 +3419,7 @@ impl AstCodeGen {
     /// generated structs. Strip those derives on struct items and synthesize
     /// manual fallback impls when missing.
     fn normalize_struct_default_clone_derives(code: &str) -> String {
-        fn type_text_mentions_known_c_void_name(
-            ty: &str,
-            c_void_backed_type_names: &HashSet<String>,
-        ) -> bool {
+        fn type_text_mentions_known_type_name(ty: &str, known_type_names: &HashSet<String>) -> bool {
             let mut token = String::new();
             for ch in ty.chars().chain(std::iter::once(' ')) {
                 if ch.is_ascii_alphanumeric() || ch == '_' || ch == ':' {
@@ -3431,15 +3428,28 @@ impl AstCodeGen {
                 }
                 if !token.is_empty() {
                     let leaf = token.rsplit("::").next().unwrap_or("");
-                    if c_void_backed_type_names.contains(&token)
-                        || c_void_backed_type_names.contains(leaf)
-                    {
+                    if known_type_names.contains(&token) || known_type_names.contains(leaf) {
                         return true;
                     }
                     token.clear();
                 }
             }
             false
+        }
+
+        fn type_text_is_raw_pointer(ty: &str) -> bool {
+            let trimmed = ty.trim();
+            trimmed.starts_with("*const ")
+                || trimmed.starts_with("*mut ")
+                || trimmed.starts_with("* const ")
+                || trimmed.starts_with("* mut ")
+        }
+
+        fn type_text_mentions_known_c_void_name(
+            ty: &str,
+            c_void_backed_type_names: &HashSet<String>,
+        ) -> bool {
+            type_text_mentions_known_type_name(ty, c_void_backed_type_names)
         }
 
         fn field_type_mentions_known_c_void_struct(
@@ -3455,6 +3465,44 @@ impl AstCodeGen {
                 return false;
             }
             type_text_mentions_known_c_void_name(ty, c_void_backed_type_names)
+        }
+
+        fn field_type_mentions_non_default_wrapper(
+            line: &str,
+            non_default_wrapper_type_names: &HashSet<String>,
+        ) -> bool {
+            let trimmed = line.trim();
+            let Some((_, rhs)) = trimmed.split_once(':') else {
+                return false;
+            };
+            let ty = rhs.trim().trim_end_matches(',').trim_end_matches(';');
+            if ty.is_empty() {
+                return false;
+            }
+            if type_text_is_raw_pointer(ty) {
+                return false;
+            }
+            AstCodeGen::is_non_default_std_wrapper_type(ty)
+                || type_text_mentions_known_type_name(ty, non_default_wrapper_type_names)
+        }
+
+        fn field_type_mentions_non_clone_wrapper(
+            line: &str,
+            non_clone_wrapper_type_names: &HashSet<String>,
+        ) -> bool {
+            let trimmed = line.trim();
+            let Some((_, rhs)) = trimmed.split_once(':') else {
+                return false;
+            };
+            let ty = rhs.trim().trim_end_matches(',').trim_end_matches(';');
+            if ty.is_empty() {
+                return false;
+            }
+            if type_text_is_raw_pointer(ty) {
+                return false;
+            }
+            AstCodeGen::is_non_clone_std_wrapper_type(ty)
+                || type_text_mentions_known_type_name(ty, non_clone_wrapper_type_names)
         }
 
         fn struct_decl_contains_c_void_field(
@@ -3478,6 +3526,64 @@ impl AstCodeGen {
                     return true;
                 }
                 if field_type_mentions_known_c_void_struct(line, c_void_backed_type_names) {
+                    return true;
+                }
+                brace_depth += line.chars().filter(|&ch| ch == '{').count() as i32;
+                brace_depth -= line.chars().filter(|&ch| ch == '}').count() as i32;
+                if saw_open && brace_depth <= 0 {
+                    break;
+                }
+            }
+            false
+        }
+
+        fn struct_decl_contains_non_default_wrapper_field(
+            lines: &[&str],
+            start_idx: usize,
+            non_default_wrapper_type_names: &HashSet<String>,
+        ) -> bool {
+            if start_idx >= lines.len() {
+                return false;
+            }
+            let mut saw_open = false;
+            let mut brace_depth: i32 = 0;
+            for line in &lines[start_idx..] {
+                if !saw_open {
+                    if !line.contains('{') {
+                        continue;
+                    }
+                    saw_open = true;
+                }
+                if field_type_mentions_non_default_wrapper(line, non_default_wrapper_type_names) {
+                    return true;
+                }
+                brace_depth += line.chars().filter(|&ch| ch == '{').count() as i32;
+                brace_depth -= line.chars().filter(|&ch| ch == '}').count() as i32;
+                if saw_open && brace_depth <= 0 {
+                    break;
+                }
+            }
+            false
+        }
+
+        fn struct_decl_contains_non_clone_wrapper_field(
+            lines: &[&str],
+            start_idx: usize,
+            non_clone_wrapper_type_names: &HashSet<String>,
+        ) -> bool {
+            if start_idx >= lines.len() {
+                return false;
+            }
+            let mut saw_open = false;
+            let mut brace_depth: i32 = 0;
+            for line in &lines[start_idx..] {
+                if !saw_open {
+                    if !line.contains('{') {
+                        continue;
+                    }
+                    saw_open = true;
+                }
+                if field_type_mentions_non_clone_wrapper(line, non_clone_wrapper_type_names) {
                     return true;
                 }
                 brace_depth += line.chars().filter(|&ch| ch == '{').count() as i32;
@@ -3534,6 +3640,8 @@ impl AstCodeGen {
         }
 
         let mut c_void_backed_type_names: HashSet<String> = HashSet::new();
+        let mut non_default_wrapper_type_names: HashSet<String> = HashSet::new();
+        let mut non_clone_wrapper_type_names: HashSet<String> = HashSet::new();
         for (alias, rhs) in &type_aliases {
             if rhs.contains("std::ffi::c_void")
                 || rhs.contains("core::ffi::c_void")
@@ -3541,11 +3649,23 @@ impl AstCodeGen {
             {
                 c_void_backed_type_names.insert(alias.clone());
             }
+            if Self::is_non_default_std_wrapper_type(rhs) {
+                non_default_wrapper_type_names.insert(alias.clone());
+            }
+            if Self::is_non_clone_std_wrapper_type(rhs) {
+                non_clone_wrapper_type_names.insert(alias.clone());
+            }
         }
 
         for (idx, struct_name) in &struct_decl_entries {
             if struct_decl_contains_c_void_field(&lines, *idx, &HashSet::new()) {
                 c_void_backed_type_names.insert(struct_name.clone());
+            }
+            if struct_decl_contains_non_default_wrapper_field(&lines, *idx, &HashSet::new()) {
+                non_default_wrapper_type_names.insert(struct_name.clone());
+            }
+            if struct_decl_contains_non_clone_wrapper_field(&lines, *idx, &HashSet::new()) {
+                non_clone_wrapper_type_names.insert(struct_name.clone());
             }
         }
 
@@ -3553,21 +3673,57 @@ impl AstCodeGen {
             let mut changed = false;
 
             for (alias, rhs) in &type_aliases {
+                let rhs_is_raw_pointer = type_text_is_raw_pointer(rhs);
                 if c_void_backed_type_names.contains(alias) {
-                    continue;
-                }
-                if type_text_mentions_known_c_void_name(rhs, &c_void_backed_type_names) {
+                } else if type_text_mentions_known_c_void_name(rhs, &c_void_backed_type_names) {
                     c_void_backed_type_names.insert(alias.clone());
+                    changed = true;
+                }
+
+                if non_default_wrapper_type_names.contains(alias) {
+                } else if Self::is_non_default_std_wrapper_type(rhs)
+                    || (!rhs_is_raw_pointer
+                        && type_text_mentions_known_type_name(rhs, &non_default_wrapper_type_names))
+                {
+                    non_default_wrapper_type_names.insert(alias.clone());
+                    changed = true;
+                }
+
+                if non_clone_wrapper_type_names.contains(alias) {
+                } else if Self::is_non_clone_std_wrapper_type(rhs)
+                    || (!rhs_is_raw_pointer
+                        && type_text_mentions_known_type_name(rhs, &non_clone_wrapper_type_names))
+                {
+                    non_clone_wrapper_type_names.insert(alias.clone());
                     changed = true;
                 }
             }
 
             for (idx, struct_name) in &struct_decl_entries {
                 if c_void_backed_type_names.contains(struct_name) {
-                    continue;
-                }
-                if struct_decl_contains_c_void_field(&lines, *idx, &c_void_backed_type_names) {
+                } else if struct_decl_contains_c_void_field(&lines, *idx, &c_void_backed_type_names)
+                {
                     c_void_backed_type_names.insert(struct_name.clone());
+                    changed = true;
+                }
+
+                if non_default_wrapper_type_names.contains(struct_name) {
+                } else if struct_decl_contains_non_default_wrapper_field(
+                    &lines,
+                    *idx,
+                    &non_default_wrapper_type_names,
+                ) {
+                    non_default_wrapper_type_names.insert(struct_name.clone());
+                    changed = true;
+                }
+
+                if non_clone_wrapper_type_names.contains(struct_name) {
+                } else if struct_decl_contains_non_clone_wrapper_field(
+                    &lines,
+                    *idx,
+                    &non_clone_wrapper_type_names,
+                ) {
+                    non_clone_wrapper_type_names.insert(struct_name.clone());
                     changed = true;
                 }
             }
@@ -3580,6 +3736,7 @@ impl AstCodeGen {
         let mut rewritten_lines: Vec<String> = Vec::with_capacity(lines.len());
         let mut needs_default: BTreeSet<String> = BTreeSet::new();
         let mut needs_clone: BTreeSet<String> = BTreeSet::new();
+        let mut clone_blocked_structs: HashSet<String> = HashSet::new();
         let mut depth: i32 = 0;
         let mut module_stack: Vec<(i32, String)> = Vec::new();
 
@@ -3648,7 +3805,23 @@ impl AstCodeGen {
                         j,
                         &c_void_backed_type_names,
                     );
-                    if has_generics || disallowed_struct_name || !struct_has_c_void_field {
+                    let struct_has_non_default_wrapper_field =
+                        struct_decl_contains_non_default_wrapper_field(
+                            &lines,
+                            j,
+                            &non_default_wrapper_type_names,
+                        );
+                    let struct_has_non_clone_wrapper_field =
+                        struct_decl_contains_non_clone_wrapper_field(
+                            &lines,
+                            j,
+                            &non_clone_wrapper_type_names,
+                        );
+                    let remove_default =
+                        struct_has_c_void_field || struct_has_non_default_wrapper_field;
+                    let remove_clone = struct_has_c_void_field || struct_has_non_clone_wrapper_field;
+                    if has_generics || disallowed_struct_name || (!remove_default && !remove_clone)
+                    {
                         rewritten_lines.push(line.to_string());
                         handled_derive = true;
                     } else {
@@ -3659,12 +3832,18 @@ impl AstCodeGen {
                             .collect();
                         let had_default = traits.iter().any(|t| t == "Default");
                         let had_clone = traits.iter().any(|t| t == "Clone");
-                        traits.retain(|t| t != "Default" && t != "Clone");
-                        if had_default {
+                        traits.retain(|t| {
+                            !((t == "Default" && remove_default) || (t == "Clone" && remove_clone))
+                        });
+                        if had_default && remove_default {
                             needs_default.insert(qualified_struct_name.clone());
                         }
-                        if had_clone {
-                            needs_clone.insert(qualified_struct_name.clone());
+                        if had_clone && remove_clone {
+                            if struct_has_non_clone_wrapper_field {
+                                clone_blocked_structs.insert(qualified_struct_name.clone());
+                            } else {
+                                needs_clone.insert(qualified_struct_name.clone());
+                            }
                         }
 
                         if !traits.is_empty() {
@@ -3728,6 +3907,9 @@ impl AstCodeGen {
 
         for struct_name in needs_clone {
             if Self::resolves_to_external_std_core_alloc_type_path(&struct_name) {
+                continue;
+            }
+            if clone_blocked_structs.contains(&struct_name) {
                 continue;
             }
             if out.contains(&format!("impl Clone for {} {{", struct_name)) {
@@ -70030,6 +70212,83 @@ pub struct StringMatchResultListener {
         assert!(
             !normalized.contains("#[derive(Default, Clone)]\npub struct StringMatchResultListener {"),
             "derive normalization should strip unsupported derive(Default, Clone) on indirect c_void-backed structs, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_struct_default_clone_derives_rewrites_non_default_wrapper_default_only() {
+        let input = r#"
+#[derive(Default, Clone)]
+pub struct SenderHolder {
+    pub tx: std::sync::mpsc::Sender<i32>,
+}
+"#;
+        let normalized = AstCodeGen::normalize_struct_default_clone_derives(input);
+        assert!(
+            normalized.contains("#[derive(Clone)]"),
+            "derive normalization should preserve Clone for clone-capable wrapper fields, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("impl Default for SenderHolder {")
+                && !normalized.contains("impl Clone for SenderHolder {"),
+            "derive normalization should only synthesize Default for non-default but clone-capable wrappers, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_struct_default_clone_derives_rewrites_non_clone_wrapper_and_alias() {
+        let input = r#"
+pub type ReceiverAlias = std::sync::mpsc::Receiver<i32>;
+
+#[derive(Default, Clone)]
+pub struct ReceiverHolder {
+    pub rx: ReceiverAlias,
+}
+"#;
+        let normalized = AstCodeGen::normalize_struct_default_clone_derives(input);
+        assert!(
+            !normalized.contains("#[derive(Default, Clone)]")
+                && !normalized.contains("#[derive(Clone)]")
+                && !normalized.contains("#[derive(Default)]"),
+            "derive normalization should strip Default/Clone derives for non-clone wrapper-backed structs, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("impl Default for ReceiverHolder {"),
+            "derive normalization should still synthesize Default fallback for receiver-backed structs, got:\n{}",
+            normalized
+        );
+        assert!(
+            !normalized.contains("impl Clone for ReceiverHolder {"),
+            "derive normalization should not synthesize unsafe Clone fallback for non-clone wrapper-backed structs, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_struct_default_clone_derives_keeps_raw_pointer_wrapped_non_clone_alias_derives()
+    {
+        let input = r#"
+pub type ReceiverAlias = std::sync::mpsc::Receiver<i32>;
+
+#[derive(Default, Clone, Copy)]
+pub struct ReceiverPtrHolder {
+    pub rx_ptr: *const ReceiverAlias,
+}
+"#;
+        let normalized = AstCodeGen::normalize_struct_default_clone_derives(input);
+        assert!(
+            normalized.contains("#[derive(Default, Clone, Copy)]"),
+            "derive normalization should preserve derives when non-clone wrappers are only behind raw pointers, got:\n{}",
+            normalized
+        );
+        assert!(
+            !normalized.contains("impl Default for ReceiverPtrHolder {")
+                && !normalized.contains("impl Clone for ReceiverPtrHolder {"),
+            "derive normalization should not synthesize fallback impls for raw-pointer wrapped wrappers, got:\n{}",
             normalized
         );
     }
