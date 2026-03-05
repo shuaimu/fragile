@@ -20758,12 +20758,7 @@ impl AstCodeGen {
         // Convert instantiation name to valid Rust identifier, then canonicalize
         // known equivalent spellings so we emit one concrete struct per shape.
         let raw_rust_name = CppType::Named(inst_name.to_string()).to_rust_type_str();
-        if Self::is_rusty_marker_trait_alias_name(&raw_rust_name)
-            || inst_name.contains("rusty::is_send<")
-            || inst_name.contains("rusty::is_sync<")
-            || inst_name.contains("rusty::is::send::")
-            || inst_name.contains("rusty::is::sync::")
-        {
+        if self.is_rusty_marker_trait_name_in_context(inst_name, Some(&raw_rust_name)) {
             return;
         }
         let rust_name = Self::canonicalize_known_template_instantiation_rust_name(&raw_rust_name)
@@ -34349,6 +34344,39 @@ impl AstCodeGen {
         name.starts_with("rusty_is_send_") || name.starts_with("rusty_is_sync_")
     }
 
+    fn is_rusty_marker_trait_cpp_path(name: &str) -> bool {
+        name.contains("rusty::is_send<")
+            || name.contains("rusty::is_sync<")
+            || name.contains("rusty::is::send::")
+            || name.contains("rusty::is::sync::")
+    }
+
+    fn is_rusty_marker_trait_name_in_context(
+        &self,
+        name: &str,
+        rust_name_hint: Option<&str>,
+    ) -> bool {
+        if Self::is_rusty_marker_trait_cpp_path(name) {
+            return true;
+        }
+        if let Some(qualified_name) = self.qualify_cpp_name_in_current_namespace(name) {
+            if Self::is_rusty_marker_trait_cpp_path(&qualified_name) {
+                return true;
+            }
+        }
+        if let Some(rust_name) = rust_name_hint {
+            if Self::is_rusty_marker_trait_alias_name(rust_name) {
+                return true;
+            }
+            if (rust_name.starts_with("is_send_") || rust_name.starts_with("is_sync_"))
+                && self.current_namespace.iter().any(|(ns, _)| ns == "rusty")
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     fn rusty_wrapper_alias_target_from_record_name(record_name: &str) -> Option<String> {
         let normalized = Self::normalize_namespace_alias_target(record_name);
         let allowlisted_prefixes = [
@@ -36883,12 +36911,7 @@ impl AstCodeGen {
         // to_rust_type_str() maps some types to primitives (e.g., exception -> c_void)
         // which is wrong for struct definitions - we want the actual struct name
         let rust_name = sanitize_identifier(name);
-        if Self::is_rusty_marker_trait_alias_name(&rust_name)
-            || name.contains("rusty::is_send<")
-            || name.contains("rusty::is_sync<")
-            || name.contains("rusty::is::send::")
-            || name.contains("rusty::is::sync::")
-        {
+        if self.is_rusty_marker_trait_name_in_context(name, Some(&rust_name)) {
             return;
         }
         let mut wrapper_alias_source_name = name.to_string();
@@ -70382,6 +70405,31 @@ pub mod testing {
     }
 
     #[test]
+    fn test_template_struct_skips_rusty_send_sync_marker_trait_helpers_in_namespace_context() {
+        let mut codegen = AstCodeGen::new();
+        codegen.current_namespace.push(("rusty".to_string(), false));
+        let inst_name = "is_send<class rrr::PollThread>";
+        let rust_name = CppType::Named(inst_name.to_string()).to_rust_type_str();
+
+        codegen.generate_template_struct(
+            inst_name,
+            &[String::from("T")],
+            &[String::from("class rrr::PollThread")],
+            &[],
+        );
+
+        assert!(
+            codegen.output.is_empty(),
+            "namespace-qualified marker-trait helper template instantiations should not emit concrete struct/impl surfaces, got:\n{}",
+            codegen.output
+        );
+        assert!(
+            !codegen.generated_structs.contains(&rust_name),
+            "namespace-qualified marker-trait helper template instantiations should not be tracked as generated structs"
+        );
+    }
+
+    #[test]
     fn test_template_struct_aliases_rusty_wrapper_instantiation_to_std() {
         let mut codegen = AstCodeGen::new();
         let inst_name = "rusty::Arc<class rrr::PollThread>";
@@ -70838,6 +70886,26 @@ pub struct rusty_Arc_classrrr_Client_ {
         assert!(
             !codegen.generated_structs.contains(&rust_name),
             "marker-trait helper records should not be tracked as generated structs"
+        );
+    }
+
+    #[test]
+    fn test_generate_struct_skips_rusty_send_sync_marker_trait_helpers_in_namespace_context() {
+        let mut codegen = AstCodeGen::new();
+        codegen.current_namespace.push(("rusty".to_string(), false));
+        let cpp_name = "is_sync<class rrr::PollThread>";
+        let rust_name = sanitize_identifier(cpp_name);
+
+        codegen.generate_struct(cpp_name, true, &[]);
+
+        assert!(
+            codegen.output.is_empty(),
+            "namespace-qualified marker-trait helper records should not emit concrete struct surfaces, got:\n{}",
+            codegen.output
+        );
+        assert!(
+            !codegen.generated_structs.contains(&rust_name),
+            "namespace-qualified marker-trait helper records should not be tracked as generated structs"
         );
     }
 
