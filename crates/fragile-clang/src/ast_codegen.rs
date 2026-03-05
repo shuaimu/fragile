@@ -3772,11 +3772,7 @@ impl AstCodeGen {
                             && !alias.contains('<')
                         {
                             let target = rhs.trim().trim_end_matches(';').trim();
-                            if !target.is_empty()
-                                && !target.contains('<')
-                                && !target.contains('[')
-                                && !target.contains('(')
-                            {
+                            if !target.is_empty() {
                                 let normalized_target =
                                     target.trim_start_matches("crate::").to_string();
                                 aliases.insert(alias.to_string(), normalized_target.clone());
@@ -3917,8 +3913,15 @@ impl AstCodeGen {
             Some((lhs.to_string(), ty))
         }
 
-        fn field_prefers_zeroed_default(field_ty: &str) -> bool {
-            AstCodeGen::is_non_default_std_wrapper_type(field_ty)
+        fn field_prefers_zeroed_default(
+            field_ty: &str,
+            alias_targets: &HashMap<String, String>,
+        ) -> bool {
+            if AstCodeGen::is_non_default_std_wrapper_type(field_ty) {
+                return true;
+            }
+            let resolved = resolve_alias_target(field_ty, alias_targets);
+            AstCodeGen::is_non_default_std_wrapper_type(&resolved)
         }
 
         fn collect_struct_field_names_for_default(
@@ -4180,7 +4183,7 @@ impl AstCodeGen {
                         out.push_str("            ");
                         out.push_str(field_name);
                         out.push_str(": ");
-                        if field_prefers_zeroed_default(field_ty) {
+                        if field_prefers_zeroed_default(field_ty, &alias_targets) {
                             out.push_str("unsafe { std::mem::zeroed() }");
                         } else {
                             out.push_str("Default::default()");
@@ -34468,6 +34471,18 @@ impl AstCodeGen {
             || compact.starts_with("std_thread_JoinHandle_")
     }
 
+    fn is_non_clone_std_wrapper_type(type_name: &str) -> bool {
+        let normalized = type_name
+            .trim()
+            .trim_start_matches("crate::")
+            .trim_start_matches("::");
+        let compact = normalized.replace(' ', "");
+        normalized.starts_with("std::sync::mpsc::Receiver<")
+            || normalized.starts_with("std::thread::JoinHandle<")
+            || compact.starts_with("std_sync_mpsc_Receiver_")
+            || compact.starts_with("std_thread_JoinHandle_")
+    }
+
     /// Generate Rust stubs (signatures only, no bodies) from a Clang AST.
     /// This is useful for FFI declarations and header generation.
     pub fn generate_stubs(mut self, ast: &ClangNode) -> String {
@@ -35941,6 +35956,42 @@ impl AstCodeGen {
         }
     }
 
+    fn rust_type_resolves_to_non_default_std_wrapper(&self, rust_type: &str) -> bool {
+        let mut current = rust_type
+            .trim_start_matches("&mut ")
+            .trim_start_matches('&')
+            .trim_start_matches("*mut ")
+            .trim_start_matches("*const ")
+            .trim()
+            .to_string();
+        let mut seen: HashSet<String> = HashSet::new();
+        loop {
+            if Self::is_non_default_std_wrapper_type(&current) {
+                return true;
+            }
+            let leaf = current
+                .rsplit("::")
+                .next()
+                .unwrap_or(current.as_str())
+                .to_string();
+            if Self::is_non_default_std_wrapper_type(&leaf) {
+                return true;
+            }
+            if !seen.insert(current.clone()) {
+                return false;
+            }
+            if let Some(target) = self.type_alias_targets.get(&current) {
+                current = target.clone();
+                continue;
+            }
+            if let Some(target) = self.type_alias_targets.get(&leaf) {
+                current = target.clone();
+                continue;
+            }
+            return false;
+        }
+    }
+
     fn rust_type_resolves_to_non_clone_record(&self, rust_type: &str) -> bool {
         let mut current = rust_type
             .trim_start_matches("&mut ")
@@ -35960,6 +36011,42 @@ impl AstCodeGen {
                 .unwrap_or(current.as_str())
                 .to_string();
             if self.non_clone_record_types.contains(&leaf) {
+                return true;
+            }
+            if !seen.insert(current.clone()) {
+                return false;
+            }
+            if let Some(target) = self.type_alias_targets.get(&current) {
+                current = target.clone();
+                continue;
+            }
+            if let Some(target) = self.type_alias_targets.get(&leaf) {
+                current = target.clone();
+                continue;
+            }
+            return false;
+        }
+    }
+
+    fn rust_type_resolves_to_non_clone_std_wrapper(&self, rust_type: &str) -> bool {
+        let mut current = rust_type
+            .trim_start_matches("&mut ")
+            .trim_start_matches('&')
+            .trim_start_matches("*mut ")
+            .trim_start_matches("*const ")
+            .trim()
+            .to_string();
+        let mut seen: HashSet<String> = HashSet::new();
+        loop {
+            if Self::is_non_clone_std_wrapper_type(&current) {
+                return true;
+            }
+            let leaf = current
+                .rsplit("::")
+                .next()
+                .unwrap_or(current.as_str())
+                .to_string();
+            if Self::is_non_clone_std_wrapper_type(&leaf) {
                 return true;
             }
             if !seen.insert(current.clone()) {
@@ -37104,7 +37191,7 @@ impl AstCodeGen {
                 // Some normalized std wrapper surfaces intentionally remain non-Default.
                 // Falling back to a manual zeroed Default impl for the parent record
                 // avoids derive-time trait bound failures in generated output.
-                if Self::is_non_default_std_wrapper_type(&type_str) {
+                if self.rust_type_resolves_to_non_default_std_wrapper(&type_str) {
                     return true;
                 }
                 // Check for large arrays (Default only impl'd up to [T; 32])
@@ -37269,6 +37356,7 @@ impl AstCodeGen {
                 }
                 if self.rust_type_resolves_to_unique_ptr_like(&type_str)
                     || self.rust_type_resolves_to_non_clone_record(&type_str)
+                    || self.rust_type_resolves_to_non_clone_std_wrapper(&type_str)
                 {
                     return true;
                 }
@@ -37276,6 +37364,7 @@ impl AstCodeGen {
                     let elem_type = element.to_rust_type_str();
                     if self.rust_type_resolves_to_unique_ptr_like(&elem_type)
                         || self.rust_type_resolves_to_non_clone_record(&elem_type)
+                        || self.rust_type_resolves_to_non_clone_std_wrapper(&elem_type)
                     {
                         return true;
                     }
@@ -37293,6 +37382,8 @@ impl AstCodeGen {
                             {
                                 if self.rust_type_resolves_to_unique_ptr_like(&alias_target)
                                     || self.rust_type_resolves_to_non_clone_record(&alias_target)
+                                    || self
+                                        .rust_type_resolves_to_non_clone_std_wrapper(&alias_target)
                                 {
                                     return true;
                                 }
@@ -37315,6 +37406,7 @@ impl AstCodeGen {
                         ) {
                             if self.rust_type_resolves_to_unique_ptr_like(&alias_target)
                                 || self.rust_type_resolves_to_non_clone_record(&alias_target)
+                                || self.rust_type_resolves_to_non_clone_std_wrapper(&alias_target)
                             {
                                 return true;
                             }
@@ -37338,6 +37430,7 @@ impl AstCodeGen {
                 let base_name = base_type.to_rust_type_str();
                 if self.rust_type_resolves_to_unique_ptr_like(&base_name)
                     || self.rust_type_resolves_to_non_clone_record(&base_name)
+                    || self.rust_type_resolves_to_non_clone_std_wrapper(&base_name)
                 {
                     return true;
                 }
@@ -70016,6 +70109,33 @@ pub struct PollThread {
     }
 
     #[test]
+    fn test_normalize_add_missing_struct_default_clone_impls_zeroes_non_default_alias_fields() {
+        let input = r#"
+pub type ReceiverAlias = std::sync::mpsc::Receiver<i32>;
+pub struct PollThreadAlias {
+    pub receiver_: ReceiverAlias,
+    pub mode_: i32,
+}
+"#;
+        let normalized = AstCodeGen::normalize_add_missing_struct_default_clone_impls(input);
+        assert!(
+            normalized.contains("impl Default for PollThreadAlias {"),
+            "missing Default impl should be synthesized for alias-backed receiver fields too, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("receiver_: unsafe { std::mem::zeroed() },"),
+            "alias-backed non-default receiver fields should use zeroed fallback instead of Default::default(), got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("mode_: Default::default(),"),
+            "ordinary fields should continue using Default::default() in field-wise synthesis, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
     fn test_normalize_add_missing_struct_default_clone_impls_handles_inline_fields() {
         let input = r#"
 pub struct __to_string_result { data: [i8; 32], len: usize }
@@ -71159,9 +71279,58 @@ pub struct rusty_Arc_classrrr_Client_ {
             output
         );
         assert!(
+            !output.contains("#[derive(Clone")
+                && !output.contains("#[derive(Default, Clone")
+                && !output.contains("#[derive(Clone, Copy")
+                && !output.contains("#[derive(Default, Clone, Copy"),
+            "std mpsc receiver fields should not derive Clone, got:\n{}",
+            output
+        );
+        assert!(
             output.contains("impl Default for PollThread {")
                 && output.contains("unsafe { std::mem::zeroed() }"),
             "std mpsc sender/receiver fields should use manual zeroed Default fallback, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_generate_struct_uses_manual_default_for_alias_to_non_default_receiver() {
+        let mut codegen = AstCodeGen::new();
+        codegen.type_alias_targets.insert(
+            "ReceiverAlias".to_string(),
+            "std::sync::mpsc::Receiver<i32>".to_string(),
+        );
+        let children = vec![make_node(
+            ClangNodeKind::FieldDecl {
+                name: "receiver_".to_string(),
+                ty: CppType::Named("ReceiverAlias".to_string()),
+                access: AccessSpecifier::Public,
+                is_static: false,
+                bit_field_width: None,
+            },
+            vec![],
+        )];
+
+        codegen.generate_struct("AliasedPollThread", true, &children);
+        let output = codegen.output;
+        assert!(
+            !output.contains("#[derive(Default"),
+            "alias-backed receiver fields should not derive Default, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("#[derive(Clone")
+                && !output.contains("#[derive(Default, Clone")
+                && !output.contains("#[derive(Clone, Copy")
+                && !output.contains("#[derive(Default, Clone, Copy"),
+            "alias-backed receiver fields should not derive Clone, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl Default for AliasedPollThread {")
+                && output.contains("unsafe { std::mem::zeroed() }"),
+            "alias-backed receiver fields should use manual zeroed Default fallback, got:\n{}",
             output
         );
     }
