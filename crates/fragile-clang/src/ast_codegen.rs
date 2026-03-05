@@ -34579,8 +34579,45 @@ impl AstCodeGen {
         }
     }
 
+    fn strip_lowered_cpp_prefix_tokens_suffix(name: &str) -> &str {
+        let mut current = name;
+        loop {
+            let mut changed = false;
+            for qualifier in ["const", "volatile"] {
+                if let Some(rest) = current.strip_prefix(qualifier) {
+                    current = rest.strip_prefix('_').unwrap_or(rest);
+                    changed = true;
+                }
+            }
+            for tag in ["class", "struct", "enum", "union"] {
+                if let Some(rest) = current.strip_prefix(tag) {
+                    current = rest.strip_prefix('_').unwrap_or(rest);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        current
+    }
+
+    fn is_lowered_basic_string_component_suffix(suffix: &str) -> bool {
+        let normalized = Self::strip_lowered_cpp_prefix_tokens_suffix(suffix.trim_matches('_'));
+        normalized == "basic_string_char"
+            || normalized == "std_basic_string_char"
+            || normalized.starts_with("basic_string_char__")
+            || normalized.starts_with("std_basic_string_char__")
+    }
+
     fn stl_container_element_rust_type_from_suffix(suffix: &str) -> Option<String> {
-        let mut normalized = suffix.trim_matches('_').trim_start_matches("const_");
+        let mut normalized = suffix.trim_matches('_');
+        normalized = Self::strip_lowered_cpp_prefix_tokens_suffix(normalized);
+        if normalized == "std_basic_string_char" {
+            // Keep lowered string lanes on the same canonical surface used by
+            // missing-stub/basic-string fallback paths.
+            return Some("basic_string_char".to_string());
+        }
         if let Some(split_idx) = normalized.find("__") {
             if split_idx > 0 {
                 normalized = &normalized[..split_idx];
@@ -34790,22 +34827,14 @@ impl AstCodeGen {
         if trimmed.is_empty() {
             return None;
         }
-        if trimmed.matches("__").count() == 1 {
-            let (key_suffix, value_suffix) = trimmed.split_once("__")?;
-            if key_suffix.is_empty() || value_suffix.is_empty() {
-                return None;
-            }
-            return Some((key_suffix.to_string(), value_suffix.to_string()));
-        }
-
-        // Handle lowered full template spellings such as:
-        //   unordered_map_K__V__struct_std_hash_K__struct_std_equal_to_K__class_std_allocator_...
-        //   map_K__V__struct_std_less_K__class_std_allocator_...
         let (key_suffix, rest) = trimmed.split_once("__")?;
         if key_suffix.is_empty() || rest.is_empty() {
             return None;
         }
 
+        // Handle lowered full template spellings such as:
+        //   unordered_map_K__V__struct_std_hash_K__struct_std_equal_to_K__class_std_allocator_...
+        //   map_K__V__struct_std_less_K__class_std_allocator_...
         let mut cutoff: Option<usize> = None;
         for marker in [
             "__struct_std_hash_",
@@ -34827,7 +34856,9 @@ impl AstCodeGen {
         }
 
         let Some(cutoff_idx) = cutoff else {
-            return None;
+            // Simple lowered form: allow value side to carry nested lowered
+            // spellings (for example `map_basic_string_char__unsigned_long`).
+            return Some((key_suffix.to_string(), rest.to_string()));
         };
         if cutoff_idx == 0 {
             return None;
@@ -34837,9 +34868,13 @@ impl AstCodeGen {
             return None;
         }
 
-        // Keep this conservative: skip nested/complex lowered forms where key
-        // or value still carries multi-token separators.
-        if key_suffix.contains("__") || value_suffix.contains("__") {
+        // Keep full-template-signature recovery conservative: skip nested key
+        // lanes and deeply nested value spellings in this path. Permit the
+        // common `basic_string<char, ...>` lowered suffix lane.
+        if key_suffix.contains("__")
+            || (value_suffix.contains("__")
+                && !Self::is_lowered_basic_string_component_suffix(value_suffix))
+        {
             return None;
         }
 
@@ -34900,6 +34935,24 @@ impl AstCodeGen {
         let normalized = suffix.trim_matches('_');
         if normalized.is_empty() {
             return None;
+        }
+
+        for (prefix, target_base) in [
+            ("std_unordered_map_", "std::collections::HashMap"),
+            ("unordered_map_", "std::collections::HashMap"),
+            ("std_map_", "std::collections::BTreeMap"),
+            ("map_", "std::collections::BTreeMap"),
+        ] {
+            let Some(inner_suffix) = normalized.strip_prefix(prefix) else {
+                continue;
+            };
+            let (key, value) = Self::stl_simple_map_key_value_rust_types_from_suffix(inner_suffix)?;
+            if !Self::is_supported_associative_map_key_type(&key)
+                || !Self::is_supported_associative_map_value_type(&value)
+            {
+                continue;
+            }
+            return Some(format!("{}<{}, {}>", target_base, key, value));
         }
 
         for (prefix, target_base) in [
@@ -35085,22 +35138,29 @@ impl AstCodeGen {
 
     fn is_supported_associative_map_key_type(ty: &str) -> bool {
         let trimmed = ty.trim();
+        let normalized = Self::strip_lowered_cpp_prefix_tokens_suffix(trimmed);
         if trimmed.is_empty() {
             return false;
         }
-        if Self::is_primitive_scalar_type_name(trimmed) {
+        if Self::is_primitive_scalar_type_name(trimmed)
+            || Self::is_primitive_scalar_type_name(normalized)
+        {
             return true;
         }
-        if trimmed.starts_with("*const ") || trimmed.starts_with("*mut ") {
+        if trimmed.starts_with("*const ")
+            || trimmed.starts_with("*mut ")
+            || normalized.starts_with("*const ")
+            || normalized.starts_with("*mut ")
+        {
             return true;
         }
-        trimmed == "std::string::String"
-            || trimmed == "String"
-            || trimmed == "std_string"
-            || trimmed == "basic_string_char"
-            || trimmed == "std_basic_string_char"
-            || trimmed.starts_with("basic_string_char__")
-            || trimmed.starts_with("std_basic_string_char__")
+        normalized == "std::string::String"
+            || normalized == "String"
+            || normalized == "std_string"
+            || normalized == "basic_string_char"
+            || normalized == "std_basic_string_char"
+            || normalized.starts_with("basic_string_char__")
+            || normalized.starts_with("std_basic_string_char__")
     }
 
     fn stl_associative_container_alias_target_from_rust_name(
@@ -73205,6 +73265,157 @@ pub mod testing {
         assert!(
             !code.contains("pub struct map_basic_string_char__vector_Arc_Client {"),
             "missing stub generation should avoid opaque placeholders for lowered map names when vector<Arc<T>> std BTreeMap targets can be formed, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_map_with_nested_map_value_aliases_to_std_btreemap() {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "map_basic_string_char__map_basic_string_char__unsigned_long".to_string(),
+            "map<basic_string<char>, map<basic_string<char>, unsigned long>>".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            code.contains(
+                "pub type map_basic_string_char__map_basic_string_char__unsigned_long = std::collections::BTreeMap<basic_string_char, std::collections::BTreeMap<basic_string_char, u64>>;"
+            ),
+            "missing stub generation should alias lowered map names with nested map values to std BTreeMap nested targets, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct map_basic_string_char__map_basic_string_char__unsigned_long {"),
+            "missing stub generation should avoid opaque placeholders for lowered map names when nested std BTreeMap value targets can be formed, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_unordered_map_with_nested_map_value_aliases_to_std_hashmap() {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "unordered_map_basic_string_char__map_basic_string_char__unsigned_long".to_string(),
+            "unordered_map<basic_string<char>, map<basic_string<char>, unsigned long>>".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            code.contains(
+                "pub type unordered_map_basic_string_char__map_basic_string_char__unsigned_long = std::collections::HashMap<basic_string_char, std::collections::BTreeMap<basic_string_char, u64>>;"
+            ),
+            "missing stub generation should alias lowered unordered_map names with nested map values to std HashMap nested targets, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct unordered_map_basic_string_char__map_basic_string_char__unsigned_long {"),
+            "missing stub generation should avoid opaque placeholders for lowered unordered_map names when nested std map value targets can be formed, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_map_full_signature_with_basic_string_value_aliases_to_std_btreemap() {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "map_int__basic_string_char__struct_std_char_traits_char__class_std_allocator_char"
+                .to_string(),
+            "map<int, basic_string<char, struct std::char_traits<char>, class std::allocator<char>>>"
+                .to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        let alias_line = code
+            .lines()
+            .find(|line| {
+                line.contains(
+                    "pub type map_int__basic_string_char__struct_std_char_traits_char__class_std_allocator_char =",
+                )
+            })
+            .unwrap_or("");
+        assert!(
+            alias_line.contains("std::collections::BTreeMap<i32,")
+                && (alias_line.contains("basic_string_char")
+                    || alias_line.contains("std_basic_string_char")
+                    || alias_line.contains("std::string::String")),
+            "missing stub generation should alias lowered full-signature map spellings with basic_string<char,...> values to std BTreeMap targets, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct map_int__basic_string_char__struct_std_char_traits_char__class_std_allocator_char {"),
+            "missing stub generation should avoid opaque placeholders for lowered full-signature map spellings when string-valued std BTreeMap targets can be formed, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_map_full_signature_with_class_prefixed_string_key_aliases_to_std_btreemap()
+    {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "map_class_std_basic_string_char__class_mdb_Table__struct_std_less_class_std_basic_string_char___class_std_allocator_struct_std_pair_const_class_std_basic_string_char__class_mdb_Table_".to_string(),
+            "map<class std::basic_string<char>, class mdb::Table>".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        let alias_line = code
+            .lines()
+            .find(|line| {
+                line.contains(
+                    "pub type map_class_std_basic_string_char__class_mdb_Table__struct_std_less_class_std_basic_string_char___class_std_allocator_struct_std_pair_const_class_std_basic_string_char__class_mdb_Table_ =",
+                )
+            })
+            .unwrap_or("");
+        assert!(
+            alias_line.contains("std::collections::BTreeMap<")
+                && (alias_line.contains("basic_string_char")
+                    || alias_line.contains("std_basic_string_char")
+                    || alias_line.contains("std::string::String"))
+                && alias_line.contains("mdb_Table"),
+            "missing stub generation should alias lowered full-signature map spellings with class-prefixed string keys to std BTreeMap targets, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct map_class_std_basic_string_char__class_mdb_Table__struct_std_less_class_std_basic_string_char___class_std_allocator_struct_std_pair_const_class_std_basic_string_char__class_mdb_Table_ {"),
+            "missing stub generation should avoid opaque placeholders for lowered full-signature map spellings with class-prefixed string keys when std BTreeMap targets can be formed, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_map_full_signature_with_class_prefixed_string_value_keeps_string_surface()
+    {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "map_int__class_std_basic_string_char__struct_std_less_int__class_std_allocator_struct_std_pair_const_int__class_std_basic_string_char__".to_string(),
+            "map<int, class std::basic_string<char>>".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        let alias_line = code
+            .lines()
+            .find(|line| {
+                line.contains(
+                    "pub type map_int__class_std_basic_string_char__struct_std_less_int__class_std_allocator_struct_std_pair_const_int__class_std_basic_string_char__ =",
+                )
+            })
+            .unwrap_or("");
+        assert!(
+            alias_line.contains("std::collections::BTreeMap<i32,")
+                && (alias_line.contains("basic_string_char")
+                    || alias_line.contains("std::string::String")),
+            "missing stub generation should preserve class-prefixed basic_string map values as string-like targets, got:\n{}",
+            code
+        );
+        assert!(
+            !alias_line.contains("u128"),
+            "missing stub generation should not collapse class-prefixed basic_string map values to integer lanes, got:\n{}",
             code
         );
     }

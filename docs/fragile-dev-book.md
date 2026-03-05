@@ -1326,3 +1326,55 @@ Added/updated missing-stub regression tests:
   - `make clean`
   - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
   - `ctest -j32 --output-on-failure`
+
+## 21. Nested Map Values + Full-Signature String Map Recovery (2026-03-05)
+
+### Problem
+
+Two conservative gaps remained in missing-stub associative alias recovery:
+
+- Lowered simple map spellings with nested lowered map values (for example `map_basic_string_char__map_basic_string_char__unsigned_long`) remained opaque because value-suffix parsing only accepted a single `__` split in simple lanes.
+- Lowered full-signature map spellings with `basic_string<char, ...>` components or lowered `class_/struct_` prefixes could collapse to unstable intermediate lanes in larger TUs (including accidental integer-key/value surfaces) instead of canonical string-like map aliases.
+
+### Rule
+
+- Keep map-key gating conservative, but allow nested lowered map spellings in **simple** value lanes when key/value components are still recoverable and supported.
+- In **full-signature** lanes, permit `basic_string<char, ...>`-shaped value suffixes while keeping other deep nested lanes conservative.
+- Canonicalize lowered `class_/struct_/const` prefix tokens in associative components and keep `std_basic_string_char` lanes on the canonical `basic_string_char` surface.
+
+### Implementation
+
+- In `crates/fragile-clang/src/ast_codegen.rs`:
+  - `stl_map_key_value_suffix_parts_from_suffix()` now:
+    - accepts simple key/value splits where value can carry nested lowered spellings,
+    - keeps full-signature tail-marker parsing for hash/equal/less/allocator lanes,
+    - allows full-signature value `__` lanes only for conservative `basic_string<char, ...>`-shaped suffixes.
+  - `stl_associative_component_rust_type_from_suffix()` now recognizes nested lowered map prefixes:
+    - `std_unordered_map_` / `unordered_map_` -> `std::collections::HashMap<K, V>`
+    - `std_map_` / `map_` -> `std::collections::BTreeMap<K, V>`
+  - Added lowered qualifier/tag stripping helper for suffix lanes:
+    - strips `const` / `volatile` / `class` / `struct` / `enum` / `union` prefix tokens.
+  - `stl_container_element_rust_type_from_suffix()` now canonicalizes `std_basic_string_char` to `basic_string_char`.
+  - `is_supported_associative_map_key_type()` now evaluates key suitability on stripped/canonicalized lanes as well.
+
+### Tests
+
+Added/updated missing-stub regression tests:
+
+- `test_missing_stub_map_with_nested_map_value_aliases_to_std_btreemap`
+- `test_missing_stub_unordered_map_with_nested_map_value_aliases_to_std_hashmap`
+- `test_missing_stub_map_full_signature_with_basic_string_value_aliases_to_std_btreemap`
+- `test_missing_stub_map_full_signature_with_class_prefixed_string_key_aliases_to_std_btreemap`
+- `test_missing_stub_map_full_signature_with_class_prefixed_string_value_keeps_string_surface`
+- Existing guardrail retained:
+  - `test_missing_stub_unordered_map_with_nested_lowered_vector_value_keeps_placeholder`
+
+### Guardrails
+
+- Conservative key policy remains unchanged for non-string/non-primitive custom keys.
+- Deep full-signature nested value lanes still stay opaque unless they match conservative recoverable shapes.
+- Full drop-in validation remains green:
+  - `make clean`
+  - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
+  - `ctest -j32 --output-on-failure`
+- Spot-check in generated `mako` sidecars confirms full-signature class-prefixed string map aliases now stay string-keyed/value-keyed (no `u128` collapse).
