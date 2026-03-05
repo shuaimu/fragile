@@ -18077,6 +18077,12 @@ impl AstCodeGen {
             {
                 continue;
             }
+            if Self::is_rusty_marker_trait_alias_name(&rust_name)
+                || cpp_name.contains("rusty::is::send::")
+                || cpp_name.contains("rusty::is::sync::")
+            {
+                continue;
+            }
             if let Some(enum_alias_target) =
                 self.resolve_missing_stub_enum_alias_target(&rust_name, &cpp_name)
             {
@@ -33692,9 +33698,6 @@ impl AstCodeGen {
         // Treat qualifier-family variants as aliases of the canonical emitted
         // surface whenever a sibling spelling is available.
         for candidate in Self::qualifier_family_siblings(rust_name) {
-            if candidate.starts_with("rusty_is_send_") || candidate.starts_with("rusty_is_sync_") {
-                return Some(format!("rusty::{}", candidate));
-            }
             if let Some(path) = self.resolve_unique_public_type_item_path(&candidate) {
                 return Some(path);
             }
@@ -34243,8 +34246,12 @@ impl AstCodeGen {
         }
         let is_marker_target = cleaned.starts_with("rusty::rusty_is_send_")
             || cleaned.starts_with("rusty::rusty_is_sync_");
-        let is_marker_alias = alias.starts_with("rusty_is_send_") || alias.starts_with("rusty_is_sync_");
+        let is_marker_alias = Self::is_rusty_marker_trait_alias_name(alias);
         is_marker_target || is_marker_alias
+    }
+
+    fn is_rusty_marker_trait_alias_name(name: &str) -> bool {
+        name.starts_with("rusty_is_send_") || name.starts_with("rusty_is_sync_")
     }
 
     fn normalize_namespace_alias_target(target: &str) -> String {
@@ -70448,7 +70455,37 @@ pub mod testing {
     }
 
     #[test]
-    fn test_missing_stub_qualifier_family_aliases_constclass_variant_to_known_sibling() {
+    fn test_missing_stub_qualifier_family_aliases_constclass_variant_to_known_sibling_non_marker() {
+        let mut codegen = AstCodeGen::new();
+        codegen.output = r#"
+pub struct rusty_Arc_classrrr_Client_ {
+    _opaque: [u8; 1],
+}
+"#
+        .to_string();
+        codegen.used_types.insert(
+            "rusty_Arc_constclassrrr_Client_".to_string(),
+            "rusty::Arc::constclassrrr::Client::".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            code.contains(
+                "pub type rusty_Arc_constclassrrr_Client_ = rusty_Arc_classrrr_Client_;"
+            ),
+            "missing stub generation should alias qualifier-family constclass variants to emitted sibling paths (including module qualification) instead of emitting opaque placeholders, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct rusty_Arc_constclassrrr_Client_ {"),
+            "missing stub generation should avoid opaque placeholders when a qualifier-family sibling type exists, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_qualifier_family_skips_rusty_send_sync_marker_aliases() {
         let mut codegen = AstCodeGen::new();
         codegen.output = r#"
 pub mod rusty {
@@ -70466,15 +70503,13 @@ pub mod rusty {
         codegen.generate_missing_type_stubs();
         let code = codegen.output;
         assert!(
-            code.contains(
-                "pub type rusty_is_send_constclassrrr_PollThread_ = rusty::rusty_is_send_classrrr_PollThread_;"
-            ),
-            "missing stub generation should alias qualifier-family constclass variants to emitted sibling paths (including module qualification) instead of emitting opaque placeholders, got:\n{}",
+            !code.contains("pub type rusty_is_send_constclassrrr_PollThread_ ="),
+            "missing stub generation should skip rusty send marker helper aliases, got:\n{}",
             code
         );
         assert!(
             !code.contains("pub struct rusty_is_send_constclassrrr_PollThread_ {"),
-            "missing stub generation should avoid opaque placeholders when a qualifier-family sibling type exists, got:\n{}",
+            "missing stub generation should not synthesize marker helper placeholders, got:\n{}",
             code
         );
     }
