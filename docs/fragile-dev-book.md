@@ -2095,3 +2095,56 @@ failure classes:
   - 116 tests pass; only `rpcbench` fails due its upstream test command hardcoding
     `WORKING_DIRECTORY=/vendor/mako` plus `./build/rpcbench` (path mismatch for this build dir).
   - `ctest -j32 --output-on-failure -E '^rpcbench$'` passes (116/116).
+
+## 35. Transitive Alias-Chain Collapse to Concrete std/Primitive Targets (2026-03-05)
+
+### Problem
+
+Even after Rusty wrapper RHS normalization, many generated top-level aliases remained as
+alias-to-alias chains, for example:
+
+- `A = B`
+- `B = std::sync::MutexGuard<'static, T>`
+
+This kept wrapper-heavy outputs less directly std-native and increased alias indirection in safe
+regions.
+
+### Rule
+
+- Collapse only top-level alias chains.
+- Resolve transitive alias RHS targets (`A -> B -> C -> ...`) and rewrite only when the final
+  concrete target is clearly safe/std-like:
+  - `std::...`, `core::...`, `alloc::...`
+  - primitive/unit/never lanes (`i*`, `u*`, `f*`, `bool`, `char`, `()`, `!`)
+  - raw/reference pointer lanes (`*...`, `&...`)
+- Do not rewrite module-scoped aliases or non-std/non-primitive terminal targets.
+- Preserve cycle safety (leave cycles to existing cycle-break normalization).
+
+### Implementation
+
+- In `crates/fragile-clang/src/ast_codegen.rs`:
+  - Added `normalize_transitive_std_type_alias_rhs_paths(...)`.
+  - The pass:
+    - collects top-level simple aliases,
+    - resolves transitive simple-identifier chains,
+    - rewrites only eligible std/primitive/pointer terminal targets.
+- Integrated into the pipeline in two locations:
+  - immediately after `normalize_rusty_type_alias_rhs_paths(...)`,
+  - and again in late cleanup after the final alias-rhs normalization rerun.
+
+### Tests
+
+- Added:
+  - `test_normalize_transitive_std_type_alias_rhs_paths_collapses_std_and_primitive_chains`
+  - `test_normalize_transitive_std_type_alias_rhs_paths_avoids_non_std_module_aliases`
+
+### Validation
+
+- Targeted tests:
+  - `cargo test -p fragile-clang normalize_transitive_std_type_alias_rhs_paths -- --nocapture`
+  - `cargo test -p fragile-clang normalize_rusty_type_alias_rhs_paths -- --nocapture`
+- clean mako rebuild (`vendor/mako/build_fragilec_dropin`):
+  - `make clean`
+  - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
+- test run:
+  - `ctest -j32 --output-on-failure`

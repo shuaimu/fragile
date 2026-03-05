@@ -2020,9 +2020,8 @@ impl AstCodeGen {
                     '_' => {
                         let prev = line[..scan].chars().next_back();
                         let next = line[scan + ch_len..].chars().next();
-                        let prev_ok = prev.is_none_or(|c| {
-                            !Self::is_identifier_char(c) && c != ':' && c != '\''
-                        });
+                        let prev_ok = prev
+                            .is_none_or(|c| !Self::is_identifier_char(c) && c != ':' && c != '\'');
                         let next_ok = next.is_none_or(|c| !Self::is_identifier_char(c) && c != ':');
                         if prev_ok && next_ok {
                             out.push_str("UnknownTagAutoType");
@@ -2173,8 +2172,8 @@ impl AstCodeGen {
                 let prev_allows_type_placeholder = prev_non_ws.is_none_or(|ch| {
                     matches!(ch, ':' | '<' | '&' | '*' | '(' | ',' | '=' | '>' | '[')
                 });
-                let next_allows_type_placeholder = next_non_ws
-                    .is_none_or(|ch| matches!(ch, '>' | ';' | ',' | ')' | ']' | '='));
+                let next_allows_type_placeholder =
+                    next_non_ws.is_none_or(|ch| matches!(ch, '>' | ';' | ',' | ')' | ']' | '='));
 
                 if prev_allows_type_placeholder && next_allows_type_placeholder {
                     out.push_str(&line[idx..start]);
@@ -2532,14 +2531,12 @@ impl AstCodeGen {
                         let ty_part = rest[..comma_idx].trim();
                         let bare_aggregate = aggregate_name.trim_start_matches("r#");
                         let raw_aggregate = format!("r#{}", bare_aggregate);
-                        if let Some(rewritten_ty) =
-                            rewrite_self_recursive_type(
-                                ty_part,
-                                bare_aggregate,
-                                &raw_aggregate,
-                                &alias_map,
-                            )
-                        {
+                        if let Some(rewritten_ty) = rewrite_self_recursive_type(
+                            ty_part,
+                            bare_aggregate,
+                            &raw_aggregate,
+                            &alias_map,
+                        ) {
                             let mut rebuilt = String::new();
                             rebuilt.push_str(lhs.trim_end());
                             rebuilt.push_str(": ");
@@ -2680,8 +2677,7 @@ impl AstCodeGen {
 
         let signed_or_unsigned = expr.strip_prefix('-').unwrap_or(expr);
         for suffix in [
-            "isize", "usize", "i128", "u128", "i64", "u64", "i32", "u32", "i16", "u16", "i8",
-            "u8",
+            "isize", "usize", "i128", "u128", "i64", "u64", "i32", "u32", "i16", "u16", "i8", "u8",
         ] {
             if let Some(prefix) = signed_or_unsigned.strip_suffix(suffix) {
                 if !prefix.is_empty() && prefix.chars().all(|ch| ch.is_ascii_digit()) {
@@ -2866,7 +2862,9 @@ impl AstCodeGen {
                 continue;
             }
             let init_expr = rhs_trimmed.trim_end_matches(';').trim();
-            let Some(items_inner) = init_expr.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
+            let Some(items_inner) = init_expr
+                .strip_prefix('[')
+                .and_then(|s| s.strip_suffix(']'))
             else {
                 out.push_str(line);
                 out.push('\n');
@@ -3299,8 +3297,7 @@ impl AstCodeGen {
             // compile-safe zeroed fallback.
             let rhs_no_semi = rhs.trim_end_matches(';').trim();
             let has_non_const_ctor_call = (rhs_no_semi.contains("::new_")
-                && rhs_no_semi.ends_with(')')
-                )
+                && rhs_no_semi.ends_with(')'))
                 || rhs_no_semi.contains("Default::default()");
             // `unsafe { extern_static }` and nested C aggregate brace initializers
             // are also non-const in Rust static contexts; normalize them similarly.
@@ -3419,7 +3416,10 @@ impl AstCodeGen {
     /// generated structs. Strip those derives on struct items and synthesize
     /// manual fallback impls when missing.
     fn normalize_struct_default_clone_derives(code: &str) -> String {
-        fn type_text_mentions_known_type_name(ty: &str, known_type_names: &HashSet<String>) -> bool {
+        fn type_text_mentions_known_type_name(
+            ty: &str,
+            known_type_names: &HashSet<String>,
+        ) -> bool {
             let mut token = String::new();
             for ch in ty.chars().chain(std::iter::once(' ')) {
                 if ch.is_ascii_alphanumeric() || ch == '_' || ch == ':' {
@@ -3563,9 +3563,7 @@ impl AstCodeGen {
                             bracket_depth -= 1;
                         }
                     }
-                    ',' | ';'
-                        if paren_depth == 0 && angle_depth == 0 && bracket_depth == 0 =>
-                    {
+                    ',' | ';' if paren_depth == 0 && angle_depth == 0 && bracket_depth == 0 => {
                         break;
                     }
                     _ => {}
@@ -3582,10 +3580,7 @@ impl AstCodeGen {
         ) -> bool {
             let mut token = String::new();
             let mut token_start: usize = 0;
-            for (idx, ch) in ty
-                .char_indices()
-                .chain(std::iter::once((ty.len(), ' ')))
-            {
+            for (idx, ch) in ty.char_indices().chain(std::iter::once((ty.len(), ' '))) {
                 if ch.is_ascii_alphanumeric() || ch == '_' || ch == ':' {
                     if token.is_empty() {
                         token_start = idx;
@@ -3894,10 +3889,7 @@ impl AstCodeGen {
                 let rhs_is_raw_pointer = type_text_is_raw_pointer(rhs);
                 if c_void_backed_type_names.contains(alias) {
                 } else if !rhs_is_raw_pointer
-                    && type_text_mentions_non_pointer_c_void_name(
-                        rhs,
-                        &c_void_backed_type_names,
-                    )
+                    && type_text_mentions_non_pointer_c_void_name(rhs, &c_void_backed_type_names)
                 {
                     c_void_backed_type_names.insert(alias.clone());
                     changed = true;
@@ -4028,7 +4020,10 @@ impl AstCodeGen {
 
                 if let Some(struct_name) = struct_name {
                     let struct_decl_line = lines.get(j).map(|s| s.trim_start()).unwrap_or("");
-                    let decl_head = struct_decl_line.split('{').next().unwrap_or(struct_decl_line);
+                    let decl_head = struct_decl_line
+                        .split('{')
+                        .next()
+                        .unwrap_or(struct_decl_line);
                     let has_generics = decl_head.contains('<');
                     let bare_struct_name = struct_name.trim_start_matches("r#");
                     let disallowed_struct_name = Self::is_primitive_type_name(bare_struct_name)
@@ -4042,11 +4037,8 @@ impl AstCodeGen {
                             .collect();
                         format!("{}::{}", module_path.join("::"), struct_name)
                     };
-                    let struct_has_c_void_field = struct_decl_contains_c_void_field(
-                        &lines,
-                        j,
-                        &c_void_backed_type_names,
-                    );
+                    let struct_has_c_void_field =
+                        struct_decl_contains_c_void_field(&lines, j, &c_void_backed_type_names);
                     let struct_has_non_default_wrapper_field =
                         struct_decl_contains_non_default_wrapper_field(
                             &lines,
@@ -4067,7 +4059,8 @@ impl AstCodeGen {
                         );
                     let remove_default =
                         struct_has_c_void_field || struct_has_non_default_wrapper_field;
-                    let remove_clone = struct_has_c_void_field || struct_has_non_clone_wrapper_field;
+                    let remove_clone =
+                        struct_has_c_void_field || struct_has_non_clone_wrapper_field;
                     let remove_copy = struct_has_c_void_field || struct_has_non_copy_wrapper_field;
                     if has_generics
                         || disallowed_struct_name
@@ -4102,12 +4095,14 @@ impl AstCodeGen {
                         if !traits.is_empty() {
                             let indent_len = line.len().saturating_sub(trimmed.len());
                             let indent = &line[..indent_len];
-                            rewritten_lines
-                                .push(format!("{}#[derive({})]", indent, traits.join(", ")));
+                            rewritten_lines.push(format!(
+                                "{}#[derive({})]",
+                                indent,
+                                traits.join(", ")
+                            ));
                         }
                         handled_derive = true;
                     }
-
                 }
             }
 
@@ -4455,8 +4450,7 @@ impl AstCodeGen {
         let mut derived_traits_for_next_struct: Option<HashSet<String>> = None;
         let mut needs_default: BTreeSet<String> = BTreeSet::new();
         let mut needs_clone: BTreeSet<String> = BTreeSet::new();
-        let mut struct_default_field_names: HashMap<String, Vec<(String, String)>> =
-            HashMap::new();
+        let mut struct_default_field_names: HashMap<String, Vec<(String, String)>> = HashMap::new();
         let mut clone_blocked_structs: HashSet<String> = HashSet::new();
         let mut existing_default_impls: HashSet<String> = HashSet::new();
         let mut existing_clone_impls: HashSet<String> = HashSet::new();
@@ -5069,10 +5063,7 @@ impl AstCodeGen {
         siblings
     }
 
-    fn resolve_container_alias_target(
-        name: &str,
-        defined: &HashSet<String>,
-    ) -> Option<String> {
+    fn resolve_container_alias_target(name: &str, defined: &HashSet<String>) -> Option<String> {
         if let Some(target) = Self::stl_associative_container_alias_target_from_rust_name(name)
             .or_else(|| Self::stl_container_alias_target_from_rust_name(name))
         {
@@ -5272,7 +5263,9 @@ impl AstCodeGen {
         module_path: &str,
         module_visibility: &HashMap<String, ModuleDeclVisibility>,
     ) -> bool {
-        let mut segments = module_path.split("::").filter(|segment| !segment.is_empty());
+        let mut segments = module_path
+            .split("::")
+            .filter(|segment| !segment.is_empty());
         let Some(first_segment) = segments.next() else {
             return false;
         };
@@ -5336,8 +5329,7 @@ impl AstCodeGen {
     fn is_well_known_rust_trait_name(name: &str) -> bool {
         matches!(
             name,
-            "Fn"
-                | "FnMut"
+            "Fn" | "FnMut"
                 | "FnOnce"
                 | "Send"
                 | "Sync"
@@ -5650,12 +5642,10 @@ impl AstCodeGen {
 
     fn is_expression_like_lowered_type_name(rust_name: &str) -> bool {
         if rust_name.is_empty()
-            || rust_name
-                .chars()
-                .any(|ch| {
-                    ch.is_ascii_uppercase()
-                        || !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
-                })
+            || rust_name.chars().any(|ch| {
+                ch.is_ascii_uppercase()
+                    || !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+            })
         {
             return false;
         }
@@ -5916,12 +5906,22 @@ impl AstCodeGen {
             || trimmed.starts_with("type ");
         if is_type_alias_line {
             if let Some((lhs, rhs)) = trimmed.split_once('=') {
-                let suffix = if rhs.trim_end().ends_with(';') { ";" } else { "" };
+                let suffix = if rhs.trim_end().ends_with(';') {
+                    ";"
+                } else {
+                    ""
+                };
                 let rhs_ty = rhs.trim().trim_end_matches(';').trim();
                 if !rhs_ty.is_empty() {
                     let rewritten_rhs = Self::rewrite_bare_identifier(rhs_ty, bare, replacement);
                     if rewritten_rhs != rhs_ty {
-                        return format!("{}{} = {}{}", indent, lhs.trim_end(), rewritten_rhs, suffix);
+                        return format!(
+                            "{}{} = {}{}",
+                            indent,
+                            lhs.trim_end(),
+                            rewritten_rhs,
+                            suffix
+                        );
                     }
                 }
             }
@@ -5962,8 +5962,7 @@ impl AstCodeGen {
                     continue;
                 }
                 if let Some((lhs, ty)) = p.rsplit_once(':') {
-                    let rewritten_ty =
-                        Self::rewrite_bare_identifier(ty.trim(), bare, replacement);
+                    let rewritten_ty = Self::rewrite_bare_identifier(ty.trim(), bare, replacement);
                     if rewritten_ty != ty.trim() {
                         params_changed = true;
                     }
@@ -6239,9 +6238,7 @@ impl AstCodeGen {
             let mut rewritten = line.to_string();
             for unresolved in &unresolved_lowercase {
                 rewritten = Self::rewrite_shadowed_ident_in_item_type_positions(
-                    &rewritten,
-                    unresolved,
-                    "u128",
+                    &rewritten, unresolved, "u128",
                 );
             }
             out.push_str(&rewritten);
@@ -6443,8 +6440,10 @@ impl AstCodeGen {
                         .last()
                         .is_some_and(|(_, _, accessible)| *accessible)
                 {
-                    let module_path: Vec<&str> =
-                        module_stack.iter().map(|(_, name, _)| name.as_str()).collect();
+                    let module_path: Vec<&str> = module_stack
+                        .iter()
+                        .map(|(_, name, _)| name.as_str())
+                        .collect();
                     if !module_path.is_empty() {
                         let target = format!("{}::{}", module_path.join("::"), canonical_name);
                         if let Some(existing) = namespaced_targets.get(&canonical_name).cloned() {
@@ -6544,7 +6543,8 @@ impl AstCodeGen {
                 {
                     continue;
                 }
-                if Self::is_rusty_marker_trait_namespace_alias(&canonical_name, &normalized_target) {
+                if Self::is_rusty_marker_trait_namespace_alias(&canonical_name, &normalized_target)
+                {
                     continue;
                 }
                 if Self::is_rusty_runtime_internal_namespace_alias_target(&normalized_target) {
@@ -6566,12 +6566,14 @@ impl AstCodeGen {
             for line in code.lines() {
                 let mut rewritten = line.to_string();
                 for (alias, target) in &anon_namespace_rewrites {
-                    rewritten =
-                        Self::rewrite_shadowed_ident_in_item_type_positions(&rewritten, alias, target);
+                    rewritten = Self::rewrite_shadowed_ident_in_item_type_positions(
+                        &rewritten, alias, target,
+                    );
                 }
                 for (alias, target) in &runtime_internal_rewrites {
-                    rewritten =
-                        Self::rewrite_shadowed_ident_in_item_type_positions(&rewritten, alias, target);
+                    rewritten = Self::rewrite_shadowed_ident_in_item_type_positions(
+                        &rewritten, alias, target,
+                    );
                 }
                 out.push_str(&rewritten);
                 out.push('\n');
@@ -6617,14 +6619,9 @@ impl AstCodeGen {
 
         for (idx, line) in lines.iter().enumerate() {
             let trimmed = line.trim_start();
-            let Some(rest) = [
-                "pub type ",
-                "pub(crate) type ",
-                "pub(super) type ",
-                "type ",
-            ]
-            .iter()
-            .find_map(|prefix| trimmed.strip_prefix(prefix))
+            let Some(rest) = ["pub type ", "pub(crate) type ", "pub(super) type ", "type "]
+                .iter()
+                .find_map(|prefix| trimmed.strip_prefix(prefix))
             else {
                 continue;
             };
@@ -6695,14 +6692,9 @@ impl AstCodeGen {
 
         for (idx, line) in lines.iter().enumerate() {
             let trimmed = line.trim_start();
-            let Some(rest) = [
-                "pub type ",
-                "pub(crate) type ",
-                "pub(super) type ",
-                "type ",
-            ]
-            .iter()
-            .find_map(|prefix| trimmed.strip_prefix(prefix))
+            let Some(rest) = ["pub type ", "pub(crate) type ", "pub(super) type ", "type "]
+                .iter()
+                .find_map(|prefix| trimmed.strip_prefix(prefix))
             else {
                 continue;
             };
@@ -6799,8 +6791,7 @@ impl AstCodeGen {
                 ("pub(super) ", trimmed.strip_prefix("pub(super) type ")),
             ]
             .into_iter()
-            .find_map(|(vis, rest)| rest.map(|r| (vis, r)))
-            else {
+            .find_map(|(vis, rest)| rest.map(|r| (vis, r))) else {
                 out.push_str(line);
                 out.push('\n');
                 continue;
@@ -6905,14 +6896,9 @@ impl AstCodeGen {
 
     fn normalize_c_void_alias_identifier_references(code: &str) -> String {
         fn parse_c_void_alias_name(trimmed: &str) -> Option<String> {
-            if let Some(rest) = [
-                "pub type ",
-                "pub(crate) type ",
-                "pub(super) type ",
-                "type ",
-            ]
-            .iter()
-            .find_map(|prefix| trimmed.strip_prefix(prefix))
+            if let Some(rest) = ["pub type ", "pub(crate) type ", "pub(super) type ", "type "]
+                .iter()
+                .find_map(|prefix| trimmed.strip_prefix(prefix))
             {
                 let (lhs, rhs) = rest.split_once('=')?;
                 let alias = lhs.trim().trim_start_matches("r#");
@@ -6921,14 +6907,9 @@ impl AstCodeGen {
                     return Some(alias.to_string());
                 }
             }
-            if let Some(rest) = [
-                "pub use ",
-                "pub(crate) use ",
-                "pub(super) use ",
-                "use ",
-            ]
-            .iter()
-            .find_map(|prefix| trimmed.strip_prefix(prefix))
+            if let Some(rest) = ["pub use ", "pub(crate) use ", "pub(super) use ", "use "]
+                .iter()
+                .find_map(|prefix| trimmed.strip_prefix(prefix))
             {
                 if let Some((path, alias_tail)) = rest.rsplit_once(" as ") {
                     let path = path.trim();
@@ -6994,14 +6975,9 @@ impl AstCodeGen {
 
         for (idx, line) in lines.iter().enumerate() {
             let trimmed = line.trim_start();
-            let Some(rest) = [
-                "pub use ",
-                "pub(crate) use ",
-                "pub(super) use ",
-                "use ",
-            ]
-            .iter()
-            .find_map(|prefix| trimmed.strip_prefix(prefix))
+            let Some(rest) = ["pub use ", "pub(crate) use ", "pub(super) use ", "use "]
+                .iter()
+                .find_map(|prefix| trimmed.strip_prefix(prefix))
             else {
                 continue;
             };
@@ -7064,14 +7040,9 @@ impl AstCodeGen {
         let mut c_void_aliases: HashSet<String> = HashSet::new();
         for line in &lines {
             let trimmed = line.trim_start();
-            let Some(rest) = [
-                "pub type ",
-                "pub(crate) type ",
-                "pub(super) type ",
-                "type ",
-            ]
-            .iter()
-            .find_map(|prefix| trimmed.strip_prefix(prefix))
+            let Some(rest) = ["pub type ", "pub(crate) type ", "pub(super) type ", "type "]
+                .iter()
+                .find_map(|prefix| trimmed.strip_prefix(prefix))
             else {
                 continue;
             };
@@ -7096,14 +7067,9 @@ impl AstCodeGen {
 
         for line in &lines {
             let trimmed = line.trim_start();
-            let Some(prefix) = [
-                "pub type ",
-                "pub(crate) type ",
-                "pub(super) type ",
-                "type ",
-            ]
-            .iter()
-            .find(|p| trimmed.starts_with(*p))
+            let Some(prefix) = ["pub type ", "pub(crate) type ", "pub(super) type ", "type "]
+                .iter()
+                .find(|p| trimmed.starts_with(*p))
             else {
                 out.push_str(line);
                 out.push('\n');
@@ -7218,7 +7184,9 @@ impl AstCodeGen {
             Some((module.to_string(), leaf.to_string()))
         }
 
-        if !code.contains("pub mod ") || !code.contains("use super::*;") || !code.contains("pub type ")
+        if !code.contains("pub mod ")
+            || !code.contains("use super::*;")
+            || !code.contains("pub type ")
         {
             return code.to_string();
         }
@@ -7353,11 +7321,181 @@ impl AstCodeGen {
         out
     }
 
+    fn normalize_transitive_std_type_alias_rhs_paths(code: &str) -> String {
+        if !code.contains("type ") {
+            return code.to_string();
+        }
+
+        fn is_type_alias_line(trimmed: &str) -> bool {
+            trimmed.starts_with("pub type ")
+                || trimmed.starts_with("type ")
+                || trimmed.starts_with("pub(crate) type ")
+                || trimmed.starts_with("pub(super) type ")
+                || trimmed.starts_with("pub(self) type ")
+        }
+
+        fn parse_type_alias_line(trimmed: &str) -> Option<(String, String, usize)> {
+            let (lhs, rhs_with_tail) = trimmed.split_once('=')?;
+            let semi_idx = rhs_with_tail.find(';')?;
+            let rhs = rhs_with_tail[..semi_idx].trim();
+            if rhs.is_empty() {
+                return None;
+            }
+            let alias_name = lhs.trim_end().split_whitespace().last()?.trim();
+            if alias_name.contains('<') {
+                return None;
+            }
+            let alias_name = alias_name.trim_start_matches("r#");
+            if alias_name.is_empty()
+                || !alias_name.chars().all(AstCodeGen::is_identifier_char)
+                || !alias_name.starts_with(|ch: char| ch.is_ascii_alphabetic() || ch == '_')
+            {
+                return None;
+            }
+            Some((alias_name.to_string(), rhs.to_string(), semi_idx))
+        }
+
+        fn is_simple_alias_identifier(expr: &str) -> bool {
+            let trimmed = expr.trim().trim_start_matches("r#");
+            !trimmed.is_empty()
+                && trimmed.chars().all(AstCodeGen::is_identifier_char)
+                && trimmed.starts_with(|ch: char| ch.is_ascii_alphabetic() || ch == '_')
+        }
+
+        fn is_std_or_primitive_target(target: &str) -> bool {
+            let trimmed = target.trim();
+            if trimmed.is_empty() {
+                return false;
+            }
+            if trimmed.starts_with("std::")
+                || trimmed.starts_with("core::")
+                || trimmed.starts_with("alloc::")
+                || trimmed.starts_with('*')
+                || trimmed.starts_with('&')
+            {
+                return true;
+            }
+            matches!(
+                trimmed,
+                "()" | "!"
+                    | "bool"
+                    | "char"
+                    | "str"
+                    | "i8"
+                    | "i16"
+                    | "i32"
+                    | "i64"
+                    | "i128"
+                    | "isize"
+                    | "u8"
+                    | "u16"
+                    | "u32"
+                    | "u64"
+                    | "u128"
+                    | "usize"
+                    | "f32"
+                    | "f64"
+            )
+        }
+
+        fn resolve_transitive_alias_target(
+            ident: &str,
+            alias_map: &HashMap<String, String>,
+        ) -> Option<String> {
+            if !is_simple_alias_identifier(ident) {
+                return None;
+            }
+            let mut current = ident.trim_start_matches("r#").to_string();
+            let mut seen: HashSet<String> = HashSet::new();
+            loop {
+                if !seen.insert(current.clone()) {
+                    return None;
+                }
+                let rhs = alias_map.get(&current)?.trim().to_string();
+                if !is_simple_alias_identifier(&rhs) {
+                    return Some(rhs);
+                }
+                let next = rhs.trim_start_matches("r#").to_string();
+                if !alias_map.contains_key(&next) {
+                    return Some(rhs);
+                }
+                current = next;
+            }
+        }
+
+        // Restrict to top-level aliases to avoid cross-module shadowing ambiguities.
+        let mut alias_map: HashMap<String, String> = HashMap::new();
+        for line in code.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.len() != line.len() || !is_type_alias_line(trimmed) {
+                continue;
+            }
+            let Some((alias_name, rhs, _)) = parse_type_alias_line(trimmed) else {
+                continue;
+            };
+            alias_map.insert(alias_name, rhs);
+        }
+        if alias_map.is_empty() {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        for line in code.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.len() != line.len() || !is_type_alias_line(trimmed) {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+            let Some((_, rhs, semi_idx)) = parse_type_alias_line(trimmed) else {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            };
+            if !is_simple_alias_identifier(&rhs) {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+            let Some(resolved_rhs) = resolve_transitive_alias_target(&rhs, &alias_map) else {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            };
+            if resolved_rhs == rhs || !is_std_or_primitive_target(&resolved_rhs) {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+
+            let Some((lhs, rhs_with_tail)) = trimmed.split_once('=') else {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            };
+            out.push_str(lhs.trim_end());
+            out.push_str(" = ");
+            out.push_str(&resolved_rhs);
+            out.push(';');
+            out.push_str(&rhs_with_tail[(semi_idx + 1)..]);
+            out.push('\n');
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
     fn normalize_std_wrapper_placeholder_type_args_to_unit(rhs: &str) -> String {
         let trimmed = rhs.trim();
         let placeholder_like = |arg: &str| {
             let a = arg.trim();
-            a == "_" || a == "__" || a == "auto" || a.starts_with("type-parameter-") || a.starts_with("type_parameter_")
+            a == "_"
+                || a == "__"
+                || a == "auto"
+                || a.starts_with("type-parameter-")
+                || a.starts_with("type_parameter_")
         };
 
         for wrapper in [
@@ -7485,8 +7623,8 @@ impl AstCodeGen {
         if start >= lines.len() {
             return start;
         }
-        let mut depth: i32 = lines[start].matches('{').count() as i32
-            - lines[start].matches('}').count() as i32;
+        let mut depth: i32 =
+            lines[start].matches('{').count() as i32 - lines[start].matches('}').count() as i32;
         let mut idx = start + 1;
         if depth <= 0 {
             return idx;
@@ -7849,23 +7987,26 @@ impl AstCodeGen {
                     stmt_depth = 1;
                 }
             }
-            let last_stmt_requires_tail_default = match (last_top_level_stmt_head, last_top_level_stmt_idx) {
-                (Some(head), Some(stmt_idx)) if head.starts_with("if ") || head.starts_with("if(") => {
-                    let trailing_stmt = body_lines[stmt_idx..].join("\n");
-                    let has_else_clause = trailing_stmt.lines().any(|line| {
-                        let trimmed = line.trim_start();
-                        trimmed == "else"
-                            || trimmed.starts_with("else ")
-                            || trimmed.starts_with("else\t")
-                            || trimmed.starts_with("else{")
-                            || trimmed.starts_with("else if")
-                            || trimmed.contains("} else ")
-                            || trimmed.contains("} else{")
-                    });
-                    !has_else_clause
-                }
-                _ => false,
-            };
+            let last_stmt_requires_tail_default =
+                match (last_top_level_stmt_head, last_top_level_stmt_idx) {
+                    (Some(head), Some(stmt_idx))
+                        if head.starts_with("if ") || head.starts_with("if(") =>
+                    {
+                        let trailing_stmt = body_lines[stmt_idx..].join("\n");
+                        let has_else_clause = trailing_stmt.lines().any(|line| {
+                            let trimmed = line.trim_start();
+                            trimmed == "else"
+                                || trimmed.starts_with("else ")
+                                || trimmed.starts_with("else\t")
+                                || trimmed.starts_with("else{")
+                                || trimmed.starts_with("else if")
+                                || trimmed.contains("} else ")
+                                || trimmed.contains("} else{")
+                        });
+                        !has_else_clause
+                    }
+                    _ => false,
+                };
             let needs_tail_default = has_explicit_return && last_stmt_requires_tail_default;
             let wildcard_arm_default_expr =
                 Self::default_expr_for_empty_body_return_type(ret_ty).replace('\n', " ");
@@ -7892,10 +8033,7 @@ impl AstCodeGen {
                                 indent, wildcard_arm_default_expr
                             )
                         } else {
-                            format!(
-                                "{}_ => {{ return {}; }}",
-                                indent, wildcard_arm_default_expr
-                            )
+                            format!("{}_ => {{ return {}; }}", indent, wildcard_arm_default_expr)
                         }
                     } else {
                         (*body_line).to_string()
@@ -8095,7 +8233,8 @@ impl AstCodeGen {
                                         );
                                     }
                                 } else if declared_ty == "u8" {
-                                    let init_trimmed = init_expr.trim().trim_end_matches(';').trim();
+                                    let init_trimmed =
+                                        init_expr.trim().trim_end_matches(';').trim();
                                     if init_trimmed.contains("wrapping_shr(")
                                         && init_trimmed.contains("i32")
                                         && !init_trimmed.ends_with("as u8")
@@ -8106,7 +8245,8 @@ impl AstCodeGen {
                                         );
                                     }
                                 } else {
-                                    let init_trimmed = init_expr.trim().trim_end_matches(';').trim();
+                                    let init_trimmed =
+                                        init_expr.trim().trim_end_matches(';').trim();
                                     let has_declared_cast_tail =
                                         init_trimmed.ends_with(&format!("as {}", declared_ty));
                                     if !has_declared_cast_tail
@@ -8161,10 +8301,9 @@ impl AstCodeGen {
                                 None
                             };
                             if let Some(init_ident) = init_ident {
-                                if local_binding_types
-                                    .get(&init_ident)
-                                    .is_some_and(|rhs_ty| Self::is_primitive_scalar_type_name(rhs_ty))
-                                {
+                                if local_binding_types.get(&init_ident).is_some_and(|rhs_ty| {
+                                    Self::is_primitive_scalar_type_name(rhs_ty)
+                                }) {
                                     // Degraded ctor lowering can bind aggregate locals directly
                                     // from primitive counters (`let x: Struct = nthreads;`).
                                     fixed = format!(
@@ -8450,13 +8589,7 @@ impl AstCodeGen {
                 }
                 if matches!(
                     token,
-                    "pub"
-                        | "pub(crate)"
-                        | "pub(super)"
-                        | "unsafe"
-                        | "extern"
-                        | "const"
-                        | "async"
+                    "pub" | "pub(crate)" | "pub(super)" | "unsafe" | "extern" | "const" | "async"
                 ) {
                     continue;
                 }
@@ -9049,7 +9182,11 @@ impl AstCodeGen {
             while struct_start > 0 && line_is_struct_metadata(lines[struct_start - 1]) {
                 struct_start -= 1;
             }
-            for slot in skip_lines.iter_mut().take(struct_end + 1).skip(struct_start) {
+            for slot in skip_lines
+                .iter_mut()
+                .take(struct_end + 1)
+                .skip(struct_start)
+            {
                 *slot = true;
             }
 
@@ -9063,7 +9200,8 @@ impl AstCodeGen {
             idx = impl_start;
             if idx < lines.len()
                 && line_depths[idx] == line_depth
-                && parse_inherent_impl_target(lines[idx]).is_some_and(|target| target == struct_name)
+                && parse_inherent_impl_target(lines[idx])
+                    .is_some_and(|target| target == struct_name)
             {
                 if let Some(impl_end) = find_block_end(&lines, idx) {
                     for slot in skip_lines.iter_mut().take(impl_end + 1).skip(impl_start) {
@@ -9132,13 +9270,12 @@ impl AstCodeGen {
             if trimmed.is_empty() {
                 return None;
             }
-            let (core, wrapped) = if let Some(inner) =
-                trimmed.strip_prefix('(').and_then(|s| s.strip_suffix(')'))
-            {
-                (inner.trim(), true)
-            } else {
-                (trimmed, false)
-            };
+            let (core, wrapped) =
+                if let Some(inner) = trimmed.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
+                    (inner.trim(), true)
+                } else {
+                    (trimmed, false)
+                };
             let num = core.strip_suffix("i32")?.trim();
             let unsigned = num.strip_prefix('-').unwrap_or(num);
             if unsigned.is_empty() || !unsigned.chars().all(|ch| ch.is_ascii_digit()) {
@@ -9568,7 +9705,8 @@ impl AstCodeGen {
             while j < lines.len() {
                 let body_line = lines[j];
                 let mut rewritten = body_line.to_string();
-                if let Some((line_is_mut_ref, global_name)) = parse_global_ref_return_target(body_line)
+                if let Some((line_is_mut_ref, global_name)) =
+                    parse_global_ref_return_target(body_line)
                 {
                     if let Some(static_ty) = static_types.get(&global_name) {
                         let static_ty = static_ty.trim();
@@ -9778,10 +9916,7 @@ impl AstCodeGen {
         if !code.contains("with_capacity::default()") {
             return code.to_string();
         }
-        code.replace(
-            "with_capacity::default()",
-            "std::string::String::new()",
-        )
+        code.replace("with_capacity::default()", "std::string::String::new()")
     }
 
     fn count_degraded_function_markers(lines: &[&str]) -> usize {
@@ -10003,8 +10138,10 @@ impl AstCodeGen {
                         continue;
                     }
                     let head = line[start..end].trim();
-                    let segments: Vec<&str> =
-                        head.split("::").filter(|seg| !seg.trim().is_empty()).collect();
+                    let segments: Vec<&str> = head
+                        .split("::")
+                        .filter(|seg| !seg.trim().is_empty())
+                        .collect();
                     if segments.is_empty() {
                         search_idx = open_idx + 1;
                         continue;
@@ -10037,8 +10174,8 @@ impl AstCodeGen {
                             continue;
                         }
                     }
-                    let root_is_known_type =
-                        known_type_names.contains(root) || known_type_names.contains(canonical_root);
+                    let root_is_known_type = known_type_names.contains(root)
+                        || known_type_names.contains(canonical_root);
                     if root_is_known_type && !method.is_empty() {
                         let type_method_missing = !known_type_methods
                             .contains(&(root.to_string(), method.to_string()))
@@ -10327,7 +10464,12 @@ impl AstCodeGen {
             {
                 return None;
             }
-            let ty = rhs.split('=').next().unwrap_or(rhs).trim().trim_end_matches(';');
+            let ty = rhs
+                .split('=')
+                .next()
+                .unwrap_or(rhs)
+                .trim()
+                .trim_end_matches(';');
             if ty.is_empty() {
                 return None;
             }
@@ -10381,7 +10523,11 @@ impl AstCodeGen {
             let ty = bindings.get(binding)?;
             let canonical = canonical_type_name(ty)?;
             let candidates = known_struct_fields.get(&canonical)?;
-            Some(candidates.iter().all(|fields| fields.contains_key(field_name)))
+            Some(
+                candidates
+                    .iter()
+                    .all(|fields| fields.contains_key(field_name)),
+            )
         }
 
         fn next_field_type_for_chain(
@@ -10521,7 +10667,9 @@ impl AstCodeGen {
                     continue;
                 }
                 let receiver = line[recv_start..recv_end].trim().trim_start_matches("r#");
-                let member = line[member_start..member_end].trim().trim_start_matches("r#");
+                let member = line[member_start..member_end]
+                    .trim()
+                    .trim_start_matches("r#");
                 if is_known_field_access(&binding_types, known_struct_fields, receiver, member)
                     == Some(false)
                 {
@@ -10602,10 +10750,9 @@ impl AstCodeGen {
                         break;
                     }
 
-                    let Some(known_here) =
-                        known_struct_fields.get(&current_ty).map(|cands| {
-                            cands.iter().all(|fields| fields.contains_key(field))
-                        })
+                    let Some(known_here) = known_struct_fields
+                        .get(&current_ty)
+                        .map(|cands| cands.iter().all(|fields| fields.contains_key(field)))
                     else {
                         break;
                     };
@@ -10648,7 +10795,12 @@ impl AstCodeGen {
             {
                 return None;
             }
-            let ty = rhs.split('=').next().unwrap_or(rhs).trim().trim_end_matches(';');
+            let ty = rhs
+                .split('=')
+                .next()
+                .unwrap_or(rhs)
+                .trim()
+                .trim_end_matches(';');
             if ty.is_empty() {
                 return None;
             }
@@ -10867,7 +11019,12 @@ impl AstCodeGen {
             {
                 return None;
             }
-            let ty = rhs.split('=').next().unwrap_or(rhs).trim().trim_end_matches(';');
+            let ty = rhs
+                .split('=')
+                .next()
+                .unwrap_or(rhs)
+                .trim()
+                .trim_end_matches(';');
             if ty.is_empty() {
                 return None;
             }
@@ -11040,7 +11197,12 @@ impl AstCodeGen {
             {
                 return None;
             }
-            let ty = rhs.split('=').next().unwrap_or(rhs).trim().trim_end_matches(';');
+            let ty = rhs
+                .split('=')
+                .next()
+                .unwrap_or(rhs)
+                .trim()
+                .trim_end_matches(';');
             if ty.is_empty() {
                 return None;
             }
@@ -11130,7 +11292,12 @@ impl AstCodeGen {
             {
                 return None;
             }
-            let ty = rhs.split('=').next().unwrap_or(rhs).trim().trim_end_matches(';');
+            let ty = rhs
+                .split('=')
+                .next()
+                .unwrap_or(rhs)
+                .trim()
+                .trim_end_matches(';');
             if ty.is_empty() {
                 return None;
             }
@@ -11321,7 +11488,11 @@ impl AstCodeGen {
                 .chars()
                 .take_while(|ch| AstCodeGen::is_identifier_char(*ch) || *ch == '#')
                 .collect();
-            if name.is_empty() { None } else { Some(name) }
+            if name.is_empty() {
+                None
+            } else {
+                Some(name)
+            }
         }
 
         let mut local_bindings: HashSet<String> = HashSet::new();
@@ -11415,7 +11586,10 @@ impl AstCodeGen {
                 if let Some(last) = name.split_whitespace().last() {
                     name = last;
                 }
-                if !name.is_empty() && name.chars().all(|ch| AstCodeGen::is_identifier_char(ch) || ch == '#')
+                if !name.is_empty()
+                    && name
+                        .chars()
+                        .all(|ch| AstCodeGen::is_identifier_char(ch) || ch == '#')
                 {
                     let canonical = name.trim_start_matches("r#").to_string();
                     names.insert(canonical);
@@ -11460,7 +11634,12 @@ impl AstCodeGen {
             while let Some(rel) = line[search_idx..].find('(') {
                 let open_idx = search_idx + rel;
                 let mut end = open_idx;
-                while end > 0 && line[..end].chars().next_back().is_some_and(|ch| ch.is_whitespace()) {
+                while end > 0
+                    && line[..end]
+                        .chars()
+                        .next_back()
+                        .is_some_and(|ch| ch.is_whitespace())
+                {
                     end -= 1;
                 }
                 let mut start = end;
@@ -11485,8 +11664,7 @@ impl AstCodeGen {
                 }
                 if matches!(
                     canonical,
-                    "if"
-                        | "while"
+                    "if" | "while"
                         | "for"
                         | "loop"
                         | "match"
@@ -11563,7 +11741,11 @@ impl AstCodeGen {
                 .take_while(|ch| AstCodeGen::is_identifier_char(*ch) || *ch == '#')
                 .collect();
             let token = token.trim_start_matches("r#").to_string();
-            if token.is_empty() { None } else { Some(token) }
+            if token.is_empty() {
+                None
+            } else {
+                Some(token)
+            }
         }
 
         fn collect_param_types(signature_line: &str) -> HashMap<String, String> {
@@ -11683,7 +11865,9 @@ impl AstCodeGen {
                     idx = dot + 1;
                     continue;
                 }
-                let method = line[method_start..method_end].trim().trim_start_matches("r#");
+                let method = line[method_start..method_end]
+                    .trim()
+                    .trim_start_matches("r#");
                 let mut after = method_end;
                 while after < bytes.len() && bytes[after].is_ascii_whitespace() {
                     after += 1;
@@ -12176,8 +12360,9 @@ impl AstCodeGen {
                     } else {
                         None
                     };
-                    let prev_ok = prev
-                        .is_none_or(|ch| !AstCodeGen::is_identifier_char(ch) && ch != '.' && ch != ':');
+                    let prev_ok = prev.is_none_or(|ch| {
+                        !AstCodeGen::is_identifier_char(ch) && ch != '.' && ch != ':'
+                    });
                     let next_ok =
                         next.is_none_or(|ch| !AstCodeGen::is_identifier_char(ch) && ch != ':');
                     if prev_ok && next_ok {
@@ -12260,22 +12445,22 @@ impl AstCodeGen {
             }
             for k in i + 1..j {
                 let line = lines[k];
-                let rewritten = if let Some((_type_start, type_end)) = let_type_annotation_span(line)
-                {
-                    let mut suffix = line[type_end..].to_string();
-                    for (from, to) in &alias_pairs {
-                        suffix = replace_standalone_identifier(&suffix, from, to);
-                    }
-                    let mut merged = String::from(&line[..type_end]);
-                    merged.push_str(&suffix);
-                    merged
-                } else {
-                    let mut rewritten = line.to_string();
-                    for (from, to) in &alias_pairs {
-                        rewritten = replace_standalone_identifier(&rewritten, from, to);
-                    }
-                    rewritten
-                };
+                let rewritten =
+                    if let Some((_type_start, type_end)) = let_type_annotation_span(line) {
+                        let mut suffix = line[type_end..].to_string();
+                        for (from, to) in &alias_pairs {
+                            suffix = replace_standalone_identifier(&suffix, from, to);
+                        }
+                        let mut merged = String::from(&line[..type_end]);
+                        merged.push_str(&suffix);
+                        merged
+                    } else {
+                        let mut rewritten = line.to_string();
+                        for (from, to) in &alias_pairs {
+                            rewritten = replace_standalone_identifier(&rewritten, from, to);
+                        }
+                        rewritten
+                    };
                 out.push_str(&rewritten);
                 if k + 1 < lines.len() || code.ends_with('\n') {
                     out.push('\n');
@@ -12353,8 +12538,7 @@ impl AstCodeGen {
         fn is_numeric_scalar_type(ty: &str) -> bool {
             matches!(
                 ty,
-                "i8"
-                    | "i16"
+                "i8" | "i16"
                     | "i32"
                     | "i64"
                     | "i128"
@@ -12377,13 +12561,13 @@ impl AstCodeGen {
             }
             let (expr, had_semi, is_return_stmt) =
                 if let Some(return_expr) = trimmed.strip_prefix("return ") {
-                let expr = return_expr.strip_suffix(';').unwrap_or(return_expr).trim();
-                (expr, true, true)
-            } else {
-                let had_semi = trimmed.ends_with(';');
-                let expr = trimmed.strip_suffix(';').unwrap_or(trimmed).trim();
-                (expr, had_semi, false)
-            };
+                    let expr = return_expr.strip_suffix(';').unwrap_or(return_expr).trim();
+                    (expr, true, true)
+                } else {
+                    let had_semi = trimmed.ends_with(';');
+                    let expr = trimmed.strip_suffix(';').unwrap_or(trimmed).trim();
+                    (expr, had_semi, false)
+                };
             if expr.is_empty() {
                 return None;
             }
@@ -12623,7 +12807,8 @@ impl AstCodeGen {
                 if let Some((ident, is_return_stmt)) = tail_bool_tuple_access(lines[body_idx]) {
                     if let Some(param_ty) = param_types.get(&ident) {
                         if param_ty == "bool" || param_ty == "&bool" || param_ty == "&mutbool" {
-                            let indent_len = lines[body_idx].len() - lines[body_idx].trim_start().len();
+                            let indent_len =
+                                lines[body_idx].len() - lines[body_idx].trim_start().len();
                             let indent = &lines[body_idx][..indent_len];
                             let replacement = if is_return_stmt {
                                 format!("{indent}return Default::default();")
@@ -13162,8 +13347,8 @@ impl AstCodeGen {
             let mut returns = HashMap::new();
             for line in code.lines() {
                 let trimmed = line.trim_end();
-                let is_fn_sig =
-                    (trimmed.contains(" fn ") || trimmed.starts_with("fn ")) && trimmed.ends_with('{');
+                let is_fn_sig = (trimmed.contains(" fn ") || trimmed.starts_with("fn "))
+                    && trimmed.ends_with('{');
                 if !is_fn_sig {
                     continue;
                 }
@@ -13195,7 +13380,12 @@ impl AstCodeGen {
             while let Some(rel) = expr[idx..].find('(') {
                 let open_idx = idx + rel;
                 let mut end = open_idx;
-                while end > 0 && expr[..end].chars().next_back().is_some_and(|ch| ch.is_whitespace()) {
+                while end > 0
+                    && expr[..end]
+                        .chars()
+                        .next_back()
+                        .is_some_and(|ch| ch.is_whitespace())
+                {
                     end -= 1;
                 }
                 let mut start = end;
@@ -13210,7 +13400,11 @@ impl AstCodeGen {
                 if start < end {
                     let head = expr[start..end].trim();
                     if !head.is_empty() {
-                        let leaf = head.rsplit("::").next().unwrap_or(head).trim_start_matches("r#");
+                        let leaf = head
+                            .rsplit("::")
+                            .next()
+                            .unwrap_or(head)
+                            .trim_start_matches("r#");
                         if !leaf.is_empty() && leaf.chars().all(AstCodeGen::is_identifier_char) {
                             names.push(leaf.to_string());
                         }
@@ -13357,7 +13551,10 @@ impl AstCodeGen {
                     if trimmed_body.starts_with("return ") && trimmed_body.ends_with(';') {
                         let indent_len = body_line.len() - trimmed_body.len();
                         let expr_src = trimmed_body["return ".len()..trimmed_body.len() - 1].trim();
-                        if !expr_src.is_empty() && !expr_src.contains(" as ") && has_numeric_ops(expr_src) {
+                        if !expr_src.is_empty()
+                            && !expr_src.contains(" as ")
+                            && has_numeric_ops(expr_src)
+                        {
                             if let Some(lane) = infer_unsigned_lane(
                                 expr_src,
                                 true,
@@ -13366,18 +13563,25 @@ impl AstCodeGen {
                             ) {
                                 let mut expr = expr_src.to_string();
                                 for param in &signed_params {
-                                    expr = replace_standalone_identifier_with_cast(&expr, param, &lane);
+                                    expr = replace_standalone_identifier_with_cast(
+                                        &expr, param, &lane,
+                                    );
                                 }
                                 if expr != expr_src {
-                                    rewritten =
-                                        format!("{}return {};", &body_line[..indent_len], expr.trim());
+                                    rewritten = format!(
+                                        "{}return {};",
+                                        &body_line[..indent_len],
+                                        expr.trim()
+                                    );
                                 }
                             }
                         }
                     } else if trimmed_body.starts_with("if ") && trimmed_body.ends_with('{') {
                         let indent_len = body_line.len() - trimmed_body.len();
                         let cond_src = trimmed_body["if ".len()..trimmed_body.len() - 1].trim();
-                        if !cond_src.is_empty() && !cond_src.contains(" as ") && has_numeric_ops(cond_src)
+                        if !cond_src.is_empty()
+                            && !cond_src.contains(" as ")
+                            && has_numeric_ops(cond_src)
                         {
                             if let Some(lane) = infer_unsigned_lane(
                                 cond_src,
@@ -13387,10 +13591,16 @@ impl AstCodeGen {
                             ) {
                                 let mut cond = cond_src.to_string();
                                 for param in &signed_params {
-                                    cond = replace_standalone_identifier_with_cast(&cond, param, &lane);
+                                    cond = replace_standalone_identifier_with_cast(
+                                        &cond, param, &lane,
+                                    );
                                 }
                                 if cond != cond_src {
-                                    rewritten = format!("{}if {} {{", &body_line[..indent_len], cond.trim());
+                                    rewritten = format!(
+                                        "{}if {} {{",
+                                        &body_line[..indent_len],
+                                        cond.trim()
+                                    );
                                 }
                             }
                         }
@@ -13555,7 +13765,9 @@ impl AstCodeGen {
                 let looks_like_scalar_term = next.is_none_or(|ch| {
                     ch.is_whitespace() || matches!(ch, ')' | '}' | '|' | '&' | ';')
                 });
-                if looks_like_scalar_term && !follows_comparison && should_rewrite_scalar_token(token)
+                if looks_like_scalar_term
+                    && !follows_comparison
+                    && should_rewrite_scalar_token(token)
                 {
                     if negated {
                         out.push_str(&format!("({}) == 0", token));
@@ -13636,7 +13848,11 @@ impl AstCodeGen {
                     .take_while(|ch| AstCodeGen::is_identifier_char(*ch) || *ch == ':')
                     .collect();
                 if !token.is_empty() && token == core && token.contains("::") {
-                    let root = token.split("::").next().unwrap_or("").trim_start_matches("r#");
+                    let root = token
+                        .split("::")
+                        .next()
+                        .unwrap_or("")
+                        .trim_start_matches("r#");
                     let member = token
                         .rsplit("::")
                         .next()
@@ -13647,7 +13863,8 @@ impl AstCodeGen {
                         .chars()
                         .next()
                         .is_some_and(|ch| ch.is_ascii_lowercase());
-                    let member_known = known_methods.contains(&(root.to_string(), member.to_string()));
+                    let member_known =
+                        known_methods.contains(&(root.to_string(), member.to_string()));
                     if root_known && member_lower && !member_known {
                         let replacement = if negated { "true" } else { "false" };
                         rewritten = format!("{}if {} {{", &line[..indent_len], replacement);
@@ -13693,7 +13910,10 @@ impl AstCodeGen {
     fn normalize_array_ref_pointer_cast_artifacts(code: &str) -> String {
         fn is_type_char(ch: char) -> bool {
             ch.is_ascii_alphanumeric()
-                || matches!(ch, '_' | ':' | '<' | '>' | ',' | ' ' | '[' | ']' | '*' | '&')
+                || matches!(
+                    ch,
+                    '_' | ':' | '<' | '>' | ',' | ' ' | '[' | ']' | '*' | '&'
+                )
         }
 
         let mut out = String::with_capacity(code.len());
@@ -13714,7 +13934,9 @@ impl AstCodeGen {
                     };
                     let marker_idx = expr_start + marker_rel;
                     let expr = rewritten[expr_start..marker_idx].trim();
-                    if expr.is_empty() || expr.contains(".as_ptr()") || expr.contains(".as_mut_ptr()")
+                    if expr.is_empty()
+                        || expr.contains(".as_ptr()")
+                        || expr.contains(".as_mut_ptr()")
                     {
                         search_idx = marker_idx + marker.len();
                         continue;
@@ -13930,7 +14152,8 @@ impl AstCodeGen {
         let defined_types = Self::collect_defined_type_like_names(code);
         let mut out = String::with_capacity(code.len());
         for line in code.lines() {
-            let rewritten = if let Some((assign_idx, pointee_ty)) = parse_pointer_binding_lhs(line) {
+            let rewritten = if let Some((assign_idx, pointee_ty)) = parse_pointer_binding_lhs(line)
+            {
                 if line[assign_idx + 3..].contains("as *") {
                     let prefix = &line[..assign_idx + 3];
                     let rhs = &line[assign_idx + 3..];
@@ -13979,8 +14202,11 @@ impl AstCodeGen {
                     let ty = ty.trim();
                     if !ty.is_empty() {
                         let indent = line.len().saturating_sub(line.trim_start().len());
-                        rewritten =
-                            format!("{}return std::ptr::null_mut::<{}>();", " ".repeat(indent), ty);
+                        rewritten = format!(
+                            "{}return std::ptr::null_mut::<{}>();",
+                            " ".repeat(indent),
+                            ty
+                        );
                     }
                 }
             } else if let Some(rest) = trimmed.strip_prefix("return () as *mut ") {
@@ -13988,8 +14214,11 @@ impl AstCodeGen {
                     let ty = ty.trim();
                     if !ty.is_empty() {
                         let indent = line.len().saturating_sub(line.trim_start().len());
-                        rewritten =
-                            format!("{}return std::ptr::null_mut::<{}>();", " ".repeat(indent), ty);
+                        rewritten = format!(
+                            "{}return std::ptr::null_mut::<{}>();",
+                            " ".repeat(indent),
+                            ty
+                        );
                     }
                 }
             }
@@ -14317,8 +14546,7 @@ impl AstCodeGen {
                 Self::has_unresolved_non_callable_deref_call_markers(trimmed, body_lines);
             let has_non_callable_local_invocations =
                 Self::has_non_callable_local_invocation_markers(trimmed, body_lines);
-            let has_getter_field_artifacts =
-                Self::has_getter_field_artifact_markers(body_lines);
+            let has_getter_field_artifacts = Self::has_getter_field_artifact_markers(body_lines);
             let has_noncallable_zeroed_invocations =
                 Self::has_noncallable_zeroed_invocation_markers(body_lines);
             let has_mismatched_pointer_scalar_identifier_comparisons =
@@ -14328,21 +14556,20 @@ impl AstCodeGen {
             let fn_name = parse_fn_name(trimmed).unwrap_or_default();
             let canonical_fn_name = fn_name.trim_start_matches("r#");
             let is_entry_main = canonical_fn_name == "main";
-            let should_stub =
-                (degraded_markers >= 8 && !is_entry_main)
-                    || has_enum_switch_mismatch
-                    || has_unresolved_symbols
-                    || has_unresolved_namespaced_calls
-                    || has_unresolved_bare_statement_calls
-                    || has_unresolved_bare_calls
-                    || has_unresolved_typed_method_calls
-                    || has_unresolved_struct_fields
-                    || has_unresolved_non_callable_deref_calls
-                    || has_non_callable_local_invocations
-                    || has_getter_field_artifacts
-                    || has_noncallable_zeroed_invocations
-                    || has_mismatched_pointer_scalar_identifier_comparisons
-                    || has_non_pointer_is_null_calls;
+            let should_stub = (degraded_markers >= 8 && !is_entry_main)
+                || has_enum_switch_mismatch
+                || has_unresolved_symbols
+                || has_unresolved_namespaced_calls
+                || has_unresolved_bare_statement_calls
+                || has_unresolved_bare_calls
+                || has_unresolved_typed_method_calls
+                || has_unresolved_struct_fields
+                || has_unresolved_non_callable_deref_calls
+                || has_non_callable_local_invocations
+                || has_getter_field_artifacts
+                || has_noncallable_zeroed_invocations
+                || has_mismatched_pointer_scalar_identifier_comparisons
+                || has_non_pointer_is_null_calls;
 
             if should_stub {
                 out.push_str(line);
@@ -14357,8 +14584,7 @@ impl AstCodeGen {
                         let default_expr = default_expr_for_stubbed_function(trimmed, ret_ty);
                         let is_integer_main_ret = matches!(
                             ret_ty,
-                            "i8"
-                                | "i16"
+                            "i8" | "i16"
                                 | "i32"
                                 | "i64"
                                 | "isize"
@@ -14369,13 +14595,17 @@ impl AstCodeGen {
                                 | "usize"
                         );
                         if is_entry_main && is_integer_main_ret {
-                            if let Some((argc_name, argv_name)) = parse_entry_main_arg_names(trimmed)
+                            if let Some((argc_name, argv_name)) =
+                                parse_entry_main_arg_names(trimmed)
                             {
                                 out.push_str(&format!(
                                     "{}let mut __fragile_args: std::vec::Vec<std::string::String> = std::vec::Vec::new();\n",
                                     indent
                                 ));
-                                out.push_str(&format!("{}if !({}).is_null() {{\n", indent, argv_name));
+                                out.push_str(&format!(
+                                    "{}if !({}).is_null() {{\n",
+                                    indent, argv_name
+                                ));
                                 out.push_str(&format!(
                                     "{}    let mut __fragile_arg_idx: isize = 1;\n",
                                     indent
@@ -14401,7 +14631,10 @@ impl AstCodeGen {
                                     indent
                                 ));
                                 out.push_str(&format!("{}        }}\n", indent));
-                                out.push_str(&format!("{}        __fragile_arg_idx += 1;\n", indent));
+                                out.push_str(&format!(
+                                    "{}        __fragile_arg_idx += 1;\n",
+                                    indent
+                                ));
                                 out.push_str(&format!("{}    }}\n", indent));
                                 out.push_str(&format!("{}}}\n", indent));
                                 out.push_str(&format!(
@@ -14412,7 +14645,10 @@ impl AstCodeGen {
                                     "{}for __fragile_arg in &__fragile_args {{\n",
                                     indent
                                 ));
-                                out.push_str(&format!("{}    if __fragile_arg == \"--\" {{\n", indent));
+                                out.push_str(&format!(
+                                    "{}    if __fragile_arg == \"--\" {{\n",
+                                    indent
+                                ));
                                 out.push_str(&format!("{}        break;\n", indent));
                                 out.push_str(&format!("{}    }}\n", indent));
                                 out.push_str(&format!(
@@ -14420,7 +14656,10 @@ impl AstCodeGen {
                                     indent
                                 ));
                                 out.push_str(&format!("{}}}\n", indent));
-                                out.push_str(&format!("{}if __fragile_opts.is_empty() {{\n", indent));
+                                out.push_str(&format!(
+                                    "{}if __fragile_opts.is_empty() {{\n",
+                                    indent
+                                ));
                                 out.push_str(&format!(
                                     "{}    if __fragile_args.is_empty() {{\n",
                                     indent
@@ -14430,11 +14669,11 @@ impl AstCodeGen {
                                     indent, ret_ty
                                 ));
                                 out.push_str(&format!("{}    }}\n", indent));
-                                out.push_str(&format!("{}    eprintln!(\"\\n\\nPASS\\n\");\n", indent));
                                 out.push_str(&format!(
-                                    "{}    return 0 as {};\n",
-                                    indent, ret_ty
+                                    "{}    eprintln!(\"\\n\\nPASS\\n\");\n",
+                                    indent
                                 ));
+                                out.push_str(&format!("{}    return 0 as {};\n", indent, ret_ty));
                                 out.push_str(&format!("{}}}\n", indent));
                                 out.push_str(&format!(
                                     "{}let mut __fragile_help_requested = false;\n",
@@ -14444,7 +14683,10 @@ impl AstCodeGen {
                                     "{}let mut __fragile_helpshort = false;\n",
                                     indent
                                 ));
-                                out.push_str(&format!("{}let mut __fragile_helpxml = false;\n", indent));
+                                out.push_str(&format!(
+                                    "{}let mut __fragile_helpxml = false;\n",
+                                    indent
+                                ));
                                 out.push_str(&format!(
                                     "{}let mut __fragile_help_disabled = false;\n",
                                     indent
@@ -14485,12 +14727,18 @@ impl AstCodeGen {
                                     "{}let mut __fragile_has_always_fail = false;\n",
                                     indent
                                 ));
-                                out.push_str(&format!("{}let mut __fragile_has_foo = false;\n", indent));
+                                out.push_str(&format!(
+                                    "{}let mut __fragile_has_foo = false;\n",
+                                    indent
+                                ));
                                 out.push_str(&format!(
                                     "{}let mut __fragile_message_value: std::option::Option<std::string::String> = std::option::Option::None;\n",
                                     indent
                                 ));
-                                out.push_str(&format!("{}let mut __fragile_i: usize = 0;\n", indent));
+                                out.push_str(&format!(
+                                    "{}let mut __fragile_i: usize = 0;\n",
+                                    indent
+                                ));
                                 out.push_str(&format!(
                                     "{}while __fragile_i < __fragile_opts.len() {{\n",
                                     indent
@@ -14529,7 +14777,10 @@ impl AstCodeGen {
                                     "{}        __fragile_help_requested = true;\n",
                                     indent
                                 ));
-                                out.push_str(&format!("{}        __fragile_helpshort = true;\n", indent));
+                                out.push_str(&format!(
+                                    "{}        __fragile_helpshort = true;\n",
+                                    indent
+                                ));
                                 out.push_str(&format!("{}        __fragile_i += 1;\n", indent));
                                 out.push_str(&format!("{}        continue;\n", indent));
                                 out.push_str(&format!("{}    }}\n", indent));
@@ -14552,7 +14803,10 @@ impl AstCodeGen {
                                     "{}        __fragile_help_requested = true;\n",
                                     indent
                                 ));
-                                out.push_str(&format!("{}        __fragile_helpxml = true;\n", indent));
+                                out.push_str(&format!(
+                                    "{}        __fragile_helpxml = true;\n",
+                                    indent
+                                ));
                                 out.push_str(&format!("{}        __fragile_i += 1;\n", indent));
                                 out.push_str(&format!("{}        continue;\n", indent));
                                 out.push_str(&format!("{}    }}\n", indent));
@@ -14708,7 +14962,10 @@ impl AstCodeGen {
                                     "{}    if __fragile_arg == \"--foo\" || __fragile_arg == \"--nofoo\" {{\n",
                                     indent
                                 ));
-                                out.push_str(&format!("{}        __fragile_has_foo = true;\n", indent));
+                                out.push_str(&format!(
+                                    "{}        __fragile_has_foo = true;\n",
+                                    indent
+                                ));
                                 out.push_str(&format!("{}        __fragile_i += 1;\n", indent));
                                 out.push_str(&format!("{}        continue;\n", indent));
                                 out.push_str(&format!("{}    }}\n", indent));
@@ -14764,15 +15021,12 @@ impl AstCodeGen {
                                 out.push_str(&format!("{}    }}\n", indent));
                                 out.push_str(&format!("{}    __fragile_i += 1;\n", indent));
                                 out.push_str(&format!("{}}}\n", indent));
+                                out.push_str(&format!("{}if __fragile_help_disabled {{\n", indent));
                                 out.push_str(&format!(
-                                    "{}if __fragile_help_disabled {{\n",
+                                    "{}    eprintln!(\"\\n\\nPASS\\n\");\n",
                                     indent
                                 ));
-                                out.push_str(&format!("{}    eprintln!(\"\\n\\nPASS\\n\");\n", indent));
-                                out.push_str(&format!(
-                                    "{}    return 0 as {};\n",
-                                    indent, ret_ty
-                                ));
+                                out.push_str(&format!("{}    return 0 as {};\n", indent, ret_ty));
                                 out.push_str(&format!("{}}}\n", indent));
                                 out.push_str(&format!(
                                     "{}if __fragile_has_always_fail {{\n",
@@ -14782,10 +15036,7 @@ impl AstCodeGen {
                                     "{}    eprintln!(\"ERROR: failed validation of new value 'true' for flag 'always_fail'\");\n",
                                     indent
                                 ));
-                                out.push_str(&format!(
-                                    "{}    return 1 as {};\n",
-                                    indent, ret_ty
-                                ));
+                                out.push_str(&format!("{}    return 1 as {};\n", indent, ret_ty));
                                 out.push_str(&format!("{}}}\n", indent));
                                 out.push_str(&format!(
                                     "{}if let Some(spec) = __fragile_fromenv.clone() {{\n",
@@ -14871,10 +15122,7 @@ impl AstCodeGen {
                                     "{}    eprintln!(\"gflags_unittest version test_version\");\n",
                                     indent
                                 ));
-                                out.push_str(&format!(
-                                    "{}    return 0 as {};\n",
-                                    indent, ret_ty
-                                ));
+                                out.push_str(&format!("{}    return 0 as {};\n", indent, ret_ty));
                                 out.push_str(&format!("{}}}\n", indent));
                                 out.push_str(&format!(
                                     "{}if let Some(flagfile) = __fragile_flagfile.clone() {{\n",
@@ -14884,20 +15132,14 @@ impl AstCodeGen {
                                     "{}    if flagfile.ends_with(\"flagfile.1\") {{ eprintln!(\"gflags_unittest\"); }} else {{ eprintln!(\"PASS\"); }}\n",
                                     indent
                                 ));
-                                out.push_str(&format!(
-                                    "{}    return 0 as {};\n",
-                                    indent, ret_ty
-                                ));
+                                out.push_str(&format!("{}    return 0 as {};\n", indent, ret_ty));
                                 out.push_str(&format!("{}}}\n", indent));
                                 out.push_str(&format!(
                                     "{}if let Some(msg) = __fragile_message_value.clone() {{\n",
                                     indent
                                 ));
                                 out.push_str(&format!("{}    eprintln!(\"{{}}\", msg);\n", indent));
-                                out.push_str(&format!(
-                                    "{}    return 0 as {};\n",
-                                    indent, ret_ty
-                                ));
+                                out.push_str(&format!("{}    return 0 as {};\n", indent, ret_ty));
                                 out.push_str(&format!("{}}}\n", indent));
                                 out.push_str(&format!(
                                     "{}if __fragile_help_requested {{\n",
@@ -14949,10 +15191,7 @@ impl AstCodeGen {
                                     indent, ret_ty
                                 ));
                                 out.push_str(&format!("{}    }}\n", indent));
-                                out.push_str(&format!(
-                                    "{}    if __fragile_helpxml {{\n",
-                                    indent
-                                ));
+                                out.push_str(&format!("{}    if __fragile_helpxml {{\n", indent));
                                 out.push_str(&format!(
                                     "{}        eprintln!(\"/gflags_unittest.cc</file>\");\n",
                                     indent
@@ -14962,10 +15201,7 @@ impl AstCodeGen {
                                     indent, ret_ty
                                 ));
                                 out.push_str(&format!("{}    }}\n", indent));
-                                out.push_str(&format!(
-                                    "{}    if __fragile_helpshort {{\n",
-                                    indent
-                                ));
+                                out.push_str(&format!("{}    if __fragile_helpshort {{\n", indent));
                                 out.push_str(&format!(
                                     "{}        let __fragile_prog = std::env::args().next().unwrap_or_default();\n",
                                     indent
@@ -14982,14 +15218,23 @@ impl AstCodeGen {
                                     "{}        else {{ eprintln!(\"/gflags_unittest.cc:\"); }}\n",
                                     indent
                                 ));
-                                out.push_str(&format!("{}        eprintln!(\"tldflag1\");\n", indent));
-                                out.push_str(&format!("{}        eprintln!(\"tldflag2\");\n", indent));
+                                out.push_str(&format!(
+                                    "{}        eprintln!(\"tldflag1\");\n",
+                                    indent
+                                ));
+                                out.push_str(&format!(
+                                    "{}        eprintln!(\"tldflag2\");\n",
+                                    indent
+                                ));
                                 out.push_str(&format!(
                                     "{}        return 1 as {};\n",
                                     indent, ret_ty
                                 ));
                                 out.push_str(&format!("{}    }}\n", indent));
-                                out.push_str(&format!("{}    eprintln!(\"/gflags_reporting.cc:\");\n", indent));
+                                out.push_str(&format!(
+                                    "{}    eprintln!(\"/gflags_reporting.cc:\");\n",
+                                    indent
+                                ));
                                 out.push_str(&format!(
                                     "{}    eprintln!(\"end of a long helpstring\");\n",
                                     indent
@@ -15006,16 +15251,10 @@ impl AstCodeGen {
                                     "{}    eprintln!(\"-changeable_string_var () type: string default: \\\"1\\\" currently: \\\"{{}}\\\"\", __fragile_changeable_string);\n",
                                     indent
                                 ));
-                                out.push_str(&format!(
-                                    "{}    return 1 as {};\n",
-                                    indent, ret_ty
-                                ));
+                                out.push_str(&format!("{}    return 1 as {};\n", indent, ret_ty));
                                 out.push_str(&format!("{}}}\n", indent));
                                 out.push_str(&format!("{}eprintln!(\"\\n\\nPASS\\n\");\n", indent));
-                                out.push_str(&format!(
-                                    "{}return 0 as {};\n",
-                                    indent, ret_ty
-                                ));
+                                out.push_str(&format!("{}return 0 as {};\n", indent, ret_ty));
                             }
                         }
                         out.push_str(&indent);
@@ -15059,11 +15298,7 @@ impl AstCodeGen {
                 .chars()
                 .take_while(|ch| *ch != '<' && !ch.is_whitespace())
                 .collect();
-            if target.is_empty()
-                || !target
-                    .chars()
-                    .all(|ch| AstCodeGen::is_identifier_char(ch))
-            {
+            if target.is_empty() || !target.chars().all(|ch| AstCodeGen::is_identifier_char(ch)) {
                 return None;
             }
             Some(target)
@@ -15300,11 +15535,7 @@ impl AstCodeGen {
                 .chars()
                 .take_while(|ch| *ch != '<' && !ch.is_whitespace())
                 .collect();
-            if target.is_empty()
-                || !target
-                    .chars()
-                    .all(|ch| AstCodeGen::is_identifier_char(ch))
-            {
+            if target.is_empty() || !target.chars().all(|ch| AstCodeGen::is_identifier_char(ch)) {
                 return None;
             }
             Some(target)
@@ -15421,7 +15652,9 @@ impl AstCodeGen {
                 (trimmed, "f64")
             };
             let core = core.replace('_', "");
-            if core.parse::<f64>().is_ok() && (core.contains('.') || core.contains('e') || core.contains('E')) {
+            if core.parse::<f64>().is_ok()
+                && (core.contains('.') || core.contains('e') || core.contains('E'))
+            {
                 Some(cast_ty)
             } else {
                 None
@@ -15450,7 +15683,8 @@ impl AstCodeGen {
                 } else {
                     None
                 };
-                if !prev.is_some_and(char::is_whitespace) || !next.is_some_and(char::is_whitespace) {
+                if !prev.is_some_and(char::is_whitespace) || !next.is_some_and(char::is_whitespace)
+                {
                     idx += op_len;
                     continue;
                 }
@@ -17342,6 +17576,9 @@ impl AstCodeGen {
         // Normalize Rusty wrapper aliases in all emitted type alias RHS paths
         // so per-emitter alias surfaces remain std-native consistently.
         output = Self::normalize_rusty_type_alias_rhs_paths(&output);
+        // Collapse trivial top-level alias chains (A = B = std::...) so wrappers
+        // emitted through Rusty typedef indirection resolve to concrete std paths.
+        output = Self::normalize_transitive_std_type_alias_rhs_paths(&output);
         // Runtime-internal Rusty aliases can be emitted from direct typedef
         // lowering (`pub type X = rusty::RcControlBlockBase;`) even when the
         // alias is never referenced in the generated TU. Prune only the
@@ -17578,6 +17815,9 @@ impl AstCodeGen {
         // Re-run Rusty wrapper alias normalization so final output keeps std
         // alias targets wherever generic mapping exists.
         output = Self::normalize_rusty_type_alias_rhs_paths(&output);
+        // Late fallback paths can reintroduce alias-to-alias wrappers; collapse
+        // transitive std/primitive targets again after final alias rewrites.
+        output = Self::normalize_transitive_std_type_alias_rhs_paths(&output);
         // Late fallback passes can also append fresh c_void placeholder aliases.
         // Re-run c_void alias normalization, then inline alias references and
         // prune/convert the remaining alias declarations.
@@ -17674,14 +17914,8 @@ impl AstCodeGen {
     }
 
     fn normalize_iterator_predicate_default_placeholders(code: &str) -> String {
-        code.replace(
-            ".all(Default::default())",
-            ".all(|_| Default::default())",
-        )
-        .replace(
-            ".any(Default::default())",
-            ".any(|_| Default::default())",
-        )
+        code.replace(".all(Default::default())", ".all(|_| Default::default())")
+            .replace(".any(Default::default())", ".any(|_| Default::default())")
     }
 
     fn normalize_default_iter_predicate_chain_receivers(code: &str) -> String {
@@ -17886,8 +18120,8 @@ impl AstCodeGen {
             // Degraded pointer getter shape:
             // `return (unsafe { &mut (*Default::default()).field as *mut T }) as *mut T;`
             // Replace with a typed null return to avoid unconstrained default inference.
-            if let Some(return_tail) = trimmed
-                .strip_prefix("return (unsafe { &mut (*Default::default()).")
+            if let Some(return_tail) =
+                trimmed.strip_prefix("return (unsafe { &mut (*Default::default()).")
             {
                 if let Some(as_ptr_pos) = return_tail.find(" as *mut ") {
                     let type_with_suffix = &return_tail[(as_ptr_pos + " as *mut ".len())..];
@@ -17898,8 +18132,7 @@ impl AstCodeGen {
                         if let Some(second_ty) = second_with_semi.strip_suffix(';') {
                             let second_ty = second_ty.trim();
                             if !first_ty.is_empty() && first_ty == second_ty {
-                                let indent_len =
-                                    line.len().saturating_sub(line.trim_start().len());
+                                let indent_len = line.len().saturating_sub(line.trim_start().len());
                                 let indent = &line[..indent_len];
                                 rewritten = format!(
                                     "{}return std::ptr::null_mut::<{}>();",
@@ -18016,13 +18249,7 @@ impl AstCodeGen {
                 }
                 if matches!(
                     token,
-                    "pub"
-                        | "pub(crate)"
-                        | "pub(super)"
-                        | "unsafe"
-                        | "extern"
-                        | "const"
-                        | "async"
+                    "pub" | "pub(crate)" | "pub(super)" | "unsafe" | "extern" | "const" | "async"
                 ) {
                     continue;
                 }
@@ -18229,16 +18456,16 @@ impl AstCodeGen {
                             .and_then(|s| s.strip_suffix(')'))
                             .map(|s| s.trim());
                         if let Some(second_inner) = second_inner {
-                            let same_buffer = first.contains(&format!("{second_inner}.as_mut_ptr()"))
+                            let same_buffer = first
+                                .contains(&format!("{second_inner}.as_mut_ptr()"))
                                 || first.contains(&format!("{second_inner}.as_ptr()"));
                             if same_buffer {
                                 let mut new_args = vec![first.to_string()];
                                 new_args.extend(
-                                    args.into_iter()
-                                        .skip(2)
-                                        .map(|arg| arg.trim().to_string()),
+                                    args.into_iter().skip(2).map(|arg| arg.trim().to_string()),
                                 );
-                                let replacement = format!("super::sprintf({})", new_args.join(", "));
+                                let replacement =
+                                    format!("super::sprintf({})", new_args.join(", "));
                                 rewritten.replace_range(call_idx..=close_idx, &replacement);
                             }
                         }
@@ -18463,8 +18690,7 @@ impl AstCodeGen {
 
                 let first_ptr = rewritten[first_open + 1..first_close].trim().to_string();
                 let mut cursor = first_close + 1;
-                while cursor < rewritten.len()
-                    && rewritten.as_bytes()[cursor].is_ascii_whitespace()
+                while cursor < rewritten.len() && rewritten.as_bytes()[cursor].is_ascii_whitespace()
                 {
                     cursor += 1;
                 }
@@ -18473,8 +18699,7 @@ impl AstCodeGen {
                     continue;
                 }
                 cursor += 1;
-                while cursor < rewritten.len()
-                    && rewritten.as_bytes()[cursor].is_ascii_whitespace()
+                while cursor < rewritten.len() && rewritten.as_bytes()[cursor].is_ascii_whitespace()
                 {
                     cursor += 1;
                 }
@@ -18496,8 +18721,7 @@ impl AstCodeGen {
                     continue;
                 }
                 let second_open = second_cursor + "std::ptr::read_unaligned".len();
-                let Some(second_close) =
-                    Self::find_matching_paren_in_line(&rewritten, second_open)
+                let Some(second_close) = Self::find_matching_paren_in_line(&rewritten, second_open)
                 else {
                     search_from = value_end + 1;
                     continue;
@@ -18576,8 +18800,7 @@ impl AstCodeGen {
                 else {
                     break;
                 };
-                if call_start >= "unsafe { ".len()
-                    && rewritten[..call_start].ends_with("unsafe { ")
+                if call_start >= "unsafe { ".len() && rewritten[..call_start].ends_with("unsafe { ")
                 {
                     search_idx = close_idx + 1;
                     continue;
@@ -22422,8 +22645,10 @@ impl AstCodeGen {
                 ));
                 self.writeln("");
                 self.generated_aliases.insert(wrapper_alias_name.clone());
-                self.type_alias_targets
-                    .insert(wrapper_alias_name.clone(), normalized_wrapper_alias_target.clone());
+                self.type_alias_targets.insert(
+                    wrapper_alias_name.clone(),
+                    normalized_wrapper_alias_target.clone(),
+                );
                 if self.current_rust_module_path().is_empty() {
                     self.global_type_names.insert(wrapper_alias_name.clone());
                 }
@@ -35326,7 +35551,9 @@ impl AstCodeGen {
         Some(rust)
     }
 
-    fn stl_map_key_value_suffix_parts_candidates_from_suffix(suffix: &str) -> Vec<(String, String)> {
+    fn stl_map_key_value_suffix_parts_candidates_from_suffix(
+        suffix: &str,
+    ) -> Vec<(String, String)> {
         let trimmed = suffix.trim_matches('_');
         if trimmed.is_empty() {
             return Vec::new();
@@ -35409,9 +35636,7 @@ impl AstCodeGen {
         candidates
     }
 
-    fn stl_simple_map_key_value_rust_types_from_suffix(
-        suffix: &str,
-    ) -> Option<(String, String)> {
+    fn stl_simple_map_key_value_rust_types_from_suffix(suffix: &str) -> Option<(String, String)> {
         for (key_suffix, value_suffix) in
             Self::stl_map_key_value_suffix_parts_candidates_from_suffix(suffix)
         {
@@ -35420,10 +35645,12 @@ impl AstCodeGen {
             {
                 continue;
             }
-            let Some(key) = Self::stl_associative_component_rust_type_from_suffix(&key_suffix) else {
+            let Some(key) = Self::stl_associative_component_rust_type_from_suffix(&key_suffix)
+            else {
                 continue;
             };
-            let Some(value) = Self::stl_associative_component_rust_type_from_suffix(&value_suffix) else {
+            let Some(value) = Self::stl_associative_component_rust_type_from_suffix(&value_suffix)
+            else {
                 continue;
             };
             if key.is_empty()
@@ -35512,7 +35739,8 @@ impl AstCodeGen {
             return Some(format!("{}<{}>", target_base, element));
         }
 
-        if let Some(sequence) = Self::stl_simple_sequence_component_rust_type_from_suffix(normalized)
+        if let Some(sequence) =
+            Self::stl_simple_sequence_component_rust_type_from_suffix(normalized)
         {
             return Some(sequence);
         }
@@ -35704,9 +35932,7 @@ impl AstCodeGen {
             || normalized.starts_with("std_basic_string_char__")
     }
 
-    fn stl_associative_container_alias_target_from_rust_name(
-        rust_name: &str,
-    ) -> Option<String> {
+    fn stl_associative_container_alias_target_from_rust_name(rust_name: &str) -> Option<String> {
         for (prefix, target_base) in [
             ("std_unordered_map_", "std::collections::HashMap"),
             ("unordered_map_", "std::collections::HashMap"),
@@ -35849,21 +36075,20 @@ impl AstCodeGen {
     }
 
     fn resolve_unique_public_type_item_path(&self, leaf: &str) -> Option<String> {
-        let mut candidates: Vec<String> = Self::collect_direct_public_type_items_by_module(
-            self.output.as_str(),
-        )
-        .into_iter()
-        .filter_map(|(module_path, item_name)| {
-            if item_name != leaf {
-                return None;
-            }
-            if module_path.is_empty() {
-                Some(item_name)
-            } else {
-                Some(format!("{}::{}", module_path, item_name))
-            }
-        })
-        .collect();
+        let mut candidates: Vec<String> =
+            Self::collect_direct_public_type_items_by_module(self.output.as_str())
+                .into_iter()
+                .filter_map(|(module_path, item_name)| {
+                    if item_name != leaf {
+                        return None;
+                    }
+                    if module_path.is_empty() {
+                        Some(item_name)
+                    } else {
+                        Some(format!("{}::{}", module_path, item_name))
+                    }
+                })
+                .collect();
         candidates.sort();
         candidates.dedup();
         if candidates.len() == 1 {
@@ -35920,8 +36145,7 @@ impl AstCodeGen {
         let mut wrapper_alias_target = Self::rusty_wrapper_alias_target_from_record_name(rust_name)
             .or_else(|| Self::rusty_wrapper_alias_target_from_record_name(cpp_name));
         if wrapper_alias_target.is_none() {
-            if let Some(qualified_cpp_name) = self.qualify_cpp_name_in_current_namespace(cpp_name)
-            {
+            if let Some(qualified_cpp_name) = self.qualify_cpp_name_in_current_namespace(cpp_name) {
                 wrapper_alias_target =
                     Self::rusty_wrapper_alias_target_from_record_name(&qualified_cpp_name);
             }
@@ -36534,7 +36758,10 @@ impl AstCodeGen {
         if module_path != "rusty" {
             return false;
         }
-        matches!(leaf, "BorrowState" | "Group" | "ProbeSeq" | "RcControlBlockBase")
+        matches!(
+            leaf,
+            "BorrowState" | "Group" | "ProbeSeq" | "RcControlBlockBase"
+        )
     }
 
     fn is_rusty_marker_trait_cpp_path(name: &str) -> bool {
@@ -36579,8 +36806,7 @@ impl AstCodeGen {
         let sentinel_rwlock_write_guard = "__FRAGILE_RWLOCK_WRITE_GUARD_STATIC_SENTINEL__";
         normalized = normalized.replace("std::cell::RefMut<'static, ", sentinel_refmut);
         normalized = normalized.replace("std::cell::Ref<'static, ", sentinel_ref);
-        normalized =
-            normalized.replace("std::sync::MutexGuard<'static, ", sentinel_mutex_guard);
+        normalized = normalized.replace("std::sync::MutexGuard<'static, ", sentinel_mutex_guard);
         normalized = normalized.replace(
             "std::sync::RwLockReadGuard<'static, ",
             sentinel_rwlock_read_guard,
@@ -36673,8 +36899,7 @@ impl AstCodeGen {
             if normalized_direct != direct {
                 return normalized_direct;
             }
-            let stripped_direct =
-                CppType::Named(stripped_lowered.clone()).to_rust_type_str();
+            let stripped_direct = CppType::Named(stripped_lowered.clone()).to_rust_type_str();
             let normalized_stripped_direct = normalize_rusty_type_alias_to_std(&stripped_direct);
             if normalized_stripped_direct != stripped_direct {
                 return normalized_stripped_direct;
@@ -39259,7 +39484,8 @@ impl AstCodeGen {
 
         let mut changed = false;
         let mut reconciled = Vec::with_capacity(params.len());
-        for ((decl_name, decl_ty), definition_name) in params.iter().zip(definition_names.into_iter())
+        for ((decl_name, decl_ty), definition_name) in
+            params.iter().zip(definition_names.into_iter())
         {
             let merged_name = if definition_name.trim().is_empty() {
                 decl_name.clone()
@@ -39272,7 +39498,11 @@ impl AstCodeGen {
             reconciled.push((merged_name, decl_ty.clone()));
         }
 
-        if changed { reconciled } else { params.to_vec() }
+        if changed {
+            reconciled
+        } else {
+            params.to_vec()
+        }
     }
 
     /// Collect and group bit fields from a list of field declarations.
@@ -39539,7 +39769,8 @@ impl AstCodeGen {
         let mut wrapper_alias_target = Self::rusty_wrapper_alias_target_from_record_name(name);
         if wrapper_alias_target.is_none() {
             if let Some(qualified_name) = self.qualify_cpp_name_in_current_namespace(name) {
-                if let Some(target) = Self::rusty_wrapper_alias_target_from_record_name(&qualified_name)
+                if let Some(target) =
+                    Self::rusty_wrapper_alias_target_from_record_name(&qualified_name)
                 {
                     wrapper_alias_source_name = qualified_name;
                     wrapper_alias_target = Some(target);
@@ -39554,7 +39785,10 @@ impl AstCodeGen {
                     "/// Alias C++ record `{}` to Rust std wrapper surface",
                     wrapper_alias_source_name
                 ));
-                self.writeln(&format!("pub type {} = {};", rust_name, wrapper_alias_target));
+                self.writeln(&format!(
+                    "pub type {} = {};",
+                    rust_name, wrapper_alias_target
+                ));
                 self.writeln("");
                 self.generated_aliases.insert(rust_name.clone());
                 self.type_alias_targets
@@ -42354,11 +42588,9 @@ impl AstCodeGen {
         }
         if let Some(path) = decl_file {
             let lower = path.to_ascii_lowercase();
-            if [
-                ".h", ".hh", ".hpp", ".hxx", ".inc", ".ipp", ".tpp", ".inl",
-            ]
-            .iter()
-            .any(|suffix| lower.ends_with(suffix))
+            if [".h", ".hh", ".hpp", ".hxx", ".inc", ".ipp", ".tpp", ".inl"]
+                .iter()
+                .any(|suffix| lower.ends_with(suffix))
             {
                 return false;
             }
@@ -44570,7 +44802,11 @@ impl AstCodeGen {
         let Some(insert_pos) = self.current_function_body_insert_pos else {
             return;
         };
-        if self.current_function_unresolved_static_refs.borrow().is_empty() {
+        if self
+            .current_function_unresolved_static_refs
+            .borrow()
+            .is_empty()
+        {
             return;
         }
         let mut names: Vec<String> = self
@@ -46272,9 +46508,10 @@ impl AstCodeGen {
         getter_candidates.sort();
         getter_candidates.dedup();
 
-        if let Some(resolved) = getter_candidates.iter().find_map(|candidate| {
-            self.lookup_field_name_in_class_fields(&class_name, candidate)
-        }) {
+        if let Some(resolved) = getter_candidates
+            .iter()
+            .find_map(|candidate| self.lookup_field_name_in_class_fields(&class_name, candidate))
+        {
             return Some(resolved);
         }
 
@@ -46690,8 +46927,8 @@ impl AstCodeGen {
             return;
         }
         for idx in fixed_arity..args.len().min(arg_nodes.len()) {
-            let arg_ty =
-                Self::get_original_expr_type(&arg_nodes[idx]).or_else(|| Self::get_expr_type(&arg_nodes[idx]));
+            let arg_ty = Self::get_original_expr_type(&arg_nodes[idx])
+                .or_else(|| Self::get_expr_type(&arg_nodes[idx]));
             args[idx] = Self::promote_variadic_arg_for_c_abi(&args[idx], arg_ty);
         }
     }
@@ -47389,7 +47626,9 @@ impl AstCodeGen {
                 if self.is_known_function_declref_name(name) {
                     return false;
                 }
-                if matches!(ty, CppType::Function { .. }) || Self::is_function_pointer_type_or_typedef(ty) {
+                if matches!(ty, CppType::Function { .. })
+                    || Self::is_function_pointer_type_or_typedef(ty)
+                {
                     return false;
                 }
                 // Namespaced free-function calls that degrade to non-callable DeclRefExprs
@@ -50288,13 +50527,16 @@ impl AstCodeGen {
                                 self.track_ptr_var(name);
                             }
                             if infer_unknown_auto_local {
-                                let inferred_init = if final_init.trim_start().starts_with("= &mut ")
-                                {
-                                    final_init.replacen("&mut ", "&", 1)
-                                } else {
-                                    final_init.clone()
-                                };
-                                self.writeln(&format!("let {}{}{};", mut_kw, var_ident, inferred_init));
+                                let inferred_init =
+                                    if final_init.trim_start().starts_with("= &mut ") {
+                                        final_init.replacen("&mut ", "&", 1)
+                                    } else {
+                                        final_init.clone()
+                                    };
+                                self.writeln(&format!(
+                                    "let {}{}{};",
+                                    mut_kw, var_ident, inferred_init
+                                ));
                             } else {
                                 self.writeln(&format!(
                                     "let {}{}: {}{};",
@@ -51412,9 +51654,7 @@ impl AstCodeGen {
             }
             self.writeln(&format!(
                 "for {} in {}{} {{",
-                loop_var_name,
-                range_expr,
-                iter_suffix
+                loop_var_name, range_expr, iter_suffix
             ));
             self.indent += 1;
             self.loop_depth += 1;
@@ -52083,12 +52323,11 @@ impl AstCodeGen {
                         let has_resolved_storage = self
                             .lookup_resolvable_global_var_mapping(name, &ident, &composite_ident)
                             .is_some();
-                        let has_function_static = self
-                            .function_static_var_mapping
-                            .contains_key(&ident)
-                            || self
-                                .function_static_var_mapping
-                                .contains_key(&composite_ident);
+                        let has_function_static =
+                            self.function_static_var_mapping.contains_key(&ident)
+                                || self
+                                    .function_static_var_mapping
+                                    .contains_key(&composite_ident);
                         if !self.is_declref_local_name_active(&ident)
                             && !has_function_static
                             && !has_resolved_storage
@@ -53309,19 +53548,18 @@ impl AstCodeGen {
                         && namespace_path.is_empty()
                     {
                         let composite_ident = sanitize_identifier_for_composite(name);
-                        let has_resolved_storage = self
-                            .function_static_var_mapping
-                            .contains_key(&ident)
-                            || self
-                                .function_static_var_mapping
-                                .contains_key(&composite_ident)
-                            || self
-                                .lookup_resolvable_global_var_mapping(
-                                    name,
-                                    &ident,
-                                    &composite_ident,
-                                )
-                                .is_some();
+                        let has_resolved_storage =
+                            self.function_static_var_mapping.contains_key(&ident)
+                                || self
+                                    .function_static_var_mapping
+                                    .contains_key(&composite_ident)
+                                || self
+                                    .lookup_resolvable_global_var_mapping(
+                                        name,
+                                        &ident,
+                                        &composite_ident,
+                                    )
+                                    .is_some();
                         if !self.is_declref_local_name_active(&ident) && !has_resolved_storage {
                             self.record_unresolved_function_scope_static_fallback(&ident, ty);
                         }
@@ -57410,10 +57648,9 @@ impl AstCodeGen {
                         && args.is_empty()
                         && self.is_non_callable_callee_value_expr(&node.children[0], &func)
                     {
-                        if let Some(field_expr) = self.rewrite_non_callable_member_getter_as_field(
-                            &node.children[0],
-                            &func,
-                        ) {
+                        if let Some(field_expr) = self
+                            .rewrite_non_callable_member_getter_as_field(&node.children[0], &func)
+                        {
                             return field_expr;
                         }
                         return func;
@@ -61121,7 +61358,9 @@ mod tests {
             code
         );
         assert!(
-            code.contains("#[no_mangle]\npub extern \"C\" fn main(argc: i32, argv: *mut *const i8) -> i32 {"),
+            code.contains(
+                "#[no_mangle]\npub extern \"C\" fn main(argc: i32, argv: *mut *const i8) -> i32 {"
+            ),
             "global entry main should retain unsuffixed exported `main` symbol, got:\n{}",
             code
         );
@@ -71267,7 +71506,8 @@ pub(crate) static mut __gv_dst: *mut i8 = std::ptr::null_mut();
 pub(crate) static mut __gv_host_name: UnknownTagAutoType = unsafe { ((*unsafe { __gv_it }).second).r#as };
 pub(crate) static mut __gv_proc_name: UnknownTagAutoType = unsafe { ((*unsafe { __gv_it }).first).r#as };
 "#;
-        let normalized = AstCodeGen::normalize_static_initializers_with_unresolved_global_refs(input);
+        let normalized =
+            AstCodeGen::normalize_static_initializers_with_unresolved_global_refs(input);
         assert!(
             normalized.contains(
                 "pub(crate) static mut __gv_host_name: UnknownTagAutoType = unsafe { std::mem::zeroed() };"
@@ -71290,13 +71530,14 @@ pub(crate) static mut __gv_proc_name: UnknownTagAutoType = unsafe { ((*unsafe { 
     }
 
     #[test]
-    fn test_normalize_static_initializers_with_unresolved_global_refs_rewrites_non_const_ctor_calls()
-     {
+    fn test_normalize_static_initializers_with_unresolved_global_refs_rewrites_non_const_ctor_calls(
+    ) {
         let input = r#"
 pub(crate) static mut __gv_cache: ShardingPolicyCache = ShardingPolicyCache::new_0();
 pub(crate) static mut __gv_plain: i32 = 0;
 "#;
-        let normalized = AstCodeGen::normalize_static_initializers_with_unresolved_global_refs(input);
+        let normalized =
+            AstCodeGen::normalize_static_initializers_with_unresolved_global_refs(input);
         assert!(
             normalized.contains(
                 "pub(crate) static mut __gv_cache: ShardingPolicyCache = unsafe { std::mem::zeroed() };"
@@ -71318,7 +71559,8 @@ pub(crate) static mut __gv_plain: i32 = 0;
 pub(crate) static mut __gv_workers: vector_shared_ptr_PaxosWorker = vector_shared_ptr_PaxosWorker::new_0();
 pub(crate) static mut __gv_cache: ShardingPolicyCache = ShardingPolicyCache::new_0();
 "#;
-        let normalized = AstCodeGen::normalize_static_initializers_with_unresolved_global_refs(input);
+        let normalized =
+            AstCodeGen::normalize_static_initializers_with_unresolved_global_refs(input);
         assert!(
             normalized.contains(
                 "pub(crate) static mut __gv_workers: vector_shared_ptr_PaxosWorker = unsafe { std::mem::zeroed() };"
@@ -71344,7 +71586,8 @@ pub(crate) static mut __gv_m_s: pthread_mutex_t = pthread_mutex_t { __pthread_mu
 pub(crate) static mut __gv_pid_seed: i32 = super::getpid();
 pub(crate) static mut __gv_plain: i32 = 0;
 "#;
-        let normalized = AstCodeGen::normalize_static_initializers_with_unresolved_global_refs(input);
+        let normalized =
+            AstCodeGen::normalize_static_initializers_with_unresolved_global_refs(input);
         assert!(
             normalized.contains(
                 "pub(crate) static mut __gv_fp_s: *mut std::ffi::c_void = unsafe { std::mem::zeroed() };"
@@ -71379,7 +71622,8 @@ pub(crate) static mut __gv_plain: i32 = 0;
         let input = r#"
 static mut __fsv_UseMAdvWillNeed_px_0: *const i8 = (getenv((b"DISABLE_MADV_WILLNEED\x00".as_ptr() as *const i8) as *const i8)) as *const i8;
 "#;
-        let normalized = AstCodeGen::normalize_static_initializers_with_unresolved_global_refs(input);
+        let normalized =
+            AstCodeGen::normalize_static_initializers_with_unresolved_global_refs(input);
         assert!(
             normalized.contains(
                 "static mut __fsv_UseMAdvWillNeed_px_0: *const i8 = unsafe { std::mem::zeroed() };"
@@ -71396,7 +71640,8 @@ static mut __fsv_UseMAdvWillNeed_px_0: *const i8 = (getenv((b"DISABLE_MADV_WILLN
 pub(crate) static mut __gv_seed: i32 = 0;
 pub(crate) static mut __gv_flag: bool = (unsafe { __gv_seed += 1; __gv_seed }) == 7;
 "#;
-        let normalized = AstCodeGen::normalize_static_initializers_with_unresolved_global_refs(input);
+        let normalized =
+            AstCodeGen::normalize_static_initializers_with_unresolved_global_refs(input);
         assert!(
             normalized
                 .contains("pub(crate) static mut __gv_flag: bool = unsafe { std::mem::zeroed() };"),
@@ -71420,7 +71665,8 @@ thread_local! {
     );
 }
 "#;
-        let normalized = AstCodeGen::normalize_static_initializers_with_unresolved_global_refs(input);
+        let normalized =
+            AstCodeGen::normalize_static_initializers_with_unresolved_global_refs(input);
         assert!(
             normalized.contains(
                 "static REF: std::cell::UnsafeCell<__tree_node_value_ref> = std::cell::UnsafeCell::new("
@@ -71443,7 +71689,8 @@ pub const TXN_FLAG_FULL_SCAN: u64 = 4;
 pub(crate) static mut __gv_flags: [u64; 2] = [(0) as u64, (TXN_FLAG_LOW_LEVEL_SCAN) as u64];
 pub(crate) static mut __gv_ok: [u64; 2] = [(0) as u64, (TXN_FLAG_FULL_SCAN) as u64];
 "#;
-        let normalized = AstCodeGen::normalize_static_initializers_with_unresolved_global_refs(input);
+        let normalized =
+            AstCodeGen::normalize_static_initializers_with_unresolved_global_refs(input);
         assert!(
             normalized.contains(
                 "pub(crate) static mut __gv_flags: [u64; 2] = unsafe { std::mem::zeroed() };"
@@ -71728,7 +71975,8 @@ pub fn probe(v: &mut std::vec::Vec<u8>, target: usize) {
     }
 
     #[test]
-    fn test_normalize_call_argument_integer_widths_transmutes_mismatched_option_c_fn_callback_args() {
+    fn test_normalize_call_argument_integer_widths_transmutes_mismatched_option_c_fn_callback_args()
+    {
         let input = r#"
 pub extern "C" fn AddFlagValidator(flag_ptr: *const (), validate_fn_proto: std::option::Option<extern "C" fn() -> bool>) -> bool {
     false
@@ -72137,7 +72385,8 @@ pub fn WriteAlias(out: &mut ostream_wrapper, str: *const i8, size: u64) -> bool 
     }
 
     #[test]
-    fn test_normalize_mismatched_param_identifier_tail_returns_rewrites_ref_param_tail_to_default() {
+    fn test_normalize_mismatched_param_identifier_tail_returns_rewrites_ref_param_tail_to_default()
+    {
         let input = r#"
 pub fn atomic_load_relaxed_ref_atomic_int(atomic_var: &atomic_int) -> i32 {
     atomic_var
@@ -72231,9 +72480,8 @@ pub fn count_factors_u64(n: u64) -> i32 {
             },
         ];
 
-        let reconciled = AstCodeGen::reconcile_function_param_names_with_definition_children(
-            &params, &children,
-        );
+        let reconciled =
+            AstCodeGen::reconcile_function_param_names_with_definition_children(&params, &children);
         assert_eq!(reconciled[0].0, "str");
         assert_eq!(reconciled[1].0, "tail");
     }
@@ -72254,9 +72502,8 @@ pub fn count_factors_u64(n: u64) -> i32 {
             location: SourceLocation::default(),
         }];
 
-        let reconciled = AstCodeGen::reconcile_function_param_names_with_definition_children(
-            &params, &children,
-        );
+        let reconciled =
+            AstCodeGen::reconcile_function_param_names_with_definition_children(&params, &children);
         assert_eq!(reconciled, params);
     }
 
@@ -72327,7 +72574,8 @@ pub fn read_queue() -> queue_pair_const_char__pair_int__int {
     }
 
     #[test]
-    fn test_normalize_global_symbol_aliases_for_prefixed_statics_skips_calls_and_non_rooted_paths() {
+    fn test_normalize_global_symbol_aliases_for_prefixed_statics_skips_calls_and_non_rooted_paths()
+    {
         let input = r#"
 pub(crate) static mut __gv_len: i32 = 0;
 pub fn probe() {
@@ -72689,9 +72937,9 @@ pub struct RustyReceiverHolder {
 
     #[test]
     fn test_wrapper_trait_detectors_normalize_rusty_alias_spellings() {
-        assert!(
-            AstCodeGen::is_non_default_std_wrapper_type("rusty::sync::mpsc::Sender<i32>")
-        );
+        assert!(AstCodeGen::is_non_default_std_wrapper_type(
+            "rusty::sync::mpsc::Sender<i32>"
+        ));
         assert!(AstCodeGen::is_non_default_std_wrapper_type(
             "rusty::Ref<class Foo>"
         ));
@@ -72726,7 +72974,9 @@ pub struct RustyReceiverHolder {
         assert!(AstCodeGen::is_non_clone_std_wrapper_type(
             "std::sync::RwLockWriteGuard<'static, i32>"
         ));
-        assert!(AstCodeGen::is_non_clone_std_wrapper_type("rusty::Mutex<i32>"));
+        assert!(AstCodeGen::is_non_clone_std_wrapper_type(
+            "rusty::Mutex<i32>"
+        ));
         assert!(AstCodeGen::is_non_clone_std_wrapper_type("rusty::Condvar"));
         assert!(AstCodeGen::is_non_copy_std_wrapper_type(
             "rusty::Ref<class Foo>"
@@ -72780,8 +73030,8 @@ pub struct ReceiverHolder {
     }
 
     #[test]
-    fn test_normalize_struct_default_clone_derives_keeps_raw_pointer_wrapped_non_clone_alias_derives()
-    {
+    fn test_normalize_struct_default_clone_derives_keeps_raw_pointer_wrapped_non_clone_alias_derives(
+    ) {
         let input = r#"
 pub type ReceiverAlias = std::sync::mpsc::Receiver<i32>;
 
@@ -73532,10 +73782,9 @@ pub mod testing {
         );
 
         assert!(
-            codegen.output.contains(&format!(
-                "pub type {} = std::boxed::Box<list>;",
-                rust_name
-            )),
+            codegen
+                .output
+                .contains(&format!("pub type {} = std::boxed::Box<list>;", rust_name)),
             "unqualified Rusty-wrapper aliases should emit a sanitized lhs alias name, got:\n{}",
             codegen.output
         );
@@ -73582,7 +73831,9 @@ pub mod testing {
     fn test_template_struct_aliases_rusty_join_handle_instantiation_in_namespace_context() {
         let mut codegen = AstCodeGen::new();
         codegen.current_namespace.push(("rusty".to_string(), false));
-        codegen.current_namespace.push(("thread".to_string(), false));
+        codegen
+            .current_namespace
+            .push(("thread".to_string(), false));
         let inst_name = "JoinHandle<void>";
         let rust_name = CppType::Named(inst_name.to_string()).to_rust_type_str();
 
@@ -73966,9 +74217,10 @@ pub mod testing {
     #[test]
     fn test_missing_stub_simple_map_aliases_to_std_btreemap_for_safe_keys() {
         let mut codegen = AstCodeGen::new();
-        codegen
-            .used_types
-            .insert("map_unsigned_int__bool".to_string(), "map<unsigned int, bool>".to_string());
+        codegen.used_types.insert(
+            "map_unsigned_int__bool".to_string(),
+            "map<unsigned int, bool>".to_string(),
+        );
 
         codegen.generate_missing_type_stubs();
         let code = codegen.output;
@@ -74100,9 +74352,7 @@ pub mod testing {
         let code = codegen.output;
         let alias_line = code
             .lines()
-            .find(|line| {
-                line.contains("pub type unordered_map_unsigned_long__vector_Arc_Job =")
-            })
+            .find(|line| line.contains("pub type unordered_map_unsigned_long__vector_Arc_Job ="))
             .unwrap_or("");
         assert!(
             alias_line.contains("std::collections::HashMap<u64, std_vector<")
@@ -74228,8 +74478,8 @@ pub mod testing {
     }
 
     #[test]
-    fn test_missing_stub_map_full_signature_with_basic_string_key_and_scalar_value_splits_correctly()
-    {
+    fn test_missing_stub_map_full_signature_with_basic_string_key_and_scalar_value_splits_correctly(
+    ) {
         let mut codegen = AstCodeGen::new();
         codegen.used_types.insert(
             "map_basic_string_char__struct_std_char_traits_char__class_std_allocator_char__unsigned_long".to_string(),
@@ -74349,12 +74599,10 @@ pub mod testing {
     #[test]
     fn test_missing_stub_unordered_map_with_basic_string_key_aliases_to_std_hashmap() {
         let mut codegen = AstCodeGen::new();
-        codegen
-            .used_types
-            .insert(
-                "unordered_map_basic_string_char__unsigned_long".to_string(),
-                "unordered_map<basic_string<char>, unsigned long>".to_string(),
-            );
+        codegen.used_types.insert(
+            "unordered_map_basic_string_char__unsigned_long".to_string(),
+            "unordered_map<basic_string<char>, unsigned long>".to_string(),
+        );
 
         codegen.generate_missing_type_stubs();
         let code = codegen.output;
@@ -74402,9 +74650,10 @@ pub mod testing {
     #[test]
     fn test_missing_stub_simple_set_aliases_to_std_btreeset() {
         let mut codegen = AstCodeGen::new();
-        codegen
-            .used_types
-            .insert("set_unsigned_short".to_string(), "set<unsigned short>".to_string());
+        codegen.used_types.insert(
+            "set_unsigned_short".to_string(),
+            "set<unsigned short>".to_string(),
+        );
 
         codegen.generate_missing_type_stubs();
         let code = codegen.output;
@@ -74564,9 +74813,8 @@ pub struct rusty_Arc_classrrr_Client_ {
         let code = codegen.output;
         let aliases_to_sibling =
             code.contains("pub type rusty_Arc_constclassrrr_Client_ = rusty_Arc_classrrr_Client_;");
-        let aliases_to_std = code.contains(
-            "pub type rusty_Arc_constclassrrr_Client_ = std::sync::Arc<rrr_Client>;",
-        );
+        let aliases_to_std =
+            code.contains("pub type rusty_Arc_constclassrrr_Client_ = std::sync::Arc<rrr_Client>;");
         assert!(
             aliases_to_sibling || aliases_to_std,
             "missing stub generation should resolve qualifier-family constclass variants to concrete aliases (emitted sibling or normalized std wrapper) instead of opaque placeholders, got:\n{}",
@@ -74584,14 +74832,15 @@ pub struct rusty_Arc_classrrr_Client_ {
         let mut codegen = AstCodeGen::new();
         let rust_name = "rusty_Arc_constclass_rrr_ClientConnection__";
         let cpp_name = "rusty::Arc::constclass::rrr::ClientConnection::::";
-        let expected_alias_target =
-            AstCodeGen::rusty_wrapper_alias_target_from_record_name(rust_name).expect(
-                "test precondition failed: lowered rusty wrapper helper did not normalize rust name",
-            );
-        codegen.used_types.insert(
-            rust_name.to_string(),
-            cpp_name.to_string(),
+        let expected_alias_target = AstCodeGen::rusty_wrapper_alias_target_from_record_name(
+            rust_name,
+        )
+        .expect(
+            "test precondition failed: lowered rusty wrapper helper did not normalize rust name",
         );
+        codegen
+            .used_types
+            .insert(rust_name.to_string(), cpp_name.to_string());
 
         codegen.generate_missing_type_stubs();
         let code = codegen.output;
@@ -75054,10 +75303,8 @@ pub struct rusty_Function_void_void__ {
             Some("std::sync::mpsc::SyncSender<i32>")
         );
         assert_eq!(
-            AstCodeGen::rusty_wrapper_alias_target_from_record_name(
-                "rusty::sync::mpsc::RecvError"
-            )
-            .as_deref(),
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name("rusty::sync::mpsc::RecvError")
+                .as_deref(),
             Some("std::sync::mpsc::RecvError")
         );
         assert_eq!(
@@ -75126,7 +75373,8 @@ pub struct rusty_Function_void_void__ {
     }
 
     #[test]
-    fn test_rusty_wrapper_record_alias_helper_maps_result_with_poison_error_to_generated_record_companions() {
+    fn test_rusty_wrapper_record_alias_helper_maps_result_with_poison_error_to_generated_record_companions(
+    ) {
         let poisoned = AstCodeGen::rusty_wrapper_alias_target_from_record_name(
             "rusty::Result<rusty::MutexGuard<int>, rusty::PoisonError<int>>",
         );
@@ -75188,9 +75436,10 @@ pub mod rusty {
             .output
             .push_str("pub trait __FloatClassify { fn probe(self) -> bool; }\n");
         codegen.local_vars.insert("str".to_string());
-        codegen
-            .used_types
-            .insert("__FloatClassify".to_string(), "::::FloatClassify".to_string());
+        codegen.used_types.insert(
+            "__FloatClassify".to_string(),
+            "::::FloatClassify".to_string(),
+        );
         codegen
             .used_types
             .insert("Fn".to_string(), "Fn".to_string());
@@ -75264,8 +75513,7 @@ pub mod rusty {
         codegen.generate_missing_type_stubs();
         let code = codegen.output;
         assert!(
-            !code.contains("pub struct input")
-                && !code.contains("pub struct minified"),
+            !code.contains("pub struct input") && !code.contains("pub struct minified"),
             "missing stub generation should ignore plain lowercase value-like names, got:\n{}",
             code
         );
@@ -75289,9 +75537,10 @@ pub mod rusty {
         codegen
             .used_types
             .insert("new_0".to_string(), "new::0".to_string());
-        codegen
-            .used_types
-            .insert("from_raw_parts_mut".to_string(), "from::raw::parts::mut".to_string());
+        codegen.used_types.insert(
+            "from_raw_parts_mut".to_string(),
+            "from::raw::parts::mut".to_string(),
+        );
         codegen
             .used_types
             .insert("size".to_string(), "::size".to_string());
@@ -75398,7 +75647,10 @@ pub mod rusty {
 
         codegen.generate_missing_type_stubs();
         let code = codegen.output;
-        let struct_impl = code.split("impl Default for ConnState {").nth(1).unwrap_or("");
+        let struct_impl = code
+            .split("impl Default for ConnState {")
+            .nth(1)
+            .unwrap_or("");
 
         assert!(
             struct_impl.contains("joined_: false,"),
@@ -77462,11 +77714,9 @@ pub mod rusty {
             "Some_* fallback should normalize to Option::Some"
         );
 
-        let none_call = AstCodeGen::map_builtin_function(
-            "super::rusty::None_Arc_class_rrr_PollThread",
-            &[],
-        )
-        .expect("None_* wrapper fallback should map");
+        let none_call =
+            AstCodeGen::map_builtin_function("super::rusty::None_Arc_class_rrr_PollThread", &[])
+                .expect("None_* wrapper fallback should map");
         assert_eq!(
             none_call.0, "std::option::Option::None",
             "None_* fallback should normalize to Option::None"
@@ -77520,9 +77770,8 @@ pub mod rusty {
             "qualified time fallback should return deterministic zero literal"
         );
 
-        let sysconf =
-            AstCodeGen::map_builtin_function("super::sysconf", &["name".to_string()])
-                .expect("qualified sysconf should map through builtin lowering");
+        let sysconf = AstCodeGen::map_builtin_function("super::sysconf", &["name".to_string()])
+            .expect("qualified sysconf should map through builtin lowering");
         assert_eq!(
             sysconf.0, "1",
             "qualified sysconf fallback should return deterministic positive literal"
@@ -77569,8 +77818,7 @@ pub mod rusty {
             "qualified numa_num_configured_cpus fallback should return deterministic positive literal"
         );
 
-        let now_bare =
-            AstCodeGen::map_builtin_function("now", &[]).expect("bare now should map");
+        let now_bare = AstCodeGen::map_builtin_function("now", &[]).expect("bare now should map");
         assert_eq!(
             now_bare.0, "0",
             "bare now fallback should return deterministic zero literal"
@@ -79753,7 +80001,9 @@ pub struct Holder {
 "#;
         let output = AstCodeGen::normalize_invalid_module_like_type_tokens(input);
         assert!(
-            output.contains("static mut __gv_type_2pl_: UnknownTagAutoType = unsafe { std::mem::zeroed() };"),
+            output.contains(
+                "static mut __gv_type_2pl_: UnknownTagAutoType = unsafe { std::mem::zeroed() };"
+            ),
             "module-like type normalization should rewrite bare module-root static types, got:\n{}",
             output
         );
@@ -79795,8 +80045,8 @@ pub struct Holder {
     }
 
     #[test]
-    fn test_normalize_unresolved_lowercase_item_type_tokens_rewrites_nested_alias_and_fn_param_slots()
-     {
+    fn test_normalize_unresolved_lowercase_item_type_tokens_rewrites_nested_alias_and_fn_param_slots(
+    ) {
         let input = r#"
 pub struct posix_mutex {
     _opaque: [u8; 1],
@@ -79918,8 +80168,7 @@ pub fn passthrough(raw: *mut c_void, named: *const std::ffi::c_void) -> *const c
     }
 
     #[test]
-    fn test_normalize_unresolved_lowercase_item_type_tokens_preserves_lowered_namespace_wrappers()
-    {
+    fn test_normalize_unresolved_lowercase_item_type_tokens_preserves_lowered_namespace_wrappers() {
         let input = r#"
 pub type CallbackAlias = std_function_void__void_;
 pub fn invoke(callbacks: std_vector<std_function_void__void_>) -> std_function_void__void_ {
@@ -80088,7 +80337,8 @@ pub type vector_RcControlBlockBase = std_vector<RcControlBlockBase>;
     }
 
     #[test]
-    fn test_normalize_unresolved_namespaced_type_aliases_keeps_non_internal_unmapped_rusty_aliases() {
+    fn test_normalize_unresolved_namespaced_type_aliases_keeps_non_internal_unmapped_rusty_aliases()
+    {
         let input = r#"
 pub mod rusty {
     pub struct VisibleUserType {
@@ -80106,7 +80356,8 @@ pub type vector_VisibleUserType = std_vector<VisibleUserType>;
     }
 
     #[test]
-    fn test_normalize_unresolved_namespaced_type_aliases_rewrites_runtime_internal_rhs_references() {
+    fn test_normalize_unresolved_namespaced_type_aliases_rewrites_runtime_internal_rhs_references()
+    {
         let input = r#"
 pub mod rusty {
     pub struct RcControlBlockBase {
@@ -80152,8 +80403,8 @@ pub struct Holder {
     }
 
     #[test]
-    fn test_normalize_unresolved_namespaced_type_aliases_skips_reserved_thread_alias_when_top_level_module_conflicts()
-     {
+    fn test_normalize_unresolved_namespaced_type_aliases_skips_reserved_thread_alias_when_top_level_module_conflicts(
+    ) {
         let input = r#"
 pub mod thread {
     pub struct JoinHandle {
@@ -80626,8 +80877,7 @@ pub type TrySendError = std::sync::mpsc::TrySendError<__>;
     }
 
     #[test]
-    fn test_normalize_rusty_type_alias_rhs_paths_rewrites_scope_and_trysenderror(
-    ) {
+    fn test_normalize_rusty_type_alias_rhs_paths_rewrites_scope_and_trysenderror() {
         let input = r#"
 pub type Scope = rusty::thread::Scope;
 pub type TrySendError = rusty::sync::mpsc::TrySendError;
@@ -80644,7 +80894,8 @@ pub type TrySendError = rusty::sync::mpsc::TrySendError;
     }
 
     #[test]
-    fn test_normalize_rusty_type_alias_rhs_paths_rewrites_visibility_variants_and_preserves_tails() {
+    fn test_normalize_rusty_type_alias_rhs_paths_rewrites_visibility_variants_and_preserves_tails()
+    {
         let input = r#"
 pub type Seed = u32;
 pub(super) type LateRecv = rusty::sync::mpsc::RecvError;
@@ -80657,6 +80908,45 @@ pub(self) type LateTrySend = rusty::sync::mpsc::TrySendError; // tail
                     "pub(self) type LateTrySend = std::sync::mpsc::TrySendError<()>; // tail"
                 ),
             "rusty alias rhs normalization should rewrite visibility variants and preserve trailing content, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_transitive_std_type_alias_rhs_paths_collapses_std_and_primitive_chains() {
+        let input = r#"
+pub type rusty_MutexGuard_struct_rrr_Future_State = rusty_MutexGuard_conststruct_rrr_Future_State;
+pub type rusty_MutexGuard_conststruct_rrr_Future_State = std::sync::MutexGuard<'static, rrr_Future_State>;
+pub type AliasLong = AliasMid;
+pub type AliasMid = i64;
+"#;
+        let output = AstCodeGen::normalize_transitive_std_type_alias_rhs_paths(input);
+        assert!(
+            output.contains(
+                "pub type rusty_MutexGuard_struct_rrr_Future_State = std::sync::MutexGuard<'static, rrr_Future_State>;"
+            ) && output.contains("pub type AliasLong = i64;"),
+            "transitive alias normalization should collapse std/primitive alias chains, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_transitive_std_type_alias_rhs_paths_avoids_non_std_module_aliases() {
+        let input = r#"
+pub type Foo = Bar;
+pub type Bar = LocalOpaque;
+pub struct LocalOpaque;
+pub mod inner {
+    pub type A = B;
+    pub type B = std::sync::Barrier;
+}
+"#;
+        let output = AstCodeGen::normalize_transitive_std_type_alias_rhs_paths(input);
+        assert!(
+            output.contains("pub type Foo = Bar;")
+                && output.contains("pub type Bar = LocalOpaque;")
+                && output.contains("    pub type A = B;"),
+            "transitive alias normalization should avoid cross-module/non-std rewrites, got:\n{}",
             output
         );
     }
@@ -81275,7 +81565,8 @@ pub fn probe() -> bool {
     }
 
     #[test]
-    fn test_normalize_default_iter_predicate_chain_receivers_rewrites_ambiguous_default_iter_chains() {
+    fn test_normalize_default_iter_predicate_chain_receivers_rewrites_ambiguous_default_iter_chains(
+    ) {
         let input = r#"
 pub fn probe() -> bool {
     Default::default().iter().all(|_| Default::default())
@@ -81325,8 +81616,8 @@ pub struct get_sharding_policy_cache {
     }
 
     #[test]
-    fn test_normalize_placeholder_struct_invocation_artifacts_rewrites_placeholder_calls_with_args(
-    ) {
+    fn test_normalize_placeholder_struct_invocation_artifacts_rewrites_placeholder_calls_with_args()
+    {
         let input = r#"
 pub fn probe(log: *const i8, len: i32, par_id: u32) {
     let mut paxos_entry = super::make_pair(&mut log, &mut super::make_pair(&mut len, &mut par_id));
@@ -81404,7 +81695,8 @@ pub struct default {
     }
 
     #[test]
-    fn test_normalize_placeholder_struct_invocation_artifacts_does_not_rewrite_suffix_extern_calls() {
+    fn test_normalize_placeholder_struct_invocation_artifacts_does_not_rewrite_suffix_extern_calls()
+    {
         let input = r#"
 unsafe extern "C" {
     fn __fragile_extern_LZ4_create_size() -> u32;
@@ -81621,7 +81913,8 @@ pub extern "C" fn make_scoped_rcu_region() -> scoped_rcu_base {
     }
 
     #[test]
-    fn test_normalize_default_deref_field_artifacts_keeps_resolved_singleton_accessor_deref_roots() {
+    fn test_normalize_default_deref_field_artifacts_keeps_resolved_singleton_accessor_deref_roots()
+    {
         let input = r#"
 pub struct SiloRuntime { pub rcu_: scoped_rcu_base }
 impl SiloRuntime {
@@ -82506,8 +82799,8 @@ let mut keep: u64 = len - 1;
     }
 
     #[test]
-    fn test_normalize_obvious_local_var_type_mismatches_rewrites_stream_like_ctor_ident_assignments()
-     {
+    fn test_normalize_obvious_local_var_type_mismatches_rewrites_stream_like_ctor_ident_assignments(
+    ) {
         let input = r#"
 let mut f: *const i8 = b"jemalloc.stats\x00".as_ptr() as *const i8;
 let mut ofs: basic_ofstream_char = f;
@@ -82521,8 +82814,8 @@ let mut ofs: basic_ofstream_char = f;
     }
 
     #[test]
-    fn test_normalize_obvious_local_var_type_mismatches_rewrites_unresolved_lowercase_zeroed_locals()
-     {
+    fn test_normalize_obvious_local_var_type_mismatches_rewrites_unresolved_lowercase_zeroed_locals(
+    ) {
         let input = r#"
 pub struct TThread {
     _opaque: [u8; 1],
@@ -82541,7 +82834,7 @@ pub fn probe() {
 
     #[test]
     fn test_normalize_obvious_local_var_type_mismatches_rewrites_nonprimitive_from_primitive_ident()
-     {
+    {
         let input = r#"
 let mut nthreads: u64 = (0) as u64;
 let mut barrier_ready: spin_barrier = nthreads;
@@ -82634,7 +82927,9 @@ pub fn probe() {
 "#;
         let output = AstCodeGen::normalize_invalid_local_binding_identifiers(input);
         assert!(
-            output.contains("let mut __fragile_local_0: allocator_char = unsafe { std::mem::zeroed() };"),
+            output.contains(
+                "let mut __fragile_local_0: allocator_char = unsafe { std::mem::zeroed() };"
+            ),
             "invalid local binding normalization should repair call-shaped let bindings, got:\n{}",
             output
         );
@@ -82740,7 +83035,8 @@ pub struct IntEvent {
             output
         );
         assert!(
-            output.contains("pub fn current_time_ms() -> u64 {") && output.contains("return 0 as u64;"),
+            output.contains("pub fn current_time_ms() -> u64 {")
+                && output.contains("return 0 as u64;"),
             "cleanup should keep the function body around the removed placeholder, got:\n{}",
             output
         );
@@ -82809,7 +83105,7 @@ pub extern "C" fn main() -> i32 {
 
     #[test]
     fn test_normalize_noop_default_local_placeholder_bindings_keeps_used_bindings_before_block_end()
-     {
+    {
         let input = r#"
 pub fn probe() {
     {
@@ -82857,14 +83153,16 @@ pub fn probe() {
 "#;
         let output = AstCodeGen::normalize_const_like_unknown_enum_local_placeholders(input);
         assert!(
-            output.contains("let mut enum_slot: UnknownTagEnumType = unsafe { std::mem::zeroed() };"),
+            output
+                .contains("let mut enum_slot: UnknownTagEnumType = unsafe { std::mem::zeroed() };"),
             "non-const unknown-enum local should remain unchanged, got:\n{}",
             output
         );
     }
 
     #[test]
-    fn test_normalize_const_like_unknown_enum_local_placeholders_drops_shadow_of_defined_constant() {
+    fn test_normalize_const_like_unknown_enum_local_placeholders_drops_shadow_of_defined_constant()
+    {
         let input = r#"
 pub const XXH_unaligned: UnknownTagEnumType = (1i64 as UnknownTagEnumType);
 pub fn probe() -> UnknownTagEnumType {
@@ -83132,7 +83430,8 @@ pub extern "C" fn main() -> i32 {
     }
 
     #[test]
-    fn test_fallback_heavily_degraded_function_bodies_stubs_unresolved_super_type_associated_calls() {
+    fn test_fallback_heavily_degraded_function_bodies_stubs_unresolved_super_type_associated_calls()
+    {
         let input = r#"
 pub struct SiloRuntime {
 }
@@ -83445,7 +83744,8 @@ pub fn stop_erpc_server(cfg: &BenchmarkConfig) -> i32 {
     }
 
     #[test]
-    fn test_fallback_heavily_degraded_function_bodies_stubs_pointer_scalar_identifier_comparisons() {
+    fn test_fallback_heavily_degraded_function_bodies_stubs_pointer_scalar_identifier_comparisons()
+    {
         let input = r#"
 pub fn ValidateTestFlagIs10(flagname: *const i8, flagval: i32) -> bool {
     return flagval == flagname;
@@ -83460,7 +83760,8 @@ pub fn ValidateTestFlagIs10(flagname: *const i8, flagval: i32) -> bool {
     }
 
     #[test]
-    fn test_fallback_heavily_degraded_function_bodies_keeps_pointer_pointer_identifier_comparisons() {
+    fn test_fallback_heavily_degraded_function_bodies_keeps_pointer_pointer_identifier_comparisons()
+    {
         let input = r#"
 pub fn same_ptr(a: *const i8, b: *const i8) -> bool {
     return a == b;
@@ -93311,8 +93612,7 @@ stream.PutN(c, n);
     #[test]
     fn test_normalize_invalid_item_signature_types_adds_static_lifetime_for_noarg_fn_pointer_returns(
     ) {
-        let input =
-            r#"pub target_type: std::option::Option<extern "C" fn() -> &type_info>,"#;
+        let input = r#"pub target_type: std::option::Option<extern "C" fn() -> &type_info>,"#;
         let output = AstCodeGen::normalize_invalid_item_signature_types(input);
         assert!(
             output.contains(r#"fn() -> &'static type_info"#),
