@@ -34752,10 +34752,16 @@ impl AstCodeGen {
             || normalized.starts_with("std::sync::mpsc::Receiver<")
             || normalized.starts_with("std::sync::mpsc::SyncSender<")
             || normalized.starts_with("std::thread::JoinHandle<")
+            || normalized == "std::sync::Barrier"
+            || normalized == "std::sync::Once"
+            || normalized == "std::sync::WaitTimeoutResult"
             || compact.starts_with("std_sync_mpsc_Sender_")
             || compact.starts_with("std_sync_mpsc_Receiver_")
             || compact.starts_with("std_sync_mpsc_SyncSender_")
             || compact.starts_with("std_thread_JoinHandle_")
+            || compact == "std_sync_Barrier"
+            || compact == "std_sync_Once"
+            || compact == "std_sync_WaitTimeoutResult"
     }
 
     fn is_non_clone_std_wrapper_type(type_name: &str) -> bool {
@@ -34767,8 +34773,18 @@ impl AstCodeGen {
         let compact = normalized.replace(' ', "");
         normalized.starts_with("std::sync::mpsc::Receiver<")
             || normalized.starts_with("std::thread::JoinHandle<")
+            || normalized.starts_with("std::sync::Mutex<")
+            || normalized.starts_with("std::sync::RwLock<")
+            || normalized == "std::sync::Barrier"
+            || normalized == "std::sync::Condvar"
+            || normalized == "std::sync::Once"
             || compact.starts_with("std_sync_mpsc_Receiver_")
             || compact.starts_with("std_thread_JoinHandle_")
+            || compact.starts_with("std_sync_Mutex_")
+            || compact.starts_with("std_sync_RwLock_")
+            || compact == "std_sync_Barrier"
+            || compact == "std_sync_Condvar"
+            || compact == "std_sync_Once"
     }
 
     fn is_non_copy_std_wrapper_type(type_name: &str) -> bool {
@@ -34785,6 +34801,9 @@ impl AstCodeGen {
             || normalized.starts_with("std::cell::RefCell<")
             || normalized.starts_with("std::sync::Mutex<")
             || normalized.starts_with("std::sync::RwLock<")
+            || normalized == "std::sync::Barrier"
+            || normalized == "std::sync::Condvar"
+            || normalized == "std::sync::Once"
             || normalized.starts_with("std::vec::Vec<")
             || normalized.starts_with("std::collections::VecDeque<")
             || normalized.starts_with("std::collections::HashSet<")
@@ -34798,6 +34817,9 @@ impl AstCodeGen {
             || compact.starts_with("std_cell_RefCell_")
             || compact.starts_with("std_sync_Mutex_")
             || compact.starts_with("std_sync_RwLock_")
+            || compact == "std_sync_Barrier"
+            || compact == "std_sync_Condvar"
+            || compact == "std_sync_Once"
             || compact.starts_with("std_vec_Vec_")
             || compact.starts_with("std_collections_VecDeque_")
             || compact.starts_with("std_collections_HashSet_")
@@ -70454,12 +70476,19 @@ pub struct RustyReceiverHolder {
         assert!(
             AstCodeGen::is_non_default_std_wrapper_type("rusty::sync::mpsc::Sender<i32>")
         );
+        assert!(AstCodeGen::is_non_default_std_wrapper_type("rusty::Once"));
+        assert!(AstCodeGen::is_non_default_std_wrapper_type(
+            "rusty::WaitTimeoutResult"
+        ));
         assert!(AstCodeGen::is_non_clone_std_wrapper_type(
             "rusty::thread::JoinHandle<()>"
         ));
+        assert!(AstCodeGen::is_non_clone_std_wrapper_type("rusty::Mutex<i32>"));
+        assert!(AstCodeGen::is_non_clone_std_wrapper_type("rusty::Condvar"));
         assert!(AstCodeGen::is_non_copy_std_wrapper_type(
             "rusty::HashMap<i32, i32>"
         ));
+        assert!(AstCodeGen::is_non_copy_std_wrapper_type("rusty::Barrier"));
     }
 
     #[test]
@@ -70513,6 +70542,31 @@ pub struct ReceiverPtrHolder {
             !normalized.contains("impl Default for ReceiverPtrHolder {")
                 && !normalized.contains("impl Clone for ReceiverPtrHolder {"),
             "derive normalization should not synthesize fallback impls for raw-pointer wrapped wrappers, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_struct_default_clone_derives_rewrites_non_clone_non_default_sync_exacts() {
+        let input = r#"
+#[derive(Default, Clone, Copy)]
+pub struct BarrierHolder {
+    pub barrier: std::sync::Barrier,
+}
+"#;
+        let normalized = AstCodeGen::normalize_struct_default_clone_derives(input);
+        assert!(
+            !normalized.contains("#[derive(Default, Clone, Copy)]\npub struct BarrierHolder {")
+                && !normalized.contains("#[derive(Default, Clone)]\npub struct BarrierHolder {")
+                && !normalized.contains("#[derive(Clone)]\npub struct BarrierHolder {")
+                && !normalized.contains("#[derive(Copy)]\npub struct BarrierHolder {"),
+            "derive normalization should strip invalid Default/Clone/Copy for barrier-backed structs, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("impl Default for BarrierHolder {")
+                && !normalized.contains("impl Clone for BarrierHolder {"),
+            "derive normalization should synthesize only Default fallback for barrier-backed structs, got:\n{}",
             normalized
         );
     }
@@ -70643,6 +70697,35 @@ pub struct PollThreadAlias {
         assert!(
             !normalized.contains("impl Clone for PollThreadAlias {"),
             "alias-backed receiver structs should not get fallback Clone synthesis, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_add_missing_struct_default_clone_impls_blocks_mutex_clone_fallback() {
+        let input = r#"
+pub struct LockHolder {
+    pub lock_: std::sync::Mutex<i32>,
+    pub rw_: std::sync::RwLock<i32>,
+    pub cond_: std::sync::Condvar,
+}
+"#;
+        let normalized = AstCodeGen::normalize_add_missing_struct_default_clone_impls(input);
+        assert!(
+            normalized.contains("impl Default for LockHolder {"),
+            "missing Default impl should be synthesized for mutex/rwlock/condvar structs, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("lock_: Default::default(),")
+                && normalized.contains("rw_: Default::default(),")
+                && normalized.contains("cond_: Default::default(),"),
+            "field-wise default synthesis should keep std sync wrappers on Default::default() where available, got:\n{}",
+            normalized
+        );
+        assert!(
+            !normalized.contains("impl Clone for LockHolder {"),
+            "mutex/rwlock/condvar-backed structs must not get unsafe fallback Clone synthesis, got:\n{}",
             normalized
         );
     }
