@@ -34411,6 +34411,7 @@ impl AstCodeGen {
             "std::sync::RwLock<",
             "std::sync::mpsc::Sender<",
             "std::sync::mpsc::Receiver<",
+            "std::sync::mpsc::SyncSender<",
             "std::thread::JoinHandle<",
             "std::vec::Vec<",
             "std::collections::VecDeque<",
@@ -71207,6 +71208,10 @@ pub struct rusty_Arc_classrrr_Client_ {
         assert_eq!(
             AstCodeGen::rusty_wrapper_alias_target_from_record_name("Receiver<int>").as_deref(),
             Some("std::sync::mpsc::Receiver<i32>")
+        );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name("SyncSender<int>").as_deref(),
+            Some("std::sync::mpsc::SyncSender<i32>")
         );
         assert_eq!(
             AstCodeGen::rusty_wrapper_alias_target_from_record_name(

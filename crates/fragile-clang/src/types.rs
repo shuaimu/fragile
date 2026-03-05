@@ -303,25 +303,66 @@ fn map_thread_join_handle_to_std(spelling: &str) -> Option<String> {
     map_thread_join_handle_with_prefix_to_std(spelling, "rusty::thread::JoinHandle<")
 }
 
+fn map_std_thread_join_handle_to_std(spelling: &str) -> Option<String> {
+    map_thread_join_handle_with_prefix_to_std(spelling, "std::thread::JoinHandle<")
+}
+
 fn map_unqualified_thread_join_handle_to_std(spelling: &str) -> Option<String> {
     map_thread_join_handle_with_prefix_to_std(spelling, "JoinHandle<")
 }
 
 fn map_lowered_thread_join_handle_to_std(spelling: &str) -> Option<String> {
-    let lowered = spelling
-        .strip_prefix("rusty::thread::rusty_thread_JoinHandle_")?
-        .strip_suffix('_')?;
-    if lowered.is_empty() {
-        return None;
+    for prefix in [
+        "rusty::thread::rusty_thread_JoinHandle_",
+        "std_thread_JoinHandle_",
+    ] {
+        if let Some(rest) = spelling.strip_prefix(prefix) {
+            let lowered = rest.strip_suffix('_').unwrap_or(rest);
+            if lowered.is_empty()
+                || !lowered
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+            {
+                continue;
+            }
+            let mapped = if lowered == "void" {
+                "()".to_string()
+            } else {
+                CppType::Named(lowered.to_string()).to_rust_type_str()
+            };
+            return Some(format!("std::thread::JoinHandle<{}>", mapped));
+        }
     }
-    let mapped = if lowered == "void" {
-        "()".to_string()
-    } else if lowered.chars().all(|ch| ch.is_ascii_alphanumeric()) {
-        CppType::Named(lowered.to_string()).to_rust_type_str()
-    } else {
-        return None;
-    };
-    Some(format!("std::thread::JoinHandle<{}>", mapped))
+    None
+}
+
+fn map_lowered_mpsc_endpoint_to_std(spelling: &str) -> Option<String> {
+    for (prefix, std_path) in [
+        ("std_sync_mpsc_Sender_", "std::sync::mpsc::Sender"),
+        ("std_sync_mpsc_Receiver_", "std::sync::mpsc::Receiver"),
+        ("std_sync_mpsc_SyncSender_", "std::sync::mpsc::SyncSender"),
+        ("rusty_sync_mpsc_Sender_", "std::sync::mpsc::Sender"),
+        ("rusty_sync_mpsc_Receiver_", "std::sync::mpsc::Receiver"),
+        ("rusty_sync_mpsc_SyncSender_", "std::sync::mpsc::SyncSender"),
+    ] {
+        if let Some(rest) = spelling.strip_prefix(prefix) {
+            let lowered = rest.strip_suffix('_').unwrap_or(rest);
+            if lowered.is_empty()
+                || !lowered
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+            {
+                continue;
+            }
+            let mapped = if lowered == "void" {
+                "()".to_string()
+            } else {
+                CppType::Named(lowered.to_string()).to_rust_type_str()
+            };
+            return Some(format!("{}<{}>", std_path, mapped));
+        }
+    }
+    None
 }
 
 fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
@@ -373,6 +414,9 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
     if let Some(mapped) = map_thread_join_handle_to_std(cleaned) {
         return Some(mapped);
     }
+    if let Some(mapped) = map_std_thread_join_handle_to_std(cleaned) {
+        return Some(mapped);
+    }
     if root_is_unqualified {
         if let Some(mapped) = map_unqualified_thread_join_handle_to_std(cleaned) {
             return Some(mapped);
@@ -387,20 +431,30 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
     // degraded output; forcing generic guard rewrites can introduce invalid
     // arity/private-path failures.
 
-    for (alias, prefix, std_path) in [
+    for (alias, std_path, qualified_roots) in [
         (
             "Sender",
-            "rusty::sync::mpsc::Sender<",
             "std::sync::mpsc::Sender",
+            &["rusty::sync::mpsc::Sender", "std::sync::mpsc::Sender"] as &[&str],
         ),
         (
             "Receiver",
-            "rusty::sync::mpsc::Receiver<",
             "std::sync::mpsc::Receiver",
+            &["rusty::sync::mpsc::Receiver", "std::sync::mpsc::Receiver"] as &[&str],
+        ),
+        (
+            "SyncSender",
+            "std::sync::mpsc::SyncSender",
+            &["rusty::sync::mpsc::SyncSender", "std::sync::mpsc::SyncSender"] as &[&str],
         ),
     ] {
-        if let Some(mapped) = map_single_template_alias_to_std(cleaned, prefix, std_path) {
-            return Some(mapped);
+        for root in qualified_roots {
+            let qualified_prefix = format!("{}<", root);
+            if let Some(mapped) =
+                map_single_template_alias_to_std(cleaned, &qualified_prefix, std_path)
+            {
+                return Some(mapped);
+            }
         }
         if root_is_unqualified {
             let bare_prefix = format!("{}<", alias);
@@ -409,6 +463,9 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
                 return Some(mapped);
             }
         }
+    }
+    if let Some(mapped) = map_lowered_mpsc_endpoint_to_std(cleaned) {
+        return Some(mapped);
     }
 
     for (alias, std_path, qualified_roots) in [
@@ -2170,6 +2227,14 @@ mod tests {
             "std::thread::JoinHandle<i32>"
         );
         assert_eq!(
+            CppType::Named("std::thread::JoinHandle<void>".to_string()).to_rust_type_str(),
+            "std::thread::JoinHandle<()>"
+        );
+        assert_eq!(
+            CppType::Named("std_thread_JoinHandle_void_".to_string()).to_rust_type_str(),
+            "std::thread::JoinHandle<()>"
+        );
+        assert_eq!(
             CppType::Named("rusty::sync::mpsc::Sender<int>".to_string()).to_rust_type_str(),
             "std::sync::mpsc::Sender<i32>"
         );
@@ -2178,12 +2243,44 @@ mod tests {
             "std::sync::mpsc::Receiver<i32>"
         );
         assert_eq!(
+            CppType::Named("std::sync::mpsc::Sender<int>".to_string()).to_rust_type_str(),
+            "std::sync::mpsc::Sender<i32>"
+        );
+        assert_eq!(
+            CppType::Named("std::sync::mpsc::Receiver<int>".to_string()).to_rust_type_str(),
+            "std::sync::mpsc::Receiver<i32>"
+        );
+        assert_eq!(
+            CppType::Named("std::sync::mpsc::SyncSender<int>".to_string()).to_rust_type_str(),
+            "std::sync::mpsc::SyncSender<i32>"
+        );
+        assert_eq!(
             CppType::Named("Sender<int>".to_string()).to_rust_type_str(),
             "std::sync::mpsc::Sender<i32>"
         );
         assert_eq!(
             CppType::Named("Receiver<int>".to_string()).to_rust_type_str(),
             "std::sync::mpsc::Receiver<i32>"
+        );
+        assert_eq!(
+            CppType::Named("SyncSender<int>".to_string()).to_rust_type_str(),
+            "std::sync::mpsc::SyncSender<i32>"
+        );
+        assert_eq!(
+            CppType::Named("std_sync_mpsc_Sender_int".to_string()).to_rust_type_str(),
+            "std::sync::mpsc::Sender<i32>"
+        );
+        assert_eq!(
+            CppType::Named("std_sync_mpsc_Receiver_int".to_string()).to_rust_type_str(),
+            "std::sync::mpsc::Receiver<i32>"
+        );
+        assert_eq!(
+            CppType::Named("std_sync_mpsc_SyncSender_int".to_string()).to_rust_type_str(),
+            "std::sync::mpsc::SyncSender<i32>"
+        );
+        assert_eq!(
+            CppType::Named("rusty_sync_mpsc_Sender_int".to_string()).to_rust_type_str(),
+            "std::sync::mpsc::Sender<i32>"
         );
         assert_eq!(
             CppType::Named(
@@ -2351,6 +2448,14 @@ mod tests {
             "std::thread::JoinHandle<()>"
         );
         assert_eq!(
+            normalize_rusty_type_alias_to_std("std::thread::JoinHandle<void>"),
+            "std::thread::JoinHandle<()>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std_thread_JoinHandle_void_"),
+            "std::thread::JoinHandle<()>"
+        );
+        assert_eq!(
             normalize_rusty_type_alias_to_std("JoinHandle<void>"),
             "std::thread::JoinHandle<()>"
         );
@@ -2359,12 +2464,44 @@ mod tests {
             "std::sync::mpsc::Sender<i32>"
         );
         assert_eq!(
+            normalize_rusty_type_alias_to_std("std::sync::mpsc::Sender<int>"),
+            "std::sync::mpsc::Sender<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std::sync::mpsc::Receiver<int>"),
+            "std::sync::mpsc::Receiver<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std::sync::mpsc::SyncSender<int>"),
+            "std::sync::mpsc::SyncSender<i32>"
+        );
+        assert_eq!(
             normalize_rusty_type_alias_to_std("Sender<int>"),
             "std::sync::mpsc::Sender<i32>"
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("Receiver<int>"),
             "std::sync::mpsc::Receiver<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("SyncSender<int>"),
+            "std::sync::mpsc::SyncSender<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std_sync_mpsc_Sender_int"),
+            "std::sync::mpsc::Sender<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std_sync_mpsc_Receiver_int"),
+            "std::sync::mpsc::Receiver<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std_sync_mpsc_SyncSender_int"),
+            "std::sync::mpsc::SyncSender<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty_sync_mpsc_Sender_int"),
+            "std::sync::mpsc::Sender<i32>"
         );
         assert_eq!(normalize_rusty_type_alias_to_std("Unit"), "()");
         assert_eq!(
