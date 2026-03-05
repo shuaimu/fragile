@@ -1083,11 +1083,14 @@ Drop top-level type aliases whose rhs is exactly `std::ffi::c_void` when the ali
 
 - Added `normalize_unused_c_void_type_aliases()` in `crates/fragile-clang/src/ast_codegen.rs`.
 - Added `normalize_type_alias_rhs_c_void_alias_references()` in `crates/fragile-clang/src/ast_codegen.rs`.
+- Added `normalize_c_void_alias_identifier_references()` and `normalize_unused_c_void_use_aliases()` in `crates/fragile-clang/src/ast_codegen.rs`.
 - Wired the pass into `AstCodeGen::generate()` immediately after runtime-internal alias pruning.
 - The pass:
   - scans `pub type`/`pub(crate) type`/`pub(super) type`/`type` aliases,
   - rewrites type-alias rhs expressions to inline known `std::ffi::c_void` aliases (for example `*mut __locale_struct` -> `*mut std::ffi::c_void`),
+  - rewrites downstream identifier-token references that still point to c_void aliases (including `pub use` alias names) to direct `std::ffi::c_void` spellings,
   - removes aliases targeting `std::ffi::c_void` when unused,
+  - removes unreferenced `pub use std::ffi::c_void as Name;` aliases after identifier inlining,
   - rewrites surviving public `c_void` aliases to equivalent `pub use std::ffi::c_void as Name;` form when no same-name concrete type item exists,
   - removes contiguous preceding `///` doc lines for dropped aliases,
   - removes one following blank line for output compaction.
@@ -1099,10 +1102,12 @@ Drop top-level type aliases whose rhs is exactly `std::ffi::c_void` when the ali
 - Alias-rhs inlining runs before pruning, so transitive alias chains can collapse and become removable without touching non-alias item signatures.
 - `pub use ... as Name` rewrites are skipped when `Name` collides with a concrete same-name `struct`/`enum`/`union` item in the final output.
 - Declared-type collection for unresolved-type closure/invariant checks now recognizes `use ... as Name` declarations as defined type-like names, so invariant enforcement remains compatible with the rewrite.
+- c_void alias normalization is re-run at the tail of the normalization pipeline (after late unresolved/fallback passes) so newly appended alias surfaces are canonicalized before final output.
 - Regression tests cover:
   - unused alias removal with doc cleanup,
   - used alias preservation,
   - non-`c_void` alias passthrough,
   - alias-rhs inlining and subsequent prune enablement,
   - `pub type` -> `pub use` rewrite behavior and collision guards,
-  - unresolved-type collection with `pub use` aliases.
+  - unresolved-type collection with `pub use` aliases,
+  - identifier-reference inlining and `pub use` alias pruning.

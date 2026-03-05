@@ -6674,7 +6674,7 @@ impl AstCodeGen {
         out
     }
 
-    fn normalize_type_alias_rhs_c_void_alias_references(code: &str) -> String {
+    fn rewrite_identifier_tokens_to_c_void(expr: &str, aliases: &HashSet<String>) -> String {
         fn is_ident_start(ch: char) -> bool {
             ch == '_' || ch.is_ascii_alphabetic()
         }
@@ -6683,47 +6683,203 @@ impl AstCodeGen {
             ch == '_' || ch.is_ascii_alphanumeric()
         }
 
-        fn rewrite_type_expr_c_void_aliases(expr: &str, aliases: &HashSet<String>) -> String {
-            let chars: Vec<char> = expr.chars().collect();
-            let mut out = String::with_capacity(expr.len());
-            let mut i = 0usize;
-            while i < chars.len() {
-                if chars[i] == 'r' && i + 2 < chars.len() && chars[i + 1] == '#' && is_ident_start(chars[i + 2]) {
-                    let start = i;
-                    i += 2;
-                    let ident_start = i;
-                    i += 1;
-                    while i < chars.len() && is_ident_char(chars[i]) {
-                        i += 1;
-                    }
-                    let token_raw: String = chars[ident_start..i].iter().collect();
-                    if aliases.contains(&token_raw) {
-                        out.push_str("std::ffi::c_void");
-                    } else {
-                        out.extend(chars[start..i].iter());
-                    }
-                    continue;
-                }
-                if is_ident_start(chars[i]) {
-                    let start = i;
-                    i += 1;
-                    while i < chars.len() && is_ident_char(chars[i]) {
-                        i += 1;
-                    }
-                    let token: String = chars[start..i].iter().collect();
-                    if aliases.contains(&token) {
-                        out.push_str("std::ffi::c_void");
-                    } else {
-                        out.push_str(&token);
-                    }
-                    continue;
-                }
-                out.push(chars[i]);
+        let chars: Vec<char> = expr.chars().collect();
+        let mut out = String::with_capacity(expr.len());
+        let mut i = 0usize;
+        while i < chars.len() {
+            if chars[i] == 'r'
+                && i + 2 < chars.len()
+                && chars[i + 1] == '#'
+                && is_ident_start(chars[i + 2])
+            {
+                let start = i;
+                i += 2;
+                let ident_start = i;
                 i += 1;
+                while i < chars.len() && is_ident_char(chars[i]) {
+                    i += 1;
+                }
+                let token_raw: String = chars[ident_start..i].iter().collect();
+                if aliases.contains(&token_raw) {
+                    out.push_str("std::ffi::c_void");
+                } else {
+                    out.extend(chars[start..i].iter());
+                }
+                continue;
             }
-            out
+            if is_ident_start(chars[i]) {
+                let start = i;
+                i += 1;
+                while i < chars.len() && is_ident_char(chars[i]) {
+                    i += 1;
+                }
+                let token: String = chars[start..i].iter().collect();
+                if aliases.contains(&token) {
+                    out.push_str("std::ffi::c_void");
+                } else {
+                    out.push_str(&token);
+                }
+                continue;
+            }
+            out.push(chars[i]);
+            i += 1;
+        }
+        out
+    }
+
+    fn normalize_c_void_alias_identifier_references(code: &str) -> String {
+        fn parse_c_void_alias_name(trimmed: &str) -> Option<String> {
+            if let Some(rest) = [
+                "pub type ",
+                "pub(crate) type ",
+                "pub(super) type ",
+                "type ",
+            ]
+            .iter()
+            .find_map(|prefix| trimmed.strip_prefix(prefix))
+            {
+                let (lhs, rhs) = rest.split_once('=')?;
+                let alias = lhs.trim().trim_start_matches("r#");
+                let target = rhs.trim().trim_end_matches(';').trim();
+                if !alias.is_empty() && target == "std::ffi::c_void" {
+                    return Some(alias.to_string());
+                }
+            }
+            if let Some(rest) = [
+                "pub use ",
+                "pub(crate) use ",
+                "pub(super) use ",
+                "use ",
+            ]
+            .iter()
+            .find_map(|prefix| trimmed.strip_prefix(prefix))
+            {
+                if let Some((path, alias_tail)) = rest.rsplit_once(" as ") {
+                    let path = path.trim();
+                    let alias = alias_tail.trim().trim_end_matches(';').trim();
+                    if path == "std::ffi::c_void" && !alias.is_empty() {
+                        return Some(alias.trim_start_matches("r#").to_string());
+                    }
+                }
+            }
+            None
         }
 
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
+            return code.to_string();
+        }
+
+        let mut c_void_aliases: HashSet<String> = HashSet::new();
+        for line in &lines {
+            let trimmed = line.trim_start();
+            if let Some(alias) = parse_c_void_alias_name(trimmed) {
+                c_void_aliases.insert(alias);
+            }
+        }
+        if c_void_aliases.is_empty() {
+            return code.to_string();
+        }
+
+        let mut changed = false;
+        let mut out = String::with_capacity(code.len());
+        for line in &lines {
+            let trimmed = line.trim_start();
+            if parse_c_void_alias_name(trimmed).is_some() {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+            let rewritten = Self::rewrite_identifier_tokens_to_c_void(line, &c_void_aliases);
+            if rewritten != *line {
+                changed = true;
+            }
+            out.push_str(&rewritten);
+            out.push('\n');
+        }
+
+        if !changed {
+            return code.to_string();
+        }
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    fn normalize_unused_c_void_use_aliases(code: &str) -> String {
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
+            return code.to_string();
+        }
+
+        let referenced = Self::collect_referenced_type_like_names(code);
+        let mut drop_line = vec![false; lines.len()];
+
+        for (idx, line) in lines.iter().enumerate() {
+            let trimmed = line.trim_start();
+            let Some(rest) = [
+                "pub use ",
+                "pub(crate) use ",
+                "pub(super) use ",
+                "use ",
+            ]
+            .iter()
+            .find_map(|prefix| trimmed.strip_prefix(prefix))
+            else {
+                continue;
+            };
+            let Some((path, alias_tail)) = rest.rsplit_once(" as ") else {
+                continue;
+            };
+            let path = path.trim();
+            let alias = alias_tail.trim().trim_end_matches(';').trim();
+            if path != "std::ffi::c_void" || alias.is_empty() {
+                continue;
+            }
+
+            let alias_raw = alias.trim_start_matches("r#");
+            let alias_is_referenced = referenced.contains(alias)
+                || (!alias_raw.is_empty() && referenced.contains(alias_raw));
+            if alias_is_referenced {
+                continue;
+            }
+
+            drop_line[idx] = true;
+            let mut prev = idx;
+            while prev > 0 {
+                let candidate = lines[prev - 1].trim_start();
+                if candidate.starts_with("///") {
+                    drop_line[prev - 1] = true;
+                    prev -= 1;
+                    continue;
+                }
+                break;
+            }
+            if idx + 1 < lines.len() && lines[idx + 1].trim().is_empty() {
+                drop_line[idx + 1] = true;
+            }
+        }
+
+        if !drop_line.iter().any(|drop| *drop) {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        for (idx, line) in lines.iter().enumerate() {
+            if drop_line[idx] {
+                continue;
+            }
+            out.push_str(line);
+            out.push('\n');
+        }
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    fn normalize_type_alias_rhs_c_void_alias_references(code: &str) -> String {
         let lines: Vec<&str> = code.lines().collect();
         if lines.is_empty() {
             return code.to_string();
@@ -6804,7 +6960,7 @@ impl AstCodeGen {
             let core_start = leading_ws_len;
             let core_end = before_semi.len() - trailing_ws_len;
             let core = &before_semi[core_start..core_end];
-            let rewritten_core = rewrite_type_expr_c_void_aliases(core, &c_void_aliases);
+            let rewritten_core = Self::rewrite_identifier_tokens_to_c_void(core, &c_void_aliases);
             let rewritten_before = format!(
                 "{}{}{}",
                 &before_semi[..core_start],
@@ -17085,10 +17241,13 @@ impl AstCodeGen {
         // alias targets wherever generic mapping exists.
         output = Self::normalize_rusty_type_alias_rhs_paths(&output);
         // Late fallback passes can also append fresh c_void placeholder aliases.
-        // Re-run c_void alias normalization and then canonicalize surviving
-        // public aliases as direct std ffi imports.
+        // Re-run c_void alias normalization, then inline alias references and
+        // prune/convert the remaining alias declarations.
         output = Self::normalize_type_alias_rhs_c_void_alias_references(&output);
         output = Self::normalize_unused_c_void_type_aliases(&output);
+        output = Self::normalize_c_void_alias_identifier_references(&output);
+        output = Self::normalize_unused_c_void_type_aliases(&output);
+        output = Self::normalize_unused_c_void_use_aliases(&output);
         output = Self::normalize_c_void_type_aliases_to_use_imports(&output);
         output
     }
@@ -77794,6 +77953,71 @@ pub struct ctype_char_ {
         assert!(
             output.contains("pub struct ctype_char_"),
             "same-name struct should remain intact, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_c_void_alias_identifier_references_rewrites_use_alias_consumers() {
+        let input = r#"
+pub use std::ffi::c_void as basic_ostream_char;
+
+pub fn write(o: *mut basic_ostream_char) -> *const basic_ostream_char {
+    o as *const basic_ostream_char
+}
+"#;
+        let output = AstCodeGen::normalize_c_void_alias_identifier_references(input);
+        assert!(
+            output.contains("pub use std::ffi::c_void as basic_ostream_char;"),
+            "alias declaration should remain for downstream prune pass, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn write(o: *mut std::ffi::c_void) -> *const std::ffi::c_void {"),
+            "use-alias type references should inline to std::ffi::c_void, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("o as *const std::ffi::c_void"),
+            "cast pointee aliases should inline to std::ffi::c_void, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_unused_c_void_use_aliases_removes_unreferenced_alias() {
+        let input = r#"
+/// c_void alias
+pub use std::ffi::c_void as placeholder;
+
+pub fn value() -> i32 { 0 }
+"#;
+        let output = AstCodeGen::normalize_unused_c_void_use_aliases(input);
+        assert!(
+            !output.contains("pub use std::ffi::c_void as placeholder;"),
+            "unused c_void use alias should be removed, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("/// c_void alias"),
+            "unused alias docs should be removed with alias, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_unused_c_void_use_aliases_keeps_referenced_alias() {
+        let input = r#"
+pub use std::ffi::c_void as placeholder;
+
+pub fn use_it(v: *mut placeholder) -> *mut placeholder {
+    v
+}
+"#;
+        let output = AstCodeGen::normalize_unused_c_void_use_aliases(input);
+        assert!(
+            output.contains("pub use std::ffi::c_void as placeholder;"),
+            "referenced c_void use alias should remain, got:\n{}",
             output
         );
     }
