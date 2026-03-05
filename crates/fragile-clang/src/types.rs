@@ -366,6 +366,7 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         "Unit" => return Some("()".to_string()),
         "RecvError" => return Some("std::sync::mpsc::RecvError".to_string()),
         "TryRecvError" => return Some("std::sync::mpsc::TryRecvError".to_string()),
+        "TrySendError" => return Some("rusty::sync::mpsc::TrySendError".to_string()),
         _ => {}
     }
 
@@ -386,12 +387,27 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
     // degraded output; forcing generic guard rewrites can introduce invalid
     // arity/private-path failures.
 
-    for (prefix, std_path) in [
-        ("rusty::sync::mpsc::Sender<", "std::sync::mpsc::Sender"),
-        ("rusty::sync::mpsc::Receiver<", "std::sync::mpsc::Receiver"),
+    for (alias, prefix, std_path) in [
+        (
+            "Sender",
+            "rusty::sync::mpsc::Sender<",
+            "std::sync::mpsc::Sender",
+        ),
+        (
+            "Receiver",
+            "rusty::sync::mpsc::Receiver<",
+            "std::sync::mpsc::Receiver",
+        ),
     ] {
         if let Some(mapped) = map_single_template_alias_to_std(cleaned, prefix, std_path) {
             return Some(mapped);
+        }
+        if root_is_unqualified {
+            let bare_prefix = format!("{}<", alias);
+            if let Some(mapped) = map_single_template_alias_to_std(cleaned, &bare_prefix, std_path)
+            {
+                return Some(mapped);
+            }
         }
     }
 
@@ -2162,6 +2178,14 @@ mod tests {
             "std::sync::mpsc::Receiver<i32>"
         );
         assert_eq!(
+            CppType::Named("Sender<int>".to_string()).to_rust_type_str(),
+            "std::sync::mpsc::Sender<i32>"
+        );
+        assert_eq!(
+            CppType::Named("Receiver<int>".to_string()).to_rust_type_str(),
+            "std::sync::mpsc::Receiver<i32>"
+        );
+        assert_eq!(
             CppType::Named(
                 "volatile struct rusty::sync::mpsc::Sender<const class rusty::String>".to_string()
             )
@@ -2191,6 +2215,10 @@ mod tests {
         );
         assert_eq!(
             CppType::Named("rusty::sync::mpsc::TrySendError".to_string()).to_rust_type_str(),
+            "rusty::sync::mpsc::TrySendError"
+        );
+        assert_eq!(
+            CppType::Named("TrySendError".to_string()).to_rust_type_str(),
             "rusty::sync::mpsc::TrySendError"
         );
         assert_eq!(
@@ -2330,6 +2358,14 @@ mod tests {
             normalize_rusty_type_alias_to_std("rusty::sync::mpsc::Sender<int>"),
             "std::sync::mpsc::Sender<i32>"
         );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("Sender<int>"),
+            "std::sync::mpsc::Sender<i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("Receiver<int>"),
+            "std::sync::mpsc::Receiver<i32>"
+        );
         assert_eq!(normalize_rusty_type_alias_to_std("Unit"), "()");
         assert_eq!(
             normalize_rusty_type_alias_to_std("Condvar"),
@@ -2341,6 +2377,10 @@ mod tests {
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::sync::mpsc::TrySendError"),
+            "rusty::sync::mpsc::TrySendError"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("TrySendError"),
             "rusty::sync::mpsc::TrySendError"
         );
         let mutex_member_guard = normalize_rusty_type_alias_to_std("rusty::sync::Mutex<int>::Guard");

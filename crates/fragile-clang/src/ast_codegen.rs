@@ -71054,6 +71054,14 @@ pub struct rusty_Arc_classrrr_Client_ {
             Some("std::sync::Condvar")
         );
         assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name("Sender<int>").as_deref(),
+            Some("std::sync::mpsc::Sender<i32>")
+        );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name("Receiver<int>").as_deref(),
+            Some("std::sync::mpsc::Receiver<i32>")
+        );
+        assert_eq!(
             AstCodeGen::rusty_wrapper_alias_target_from_record_name(
                 "rusty::sync::mpsc::RecvError"
             )
