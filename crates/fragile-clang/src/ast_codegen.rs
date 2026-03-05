@@ -5041,6 +5041,34 @@ impl AstCodeGen {
         siblings
     }
 
+    fn degraded_function_signature_siblings(name: &str) -> Vec<String> {
+        // Degraded spellings can encode repeated scope separators (`::::`) as
+        // repeated underscores. Prefer already-emitted sibling spellings with
+        // collapsed separators before generating fresh placeholders.
+        if !(name.starts_with("rusty_Function_") || name.starts_with("Function_")) {
+            return Vec::new();
+        }
+        if !name.contains("__") || name.ends_with("__") {
+            return Vec::new();
+        }
+
+        let mut collapsed = name.to_string();
+        while collapsed.contains("__") {
+            collapsed = collapsed.replace("__", "_");
+        }
+
+        let mut siblings = Vec::new();
+        if collapsed != name {
+            siblings.push(collapsed.clone());
+            siblings.push(format!("{}_", collapsed));
+        }
+
+        siblings.retain(|candidate| candidate != name);
+        siblings.sort();
+        siblings.dedup();
+        siblings
+    }
+
     fn resolve_container_alias_target(
         name: &str,
         defined: &HashSet<String>,
@@ -35416,6 +35444,18 @@ impl AstCodeGen {
                 return Some(path);
             }
         }
+
+        if cpp_name.contains("rusty::Function::") && cpp_name.contains("::::") {
+            for candidate in Self::degraded_function_signature_siblings(rust_name) {
+                if let Some(path) = self.resolve_unique_public_type_item_path(&candidate) {
+                    return Some(path);
+                }
+                if self.missing_stub_alias_target_is_emitted(&candidate) {
+                    return Some(candidate);
+                }
+            }
+        }
+
         let mut wrapper_alias_target = Self::rusty_wrapper_alias_target_from_record_name(rust_name)
             .or_else(|| Self::rusty_wrapper_alias_target_from_record_name(cpp_name));
         if wrapper_alias_target.is_none() {
@@ -74101,6 +74141,34 @@ pub struct rusty_Arc_classrrr_Client_ {
         assert!(
             !code.contains("pub struct Barrier {"),
             "missing stub generation should avoid emitting opaque structs for unqualified rusty namespace wrappers, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_aliases_degraded_rusty_function_signature_to_known_sibling() {
+        let mut codegen = AstCodeGen::new();
+        codegen.output = r#"
+pub struct rusty_Function_void_void__ {
+    _opaque: [u8; 1],
+}
+"#
+        .to_string();
+        codegen.used_types.insert(
+            "rusty_Function_void__void_".to_string(),
+            "rusty::Function::void::::void::".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            code.contains("pub type rusty_Function_void__void_ = rusty_Function_void_void__;"),
+            "missing stub generation should alias degraded rusty::Function signatures to known lowered siblings when available, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct rusty_Function_void__void_ {"),
+            "missing stub generation should avoid emitting placeholders for degraded rusty::Function signatures when a concrete sibling exists, got:\n{}",
             code
         );
     }

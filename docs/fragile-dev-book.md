@@ -1730,3 +1730,64 @@ even though they are Rusty wrappers around std guard surfaces.
   - `make clean`
   - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
   - `ctest -j32 --output-on-failure`
+
+## 29. Recover Degraded `rusty::Function` Signature Placeholders to Emitted Siblings (2026-03-05)
+
+### Problem
+
+Drop-in sidecars still emitted many concrete placeholder structs for degraded function wrapper
+spellings like:
+
+- `rusty::Function::void::::void::` -> `rusty_Function_void__void_`
+
+even when a concrete sibling type was already emitted in the same translation unit:
+
+- `rusty::Function<void (void)>` -> `rusty_Function_void_void__`
+
+This produced duplicated function-wrapper surfaces and unnecessary placeholder structs.
+
+### Rule
+
+- During missing-stub concrete alias resolution, detect degraded `rusty::Function` spellings that
+  carry repeated scope separators (`::::`).
+- Prefer aliasing the degraded lowered name to an already-emitted sibling obtained by collapsing
+  repeated lowered separators, instead of generating a new placeholder struct.
+- Keep this fallback conservative:
+  - only for `rusty::Function` degraded spellings,
+  - only when a concrete candidate is already emitted.
+
+### Implementation
+
+- In `crates/fragile-clang/src/ast_codegen.rs`:
+  - Added `degraded_function_signature_siblings()`:
+    - targets `rusty_Function_` / `Function_` lowered spellings with repeated `__` separators,
+    - produces canonical sibling candidates by collapsing repeated underscore runs and testing a
+      template-close underscore variant.
+  - Extended `resolve_missing_stub_concrete_alias_target()`:
+    - when `cpp_name` contains both `rusty::Function::` and `::::`,
+    - probes `degraded_function_signature_siblings()` candidates and aliases to the first emitted
+      sibling/path match.
+
+### Tests
+
+- Added `test_missing_stub_aliases_degraded_rusty_function_signature_to_known_sibling`:
+  - seeds output with `rusty_Function_void_void__`,
+  - marks `rusty_Function_void__void_` (`rusty::Function::void::::void::`) as missing,
+  - verifies stub generation emits:
+    - `pub type rusty_Function_void__void_ = rusty_Function_void_void__;`
+  - and does not emit a placeholder struct for `rusty_Function_void__void_`.
+
+### Guardrails
+
+- Scope is missing-stub alias recovery only; no global remapping of `rusty::Function` type
+  lowering is introduced.
+- Candidate aliasing is gated on already-emitted targets, avoiding synthetic or speculative
+  mappings.
+- Fresh validation remains green:
+  - `cargo test -p fragile-clang --lib test_missing_stub_aliases_degraded_rusty_function_signature_to_known_sibling`
+  - `cargo test -p fragile-clang --lib test_missing_stub_aliases_lowered_rusty_wrapper_name_when_cpp_path_is_degraded`
+  - `cargo test -p fragile-clang --lib test_missing_stub_aliases_unqualified_rusty_wrapper_in_namespace_context`
+  - `cargo build --release --bin fragilec`
+  - `make clean`
+  - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
+  - `ctest -j32 --output-on-failure`
