@@ -5664,6 +5664,11 @@ impl AstCodeGen {
         if segments.len() < 2 {
             return false;
         }
+        // Keep `c_u128`-like spellings eligible as real type candidates while
+        // still suppressing the obvious pseudo-type `c_void`.
+        if segments.len() == 2 && segments[0] == "c" {
+            return segments[1] == "void";
+        }
 
         segments.iter().all(|seg| {
             Self::is_expression_like_path_segment(seg) || Self::is_numeric_path_segment(seg)
@@ -6171,6 +6176,7 @@ impl AstCodeGen {
             "std",
             "core",
             "alloc",
+            "c_void",
             "string",
             "vec",
             "option",
@@ -74934,6 +74940,12 @@ pub mod rusty {
             .insert("from_raw_parts_mut".to_string());
         codegen
             .referenced_but_undefined_structs
+            .insert("c_void".to_string());
+        codegen
+            .referenced_but_undefined_structs
+            .insert("c_u128".to_string());
+        codegen
+            .referenced_but_undefined_structs
             .insert("thread_id".to_string());
         codegen.generate_missing_type_stubs();
         let code = codegen.output;
@@ -74942,12 +74954,13 @@ pub mod rusty {
                 && !code.contains("pub struct type_name")
                 && !code.contains("pub struct from_utf8")
                 && !code.contains("pub struct new_0")
-                && !code.contains("pub struct from_raw_parts_mut"),
+                && !code.contains("pub struct from_raw_parts_mut")
+                && !code.contains("pub struct c_void"),
             "referenced-but-undefined expression-like names should be ignored as type stubs, got:\n{}",
             code
         );
         assert!(
-            code.contains("pub struct thread_id"),
+            code.contains("pub struct thread_id") && code.contains("pub struct c_u128"),
             "non-expression lowercase type-like names should remain eligible in referenced-but-undefined recovery, got:\n{}",
             code
         );
@@ -79469,6 +79482,28 @@ pub(crate) static mut __gv_continuation: std::mem::MaybeUninit<continuation_t> =
                 "pub(crate) static mut __gv_continuation: std::mem::MaybeUninit<u128> = std::mem::MaybeUninit::uninit();"
             ),
             "static type-slot normalization should rewrite unresolved lowercase tokens in static declarations, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_unresolved_lowercase_item_type_tokens_preserves_c_void_paths() {
+        let input = r#"
+use std::ffi::c_void;
+pub fn passthrough(raw: *mut c_void, named: *const std::ffi::c_void) -> *const c_void {
+    named
+}
+"#;
+        let output = AstCodeGen::normalize_unresolved_lowercase_item_type_tokens(input);
+        assert!(
+            output.contains("pub fn passthrough(raw: *mut c_void, named: *const std::ffi::c_void) -> *const c_void")
+                || output.contains("pub fn passthrough(raw: *mut c_void, named: *const std::ffi::c_void) -> *const c_void {"),
+            "c_void-bearing signatures should be preserved by lowercase fallback normalization, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("std::ffi::u128") && !output.contains("*mut u128"),
+            "c_void type paths should not be rewritten to u128 fallback types, got:\n{}",
             output
         );
     }

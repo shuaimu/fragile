@@ -1798,3 +1798,49 @@ This produced duplicated function-wrapper surfaces and unnecessary placeholder s
   - `make clean`
   - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
   - `ctest -j32 --output-on-failure`
+
+## 30. Preserve `c_void` in Lowercase Item-Type Fallback Normalization (2026-03-05)
+
+### Problem
+
+`normalize_unresolved_lowercase_item_type_tokens()` rewrites unresolved lowercase item-signature
+type identifiers to `u128`. Without reserving `c_void`, this fallback can rewrite valid FFI paths:
+
+- `std::ffi::c_void` -> `std::ffi::u128`
+
+This leads to hard compile failures in generated sidecars (for example `cannot find type u128 in
+module std::ffi`).
+
+### Rule
+
+- Treat `c_void` as a reserved lowercase FFI type token in item-signature fallback normalization.
+- Never rewrite `c_void` through the unresolved lowercase -> `u128` lane.
+
+### Implementation
+
+- In `crates/fragile-clang/src/ast_codegen.rs`:
+  - Added `"c_void"` to the `reserved_module_like` set used by
+    `normalize_unresolved_lowercase_item_type_tokens()`.
+
+### Tests
+
+- Added `test_normalize_unresolved_lowercase_item_type_tokens_preserves_c_void_paths`:
+  - verifies signatures containing both `*mut c_void` and `*const std::ffi::c_void` are preserved,
+  - verifies no `std::ffi::u128`/`*mut u128` rewrite occurs.
+
+### Guardrails
+
+- Scope is limited to lowercase item-type fallback normalization.
+- Existing unresolved lowercase rewrites (for true unknown identifiers like `pair`, `id`) remain
+  intact.
+
+### Validation
+
+- `cargo test -p fragile-clang --lib test_missing_stub_generation_ignores_expression_like_referenced_but_undefined_names`
+- `cargo test -p fragile-clang --lib test_missing_stub_generation_ignores_expression_like_path_used_type_names`
+- `cargo test -p fragile-clang --lib test_normalize_unresolved_lowercase_item_type_tokens_preserves_c_void_paths`
+- `cargo build --release --bin fragilec`
+- `make clean`
+- `cmake -S .. -B .` (from `vendor/mako/build_fragilec_dropin`)
+- `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
+- `ctest -j32 --output-on-failure` (only failure: `rpcbench` path expects `./build/rpcbench`)
