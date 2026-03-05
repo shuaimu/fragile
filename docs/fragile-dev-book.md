@@ -166,6 +166,9 @@ Generic normalizations added in this replay cycle:
   - drop paired alias-doc lines (`/// C++ typedef/using ...`) for removed aliases to keep output clean.
 - `normalize_with_capacity_default_string_placeholders`:
   - rewrites degraded `with_capacity::default()` placeholders (from failed `String::with_capacity` recovery) to `std::string::String::new()`.
+- expression-like pseudo-type stub suppression (`generate_missing_type_stubs`):
+  - detects leaked expression path spellings used as fake type names (for example `size::of`, `type::name`, `from::utf8`) and skips emitting fallback `pub struct ...` stubs for them.
+  - applies to both `used_types` and `referenced_but_undefined_structs` recovery paths, while preserving real lowercase type candidates.
 
 Outcome snapshot:
 
@@ -174,6 +177,7 @@ Outcome snapshot:
 - On March 4, 2026 (revalidation pass), a fresh rerun in `build_fragilec_dropin` with `make clean`, `cmake --build . -j32`, and `ctest -j32 --output-on-failure` completed with `117/117` tests passed and no `fragile rustc object compile failed` translation units in the build log.
 - On March 5, 2026, after adding runtime-internal alias rewrite+suppression, a fresh `make clean`, `cmake --build . -j32`, and `ctest -j32 --output-on-failure` rerun again passed (`117/117`) while removing generated fallback aliases for `BorrowState`/`Group`/`ProbeSeq`/`RcControlBlockBase` in `build_fragilec_dropin` sidecar `.fragile.rs` outputs.
 - On March 5, 2026, after adding unused runtime-internal typedef pruning, another fresh `make clean`, `cmake --build . -j32`, and `ctest -j32 --output-on-failure` rerun passed (`117/117`) and reduced remaining `pub type ... = rusty::...;` sidecar aliases in `build_fragilec_dropin` from 74 to 0.
+- On March 5, 2026, after adding expression-like pseudo-type stub suppression for leaked paths (for example `size::of`), a fresh `make clean`, `cmake --build . -j32`, and `ctest -j32 --output-on-failure` rerun passed (`117/117`) and removed invalid fallback struct emissions for those path-like pseudo types.
 
 ### 2.3 C++ `_v` trait globals and export linkage
 

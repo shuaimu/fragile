@@ -5566,6 +5566,100 @@ impl AstCodeGen {
         true
     }
 
+    fn is_expression_like_path_segment(segment: &str) -> bool {
+        matches!(
+            segment,
+            "align"
+                | "call"
+                | "cap"
+                | "capacity"
+                | "data"
+                | "finite"
+                | "from"
+                | "func"
+                | "infinite"
+                | "into"
+                | "is"
+                | "layout"
+                | "len"
+                | "mul"
+                | "name"
+                | "nan"
+                | "new"
+                | "normal"
+                | "of"
+                | "op"
+                | "or"
+                | "parts"
+                | "ptr"
+                | "raw"
+                | "saturating"
+                | "size"
+                | "total"
+                | "type"
+                | "unwrap"
+                | "utf8"
+                | "vtable"
+                | "void"
+                | "with"
+        )
+    }
+
+    fn is_expression_like_cpp_type_spelling(cpp_name: &str) -> bool {
+        let cleaned = cpp_name.trim();
+        if cleaned.is_empty()
+            || !cleaned.contains("::")
+            || cleaned.contains('<')
+            || cleaned.contains('>')
+            || cleaned.contains('(')
+            || cleaned.contains(')')
+            || cleaned.contains(' ')
+            || cleaned.contains('&')
+            || cleaned.contains('*')
+            || cleaned.contains('[')
+            || cleaned.contains(']')
+        {
+            return false;
+        }
+
+        let segments: Vec<&str> = cleaned.split("::").filter(|seg| !seg.is_empty()).collect();
+        if segments.len() < 2 {
+            return false;
+        }
+        if segments
+            .iter()
+            .any(|seg| seg.starts_with("__") || seg.chars().any(|ch| ch.is_ascii_uppercase()))
+        {
+            return false;
+        }
+
+        segments
+            .iter()
+            .all(|seg| Self::is_expression_like_path_segment(seg))
+    }
+
+    fn is_expression_like_lowered_type_name(rust_name: &str) -> bool {
+        if rust_name.is_empty()
+            || rust_name
+                .chars()
+                .any(|ch| {
+                    ch.is_ascii_uppercase()
+                        || !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+                })
+        {
+            return false;
+        }
+
+        let segments: Vec<&str> = rust_name.split('_').filter(|seg| !seg.is_empty()).collect();
+        if segments.len() < 2 {
+            return false;
+        }
+
+        segments
+            .iter()
+            .all(|seg| Self::is_expression_like_path_segment(seg))
+    }
+
     fn normalize_unresolved_type_spelling_variants(code: &str) -> String {
         let defined = Self::collect_defined_type_like_names(code);
         if defined.is_empty() {
@@ -19042,6 +19136,8 @@ impl AstCodeGen {
             if self.local_vars.contains(rust_name)
                 || self.global_vars.contains(rust_name)
                 || self.defined_function_names.contains(rust_name)
+                || Self::is_expression_like_cpp_type_spelling(cpp_name)
+                || Self::is_expression_like_lowered_type_name(rust_name)
                 || !Self::looks_like_stub_candidate_type_name(rust_name)
             {
                 continue;
@@ -19141,6 +19237,9 @@ impl AstCodeGen {
         for rust_name in &self.referenced_but_undefined_structs {
             // Skip if already in missing_types
             if missing_types.iter().any(|(n, _)| n == rust_name) {
+                continue;
+            }
+            if Self::is_expression_like_lowered_type_name(rust_name) {
                 continue;
             }
             // Skip if already generated
@@ -74743,6 +74842,72 @@ pub mod rusty {
             !code.contains("pub struct input")
                 && !code.contains("pub struct minified"),
             "missing stub generation should ignore plain lowercase value-like names, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_generation_ignores_expression_like_path_used_type_names() {
+        let mut codegen = AstCodeGen::new();
+        codegen
+            .used_types
+            .insert("size_of".to_string(), "size::of".to_string());
+        codegen
+            .used_types
+            .insert("type_name".to_string(), "type::name".to_string());
+        codegen
+            .used_types
+            .insert("from_utf8".to_string(), "from::utf8".to_string());
+        codegen
+            .used_types
+            .insert("align_of".to_string(), "align::of".to_string());
+        codegen
+            .used_types
+            .insert("mutex".to_string(), "mutex".to_string());
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            !code.contains("pub struct size_of")
+                && !code.contains("pub struct type_name")
+                && !code.contains("pub struct from_utf8")
+                && !code.contains("pub struct align_of"),
+            "missing stub generation should ignore expression-like path tokens leaked as type names, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub struct mutex"),
+            "known lowercase type surfaces should remain eligible when they are real type spellings, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_generation_ignores_expression_like_referenced_but_undefined_names() {
+        let mut codegen = AstCodeGen::new();
+        codegen
+            .referenced_but_undefined_structs
+            .insert("size_of".to_string());
+        codegen
+            .referenced_but_undefined_structs
+            .insert("type_name".to_string());
+        codegen
+            .referenced_but_undefined_structs
+            .insert("from_utf8".to_string());
+        codegen
+            .referenced_but_undefined_structs
+            .insert("thread_id".to_string());
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            !code.contains("pub struct size_of")
+                && !code.contains("pub struct type_name")
+                && !code.contains("pub struct from_utf8"),
+            "referenced-but-undefined expression-like names should be ignored as type stubs, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub struct thread_id"),
+            "non-expression lowercase type-like names should remain eligible in referenced-but-undefined recovery, got:\n{}",
             code
         );
     }
