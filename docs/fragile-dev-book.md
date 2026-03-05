@@ -2013,3 +2013,85 @@ During clean mako replay, this surfaced as:
   - `rg -n "std_vector_unsignedint = std_vector<u32>" CMakeFiles/test_client_service.dir/test/test_client_service.cc.fragile.rs`
   - confirms compact `unsignedint` suffix canonicalizes to `u32`
 - `ctest -j32 --output-on-failure` (only failure remains `rpcbench` path `./build/rpcbench`)
+
+## 34. Reserved `thread` Alias Recovery and Untyped Default/Clone Artifact Cleanup (2026-03-05)
+
+### Problem
+
+After preserving lowered composite/container spellings, clean mako replay shifted to three generic
+failure classes:
+
+- unresolved bare `thread` in top-level signatures even when a unique public namespaced target
+  existed (for example `asio::detail::thread`);
+- ambiguous untyped placeholder defaults in degraded bodies:
+  - `let mut t = Default::default();` (E0790),
+  - `Default::default().join();` (E0282);
+- single-use local clone artifacts on non-`Clone` placeholder structs:
+  - `(poll_arc).clone()` (E0599).
+
+### Rule
+
+- Reserved lowercase names such as `thread` can still receive top-level unresolved namespaced alias
+  fallbacks when:
+  - the target is non-`std/core/alloc`, and
+  - there is no top-level module-name collision.
+- Alias dedupe must only consider real top-level declarations; nested aliases with the same leaf
+  name must not block top-level fallback alias emission.
+- Untyped local default placeholders and degraded clone/join artifacts should be normalized away in
+  compile-safe, generic ways rather than forcing non-`Clone` impl synthesis on wrapper-backed
+  structs.
+
+### Implementation
+
+- In `crates/fragile-clang/src/ast_codegen.rs`:
+  - `normalize_unresolved_namespaced_type_aliases(...)`:
+    - tracks top-level module names and only blocks reserved-name alias synthesis on true
+      root-module collisions or std/core/alloc targets;
+    - switches alias dedupe from global string-search (`out.contains("pub type X =")`) to
+      top-level declaration tracking, allowing valid top-level fallback aliases when same-name
+      nested aliases already exist.
+  - `normalize_unresolved_join_method_calls(...)` now rewrites untyped default receivers
+    (`Default::default().join();`, `std::default::Default::default().join();`) to `();`.
+  - `normalize_unused_default_local_bindings(...)` function-head detection now recognizes extern ABI
+    signatures (`pub extern "C" fn ...`) and related qualifier combinations.
+  - Added `normalize_single_use_local_clone_calls(...)`:
+    - rewrites parenthesized local clone calls (`(x).clone()`) to moves (`(x)`) when the local is
+      single-use in-function (declaration + clone site only).
+  - Added `normalize_noop_default_local_placeholder_bindings(...)`:
+    - drops untyped `let ... = Default::default();` placeholders when immediately followed by noop
+      `();` and unused before block close.
+  - Pipeline integration:
+    - runs the noop-default cleanup alongside existing unused-default cleanup both in early body
+      cleanup and final late cleanup stages.
+
+### Tests
+
+- Added:
+  - `test_normalize_unresolved_namespaced_type_aliases_allows_nonstd_reserved_thread_aliases`
+  - `test_normalize_unresolved_namespaced_type_aliases_skips_reserved_thread_alias_when_top_level_module_conflicts`
+  - `test_normalize_unresolved_join_method_calls_rewrites_untyped_default_receiver_join_noop`
+  - `test_normalize_unused_default_local_bindings_drops_unused_untyped_defaults_in_extern_fn`
+  - `test_normalize_single_use_local_clone_calls_rewrites_parenthesized_local_clone_move`
+  - `test_normalize_single_use_local_clone_calls_keeps_multi_use_local_clone_calls`
+  - `test_normalize_noop_default_local_placeholder_bindings_drops_noop_placeholder_pair`
+  - `test_normalize_noop_default_local_placeholder_bindings_keeps_used_bindings_before_block_end`
+
+### Validation
+
+- Targeted unit tests:
+  - `cargo test -p fragile-clang --lib normalize_unresolved_namespaced_type_aliases -- --nocapture`
+  - `cargo test -p fragile-clang --lib normalize_unresolved_join_method_calls -- --nocapture`
+  - `cargo test -p fragile-clang --lib normalize_unused_default_local_bindings -- --nocapture`
+  - `cargo test -p fragile-clang --lib normalize_single_use_local_clone_calls -- --nocapture`
+  - `cargo test -p fragile-clang --lib normalize_noop_default_local_placeholder_bindings -- --nocapture`
+- Compiler build:
+  - `cargo build --release --bin fragilec`
+- clean mako rebuild (`vendor/mako/build_fragilec_dropin`):
+  - `make clean`
+  - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
+  - result: `EXIT:0`
+- test run:
+  - `ctest -j32 --output-on-failure`
+  - 116 tests pass; only `rpcbench` fails due its upstream test command hardcoding
+    `WORKING_DIRECTORY=/vendor/mako` plus `./build/rpcbench` (path mismatch for this build dir).
+  - `ctest -j32 --output-on-failure -E '^rpcbench$'` passes (116/116).
