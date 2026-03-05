@@ -34785,19 +34785,73 @@ impl AstCodeGen {
         Some(rust)
     }
 
-    fn stl_simple_map_key_value_rust_types_from_suffix(
-        suffix: &str,
-    ) -> Option<(String, String)> {
+    fn stl_map_key_value_suffix_parts_from_suffix(suffix: &str) -> Option<(String, String)> {
         let trimmed = suffix.trim_matches('_');
         if trimmed.is_empty() {
             return None;
         }
-        if trimmed.matches("__").count() != 1 {
+        if trimmed.matches("__").count() == 1 {
+            let (key_suffix, value_suffix) = trimmed.split_once("__")?;
+            if key_suffix.is_empty() || value_suffix.is_empty() {
+                return None;
+            }
+            return Some((key_suffix.to_string(), value_suffix.to_string()));
+        }
+
+        // Handle lowered full template spellings such as:
+        //   unordered_map_K__V__struct_std_hash_K__struct_std_equal_to_K__class_std_allocator_...
+        //   map_K__V__struct_std_less_K__class_std_allocator_...
+        let (key_suffix, rest) = trimmed.split_once("__")?;
+        if key_suffix.is_empty() || rest.is_empty() {
             return None;
         }
-        let (key_suffix, value_suffix) = trimmed.split_once("__")?;
-        let key = Self::stl_container_element_rust_type_from_suffix(key_suffix)?;
-        let value = Self::stl_container_element_rust_type_from_suffix(value_suffix)?;
+
+        let mut cutoff: Option<usize> = None;
+        for marker in [
+            "__struct_std_hash_",
+            "__class_std_hash_",
+            "__std_hash_",
+            "__struct_std_equal_to_",
+            "__class_std_equal_to_",
+            "__std_equal_to_",
+            "__struct_std_less_",
+            "__class_std_less_",
+            "__std_less_",
+            "__class_std_allocator_",
+            "__struct_std_allocator_",
+            "__std_allocator_",
+        ] {
+            if let Some(idx) = rest.find(marker) {
+                cutoff = Some(cutoff.map_or(idx, |prev| prev.min(idx)));
+            }
+        }
+
+        let Some(cutoff_idx) = cutoff else {
+            return None;
+        };
+        if cutoff_idx == 0 {
+            return None;
+        }
+        let value_suffix = &rest[..cutoff_idx];
+        if value_suffix.is_empty() {
+            return None;
+        }
+
+        // Keep this conservative: skip nested/complex lowered forms where key
+        // or value still carries multi-token separators.
+        if key_suffix.contains("__") || value_suffix.contains("__") {
+            return None;
+        }
+
+        Some((key_suffix.to_string(), value_suffix.to_string()))
+    }
+
+    fn stl_simple_map_key_value_rust_types_from_suffix(
+        suffix: &str,
+    ) -> Option<(String, String)> {
+        let (key_suffix, value_suffix) = Self::stl_map_key_value_suffix_parts_from_suffix(suffix)?;
+        let key = Self::stl_container_element_rust_type_from_suffix(&key_suffix)?;
+        let value = Self::stl_container_element_rust_type_from_suffix(&value_suffix)?;
         if key.is_empty()
             || value.is_empty()
             || Self::has_unresolved_template_placeholder(&key)
@@ -34875,15 +34929,37 @@ impl AstCodeGen {
         true
     }
 
+    fn is_supported_associative_map_key_type(ty: &str) -> bool {
+        let trimmed = ty.trim();
+        if trimmed.is_empty() {
+            return false;
+        }
+        if Self::is_primitive_scalar_type_name(trimmed) {
+            return true;
+        }
+        if trimmed.starts_with("*const ") || trimmed.starts_with("*mut ") {
+            return true;
+        }
+        trimmed == "std::string::String" || trimmed == "String" || trimmed == "std_string"
+    }
+
     fn stl_associative_container_alias_target_from_rust_name(
         rust_name: &str,
     ) -> Option<String> {
-        for prefix in ["std_unordered_map_", "unordered_map_"] {
+        for (prefix, target_base) in [
+            ("std_unordered_map_", "std::collections::HashMap"),
+            ("unordered_map_", "std::collections::HashMap"),
+            ("std_map_", "std::collections::BTreeMap"),
+            ("map_", "std::collections::BTreeMap"),
+        ] {
             let Some(suffix) = rust_name.strip_prefix(prefix) else {
                 continue;
             };
             let (key, value) = Self::stl_simple_map_key_value_rust_types_from_suffix(suffix)?;
-            return Some(format!("std::collections::HashMap<{}, {}>", key, value));
+            if !Self::is_supported_associative_map_key_type(&key) {
+                continue;
+            }
+            return Some(format!("{}<{}, {}>", target_base, key, value));
         }
         None
     }
@@ -72721,6 +72797,77 @@ pub mod testing {
         assert!(
             code.contains("pub struct unordered_map_void__unordered_map {"),
             "missing stub generation should keep an opaque placeholder for unresolved/unusable unordered_map component spellings, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_full_unordered_map_signature_aliases_to_std_hashmap() {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "unordered_map_long__class_rusty_Arc_class_rrr_Future__struct_std_hash_long__struct_std_equal_to_long__class_std_allocator_struct_std_pair_const_long__class_rusty_Arc_class_rrr_Future__".to_string(),
+            "unordered_map<long, rusty::Arc<rrr::Future>, std::hash<long>, std::equal_to<long>, std::allocator<std::pair<const long, rusty::Arc<rrr::Future>>>>".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            code.contains(
+                "pub type unordered_map_long__class_rusty_Arc_class_rrr_Future__struct_std_hash_long__struct_std_equal_to_long__class_std_allocator_struct_std_pair_const_long__class_rusty_Arc_class_rrr_Future__ = std::collections::HashMap<i64, std::sync::Arc<rrr_Future>>;"
+            ),
+            "missing stub generation should alias lowered full-signature unordered_map names to std::collections::HashMap when key/value components are safely recognized, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains(
+                "pub struct unordered_map_long__class_rusty_Arc_class_rrr_Future__struct_std_hash_long__struct_std_equal_to_long__class_std_allocator_struct_std_pair_const_long__class_rusty_Arc_class_rrr_Future__ {"
+            ),
+            "missing stub generation should avoid opaque placeholders for full-signature lowered unordered_map names when std HashMap targets can be formed, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_simple_map_aliases_to_std_btreemap_for_safe_keys() {
+        let mut codegen = AstCodeGen::new();
+        codegen
+            .used_types
+            .insert("map_unsigned_int__bool".to_string(), "map<unsigned int, bool>".to_string());
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            code.contains(
+                "pub type map_unsigned_int__bool = std::collections::BTreeMap<u32, bool>;"
+            ),
+            "missing stub generation should alias lowered map names with conservative key types to std::collections::BTreeMap, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct map_unsigned_int__bool {"),
+            "missing stub generation should avoid opaque placeholders for map aliases when std BTreeMap targets can be formed, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_map_with_non_conservative_key_keeps_placeholder() {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "map_ALock__unsigned_long".to_string(),
+            "map<ALock, unsigned long>".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            !code.contains("pub type map_ALock__unsigned_long = std::collections::BTreeMap"),
+            "missing stub generation should not force std::collections::BTreeMap aliases for lowered map names with non-conservative key types, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub struct map_ALock__unsigned_long {"),
+            "missing stub generation should keep an opaque placeholder for lowered map names with non-conservative key types, got:\n{}",
             code
         );
     }

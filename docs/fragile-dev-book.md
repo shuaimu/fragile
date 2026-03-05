@@ -1148,14 +1148,27 @@ Only emit lowered map aliases when both key/value components are valid concrete 
 
 - In `crates/fragile-clang/src/ast_codegen.rs`, added `is_supported_associative_map_component_type()`.
 - `stl_simple_map_key_value_rust_types_from_suffix()` now requires both parsed key/value components to pass this guard.
+- Added conservative lowered full-signature parsing for map spellings via `stl_map_key_value_suffix_parts_from_suffix()`:
+  - supports signatures with trailing hash/equal/less/allocator lowered tails,
+  - only when key/value extraction is unambiguous.
+- Extended associative alias targets to include:
+  - `std_unordered_map_*` / `unordered_map_*` -> `std::collections::HashMap<K, V>`
+  - `std_map_*` / `map_*` -> `std::collections::BTreeMap<K, V>`
+- Added key-type gating with `is_supported_associative_map_key_type()` so only conservative key surfaces (primitive scalars, raw pointers, string-like std spellings) are lowered to std map aliases.
 - Guard rejects:
   - unresolved template placeholders,
   - `std::ffi::c_void`/`std_ffi_c_void`,
   - bare lowered container base names (for example `unordered_map`, `map`, `vector`, `set`, `queue`, `stack`, and std-prefixed counterparts).
 - Added regression test:
   - `test_missing_stub_unordered_map_with_unusable_component_types_keeps_placeholder`
+  - `test_missing_stub_full_unordered_map_signature_aliases_to_std_hashmap`
+  - `test_missing_stub_simple_map_aliases_to_std_btreemap_for_safe_keys`
+  - `test_missing_stub_map_with_non_conservative_key_keeps_placeholder`
 
 ### Guardrails
 
 - Simple lowered `std_unordered_map_*` spellings with concrete components (for example `long` -> `i64`, `constclass_rusty_Arc_class_rrr_Future_` -> `std::sync::Arc<rrr_Future>`) still alias to `std::collections::HashMap<...>`.
+- Lowered full-signature unordered-map spellings with explicit hash/equal/allocator tails now alias to the same `std::collections::HashMap<...>` surface when key/value are conservatively recoverable.
+- Simple lowered ordered-map spellings with conservative keys (for example `map_unsigned_int__bool`) now alias to `std::collections::BTreeMap<...>`.
+- Ordered maps with non-conservative keys (for example `map_ALock__unsigned_long`) remain opaque placeholders to avoid introducing trait-bound regressions from forced std container semantics.
 - Unusable lowered `unordered_map_*` spellings now remain opaque, preventing invalid Rust type aliases and preserving build stability.
