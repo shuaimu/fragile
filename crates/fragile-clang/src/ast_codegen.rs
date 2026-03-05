@@ -35023,7 +35023,13 @@ impl AstCodeGen {
         if trimmed.starts_with("*const ") || trimmed.starts_with("*mut ") {
             return true;
         }
-        trimmed == "std::string::String" || trimmed == "String" || trimmed == "std_string"
+        trimmed == "std::string::String"
+            || trimmed == "String"
+            || trimmed == "std_string"
+            || trimmed == "basic_string_char"
+            || trimmed == "std_basic_string_char"
+            || trimmed.starts_with("basic_string_char__")
+            || trimmed.starts_with("std_basic_string_char__")
     }
 
     fn stl_associative_container_alias_target_from_rust_name(
@@ -35230,12 +35236,36 @@ impl AstCodeGen {
 
         // Canonicalize common `basic_string<char, ...>` spellings to the prebuilt
         // `std_string` surface so generated call sites can reuse string methods.
+        let rust_name_is_stl_container_lowering = [
+            "std_unordered_map_",
+            "unordered_map_",
+            "std_map_",
+            "map_",
+            "std_unordered_set_",
+            "unordered_set_",
+            "std_set_",
+            "set_",
+            "std_vector_",
+            "vector_",
+            "std_deque_",
+            "deque_",
+            "std_queue_",
+            "queue_",
+            "std_stack_",
+            "stack_",
+        ]
+        .iter()
+        .any(|prefix| rust_name.starts_with(prefix));
         let looks_like_basic_string_char = rust_name == "basic_string_char"
             || rust_name == "std_basic_string_char"
             || rust_name.starts_with("basic_string_char__")
+            || rust_name.starts_with("std_basic_string_char__")
             || cpp_name.contains("basic_string<char")
             || cpp_name.contains("basic_string< char");
-        if looks_like_basic_string_char && self.missing_stub_alias_target_is_emitted("std_string") {
+        if !rust_name_is_stl_container_lowering
+            && looks_like_basic_string_char
+            && self.missing_stub_alias_target_is_emitted("std_string")
+        {
             return Some("std_string".to_string());
         }
 
@@ -73020,6 +73050,37 @@ pub mod testing {
         assert!(
             !code.contains("pub struct unordered_map_unsigned_int__set_unsigned_long {"),
             "missing stub generation should avoid opaque placeholders for unordered_map aliases when set-valued std HashMap targets can be formed, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_unordered_map_with_basic_string_key_aliases_to_std_hashmap() {
+        let mut codegen = AstCodeGen::new();
+        codegen
+            .used_types
+            .insert(
+                "unordered_map_basic_string_char__unsigned_long".to_string(),
+                "unordered_map<basic_string<char>, unsigned long>".to_string(),
+            );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            code.contains(
+                "pub type unordered_map_basic_string_char__unsigned_long = std::collections::HashMap<"
+            ),
+            "missing stub generation should alias lowered unordered_map names with basic_string<char> keys to std HashMap targets, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub type unordered_map_basic_string_char__unsigned_long = std_string;"),
+            "missing stub generation should not collapse unordered_map aliases with basic_string<char> keys to std_string, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct unordered_map_basic_string_char__unsigned_long {"),
+            "missing stub generation should avoid opaque placeholders for unordered_map aliases with basic_string<char> keys when std HashMap targets can be formed, got:\n{}",
             code
         );
     }

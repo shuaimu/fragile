@@ -1212,3 +1212,32 @@ Only emit lowered set aliases when the recovered element type is conservative an
 - Full-signature lowered unordered-set spellings with recognized std tail markers alias when element extraction is unambiguous.
 - Lowered map spellings with conservative lowered set values now alias to std map surfaces instead of remaining opaque placeholders (for example `map_unsigned_long__set_unsigned_short` -> `std::collections::BTreeMap<u64, std_collections_BTreeSet_u16>` with `std_collections_BTreeSet_u16` aliasing to `std::collections::BTreeSet<u16>`).
 - Non-conservative lowered set spellings (for example `set_Arc_Job`) remain opaque placeholders, avoiding forced std trait-bound regressions.
+
+## 18. Basic-String Keyed `unordered_map` Missing-Stub Alias Recovery (2026-03-05)
+
+### Problem
+
+Lowered names like `unordered_map_basic_string_char__unsigned_long` were being mis-aliased to `std_string` because the associative alias path rejected `basic_string_char` keys, then a broad fallback treated any type mentioning `basic_string<char>` as if it were the string type itself.
+
+### Rule
+
+Treat lowered `basic_string<char>` spellings as conservative associative keys and prevent string-fallback aliasing from firing on lowered STL container names.
+
+### Implementation
+
+- In `crates/fragile-clang/src/ast_codegen.rs`:
+  - Extended `is_supported_associative_map_key_type()` to accept:
+    - `basic_string_char`,
+    - `std_basic_string_char`,
+    - lowered `basic_string_char__*` variants.
+  - Tightened the `resolve_missing_stub_concrete_alias_target()` `basic_string<char>` fallback:
+    - added a guard to skip this fallback when `rust_name` is a lowered STL container spelling (`unordered_map_*`, `map_*`, `set_*`, `vector_*`, etc).
+- Added regression test:
+  - `test_missing_stub_unordered_map_with_basic_string_key_aliases_to_std_hashmap`
+  - asserts the missing-stub emits `std::collections::HashMap<...>` and not `std_string`.
+
+### Guardrails
+
+- Lowered string-like concrete types still canonicalize to `std_string` when they are truly string spellings.
+- Lowered associative container spellings with `basic_string<char>` keys now stay container-shaped (`HashMap`), avoiding accidental scalar alias collapse.
+- Full `mako` clean build (`make clean`, `cmake --build . -j32`) and `ctest -j32 --output-on-failure` remain green after the change.
