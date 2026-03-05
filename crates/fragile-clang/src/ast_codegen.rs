@@ -71042,8 +71042,16 @@ pub struct rusty_Arc_classrrr_Client_ {
             Some("std::thread::JoinHandle<()>")
         );
         assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name("JoinHandle<void>").as_deref(),
+            Some("std::thread::JoinHandle<()>")
+        );
+        assert_eq!(
             AstCodeGen::rusty_wrapper_alias_target_from_record_name("rusty::Barrier").as_deref(),
             Some("std::sync::Barrier")
+        );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name("Condvar").as_deref(),
+            Some("std::sync::Condvar")
         );
         assert_eq!(
             AstCodeGen::rusty_wrapper_alias_target_from_record_name(
@@ -71051,6 +71059,10 @@ pub struct rusty_Arc_classrrr_Client_ {
             )
             .as_deref(),
             Some("std::sync::mpsc::RecvError")
+        );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name("Unit").as_deref(),
+            Some("()")
         );
         assert_eq!(
             AstCodeGen::rusty_wrapper_alias_target_from_record_name("rusty::sync::mpsc::Unit")

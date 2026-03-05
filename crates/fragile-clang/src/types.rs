@@ -284,10 +284,8 @@ fn map_alias_template_arg_to_rust(arg: &str) -> String {
     CppType::Named(trimmed.to_string()).to_rust_type_str()
 }
 
-fn map_thread_join_handle_to_std(spelling: &str) -> Option<String> {
-    let inner = spelling
-        .strip_prefix("rusty::thread::JoinHandle<")?
-        .strip_suffix('>')?;
+fn map_thread_join_handle_with_prefix_to_std(spelling: &str, prefix: &str) -> Option<String> {
+    let inner = spelling.strip_prefix(prefix)?.strip_suffix('>')?;
     let args = parse_template_args(inner);
     if args.len() != 1 {
         return None;
@@ -299,6 +297,14 @@ fn map_thread_join_handle_to_std(spelling: &str) -> Option<String> {
         CppType::Named(args[0].clone()).to_rust_type_str()
     };
     Some(format!("std::thread::JoinHandle<{}>", mapped))
+}
+
+fn map_thread_join_handle_to_std(spelling: &str) -> Option<String> {
+    map_thread_join_handle_with_prefix_to_std(spelling, "rusty::thread::JoinHandle<")
+}
+
+fn map_unqualified_thread_join_handle_to_std(spelling: &str) -> Option<String> {
+    map_thread_join_handle_with_prefix_to_std(spelling, "JoinHandle<")
 }
 
 fn map_lowered_thread_join_handle_to_std(spelling: &str) -> Option<String> {
@@ -353,11 +359,23 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         }
         // `using namespace rusty;` can leave aliases unqualified in Clang spellings.
         "String" => return Some("std::string::String".to_string()),
+        "Barrier" => return Some("std::sync::Barrier".to_string()),
+        "Condvar" => return Some("std::sync::Condvar".to_string()),
+        "Once" => return Some("std::sync::Once".to_string()),
+        "WaitTimeoutResult" => return Some("std::sync::WaitTimeoutResult".to_string()),
+        "Unit" => return Some("()".to_string()),
+        "RecvError" => return Some("std::sync::mpsc::RecvError".to_string()),
+        "TryRecvError" => return Some("std::sync::mpsc::TryRecvError".to_string()),
         _ => {}
     }
 
     if let Some(mapped) = map_thread_join_handle_to_std(cleaned) {
         return Some(mapped);
+    }
+    if root_is_unqualified {
+        if let Some(mapped) = map_unqualified_thread_join_handle_to_std(cleaned) {
+            return Some(mapped);
+        }
     }
     if let Some(mapped) = map_lowered_thread_join_handle_to_std(cleaned) {
         return Some(mapped);
@@ -2123,6 +2141,10 @@ mod tests {
             "std::thread::JoinHandle<()>"
         );
         assert_eq!(
+            CppType::Named("JoinHandle<void>".to_string()).to_rust_type_str(),
+            "std::thread::JoinHandle<()>"
+        );
+        assert_eq!(
             CppType::Named("const class rusty::thread::JoinHandle<void>".to_string())
                 .to_rust_type_str(),
             "std::thread::JoinHandle<()>"
@@ -2150,8 +2172,13 @@ mod tests {
             CppType::Named("rusty::sync::mpsc::Unit".to_string()).to_rust_type_str(),
             "()"
         );
+        assert_eq!(CppType::Named("Unit".to_string()).to_rust_type_str(), "()");
         assert_eq!(
             CppType::Named("rusty::sync::mpsc::RecvError".to_string()).to_rust_type_str(),
+            "std::sync::mpsc::RecvError"
+        );
+        assert_eq!(
+            CppType::Named("RecvError".to_string()).to_rust_type_str(),
             "std::sync::mpsc::RecvError"
         );
         assert_eq!(
@@ -2159,8 +2186,16 @@ mod tests {
             "std::sync::mpsc::TryRecvError"
         );
         assert_eq!(
+            CppType::Named("TryRecvError".to_string()).to_rust_type_str(),
+            "std::sync::mpsc::TryRecvError"
+        );
+        assert_eq!(
             CppType::Named("rusty::sync::mpsc::TrySendError".to_string()).to_rust_type_str(),
             "rusty::sync::mpsc::TrySendError"
+        );
+        assert_eq!(
+            CppType::Named("Condvar".to_string()).to_rust_type_str(),
+            "std::sync::Condvar"
         );
         let mutex_member_guard =
             CppType::Named("rusty::sync::Mutex<int>::Guard".to_string()).to_rust_type_str();
@@ -2288,8 +2323,21 @@ mod tests {
             "std::thread::JoinHandle<()>"
         );
         assert_eq!(
+            normalize_rusty_type_alias_to_std("JoinHandle<void>"),
+            "std::thread::JoinHandle<()>"
+        );
+        assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::sync::mpsc::Sender<int>"),
             "std::sync::mpsc::Sender<i32>"
+        );
+        assert_eq!(normalize_rusty_type_alias_to_std("Unit"), "()");
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("Condvar"),
+            "std::sync::Condvar"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("RecvError"),
+            "std::sync::mpsc::RecvError"
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::sync::mpsc::TrySendError"),
