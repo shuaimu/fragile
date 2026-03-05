@@ -34910,6 +34910,7 @@ impl AstCodeGen {
             "std::sync::mpsc::SyncSender<",
             "std::sync::mpsc::TrySendError<",
             "std::thread::JoinHandle<",
+            "std::thread::Scope<",
             "std::vec::Vec<",
             "std::collections::VecDeque<",
             "std::collections::HashSet<",
@@ -77207,7 +77208,7 @@ pub type TrySendError = std::sync::mpsc::TrySendError<__>;
     }
 
     #[test]
-    fn test_normalize_rusty_type_alias_rhs_paths_preserves_unmapped_rusty_targets_and_trysenderror(
+    fn test_normalize_rusty_type_alias_rhs_paths_rewrites_scope_and_trysenderror(
     ) {
         let input = r#"
 pub type Scope = rusty::thread::Scope;
@@ -77215,11 +77216,11 @@ pub type TrySendError = rusty::sync::mpsc::TrySendError;
 "#;
         let output = AstCodeGen::normalize_rusty_type_alias_rhs_paths(input);
         assert!(
-            output.contains("pub type Scope = rusty::thread::Scope;")
+            output.contains("pub type Scope = std::thread::Scope<'static, 'static>;")
                 && output.contains(
                     "pub type TrySendError = std::sync::mpsc::TrySendError<()>;"
                 ),
-            "rusty alias rhs normalization should keep unmapped targets while rewriting TrySendError to std mpsc unit fallback, got:\n{}",
+            "rusty alias rhs normalization should rewrite Scope and TrySendError to std paths, got:\n{}",
             output
         );
     }

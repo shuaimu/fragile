@@ -637,6 +637,12 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         "rusty::WaitTimeoutResult" | "rusty::sync::WaitTimeoutResult" => {
             return Some("std::sync::WaitTimeoutResult".to_string());
         }
+        "rusty::thread::Scope" | "std::thread::Scope" => {
+            // Rust std `Scope` carries two lifetime params. Rusty exposes a
+            // non-generic spelling, so pick concrete lifetimes to keep this
+            // alias on std library surfaces.
+            return Some("std::thread::Scope<'static, 'static>".to_string());
+        }
         "rusty::None_t" => return Some("()".to_string()),
         "rusty::sync::mpsc::Unit" => return Some("()".to_string()),
         "rusty::sync::mpsc::RecvError" => return Some("std::sync::mpsc::RecvError".to_string()),
@@ -2595,6 +2601,14 @@ mod tests {
             "std::thread::JoinHandle<()>"
         );
         assert_eq!(
+            CppType::Named("rusty::thread::Scope".to_string()).to_rust_type_str(),
+            "std::thread::Scope<'static, 'static>"
+        );
+        assert_eq!(
+            CppType::Named("std::thread::Scope".to_string()).to_rust_type_str(),
+            "std::thread::Scope<'static, 'static>"
+        );
+        assert_eq!(
             CppType::Named("JoinHandle<void>".to_string()).to_rust_type_str(),
             "std::thread::JoinHandle<()>"
         );
@@ -2894,8 +2908,16 @@ mod tests {
             "std::thread::JoinHandle<()>"
         );
         assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::thread::Scope"),
+            "std::thread::Scope<'static, 'static>"
+        );
+        assert_eq!(
             normalize_rusty_type_alias_to_std("std::thread::JoinHandle<void>"),
             "std::thread::JoinHandle<()>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std::thread::Scope"),
+            "std::thread::Scope<'static, 'static>"
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("std::thread::JoinHandle<()>"),
