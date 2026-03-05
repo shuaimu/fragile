@@ -34334,6 +34334,7 @@ impl AstCodeGen {
             "std::sync::RwLock<",
             "std::sync::mpsc::Sender<",
             "std::sync::mpsc::Receiver<",
+            "std::thread::JoinHandle<",
             "std::vec::Vec<",
             "std::collections::VecDeque<",
             "std::collections::HashSet<",
@@ -34341,14 +34342,25 @@ impl AstCodeGen {
             "std::collections::HashMap<",
             "std::collections::BTreeMap<",
         ];
+        let allowlisted_exacts = [
+            "std::sync::Barrier",
+            "std::sync::Condvar",
+            "std::sync::Once",
+            "std::sync::WaitTimeoutResult",
+            "std::sync::mpsc::RecvError",
+            "std::sync::mpsc::TryRecvError",
+        ];
         if normalized == record_name
             || normalized.contains("rusty::")
             || normalized.contains("crate::rusty::")
             || normalized.contains("::rusty::")
             || Self::has_unresolved_template_placeholder(&normalized)
-            || !allowlisted_prefixes
+            || (!allowlisted_prefixes
                 .iter()
                 .any(|prefix| normalized.starts_with(prefix))
+                && !allowlisted_exacts
+                    .iter()
+                    .any(|exact| normalized == *exact))
         {
             return None;
         }
@@ -70394,6 +70406,36 @@ pub mod testing {
     }
 
     #[test]
+    fn test_template_struct_aliases_rusty_join_handle_instantiation_to_std() {
+        let mut codegen = AstCodeGen::new();
+        let inst_name = "rusty::thread::JoinHandle<void>";
+        let rust_name = sanitize_identifier(inst_name);
+
+        codegen.generate_template_struct(
+            inst_name,
+            &[String::from("T")],
+            &[String::from("void")],
+            &[],
+        );
+
+        assert!(
+            codegen.output.contains(&format!(
+                "pub type {} = std::thread::JoinHandle<()>;",
+                rust_name
+            )),
+            "join-handle wrapper template instantiations should alias to std::thread::JoinHandle, got:\n{}",
+            codegen.output
+        );
+        assert!(
+            !codegen
+                .output
+                .contains(&format!("pub struct {} {{", rust_name)),
+            "join-handle wrapper template instantiations should not emit opaque structs, got:\n{}",
+            codegen.output
+        );
+    }
+
+    #[test]
     fn test_template_struct_skips_extern_template_instantiation_declarations() {
         let mut codegen = AstCodeGen::new();
         let inst_name = "Widget<int>";
@@ -70758,6 +70800,30 @@ pub struct rusty_Arc_classrrr_Client_ {
     }
 
     #[test]
+    fn test_generate_struct_aliases_non_generic_rusty_wrapper_record_to_std() {
+        let mut codegen = AstCodeGen::new();
+        let cpp_name = "rusty::Barrier";
+        let rust_name = sanitize_identifier(cpp_name);
+
+        codegen.generate_struct(cpp_name, true, &[]);
+
+        assert!(
+            codegen
+                .output
+                .contains(&format!("pub type {} = std::sync::Barrier;", rust_name)),
+            "non-generic rusty wrapper records should alias to std surfaces, got:\n{}",
+            codegen.output
+        );
+        assert!(
+            !codegen
+                .output
+                .contains(&format!("pub struct {} {{", rust_name)),
+            "non-generic rusty wrapper records should not emit opaque structs, got:\n{}",
+            codegen.output
+        );
+    }
+
+    #[test]
     fn test_rusty_wrapper_record_alias_helper_supports_option_and_result() {
         assert_eq!(
             AstCodeGen::rusty_wrapper_alias_target_from_record_name("rusty::Option<int>")
@@ -70768,6 +70834,28 @@ pub struct rusty_Arc_classrrr_Client_ {
             AstCodeGen::rusty_wrapper_alias_target_from_record_name("rusty::Result<int, long>")
                 .as_deref(),
             Some("std::result::Result<i32, i64>")
+        );
+    }
+
+    #[test]
+    fn test_rusty_wrapper_record_alias_helper_supports_join_handle_and_non_generic_wrappers() {
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name(
+                "rusty::thread::JoinHandle<void>"
+            )
+            .as_deref(),
+            Some("std::thread::JoinHandle<()>")
+        );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name("rusty::Barrier").as_deref(),
+            Some("std::sync::Barrier")
+        );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name(
+                "rusty::sync::mpsc::RecvError"
+            )
+            .as_deref(),
+            Some("std::sync::mpsc::RecvError")
         );
     }
 
