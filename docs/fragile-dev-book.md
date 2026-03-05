@@ -282,6 +282,9 @@ Large codebases that include `rusty-cpp` headers frequently surface both fully q
   - `rusty::ResultVoid<T>` and `ResultVoid<T>` -> `std::result::Result<T, ()>`
   - `rusty::ResultInt<T>` and `ResultInt<T>` -> `std::result::Result<T, i32>`
   - `rusty::ResultString<T>` and `ResultString<T>` -> `std::result::Result<T, *const i8>`
+- mpsc wrapper aliases:
+  - `Sender<T>` / `Receiver<T>` / `SyncSender<T>` / `TrySendError<T>` normalize to the corresponding `std::sync::mpsc::*` wrappers
+  - explicit `void` and unresolved payload placeholders in those wrappers normalize to unit `()`
 
 This keeps generated Rust in safe/std-native form instead of preserving rusty-cpp wrapper type names in emitted signatures.
 
