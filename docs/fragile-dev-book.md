@@ -1077,7 +1077,7 @@ Namespace alias target normalization must reuse the same Rusty-wrapper mapping l
 - Wrapper derive-block propagation now treats raw-pointer fields/aliases as pointer-indirected surfaces (`*const T` / `*mut T`): non-`Default`/non-`Clone` restrictions of pointee wrapper types no longer leak through pointer fields, avoiding invalid `#[derive(Copy)]`-without-`Clone` rewrites on pointer wrapper shells.
 - Missing-stub qualifier-family alias recovery also skips Rusty marker-trait helper exports (`rusty_is_send_*` / `rusty_is_sync_*`) instead of synthesizing `pub type` bridges for `rusty::is::send::...` / `rusty::is::sync::...` unresolved spellings.
 - Record/template emission marker-helper suppression now resolves names through active namespace context too, so unqualified helper declarations inside `namespace rusty { ... }` (for example `is_send<...>` / `is_sync<...>`) are skipped just like fully-qualified `rusty::...` spellings.
-- Record and template-instantiation emission now aliases a conservative allowlist of lifetime-free Rusty wrapper surfaces directly to normalized Rust std targets (for example `rusty::Arc<T>` -> `std::sync::Arc<T>`, `rusty::Option<T>` -> `std::option::Option<T>`, `rusty::thread::JoinHandle<T>` -> `std::thread::JoinHandle<T>`, `rusty::Vec<T>` -> `std::vec::Vec<T>`, `rusty::sync::mpsc::Unit` -> `()`, and non-generic wrappers like `rusty::Barrier`/`rusty::Condvar` -> `std::sync::...`) instead of emitting opaque wrapper structs; alias lookup also considers the active namespace path so unqualified declarations inside `namespace rusty { ... }` still normalize to std aliases, template aliases sanitize the emitted lhs name when normalized lowering yields a Rust path, aliasing is rejected if any nested `rusty::` path remains after normalization, and lifetime-sensitive wrappers (`Ref`/`RefMut`) stay excluded.
+- Record and template-instantiation emission now aliases a conservative allowlist of Rusty wrapper surfaces directly to normalized Rust std targets (for example `rusty::Arc<T>` -> `std::sync::Arc<T>`, `rusty::Option<T>` -> `std::option::Option<T>`, `rusty::thread::JoinHandle<T>` -> `std::thread::JoinHandle<T>`, `rusty::Vec<T>` -> `std::vec::Vec<T>`, `rusty::sync::mpsc::Unit` -> `()`, and non-generic wrappers like `rusty::Barrier`/`rusty::Condvar` -> `std::sync::...`) instead of emitting opaque wrapper structs; alias lookup also considers the active namespace path so unqualified declarations inside `namespace rusty { ... }` still normalize to std aliases, template aliases sanitize the emitted lhs name when normalized lowering yields a Rust path, aliasing is rejected if any nested `rusty::` path remains after normalization, and `Ref`/`RefMut` alias targets are now emitted with explicit `'static` lifetime lanes when materialized as `type` aliases.
 - Missing-stub concrete alias recovery now reuses the same Rusty-wrapper mapping path before opaque fallback, including namespace-qualified lookup for unqualified names. This keeps degraded unresolved spellings (for example `rusty::Arc::constclass::...`) on std alias surfaces instead of emitting placeholder structs.
 - Fallback `Default`/`Clone` synthesis now treats Rusty wrapper paths that normalize to external std/core/alloc targets as external too, avoiding unsafe fallback impls on wrappers like `rusty::Barrier`/`rusty::Once`; lowered Rusty thread JoinHandle wrapper spellings (`rusty::thread::rusty_thread_JoinHandle_*`) remain eligible for local fallback impls because generated field-wise defaults still depend on them.
 - Fallback `Default`/`Clone` synthesis must not emit impls for external `std::`/`core::`/`alloc::` targets after alias resolution; additionally, qualified local type paths must only resolve through exact alias keys (not unrelated leaf-name aliases) to avoid orphan impls such as `impl Clone for std::sync::Barrier`.
@@ -1520,6 +1520,57 @@ The outer `Result` surface should still normalize to `std::result::Result<...>`,
 - Fresh validation remains green:
   - `cargo test -p fragile-clang --lib poison_error_to_generated_record`
   - `cargo test -p fragile-clang --lib maps_wrappers_and_preserves_non_rusty_paths`
+  - `make clean`
+  - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
+  - `ctest -j32 --output-on-failure`
+
+## 25. `Ref`/`RefMut` Wrapper Record Aliasing with Explicit Lifetimes (2026-03-05)
+
+### Problem
+
+Rusty wrapper-record aliasing previously excluded `rusty::Ref<T>` / `rusty::RefMut<T>` even though type normalization already mapped these surfaces to `std::cell::{Ref, RefMut}`. This left many generated opaque wrapper structs in drop-in output.
+
+A direct allowlist expansion caused Rust compile failures for alias items:
+
+- `error[E0106]: missing lifetime specifier`
+
+because `type` aliases cannot use lifetime elision in `std::cell::Ref<...>` / `std::cell::RefMut<...>` positions.
+
+### Rule
+
+- Allow wrapper-record aliasing for `Ref` / `RefMut` surfaces.
+- In record-alias emission context, inject explicit `'static` lifetime lanes into `std::cell::Ref` / `std::cell::RefMut` targets (including nested appearances) so emitted `type` aliases are well-formed.
+- Keep this lifetime injection scoped to wrapper-record alias target emission only (do not globally rewrite all `Ref`/`RefMut` spellings).
+
+### Implementation
+
+- In `crates/fragile-clang/src/ast_codegen.rs`:
+  - Added `normalize_ref_like_lifetimes_in_alias_target()` to rewrite:
+    - `std::cell::Ref<...>` -> `std::cell::Ref<'static, ...>`
+    - `std::cell::RefMut<...>` -> `std::cell::RefMut<'static, ...>`
+    - while preserving already-injected `'static` forms.
+  - Applied this normalization inside `rusty_wrapper_alias_target_from_record_name()` after standard Rusty-to-std target normalization.
+  - Expanded wrapper-record alias allowlist prefixes to include:
+    - `std::cell::Ref<`
+    - `std::cell::RefMut<`
+  - Extended wrapper trait detectors so `Ref` / `RefMut` are treated as non-`Default`/non-`Copy` wrappers, with `RefMut` also treated as non-`Clone`.
+
+### Tests
+
+- Extended `test_rusty_wrapper_record_alias_helper_supports_option_and_result` with:
+  - `rusty::Ref<class Foo> -> std::cell::Ref<'static, Foo>`
+  - `rusty::RefMut<class Foo> -> std::cell::RefMut<'static, Foo>`
+  - nested `rusty::Option<rusty::RefMut<class Foo>> -> std::option::Option<std::cell::RefMut<'static, Foo>>`
+- Extended `test_wrapper_trait_detectors_normalize_rusty_alias_spellings` with `Ref`/`RefMut` trait-block assertions.
+
+### Guardrails
+
+- The `normalized == record_name` guard remains based on pre-lifetime-injection normalization, so non-Rusty record names are still not auto-aliased by this pass.
+- `Ref`/`RefMut` lifetime insertion is deterministic and idempotent for `'static` aliases.
+- Fresh validation remains green:
+  - `cargo test -p fragile-clang --lib rusty_wrapper_record_alias_helper_supports_option_and_result`
+  - `cargo test -p fragile-clang --lib wrapper_trait_detectors_normalize_rusty_alias_spellings`
+  - `cargo build --release --bin fragilec`
   - `make clean`
   - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
   - `ctest -j32 --output-on-failure`

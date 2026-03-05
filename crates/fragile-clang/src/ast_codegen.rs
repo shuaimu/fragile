@@ -36069,8 +36069,23 @@ impl AstCodeGen {
         false
     }
 
+    fn normalize_ref_like_lifetimes_in_alias_target(target: &str) -> String {
+        let mut normalized = target.to_string();
+        let sentinel_refmut = "__FRAGILE_REFMUT_STATIC_SENTINEL__";
+        let sentinel_ref = "__FRAGILE_REF_STATIC_SENTINEL__";
+        normalized = normalized.replace("std::cell::RefMut<'static, ", sentinel_refmut);
+        normalized = normalized.replace("std::cell::Ref<'static, ", sentinel_ref);
+        normalized = normalized.replace("std::cell::RefMut<", "std::cell::RefMut<'static, ");
+        normalized = normalized.replace("std::cell::Ref<", "std::cell::Ref<'static, ");
+        normalized = normalized.replace(sentinel_refmut, "std::cell::RefMut<'static, ");
+        normalized = normalized.replace(sentinel_ref, "std::cell::Ref<'static, ");
+        normalized
+    }
+
     fn rusty_wrapper_alias_target_from_record_name(record_name: &str) -> Option<String> {
         let normalized = Self::normalize_namespace_alias_target(record_name);
+        let normalized_with_lifetimes =
+            Self::normalize_ref_like_lifetimes_in_alias_target(&normalized);
         let allowlisted_prefixes = [
             "std::option::Option<",
             "std::result::Result<",
@@ -36081,6 +36096,8 @@ impl AstCodeGen {
             "std::rc::Weak<",
             "std::cell::Cell<",
             "std::cell::RefCell<",
+            "std::cell::Ref<",
+            "std::cell::RefMut<",
             "std::cell::UnsafeCell<",
             "std::sync::Mutex<",
             "std::sync::RwLock<",
@@ -36107,20 +36124,20 @@ impl AstCodeGen {
             "std::sync::mpsc::TryRecvError",
         ];
         if normalized == record_name
-            || (normalized.contains("rusty::")
-                || normalized.contains("crate::rusty::")
-                || normalized.contains("::rusty::"))
-            || Self::has_unresolved_template_placeholder(&normalized)
+            || (normalized_with_lifetimes.contains("rusty::")
+                || normalized_with_lifetimes.contains("crate::rusty::")
+                || normalized_with_lifetimes.contains("::rusty::"))
+            || Self::has_unresolved_template_placeholder(&normalized_with_lifetimes)
             || (!allowlisted_prefixes
                 .iter()
-                .any(|prefix| normalized.starts_with(prefix))
+                .any(|prefix| normalized_with_lifetimes.starts_with(prefix))
                 && !allowlisted_exacts
                     .iter()
-                    .any(|exact| normalized == *exact))
+                    .any(|exact| normalized_with_lifetimes == *exact))
         {
             return None;
         }
-        Some(normalized)
+        Some(normalized_with_lifetimes)
     }
 
     fn normalize_namespace_alias_target(target: &str) -> String {
@@ -36138,6 +36155,8 @@ impl AstCodeGen {
             || normalized.starts_with("std::sync::mpsc::Receiver<")
             || normalized.starts_with("std::sync::mpsc::SyncSender<")
             || normalized.starts_with("std::thread::JoinHandle<")
+            || normalized.starts_with("std::cell::Ref<")
+            || normalized.starts_with("std::cell::RefMut<")
             || normalized == "std::sync::Barrier"
             || normalized == "std::sync::Once"
             || normalized == "std::sync::WaitTimeoutResult"
@@ -36145,6 +36164,8 @@ impl AstCodeGen {
             || compact.starts_with("std_sync_mpsc_Receiver_")
             || compact.starts_with("std_sync_mpsc_SyncSender_")
             || compact.starts_with("std_thread_JoinHandle_")
+            || compact.starts_with("std_cell_Ref_")
+            || compact.starts_with("std_cell_RefMut_")
             || compact == "std_sync_Barrier"
             || compact == "std_sync_Once"
             || compact == "std_sync_WaitTimeoutResult"
@@ -36159,6 +36180,7 @@ impl AstCodeGen {
         let compact = normalized.replace(' ', "");
         normalized.starts_with("std::sync::mpsc::Receiver<")
             || normalized.starts_with("std::thread::JoinHandle<")
+            || normalized.starts_with("std::cell::RefMut<")
             || normalized.starts_with("std::sync::Mutex<")
             || normalized.starts_with("std::sync::RwLock<")
             || normalized == "std::sync::Barrier"
@@ -36166,6 +36188,7 @@ impl AstCodeGen {
             || normalized == "std::sync::Once"
             || compact.starts_with("std_sync_mpsc_Receiver_")
             || compact.starts_with("std_thread_JoinHandle_")
+            || compact.starts_with("std_cell_RefMut_")
             || compact.starts_with("std_sync_Mutex_")
             || compact.starts_with("std_sync_RwLock_")
             || compact == "std_sync_Barrier"
@@ -36184,6 +36207,8 @@ impl AstCodeGen {
             || normalized.starts_with("std::sync::mpsc::Receiver<")
             || normalized.starts_with("std::sync::mpsc::SyncSender<")
             || normalized.starts_with("std::thread::JoinHandle<")
+            || normalized.starts_with("std::cell::Ref<")
+            || normalized.starts_with("std::cell::RefMut<")
             || normalized.starts_with("std::cell::RefCell<")
             || normalized.starts_with("std::sync::Mutex<")
             || normalized.starts_with("std::sync::RwLock<")
@@ -36200,6 +36225,8 @@ impl AstCodeGen {
             || compact.starts_with("std_sync_mpsc_Receiver_")
             || compact.starts_with("std_sync_mpsc_SyncSender_")
             || compact.starts_with("std_thread_JoinHandle_")
+            || compact.starts_with("std_cell_Ref_")
+            || compact.starts_with("std_cell_RefMut_")
             || compact.starts_with("std_cell_RefCell_")
             || compact.starts_with("std_sync_Mutex_")
             || compact.starts_with("std_sync_RwLock_")
@@ -71925,6 +71952,12 @@ pub struct RustyReceiverHolder {
         assert!(
             AstCodeGen::is_non_default_std_wrapper_type("rusty::sync::mpsc::Sender<i32>")
         );
+        assert!(AstCodeGen::is_non_default_std_wrapper_type(
+            "rusty::Ref<class Foo>"
+        ));
+        assert!(AstCodeGen::is_non_default_std_wrapper_type(
+            "rusty::RefMut<class Foo>"
+        ));
         assert!(AstCodeGen::is_non_default_std_wrapper_type("rusty::Once"));
         assert!(AstCodeGen::is_non_default_std_wrapper_type(
             "rusty::WaitTimeoutResult"
@@ -71932,8 +71965,17 @@ pub struct RustyReceiverHolder {
         assert!(AstCodeGen::is_non_clone_std_wrapper_type(
             "rusty::thread::JoinHandle<()>"
         ));
+        assert!(AstCodeGen::is_non_clone_std_wrapper_type(
+            "rusty::RefMut<class Foo>"
+        ));
         assert!(AstCodeGen::is_non_clone_std_wrapper_type("rusty::Mutex<i32>"));
         assert!(AstCodeGen::is_non_clone_std_wrapper_type("rusty::Condvar"));
+        assert!(AstCodeGen::is_non_copy_std_wrapper_type(
+            "rusty::Ref<class Foo>"
+        ));
+        assert!(AstCodeGen::is_non_copy_std_wrapper_type(
+            "rusty::RefMut<class Foo>"
+        ));
         assert!(AstCodeGen::is_non_copy_std_wrapper_type(
             "rusty::HashMap<i32, i32>"
         ));
@@ -74075,6 +74117,23 @@ pub struct rusty_Arc_classrrr_Client_ {
             AstCodeGen::rusty_wrapper_alias_target_from_record_name("rusty::Result<int, long>")
                 .as_deref(),
             Some("std::result::Result<i32, i64>")
+        );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name("rusty::Ref<class Foo>")
+                .as_deref(),
+            Some("std::cell::Ref<'static, Foo>")
+        );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name("rusty::RefMut<class Foo>")
+                .as_deref(),
+            Some("std::cell::RefMut<'static, Foo>")
+        );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name(
+                "rusty::Option<rusty::RefMut<class Foo>>"
+            )
+            .as_deref(),
+            Some("std::option::Option<std::cell::RefMut<'static, Foo>>")
         );
     }
 
