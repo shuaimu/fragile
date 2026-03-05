@@ -1088,6 +1088,7 @@ Drop top-level type aliases whose rhs is exactly `std::ffi::c_void` when the ali
   - scans `pub type`/`pub(crate) type`/`pub(super) type`/`type` aliases,
   - rewrites type-alias rhs expressions to inline known `std::ffi::c_void` aliases (for example `*mut __locale_struct` -> `*mut std::ffi::c_void`),
   - removes aliases targeting `std::ffi::c_void` when unused,
+  - rewrites surviving public `c_void` aliases to equivalent `pub use std::ffi::c_void as Name;` form when no same-name concrete type item exists,
   - removes contiguous preceding `///` doc lines for dropped aliases,
   - removes one following blank line for output compaction.
 
@@ -1096,8 +1097,12 @@ Drop top-level type aliases whose rhs is exactly `std::ffi::c_void` when the ali
 - Referenced `std::ffi::c_void` aliases are preserved.
 - Non-`std::ffi::c_void` aliases are untouched.
 - Alias-rhs inlining runs before pruning, so transitive alias chains can collapse and become removable without touching non-alias item signatures.
+- `pub use ... as Name` rewrites are skipped when `Name` collides with a concrete same-name `struct`/`enum`/`union` item in the final output.
+- Declared-type collection for unresolved-type closure/invariant checks now recognizes `use ... as Name` declarations as defined type-like names, so invariant enforcement remains compatible with the rewrite.
 - Regression tests cover:
   - unused alias removal with doc cleanup,
   - used alias preservation,
   - non-`c_void` alias passthrough,
-  - alias-rhs inlining and subsequent prune enablement.
+  - alias-rhs inlining and subsequent prune enablement,
+  - `pub type` -> `pub use` rewrite behavior and collision guards,
+  - unresolved-type collection with `pub use` aliases.

@@ -5069,6 +5069,37 @@ impl AstCodeGen {
             }
         }
 
+        // Type aliases emitted as imports (e.g. `pub use std::ffi::c_void as X;`).
+        if let Some(rest) = trimmed
+            .strip_prefix("pub use ")
+            .or_else(|| trimmed.strip_prefix("pub(crate) use "))
+            .or_else(|| trimmed.strip_prefix("pub(super) use "))
+            .or_else(|| trimmed.strip_prefix("use "))
+        {
+            if let Some((_, alias_tail)) = rest.rsplit_once(" as ") {
+                let alias_tail = alias_tail.trim_start();
+                let ident = if let Some(raw_tail) = alias_tail.strip_prefix("r#") {
+                    let tail: String = raw_tail
+                        .chars()
+                        .take_while(|c| Self::is_identifier_char(*c))
+                        .collect();
+                    if tail.is_empty() {
+                        String::new()
+                    } else {
+                        format!("r#{}", tail)
+                    }
+                } else {
+                    alias_tail
+                        .chars()
+                        .take_while(|c| Self::is_identifier_char(*c))
+                        .collect::<String>()
+                };
+                if !ident.is_empty() {
+                    return Some(ident);
+                }
+            }
+        }
+
         let prefixes = [
             "pub struct ",
             "pub union ",
@@ -6545,6 +6576,97 @@ impl AstCodeGen {
             }
             out.push_str(line);
             out.push('\n');
+        }
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    fn normalize_c_void_type_aliases_to_use_imports(code: &str) -> String {
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
+            return code.to_string();
+        }
+
+        let mut non_alias_type_names: HashSet<String> = HashSet::new();
+        for line in &lines {
+            let trimmed = line.trim_start();
+            let name = Self::extract_emitted_item_name(trimmed, "pub struct ")
+                .or_else(|| Self::extract_emitted_item_name(trimmed, "pub(crate) struct "))
+                .or_else(|| Self::extract_emitted_item_name(trimmed, "pub(super) struct "))
+                .or_else(|| Self::extract_emitted_item_name(trimmed, "struct "))
+                .or_else(|| Self::extract_emitted_item_name(trimmed, "pub enum "))
+                .or_else(|| Self::extract_emitted_item_name(trimmed, "pub(crate) enum "))
+                .or_else(|| Self::extract_emitted_item_name(trimmed, "pub(super) enum "))
+                .or_else(|| Self::extract_emitted_item_name(trimmed, "enum "))
+                .or_else(|| Self::extract_emitted_item_name(trimmed, "pub union "))
+                .or_else(|| Self::extract_emitted_item_name(trimmed, "pub(crate) union "))
+                .or_else(|| Self::extract_emitted_item_name(trimmed, "pub(super) union "))
+                .or_else(|| Self::extract_emitted_item_name(trimmed, "union "));
+            if let Some(name) = name {
+                if !name.is_empty() {
+                    non_alias_type_names.insert(name.clone());
+                    non_alias_type_names.insert(name.trim_start_matches("r#").to_string());
+                }
+            }
+        }
+
+        let mut changed = false;
+        let mut out = String::with_capacity(code.len());
+
+        for line in &lines {
+            let trimmed = line.trim_start();
+            let Some((vis_prefix, rest)) = [
+                ("pub ", trimmed.strip_prefix("pub type ")),
+                ("pub(crate) ", trimmed.strip_prefix("pub(crate) type ")),
+                ("pub(super) ", trimmed.strip_prefix("pub(super) type ")),
+            ]
+            .into_iter()
+            .find_map(|(vis, rest)| rest.map(|r| (vis, r)))
+            else {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            };
+
+            let Some((lhs, rhs)) = rest.split_once('=') else {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            };
+            let alias = lhs.trim();
+            if alias.is_empty() {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+            let alias_raw = alias.trim_start_matches("r#");
+            if non_alias_type_names.contains(alias) || non_alias_type_names.contains(alias_raw) {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+            let target = rhs.trim().trim_end_matches(';').trim();
+            if target != "std::ffi::c_void" {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+
+            let indent_len = line.len().saturating_sub(trimmed.len());
+            let indent = &line[..indent_len];
+            out.push_str(indent);
+            out.push_str(vis_prefix);
+            out.push_str("use std::ffi::c_void as ");
+            out.push_str(alias);
+            out.push_str(";");
+            out.push('\n');
+            changed = true;
+        }
+
+        if !changed {
+            return code.to_string();
         }
         if !code.ends_with('\n') && out.ends_with('\n') {
             out.pop();
@@ -16962,6 +17084,12 @@ impl AstCodeGen {
         // Re-run Rusty wrapper alias normalization so final output keeps std
         // alias targets wherever generic mapping exists.
         output = Self::normalize_rusty_type_alias_rhs_paths(&output);
+        // Late fallback passes can also append fresh c_void placeholder aliases.
+        // Re-run c_void alias normalization and then canonicalize surviving
+        // public aliases as direct std ffi imports.
+        output = Self::normalize_type_alias_rhs_c_void_alias_references(&output);
+        output = Self::normalize_unused_c_void_type_aliases(&output);
+        output = Self::normalize_c_void_type_aliases_to_use_imports(&output);
         output
     }
 
@@ -77603,6 +77731,74 @@ pub type locale_t = *mut __locale_struct;
     }
 
     #[test]
+    fn test_normalize_c_void_type_aliases_to_use_imports_converts_public_aliases() {
+        let input = r#"
+pub type ctype_char_ = std::ffi::c_void;
+pub(crate) type inner = std::ffi::c_void;
+pub(super) type super_inner = std::ffi::c_void;
+type private_alias = std::ffi::c_void;
+"#;
+        let output = AstCodeGen::normalize_c_void_type_aliases_to_use_imports(input);
+        assert!(
+            output.contains("pub use std::ffi::c_void as ctype_char_;"),
+            "public c_void aliases should rewrite to pub use import, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub(crate) use std::ffi::c_void as inner;"),
+            "pub(crate) c_void aliases should rewrite to use import, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub(super) use std::ffi::c_void as super_inner;"),
+            "pub(super) c_void aliases should rewrite to use import, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("type private_alias = std::ffi::c_void;"),
+            "private aliases should remain untouched to avoid associated-type rewrite hazards, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_c_void_type_aliases_to_use_imports_keeps_non_c_void_aliases() {
+        let input = r#"
+pub type MaybeInt = std::option::Option<i32>;
+"#;
+        let output = AstCodeGen::normalize_c_void_type_aliases_to_use_imports(input);
+        assert_eq!(
+            output.trim(),
+            input.trim(),
+            "non-c_void aliases should be unaffected, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_c_void_type_aliases_to_use_imports_skips_struct_name_collisions() {
+        let input = r#"
+pub type ctype_char_ = std::ffi::c_void;
+
+#[repr(C)]
+pub struct ctype_char_ {
+    pub _opaque: [u8; 1],
+}
+"#;
+        let output = AstCodeGen::normalize_c_void_type_aliases_to_use_imports(input);
+        assert!(
+            output.contains("pub type ctype_char_ = std::ffi::c_void;"),
+            "c_void alias should not rewrite when same-name struct exists, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub struct ctype_char_"),
+            "same-name struct should remain intact, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
     fn test_normalize_unresolved_namespaced_type_aliases_skips_conflicted_leaf_names() {
         let input = r#"
 pub mod a {
@@ -78176,6 +78372,22 @@ pub fn probe(x: r#type) -> r#type {
         assert!(
             unresolved.is_empty(),
             "raw-identifier enum definitions should be recognized as defined and not re-materialized, got: {:?}",
+            unresolved
+        );
+    }
+
+    #[test]
+    fn test_collect_unresolved_type_like_names_treats_pub_use_type_alias_as_defined() {
+        let input = r#"
+pub use std::ffi::c_void as ctype_char_;
+pub fn probe(v: *const ctype_char_) -> *const ctype_char_ {
+    v
+}
+"#;
+        let unresolved = AstCodeGen::unresolved_named_type_references(input);
+        assert!(
+            unresolved.is_empty(),
+            "pub use type aliases should count as defined type-like names, got: {:?}",
             unresolved
         );
     }
