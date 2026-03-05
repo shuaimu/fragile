@@ -393,10 +393,10 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
             return Some("std::sync::mpsc::TryRecvError".to_string());
         }
         "rusty::sync::mpsc::TrySendError" => {
-            // Rust std `TrySendError<T>` carries the unsent payload as a generic
-            // parameter, while Rusty exposes a non-generic enum. Keep the
-            // Rusty spelling to avoid introducing invalid missing-generic aliases.
-            return Some("rusty::sync::mpsc::TrySendError".to_string());
+            // Rust std `TrySendError<T>` is generic. Rusty often surfaces a
+            // non-generic spelling, so use unit payload as a conservative
+            // default that keeps the path on std surfaces.
+            return Some("std::sync::mpsc::TrySendError<()>".to_string());
         }
         // `using namespace rusty;` can leave aliases unqualified in Clang spellings.
         "String" => return Some("std::string::String".to_string()),
@@ -407,7 +407,7 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         "Unit" => return Some("()".to_string()),
         "RecvError" => return Some("std::sync::mpsc::RecvError".to_string()),
         "TryRecvError" => return Some("std::sync::mpsc::TryRecvError".to_string()),
-        "TrySendError" => return Some("rusty::sync::mpsc::TrySendError".to_string()),
+        "TrySendError" => return Some("std::sync::mpsc::TrySendError<()>".to_string()),
         _ => {}
     }
 
@@ -448,6 +448,27 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
             &["rusty::sync::mpsc::SyncSender", "std::sync::mpsc::SyncSender"] as &[&str],
         ),
     ] {
+        for root in qualified_roots {
+            let qualified_prefix = format!("{}<", root);
+            if let Some(mapped) =
+                map_single_template_alias_to_std(cleaned, &qualified_prefix, std_path)
+            {
+                return Some(mapped);
+            }
+        }
+        if root_is_unqualified {
+            let bare_prefix = format!("{}<", alias);
+            if let Some(mapped) = map_single_template_alias_to_std(cleaned, &bare_prefix, std_path)
+            {
+                return Some(mapped);
+            }
+        }
+    }
+    for (alias, std_path, qualified_roots) in [(
+        "TrySendError",
+        "std::sync::mpsc::TrySendError",
+        &["rusty::sync::mpsc::TrySendError", "std::sync::mpsc::TrySendError"] as &[&str],
+    )] {
         for root in qualified_roots {
             let qualified_prefix = format!("{}<", root);
             if let Some(mapped) =
@@ -2312,11 +2333,15 @@ mod tests {
         );
         assert_eq!(
             CppType::Named("rusty::sync::mpsc::TrySendError".to_string()).to_rust_type_str(),
-            "rusty::sync::mpsc::TrySendError"
+            "std::sync::mpsc::TrySendError<()>"
         );
         assert_eq!(
             CppType::Named("TrySendError".to_string()).to_rust_type_str(),
-            "rusty::sync::mpsc::TrySendError"
+            "std::sync::mpsc::TrySendError<()>"
+        );
+        assert_eq!(
+            CppType::Named("rusty::sync::mpsc::TrySendError<long>".to_string()).to_rust_type_str(),
+            "std::sync::mpsc::TrySendError<i64>"
         );
         assert_eq!(
             CppType::Named("Condvar".to_string()).to_rust_type_str(),
@@ -2514,11 +2539,15 @@ mod tests {
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::sync::mpsc::TrySendError"),
-            "rusty::sync::mpsc::TrySendError"
+            "std::sync::mpsc::TrySendError<()>"
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("TrySendError"),
-            "rusty::sync::mpsc::TrySendError"
+            "std::sync::mpsc::TrySendError<()>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("TrySendError<int>"),
+            "std::sync::mpsc::TrySendError<i32>"
         );
         let mutex_member_guard = normalize_rusty_type_alias_to_std("rusty::sync::Mutex<int>::Guard");
         assert!(

@@ -34849,10 +34849,6 @@ impl AstCodeGen {
 
     fn rusty_wrapper_alias_target_from_record_name(record_name: &str) -> Option<String> {
         let normalized = Self::normalize_namespace_alias_target(record_name);
-        let allowlisted_rusty_exacts = ["rusty::sync::mpsc::TrySendError"];
-        let allowlisted_rusty_exact = allowlisted_rusty_exacts
-            .iter()
-            .any(|exact| normalized == *exact);
         let allowlisted_prefixes = [
             "std::option::Option<",
             "std::result::Result<",
@@ -34869,6 +34865,7 @@ impl AstCodeGen {
             "std::sync::mpsc::Sender<",
             "std::sync::mpsc::Receiver<",
             "std::sync::mpsc::SyncSender<",
+            "std::sync::mpsc::TrySendError<",
             "std::thread::JoinHandle<",
             "std::vec::Vec<",
             "std::collections::VecDeque<",
@@ -34887,18 +34884,16 @@ impl AstCodeGen {
             "std::sync::mpsc::TryRecvError",
         ];
         if normalized == record_name
-            || (!allowlisted_rusty_exact
-                && (normalized.contains("rusty::")
-                    || normalized.contains("crate::rusty::")
-                    || normalized.contains("::rusty::")))
+            || (normalized.contains("rusty::")
+                || normalized.contains("crate::rusty::")
+                || normalized.contains("::rusty::"))
             || Self::has_unresolved_template_placeholder(&normalized)
             || (!allowlisted_prefixes
                 .iter()
                 .any(|prefix| normalized.starts_with(prefix))
                 && !allowlisted_exacts
                     .iter()
-                    .any(|exact| normalized == *exact)
-                && !allowlisted_rusty_exact)
+                    .any(|exact| normalized == *exact))
         {
             return None;
         }
@@ -72056,10 +72051,10 @@ pub struct rusty_Arc_classrrr_Client_ {
 
         assert!(
             codegen.output.contains(&format!(
-                "pub type {} = rusty::sync::mpsc::TrySendError;",
+                "pub type {} = std::sync::mpsc::TrySendError<()>;",
                 rust_name
             )),
-            "namespace-qualified TrySendError wrappers should alias to rusty mpsc path, got:\n{}",
+            "namespace-qualified TrySendError wrappers should alias to std mpsc path with unit payload fallback, got:\n{}",
             codegen.output
         );
         assert!(
@@ -72217,7 +72212,7 @@ pub struct rusty_Arc_classrrr_Client_ {
         );
         assert_eq!(
             AstCodeGen::rusty_wrapper_alias_target_from_record_name("TrySendError").as_deref(),
-            Some("rusty::sync::mpsc::TrySendError")
+            Some("std::sync::mpsc::TrySendError<()>")
         );
         assert_eq!(
             AstCodeGen::rusty_wrapper_alias_target_from_record_name("Unit").as_deref(),
@@ -72231,7 +72226,7 @@ pub struct rusty_Arc_classrrr_Client_ {
     }
 
     #[test]
-    fn test_rusty_wrapper_record_alias_helper_rejects_nested_rusty_paths() {
+    fn test_rusty_wrapper_record_alias_helper_rejects_nested_rusty_only_paths() {
         let poisoned = AstCodeGen::rusty_wrapper_alias_target_from_record_name(
             "rusty::Result<rusty::MutexGuard<int>, rusty::PoisonError<int>>",
         );
@@ -72240,12 +72235,17 @@ pub struct rusty_Arc_classrrr_Client_ {
             "result aliases with nested rusty-only wrappers should not collapse into std aliases, got: {:?}",
             poisoned
         );
+    }
+
+    #[test]
+    fn test_rusty_wrapper_record_alias_helper_maps_nested_try_send_error_to_std() {
         let try_send = AstCodeGen::rusty_wrapper_alias_target_from_record_name(
             "rusty::Option<rusty::sync::mpsc::TrySendError>",
         );
         assert!(
-            try_send.is_none(),
-            "option aliases with nested rusty-only wrappers should not collapse into std aliases, got: {:?}",
+            try_send
+                == Some("std::option::Option<std::sync::mpsc::TrySendError<()>>".to_string()),
+            "option aliases with nested TrySendError should normalize to std mpsc unit fallback, got: {:?}",
             try_send
         );
     }
@@ -77143,8 +77143,10 @@ pub type TrySendError = rusty::sync::mpsc::TrySendError;
         let output = AstCodeGen::normalize_rusty_type_alias_rhs_paths(input);
         assert!(
             output.contains("pub type Scope = rusty::thread::Scope;")
-                && output.contains("pub type TrySendError = rusty::sync::mpsc::TrySendError;"),
-            "rusty alias rhs normalization should keep unmapped targets unchanged, got:\n{}",
+                && output.contains(
+                    "pub type TrySendError = std::sync::mpsc::TrySendError<()>;"
+                ),
+            "rusty alias rhs normalization should keep unmapped targets while rewriting TrySendError to std mpsc unit fallback, got:\n{}",
             output
         );
     }
@@ -77160,7 +77162,7 @@ pub(self) type LateTrySend = rusty::sync::mpsc::TrySendError; // tail
         assert!(
             output.contains("pub(super) type LateRecv = std::sync::mpsc::RecvError;")
                 && output.contains(
-                    "pub(self) type LateTrySend = rusty::sync::mpsc::TrySendError; // tail"
+                    "pub(self) type LateTrySend = std::sync::mpsc::TrySendError<()>; // tail"
                 ),
             "rusty alias rhs normalization should rewrite visibility variants and preserve trailing content, got:\n{}",
             output
@@ -78313,7 +78315,7 @@ pub mod rusty {
         );
         assert_eq!(
             AstCodeGen::normalize_namespace_alias_target("rusty::sync::mpsc::TrySendError"),
-            "rusty::sync::mpsc::TrySendError"
+            "std::sync::mpsc::TrySendError<()>"
         );
         assert_eq!(
             AstCodeGen::normalize_namespace_alias_target("rusty::sync::mpsc::Unit"),

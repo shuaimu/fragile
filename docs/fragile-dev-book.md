@@ -463,7 +463,7 @@ Auto-exported namespace aliases are normalized before emission. Representative r
 - `rusty::Option<T>` / `rusty::Result<T, E>` -> `std::option::Option<T>` / `std::result::Result<T, E>`
 - `rusty::HashMap<K, V>` / `rusty::HashSet<T>` -> `std::collections::HashMap<K, V>` / `std::collections::HashSet<T>`
 - `rusty::RefCell<T>` / `rusty::UnsafeCell<T>` -> `std::cell::RefCell<T>` / `std::cell::UnsafeCell<T>`
-- non-isomorphic Rusty sync/channel wrappers stay Rusty (for example `rusty::sync::mpsc::TrySendError`, guard aliases, and `PoisonError`/`LockResult`/`TryLockResult`) to avoid invalid std-generic or lifetime rewrites
+- non-isomorphic Rusty sync wrappers that require lifetimes or custom error surfaces stay Rusty (for example guard aliases and `PoisonError`/`LockResult`/`TryLockResult`) to avoid invalid std-lifetime rewrites
 
 This keeps generated top-level aliases std-native and avoids re-introducing rusty-cpp wrapper names in otherwise safe/std lowered output.
 
@@ -989,8 +989,8 @@ Namespace alias target normalization must reuse the same Rusty-wrapper mapping l
 - Wrapper aliases now normalize to Rust std paths consistently.
 - Non-rusty namespaced aliases (for example `testing::internal::Visible`) are preserved as-is, avoiding accidental namespace mangling.
 - Nested Rusty namespace spellings (for example `rusty::sync::Weak<T>`, `rusty::rc::Weak<T>`, `rusty::collections::HashMap<K, V>`) are normalized through the same shared path.
-- Rusty thread/channel spellings now normalize as well (for example `rusty::thread::JoinHandle<T>`, `rusty::sync::mpsc::{Sender<T>, Receiver<T>, Unit, RecvError, TryRecvError}`), with `JoinHandle<void>` mapped to `std::thread::JoinHandle<()>`.
-- `rusty::sync::mpsc::TrySendError` intentionally stays on the Rusty path: Rust std `TrySendError<T>` is payload-generic and is not isomorphic with Rusty’s non-generic surface.
+- Rusty thread/channel spellings now normalize as well (for example `rusty::thread::JoinHandle<T>`, `rusty::sync::mpsc::{Sender<T>, Receiver<T>, Unit, RecvError, TryRecvError, TrySendError}`), with `JoinHandle<void>` mapped to `std::thread::JoinHandle<()>`.
+- Bare/non-generic `TrySendError` spellings now normalize to `std::sync::mpsc::TrySendError<()>` as a conservative std fallback, and templated forms normalize to `std::sync::mpsc::TrySendError<T>`.
 - Rusty collection wrappers now tolerate extra C++ comparator/hasher/allocator template arguments while mapping to Rust std primary parameters:
   - `rusty::{Vec, VecDeque, HashSet, BTreeSet}<T, ...>` -> std one-parameter forms
   - `rusty::{HashMap, BTreeMap}<K, V, ...>` -> std two-parameter forms
@@ -1015,9 +1015,9 @@ Namespace alias target normalization must reuse the same Rusty-wrapper mapping l
 - Lowered Rusty thread spellings in namespace exports are normalized as well (for example `rusty::thread::rusty_thread_JoinHandle_void_ -> std::thread::JoinHandle<()>`).
 - Normalization preserves explicit Rust function-pointer template arguments (for example `Option<extern "C" fn(...) -> ...>`) instead of re-parsing/mangling them through C++ named-type lowering.
 - Non-template Rusty sync primitives with direct std equivalents are normalized as well (`rusty::{Barrier, Condvar, Once, WaitTimeoutResult}` and `rusty::sync::{Barrier, Condvar, Once, WaitTimeoutResult}`).
-- Unqualified Rusty wrapper spellings introduced by `using namespace rusty...` are normalized too for direct std-equivalent surfaces (for example `JoinHandle<T>`, `Sender<T>`, `Receiver<T>`, `Condvar`, `Unit`, `RecvError`, `TryRecvError`) and Rusty-only non-isomorphic wrappers such as `TrySendError` are preserved on Rusty paths, so downstream aliases/fields do not leak unresolved bare wrapper names.
+- Unqualified Rusty wrapper spellings introduced by `using namespace rusty...` are normalized too for direct std-equivalent surfaces (for example `JoinHandle<T>`, `Sender<T>`, `Receiver<T>`, `Condvar`, `Unit`, `RecvError`, `TryRecvError`, `TrySendError`) so downstream aliases/fields do not leak unresolved bare wrapper names.
 - Canonical and lowered std wrapper spellings for the same surfaces are normalized through the same path (for example `std::thread::JoinHandle<T>`, `std::sync::mpsc::{Sender, Receiver, SyncSender}<T>`, and lowered identifiers like `std_thread_JoinHandle_void_` / `std_sync_mpsc_Sender_int`) so generated code emits real std paths instead of sanitized wrapper identifiers.
-- Wrapper-record alias emission now allowlists `rusty::sync::mpsc::TrySendError` as a concrete alias target, so namespace-qualified `TrySendError` records emit `pub type` aliases instead of opaque placeholder structs.
+- Wrapper-record alias emission now allowlists `std::sync::mpsc::TrySendError<...>` alias targets, so namespace-qualified `TrySendError` records emit `pub type` aliases instead of opaque placeholder structs.
 - Rooted Rust-style alias spellings are normalized through the same path as well (for example `::rusty::...` and `crate::rusty::...`).
 - CV-qualified/tagged Rusty spellings are normalized too by stripping `const`/`volatile` and `class`/`struct` prefixes before matching (for example `const class ::rusty::Barrier` and `volatile struct crate::rusty::sync::mpsc::Receiver<const class rusty::String>`).
 - Namespace alias emission and unresolved-namespaced alias fallback both skip Rusty marker-trait helper exports (`rusty_is_send_*` / `rusty_is_sync_*`) so generated `pub type` aliases do not leak internal trait-probe wrapper names.
