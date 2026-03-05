@@ -8,7 +8,7 @@ use crate::ast::{
     AccessSpecifier, BinaryOp, CastKind, ClangNode, ClangNodeKind, ConstructorKind, CoroutineInfo,
     CoroutineKind, TemplateSpecializationKind, UnaryOp,
 };
-use crate::types::{normalize_rusty_type_alias_to_std, parse_template_args, CppType};
+use crate::types::{parse_template_args, CppType};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -2915,40 +2915,30 @@ impl AstCodeGen {
     }
 
     fn normalize_vector_static_zeroed_initializers(code: &str) -> String {
-        fn is_vector_like_static_type(ty: &str) -> bool {
-            let ty = ty.trim();
-            ty.starts_with("vector_")
-                || ty.starts_with("std_vector<")
-                || ty.starts_with("std::vec::Vec<")
-        }
-
         let mut out = String::with_capacity(code.len());
         for line in code.lines() {
             let trimmed = line.trim_start();
             let is_static = Self::parse_static_item_name(trimmed).is_some();
-            if !is_static {
-                out.push_str(line);
-                out.push('\n');
-                continue;
-            }
-            let Some((lhs, rhs)) = trimmed.split_once(" = ") else {
-                out.push_str(line);
-                out.push('\n');
-                continue;
-            };
-            if !rhs.trim().starts_with("unsafe { std::mem::zeroed() }") {
+            let zeroed_suffix = " = unsafe { std::mem::zeroed() };";
+            if !is_static || !trimmed.ends_with(zeroed_suffix) {
                 out.push_str(line);
                 out.push('\n');
                 continue;
             }
 
-            let Some((prefix, ty_raw)) = lhs.rsplit_once(':') else {
+            let Some((lhs, _)) = trimmed.split_once(zeroed_suffix) else {
                 out.push_str(line);
                 out.push('\n');
                 continue;
             };
-            let ty = ty_raw.trim();
-            if !is_vector_like_static_type(ty) {
+            let Some((_, ty_part)) = lhs.rsplit_once(':') else {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            };
+            let ty = ty_part.trim();
+            let is_vector_ty = ty.starts_with("vector_") || ty.starts_with("std_vector<");
+            if !is_vector_ty {
                 out.push_str(line);
                 out.push('\n');
                 continue;
@@ -2957,14 +2947,12 @@ impl AstCodeGen {
             let indent_len = line.len().saturating_sub(trimmed.len());
             let indent = &line[..indent_len];
             out.push_str(indent);
-            out.push_str(prefix.trim_end());
-            out.push_str(": ");
-            out.push_str(ty);
+            out.push_str(lhs);
             out.push_str(" = ");
             out.push_str(ty);
-            out.push_str("::new_0();\n");
+            out.push_str("::new_0();");
+            out.push('\n');
         }
-
         if !code.ends_with('\n') && !out.is_empty() {
             out.pop();
         }
@@ -3044,10 +3032,18 @@ impl AstCodeGen {
             let ty = ty_part.trim();
             let init = init_part.trim();
             let is_unreferenced = static_use_counts.get(name).copied().unwrap_or(0) == 1;
-            let looks_like_problematic_init = init.contains("std::mem::zeroed()")
-                || init.contains("::")
-                || init.contains("Default::default()")
-                || init.contains("new_0(");
+            let is_vector_like_ty = ty.starts_with("vector_") || ty.starts_with("std_vector<");
+            let init_trimmed = init.trim().trim_end_matches(';').trim();
+            let is_zeroed_init = init_trimmed.contains("std::mem::zeroed()");
+            let is_addr_of_mut_init = init_trimmed.contains("std::ptr::addr_of_mut!(");
+            let looks_like_namespaced_call = init_trimmed.contains("::")
+                && init_trimmed.ends_with(')')
+                && !is_zeroed_init
+                && !is_addr_of_mut_init;
+            let looks_like_problematic_init = (is_zeroed_init && is_vector_like_ty)
+                || looks_like_namespaced_call
+                || init_trimmed.contains("Default::default()")
+                || init_trimmed.contains("new_0(");
             if !is_unreferenced
                 || !looks_like_problematic_init
                 || ty.starts_with("std::mem::MaybeUninit<")
@@ -3104,6 +3100,35 @@ impl AstCodeGen {
             symbols
         }
 
+        fn is_const_safe_new0_static_ctor(rhs_no_semi: &str) -> bool {
+            let compact: String = rhs_no_semi.chars().filter(|ch| !ch.is_whitespace()).collect();
+            let Some(ty) = compact.strip_suffix("::new_0()") else {
+                return false;
+            };
+            // STL vector stubs use a const-capable empty-Vec constructor.
+            ty.starts_with("std_vector<") || ty.starts_with("vector_")
+        }
+
+        fn is_const_safe_static_call_initializer(rhs_no_semi: &str) -> bool {
+            let compact: String = rhs_no_semi.chars().filter(|ch| !ch.is_whitespace()).collect();
+            if compact.starts_with("std::sync::LazyLock::new(")
+                || compact.starts_with("std::sync::LazyLock::<")
+                || compact.starts_with("LazyLock::new(")
+                || compact.starts_with("LazyLock::<")
+                || compact == "std::sync::OnceLock::new()"
+                || compact == "OnceLock::new()"
+                || compact == "std::sync::Once::new()"
+                || compact == "Once::new()"
+            {
+                return true;
+            }
+
+            (compact.starts_with("std::sync::atomic::Atomic")
+                || compact.starts_with("core::sync::atomic::Atomic")
+                || compact.starts_with("Atomic"))
+                && compact.contains("::new(")
+        }
+
         fn contains_non_const_function_call(rhs_no_semi: &str) -> bool {
             let bytes = rhs_no_semi.as_bytes();
             let mut idx = 0usize;
@@ -3156,13 +3181,19 @@ impl AstCodeGen {
                 }
                 if scan < bytes.len() && bytes[scan] == b'(' {
                     let ident = &rhs_no_semi[idx..end];
-                    if ident != "unsafe"
-                        && ident != "if"
-                        && ident != "while"
-                        && ident != "for"
-                        && ident != "match"
-                        && ident != "loop"
-                        && ident != "return"
+                    let ident_leaf = ident.rsplit("::").next().unwrap_or(ident);
+                    if ident_leaf != "unsafe"
+                        && ident_leaf != "if"
+                        && ident_leaf != "while"
+                        && ident_leaf != "for"
+                        && ident_leaf != "match"
+                        && ident_leaf != "loop"
+                        && ident_leaf != "return"
+                        // Enum variant constructors used in static aggregate literals are const-safe.
+                        // Don't classify these as non-const function calls.
+                        && ident_leaf != "Some"
+                        && ident_leaf != "Ok"
+                        && ident_leaf != "Err"
                     {
                         return true;
                     }
@@ -3170,82 +3201,6 @@ impl AstCodeGen {
                 idx = end;
             }
             false
-        }
-
-        fn parse_const_item_name(line: &str) -> Option<String> {
-            let rest = line
-                .strip_prefix("pub const ")
-                .or_else(|| line.strip_prefix("pub(crate) const "))
-                .or_else(|| line.strip_prefix("pub(super) const "))
-                .or_else(|| line.strip_prefix("const "))?;
-            let name: String = rest
-                .chars()
-                .take_while(|ch| AstCodeGen::is_identifier_char(*ch) || *ch == '#')
-                .collect();
-            if name.is_empty() {
-                None
-            } else {
-                Some(name.trim_start_matches("r#").to_string())
-            }
-        }
-
-        fn is_const_like_identifier(name: &str) -> bool {
-            if name.is_empty() {
-                return false;
-            }
-            let mut saw_alpha = false;
-            for ch in name.chars() {
-                if ch == '_' || ch.is_ascii_digit() {
-                    continue;
-                }
-                if ch.is_ascii_uppercase() {
-                    saw_alpha = true;
-                    continue;
-                }
-                return false;
-            }
-            saw_alpha
-        }
-
-        fn extract_const_like_symbols(text: &str) -> Vec<String> {
-            let mut symbols = Vec::new();
-            let mut idx = 0usize;
-            while idx < text.len() {
-                let ch = text[idx..].chars().next().unwrap();
-                if ch == '_' || ch.is_ascii_alphabetic() {
-                    let start = idx;
-                    idx += ch.len_utf8();
-                    while idx < text.len() {
-                        let next = text[idx..].chars().next().unwrap();
-                        if AstCodeGen::is_identifier_char(next) {
-                            idx += next.len_utf8();
-                        } else {
-                            break;
-                        }
-                    }
-                    let ident = &text[start..idx];
-                    let prev = if start > 0 {
-                        text[..start].chars().next_back()
-                    } else {
-                        None
-                    };
-                    let next = if idx < text.len() {
-                        text[idx..].chars().next()
-                    } else {
-                        None
-                    };
-                    let prev_ok = prev.is_none_or(|c| !AstCodeGen::is_identifier_char(c))
-                        && prev != Some(':')
-                        && prev != Some('.');
-                    let next_ok = next.is_none_or(|c| !AstCodeGen::is_identifier_char(c));
-                    if prev_ok && next_ok && is_const_like_identifier(ident) {
-                        symbols.push(ident.to_string());
-                    }
-                } else {
-                    idx += ch.len_utf8();
-                }
-            }
-            symbols
         }
 
         let mut known_globals: HashSet<String> = HashSet::new();
@@ -3256,16 +3211,6 @@ impl AstCodeGen {
         }
         if known_globals.is_empty() {
             return code.to_string();
-        }
-
-        let mut known_const_symbols: HashSet<String> = HashSet::new();
-        for line in code.lines() {
-            if let Some(name) = parse_const_item_name(line.trim_start()) {
-                known_const_symbols.insert(name);
-            }
-        }
-        for name in &known_globals {
-            known_const_symbols.insert(name.clone());
         }
 
         let mut out = String::with_capacity(code.len());
@@ -3300,7 +3245,7 @@ impl AstCodeGen {
             let rhs_no_semi = rhs.trim_end_matches(';').trim();
             let has_non_const_ctor_call = (rhs_no_semi.contains("::new_")
                 && rhs_no_semi.ends_with(')')
-                )
+                && !is_const_safe_new0_static_ctor(rhs_no_semi))
                 || rhs_no_semi.contains("Default::default()");
             // `unsafe { extern_static }` and nested C aggregate brace initializers
             // are also non-const in Rust static contexts; normalize them similarly.
@@ -3331,7 +3276,9 @@ impl AstCodeGen {
                 && !rhs_no_semi.contains("std::ptr::null()")
                 && !rhs_no_semi.contains("std::ptr::null_mut()")
                 && !rhs_no_semi.contains("std::ptr::null::<")
-                && !rhs_no_semi.contains("std::ptr::null_mut::<");
+                && !rhs_no_semi.contains("std::ptr::null_mut::<")
+                && !is_const_safe_new0_static_ctor(rhs_no_semi)
+                && !is_const_safe_static_call_initializer(rhs_no_semi);
             // Degraded static initializers can also carry mutating unsafe blocks
             // (`unsafe { x += 1; x }`) which are rejected during const-eval.
             let has_mutating_assignment_op = [
@@ -3361,20 +3308,6 @@ impl AstCodeGen {
                 || has_non_const_unsafe_side_effect_block
                 || has_nested_brace_aggregate_without_fields
             {
-                let indent_len = line.len().saturating_sub(trimmed.len());
-                let indent = &line[..indent_len];
-                let lhs = trimmed[..eq_idx].trim_end();
-                out.push_str(indent);
-                out.push_str(lhs);
-                out.push_str(" = unsafe { std::mem::zeroed() };");
-                out.push('\n');
-                continue;
-            }
-
-            let has_missing_const_like_symbol = extract_const_like_symbols(rhs_no_semi)
-                .into_iter()
-                .any(|sym| !known_const_symbols.contains(&sym));
-            if has_missing_const_like_symbol {
                 let indent_len = line.len().saturating_sub(trimmed.len());
                 let indent = &line[..indent_len];
                 let lhs = trimmed[..eq_idx].trim_end();
@@ -3711,9 +3644,6 @@ impl AstCodeGen {
         }
 
         for struct_name in needs_default {
-            if Self::resolves_to_external_std_core_alloc_type_path(&struct_name) {
-                continue;
-            }
             if out.contains(&format!("impl Default for {} {{", struct_name)) {
                 continue;
             }
@@ -3727,9 +3657,6 @@ impl AstCodeGen {
         }
 
         for struct_name in needs_clone {
-            if Self::resolves_to_external_std_core_alloc_type_path(&struct_name) {
-                continue;
-            }
             if out.contains(&format!("impl Clone for {} {{", struct_name)) {
                 continue;
             }
@@ -3750,68 +3677,36 @@ impl AstCodeGen {
     fn normalize_add_missing_struct_default_clone_impls(code: &str) -> String {
         fn collect_flat_type_alias_targets(code: &str) -> HashMap<String, String> {
             let mut aliases: HashMap<String, String> = HashMap::new();
-            let mut depth: i32 = 0;
-            let mut module_stack: Vec<(i32, String)> = Vec::new();
             for line in code.lines() {
-                while module_stack
-                    .last()
-                    .is_some_and(|(start_depth, _)| *start_depth > depth)
-                {
-                    module_stack.pop();
-                }
-
                 let trimmed = line.trim_start();
-                if let Some(rest) = trimmed
+                let Some(rest) = trimmed
                     .strip_prefix("pub type ")
                     .or_else(|| trimmed.strip_prefix("type "))
+                else {
+                    continue;
+                };
+                let Some((lhs, rhs)) = rest.split_once('=') else {
+                    continue;
+                };
+                let alias = lhs.trim().trim_start_matches("r#");
+                if alias.is_empty()
+                    || !alias.chars().all(AstCodeGen::is_identifier_char)
+                    || alias.contains('<')
                 {
-                    if let Some((lhs, rhs)) = rest.split_once('=') {
-                        let alias = lhs.trim().trim_start_matches("r#");
-                        if !alias.is_empty()
-                            && alias.chars().all(AstCodeGen::is_identifier_char)
-                            && !alias.contains('<')
-                        {
-                            let target = rhs.trim().trim_end_matches(';').trim();
-                            if !target.is_empty()
-                                && !target.contains('<')
-                                && !target.contains('[')
-                                && !target.contains('(')
-                            {
-                                let normalized_target =
-                                    target.trim_start_matches("crate::").to_string();
-                                aliases.insert(alias.to_string(), normalized_target.clone());
-                                if !module_stack.is_empty() {
-                                    let module_path: Vec<&str> = module_stack
-                                        .iter()
-                                        .map(|(_, module_name)| module_name.as_str())
-                                        .collect();
-                                    let qualified_alias =
-                                        format!("{}::{}", module_path.join("::"), alias);
-                                    aliases.insert(qualified_alias, normalized_target);
-                                }
-                            }
-                        }
-                    }
+                    continue;
                 }
-
-                let declared_module = AstCodeGen::parse_module_decl_info(line);
-                let open_count = line.chars().filter(|&ch| ch == '{').count() as i32;
-                let close_count = line.chars().filter(|&ch| ch == '}').count() as i32;
-                if let Some((module_name, _)) = declared_module {
-                    if open_count > 0 {
-                        module_stack.push((depth + 1, module_name));
-                    }
-                }
-                depth += open_count - close_count;
-                if depth < 0 {
-                    depth = 0;
-                }
-                while module_stack
-                    .last()
-                    .is_some_and(|(start_depth, _)| *start_depth > depth)
+                let target = rhs.trim().trim_end_matches(';').trim();
+                if target.is_empty()
+                    || target.contains('<')
+                    || target.contains('[')
+                    || target.contains('(')
                 {
-                    module_stack.pop();
+                    continue;
                 }
+                aliases.insert(
+                    alias.to_string(),
+                    target.trim_start_matches("crate::").to_string(),
+                );
             }
             aliases
         }
@@ -3823,7 +3718,11 @@ impl AstCodeGen {
                 if current.is_empty() || !seen.insert(current.clone()) {
                     break;
                 }
-                let next = aliases.get(&current).cloned();
+                let leaf = current.rsplit("::").next().unwrap_or("");
+                let next = aliases
+                    .get(&current)
+                    .or_else(|| aliases.get(leaf))
+                    .cloned();
                 let Some(next) = next else {
                     break;
                 };
@@ -4063,10 +3962,6 @@ impl AstCodeGen {
                         };
                         let canonical_struct_name =
                             resolve_alias_target(&qualified_struct_name, &alias_targets);
-                        let canonical_struct_is_external =
-                            Self::resolves_to_external_std_core_alloc_type_path(
-                                &canonical_struct_name,
-                            );
                         let module_path_root_accessible = module_stack
                             .last()
                             .is_none_or(|(_, _, accessible)| *accessible);
@@ -4075,7 +3970,6 @@ impl AstCodeGen {
                             && !disallowed_struct_name
                             && !is_private_struct
                             && module_path_root_accessible
-                            && !canonical_struct_is_external
                         {
                             let derives_default = derived.contains("Default");
                             let derives_clone = derived.contains("Clone");
@@ -4091,7 +3985,6 @@ impl AstCodeGen {
                             && !disallowed_struct_name
                             && !is_private_struct
                             && module_path_root_accessible
-                            && !canonical_struct_is_external
                         {
                             if let Some(field_names) =
                                 collect_struct_field_names_for_default(&lines, line_idx)
@@ -4154,9 +4047,6 @@ impl AstCodeGen {
         }
 
         for struct_name in needs_default {
-            if Self::resolves_to_external_std_core_alloc_type_path(&struct_name) {
-                continue;
-            }
             if existing_default_impls.contains(&struct_name)
                 || out.contains(&format!("impl Default for {} {{", struct_name))
             {
@@ -4186,9 +4076,6 @@ impl AstCodeGen {
         }
 
         for struct_name in needs_clone {
-            if Self::resolves_to_external_std_core_alloc_type_path(&struct_name) {
-                continue;
-            }
             if existing_clone_impls.contains(&struct_name)
                 || out.contains(&format!("impl Clone for {} {{", struct_name))
             {
@@ -4226,37 +4113,6 @@ impl AstCodeGen {
 
     fn is_identifier_char(ch: char) -> bool {
         ch.is_ascii_alphanumeric() || ch == '_'
-    }
-
-    fn is_external_std_core_alloc_type_path(path: &str) -> bool {
-        let normalized = path
-            .trim()
-            .trim_start_matches("crate::")
-            .trim_start_matches("::");
-        normalized.starts_with("std::")
-            || normalized.starts_with("core::")
-            || normalized.starts_with("alloc::")
-    }
-
-    fn resolves_to_external_std_core_alloc_type_path(path: &str) -> bool {
-        if Self::is_external_std_core_alloc_type_path(path) {
-            return true;
-        }
-        let normalized_path = path
-            .trim()
-            .trim_start_matches("crate::")
-            .trim_start_matches("::");
-        // Keep lowered Rusty thread join-handle placeholders eligible for local
-        // fallback impl synthesis: they are generated wrapper surfaces rather
-        // than direct std paths and can still be referenced by synthesized
-        // field-wise defaults.
-        if normalized_path.starts_with("rusty::thread::rusty_thread_JoinHandle_")
-            || normalized_path.starts_with("rusty::thread::JoinHandle")
-        {
-            return false;
-        }
-        let normalized = Self::normalize_namespace_alias_target(path);
-        Self::is_external_std_core_alloc_type_path(&normalized)
     }
 
     fn split_top_level_list<'a>(input: &'a str, separator: char) -> Vec<&'a str> {
@@ -4874,11 +4730,10 @@ impl AstCodeGen {
                     continue;
                 }
                 if let Some(target) = Self::resolve_container_alias_target(name, &defined) {
-                    let normalized_target = Self::normalize_namespace_alias_target(&target);
                     additions.push_str(
                         "\n/// Container/smart-pointer alias fallback for unresolved lowered type spelling\n",
                     );
-                    additions.push_str(&format!("pub type {} = {};\n", name, normalized_target));
+                    additions.push_str(&format!("pub type {} = {};\n", name, target));
                     defined.insert(name.clone());
                     progressed = true;
                     continue;
@@ -4887,11 +4742,10 @@ impl AstCodeGen {
                     .into_iter()
                     .find(|candidate| defined.contains(candidate))
                 {
-                    let normalized_target = Self::normalize_namespace_alias_target(&target);
                     additions.push_str(
                         "\n/// Qualifier-family alias fallback for unresolved type spelling\n",
                     );
-                    additions.push_str(&format!("pub type {} = {};\n", name, normalized_target));
+                    additions.push_str(&format!("pub type {} = {};\n", name, target));
                     defined.insert(name.clone());
                     progressed = true;
                 }
@@ -4979,8 +4833,6 @@ impl AstCodeGen {
                 "condition_variable",
                 "once_flag",
                 "thread",
-                "tm",
-                "timeval",
                 "vector",
                 "deque",
                 "queue",
@@ -5572,7 +5424,37 @@ impl AstCodeGen {
         }
 
         let mut out = String::with_capacity(code.len());
+        let mut next_union_is_recovered = false;
+        let mut recovered_union_depth: i32 = 0;
         for line in code.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("/// Recovered union for C++ `union (unnamed union at ") {
+                next_union_is_recovered = true;
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+
+            if next_union_is_recovered && trimmed.starts_with("pub union ") && trimmed.ends_with('{') {
+                next_union_is_recovered = false;
+                recovered_union_depth = 1;
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+
+            if recovered_union_depth > 0 {
+                out.push_str(line);
+                out.push('\n');
+                let open_count = line.chars().filter(|&ch| ch == '{').count() as i32;
+                let close_count = line.chars().filter(|&ch| ch == '}').count() as i32;
+                recovered_union_depth += open_count - close_count;
+                if recovered_union_depth < 0 {
+                    recovered_union_depth = 0;
+                }
+                continue;
+            }
+
             let mut rewritten = line.to_string();
             for unresolved in &unresolved_lowercase {
                 rewritten = Self::rewrite_shadowed_ident_in_item_type_positions(
@@ -5610,21 +5492,6 @@ impl AstCodeGen {
         if has_non_generic_vec_shadow {
             out = Self::rewrite_bare_path_prefix(&out, "Vec<", "std::vec::Vec<");
             out = Self::rewrite_bare_path_prefix(&out, "Vec::", "std::vec::Vec::");
-        }
-        // Bare `Result<T, E>`/`Result::...` frequently collide with user-defined
-        // non-generic `Result` placeholder records.
-        let has_non_generic_result_shadow = defined.contains("Result")
-            && !code.contains("struct Result<")
-            && !code.contains("pub struct Result<")
-            && !code.contains("enum Result<")
-            && !code.contains("pub enum Result<")
-            && !code.contains("union Result<")
-            && !code.contains("pub union Result<")
-            && !code.contains("type Result<")
-            && !code.contains("pub type Result<");
-        if has_non_generic_result_shadow {
-            out = Self::rewrite_bare_path_prefix(&out, "Result<", "std::result::Result<");
-            out = Self::rewrite_bare_path_prefix(&out, "Result::", "std::result::Result::");
         }
         out
     }
@@ -5717,11 +5584,64 @@ impl AstCodeGen {
             if out.contains(&prefix) {
                 continue;
             }
-            let normalized_target = Self::normalize_namespace_alias_target(&target);
             out.push_str("/// Lowercase unresolved type alias fallback\n");
-            out.push_str(&format!("pub type {} = {};\n", alias, normalized_target));
+            out.push_str(&format!("pub type {} = {};\n", alias, target));
         }
         out
+    }
+
+    fn has_unqualified_type_usage(code: &str, target_name: &str) -> bool {
+        let canonical_target = target_name.trim_start_matches("r#");
+        let mut depth: i32 = 0;
+        let mut module_stack: Vec<i32> = Vec::new();
+        for line in code.lines() {
+            while module_stack.last().is_some_and(|start_depth| *start_depth > depth) {
+                module_stack.pop();
+            }
+
+            let in_module_scope = !module_stack.is_empty();
+            if let Some(declared) = Self::parse_declared_type_like_name(line) {
+                if declared.trim_start_matches("r#") == canonical_target {
+                    let open_count = line.chars().filter(|&ch| ch == '{').count() as i32;
+                    let close_count = line.chars().filter(|&ch| ch == '}').count() as i32;
+                    if Self::parse_module_decl_name(line).is_some() && open_count > 0 {
+                        module_stack.push(depth + 1);
+                    }
+                    depth += open_count - close_count;
+                    if depth < 0 {
+                        depth = 0;
+                    }
+                    continue;
+                }
+            }
+
+            if !in_module_scope {
+                let trimmed = line.trim_start();
+                if !(trimmed.starts_with("impl ") && trimmed.ends_with('{')) {
+                    let mut snippets = Vec::new();
+                    Self::collect_type_expr_snippets_from_line(line, &mut snippets);
+                    for snippet in snippets {
+                        for ident in Self::extract_named_type_identifiers_from_type_expr(&snippet)
+                        {
+                            if ident.trim_start_matches("r#") == canonical_target {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            let open_count = line.chars().filter(|&ch| ch == '{').count() as i32;
+            let close_count = line.chars().filter(|&ch| ch == '}').count() as i32;
+            if Self::parse_module_decl_name(line).is_some() && open_count > 0 {
+                module_stack.push(depth + 1);
+            }
+            depth += open_count - close_count;
+            if depth < 0 {
+                depth = 0;
+            }
+        }
+        false
     }
 
     /// Add top-level alias shims (e.g. `LogEntry = janus::LogEntry`) when a
@@ -5853,6 +5773,9 @@ impl AstCodeGen {
                 continue;
             }
             if let Some(Some(target)) = namespaced_targets.get(&canonical_name) {
+                if !Self::has_unqualified_type_usage(code, &canonical_name) {
+                    continue;
+                }
                 // Anonymous-namespace exports are already surfaced inside their
                 // parent module via `pub(crate) use __anon_*::*;`. Adding a
                 // top-level alias can create ambiguous `use super::*` imports.
@@ -5866,9 +5789,6 @@ impl AstCodeGen {
                     continue;
                 };
                 if !Self::is_root_accessible_module_path(target_module_path, &module_visibility) {
-                    continue;
-                }
-                if Self::is_rusty_marker_trait_namespace_alias(&canonical_name, target) {
                     continue;
                 }
                 aliases
@@ -5907,12 +5827,8 @@ impl AstCodeGen {
             if out.contains(&prefix) {
                 continue;
             }
-            if Self::is_rusty_marker_trait_namespace_alias(&alias, &target) {
-                continue;
-            }
-            let normalized_target = Self::normalize_namespace_alias_target(&target);
             out.push_str("/// Namespaced unresolved type alias fallback\n");
-            out.push_str(&format!("pub type {} = {};\n", alias, normalized_target));
+            out.push_str(&format!("pub type {} = {};\n", alias, target));
         }
         out
     }
@@ -6041,66 +5957,6 @@ impl AstCodeGen {
         out
     }
 
-    fn normalize_rusty_type_alias_rhs_paths(code: &str) -> String {
-        if !code.contains("type ") || !code.contains("rusty::") {
-            return code.to_string();
-        }
-
-        let mut out = String::with_capacity(code.len());
-        for line in code.lines() {
-            let trimmed = line.trim_start();
-            let is_type_alias = trimmed.starts_with("pub type ")
-                || trimmed.starts_with("type ")
-                || trimmed.starts_with("pub(crate) type ")
-                || trimmed.starts_with("pub(super) type ")
-                || trimmed.starts_with("pub(self) type ");
-            if !is_type_alias {
-                out.push_str(line);
-                out.push('\n');
-                continue;
-            }
-
-            let Some((lhs, rhs_with_tail)) = trimmed.split_once('=') else {
-                out.push_str(line);
-                out.push('\n');
-                continue;
-            };
-            let Some(semi_idx) = rhs_with_tail.find(';') else {
-                out.push_str(line);
-                out.push('\n');
-                continue;
-            };
-
-            let rhs = rhs_with_tail[..semi_idx].trim();
-            if rhs.is_empty() {
-                out.push_str(line);
-                out.push('\n');
-                continue;
-            }
-
-            let normalized_rhs = Self::normalize_namespace_alias_target(rhs);
-            if normalized_rhs == rhs {
-                out.push_str(line);
-                out.push('\n');
-                continue;
-            }
-
-            let indent_len = line.len().saturating_sub(trimmed.len());
-            out.push_str(&line[..indent_len]);
-            out.push_str(lhs.trim_end());
-            out.push_str(" = ");
-            out.push_str(&normalized_rhs);
-            out.push(';');
-            out.push_str(&rhs_with_tail[(semi_idx + 1)..]);
-            out.push('\n');
-        }
-
-        if !code.ends_with('\n') && out.ends_with('\n') {
-            out.pop();
-        }
-        out
-    }
-
     fn normalize_placeholder_ctor_calls(code: &str) -> String {
         let needle = "_::new_0()";
         let mut out = String::with_capacity(code.len());
@@ -6180,8 +6036,6 @@ impl AstCodeGen {
         } else if let Some(inner) = trimmed
             .strip_prefix("std::result::Result<")
             .or_else(|| trimmed.strip_prefix("core::result::Result<"))
-            .or_else(|| trimmed.strip_prefix("alloc::result::Result<"))
-            .or_else(|| trimmed.strip_prefix("Result<"))
             .and_then(|rest| rest.strip_suffix('>'))
         {
             let parts = Self::split_top_level_list(inner, ',');
@@ -6197,246 +6051,6 @@ impl AstCodeGen {
         } else {
             Self::get_default_value_for_type(trimmed)
         }
-    }
-
-    fn skip_impl_block(lines: &[&str], start: usize) -> usize {
-        if start >= lines.len() {
-            return start;
-        }
-        let mut depth: i32 = lines[start].matches('{').count() as i32
-            - lines[start].matches('}').count() as i32;
-        let mut idx = start + 1;
-        if depth <= 0 {
-            return idx;
-        }
-        while idx < lines.len() {
-            depth += lines[idx].matches('{').count() as i32;
-            depth -= lines[idx].matches('}').count() as i32;
-            idx += 1;
-            if depth <= 0 {
-                break;
-            }
-        }
-        idx
-    }
-
-    fn normalize_known_libc_time_struct_placeholders(code: &str) -> String {
-        let needs_tm = code.contains(".tm_year")
-            || code.contains(".tm_mon")
-            || code.contains(".tm_mday")
-            || code.contains(".tm_hour")
-            || code.contains(".tm_min")
-            || code.contains(".tm_sec");
-        let needs_timeval = code.contains(".tv_sec") || code.contains(".tv_usec");
-        if !needs_tm && !needs_timeval {
-            return code.to_string();
-        }
-
-        let lines: Vec<&str> = code.lines().collect();
-        if lines.is_empty() {
-            return code.to_string();
-        }
-        let mut out = String::with_capacity(code.len() + 512);
-        let mut i = 0usize;
-        while i < lines.len() {
-            let line = lines[i];
-            let trimmed = line.trim();
-
-            let emit_tm = |out: &mut String| {
-                out.push_str("#[repr(C)]\n");
-                out.push_str("pub struct tm {\n");
-                out.push_str("    pub tm_sec: i32,\n");
-                out.push_str("    pub tm_min: i32,\n");
-                out.push_str("    pub tm_hour: i32,\n");
-                out.push_str("    pub tm_mday: i32,\n");
-                out.push_str("    pub tm_mon: i32,\n");
-                out.push_str("    pub tm_year: i32,\n");
-                out.push_str("    pub tm_wday: i32,\n");
-                out.push_str("    pub tm_yday: i32,\n");
-                out.push_str("    pub tm_isdst: i32,\n");
-                out.push_str("    pub tm_gmtoff: i64,\n");
-                out.push_str("    pub tm_zone: *const i8,\n");
-                out.push_str("}\n");
-                out.push_str("impl Default for tm {\n");
-                out.push_str("    fn default() -> Self {\n");
-                out.push_str("        Self {\n");
-                out.push_str("            tm_sec: 0,\n");
-                out.push_str("            tm_min: 0,\n");
-                out.push_str("            tm_hour: 0,\n");
-                out.push_str("            tm_mday: 0,\n");
-                out.push_str("            tm_mon: 0,\n");
-                out.push_str("            tm_year: 0,\n");
-                out.push_str("            tm_wday: 0,\n");
-                out.push_str("            tm_yday: 0,\n");
-                out.push_str("            tm_isdst: 0,\n");
-                out.push_str("            tm_gmtoff: 0,\n");
-                out.push_str("            tm_zone: std::ptr::null(),\n");
-                out.push_str("        }\n");
-                out.push_str("    }\n");
-                out.push_str("}\n");
-            };
-            let emit_timeval = |out: &mut String| {
-                out.push_str("#[repr(C)]\n");
-                out.push_str("pub struct timeval {\n");
-                out.push_str("    pub tv_sec: i64,\n");
-                out.push_str("    pub tv_usec: i64,\n");
-                out.push_str("}\n");
-                out.push_str("impl Default for timeval {\n");
-                out.push_str("    fn default() -> Self {\n");
-                out.push_str("        Self { tv_sec: 0, tv_usec: 0 }\n");
-                out.push_str("    }\n");
-                out.push_str("}\n");
-            };
-
-            if needs_timeval && trimmed == "pub type timeval = i64;" {
-                emit_timeval(&mut out);
-                if i + 1 < lines.len() || code.ends_with('\n') {
-                    out.push('\n');
-                }
-                i += 1;
-                continue;
-            }
-
-            if needs_tm && trimmed.contains("pub struct tm {") && trimmed.contains("_opaque:") {
-                emit_tm(&mut out);
-                i += 1;
-                if i < lines.len() && lines[i].trim().starts_with("impl Default for tm") {
-                    i = Self::skip_impl_block(&lines, i);
-                }
-                if i < lines.len() || code.ends_with('\n') {
-                    out.push('\n');
-                }
-                continue;
-            }
-
-            if needs_timeval
-                && trimmed.contains("pub struct timeval {")
-                && trimmed.contains("_opaque:")
-            {
-                emit_timeval(&mut out);
-                i += 1;
-                if i < lines.len() && lines[i].trim().starts_with("impl Default for timeval") {
-                    i = Self::skip_impl_block(&lines, i);
-                }
-                if i < lines.len() || code.ends_with('\n') {
-                    out.push('\n');
-                }
-                continue;
-            }
-
-            if needs_tm && trimmed == "#[repr(C)]" && i + 2 < lines.len() {
-                let next_trimmed = lines[i + 1].trim();
-                if next_trimmed.starts_with("pub struct tm {") {
-                    let mut j = i + 2;
-                    let mut saw_opaque = false;
-                    while j < lines.len() {
-                        let t = lines[j].trim();
-                        if t.contains("_opaque:") {
-                            saw_opaque = true;
-                        }
-                        if t == "}" {
-                            break;
-                        }
-                        j += 1;
-                    }
-                    if saw_opaque && j < lines.len() {
-                        emit_tm(&mut out);
-                        i = j + 1;
-                        if i < lines.len() && lines[i].trim().starts_with("impl Default for tm") {
-                            i = Self::skip_impl_block(&lines, i);
-                        }
-                        if i < lines.len() || code.ends_with('\n') {
-                            out.push('\n');
-                        }
-                        continue;
-                    }
-                }
-            }
-
-            if needs_timeval && trimmed == "#[repr(C)]" && i + 2 < lines.len() {
-                let next_trimmed = lines[i + 1].trim();
-                if next_trimmed.starts_with("pub struct timeval {") {
-                    let mut j = i + 2;
-                    let mut saw_opaque = false;
-                    while j < lines.len() {
-                        let t = lines[j].trim();
-                        if t.contains("_opaque:") {
-                            saw_opaque = true;
-                        }
-                        if t == "}" {
-                            break;
-                        }
-                        j += 1;
-                    }
-                    if saw_opaque && j < lines.len() {
-                        emit_timeval(&mut out);
-                        i = j + 1;
-                        if i < lines.len()
-                            && lines[i].trim().starts_with("impl Default for timeval")
-                        {
-                            i = Self::skip_impl_block(&lines, i);
-                        }
-                        if i < lines.len() || code.ends_with('\n') {
-                            out.push('\n');
-                        }
-                        continue;
-                    }
-                }
-            }
-
-            out.push_str(line);
-            if i + 1 < lines.len() || code.ends_with('\n') {
-                out.push('\n');
-            }
-            i += 1;
-        }
-        Self::strip_stale_time_placeholder_default_impls(&out, needs_tm, needs_timeval)
-    }
-
-    fn strip_stale_time_placeholder_default_impls(
-        code: &str,
-        strip_tm: bool,
-        strip_timeval: bool,
-    ) -> String {
-        if (!strip_tm || !code.contains("impl Default for tm"))
-            && (!strip_timeval || !code.contains("impl Default for timeval"))
-        {
-            return code.to_string();
-        }
-
-        let lines: Vec<&str> = code.lines().collect();
-        if lines.is_empty() {
-            return code.to_string();
-        }
-
-        let mut out = String::with_capacity(code.len());
-        let mut i = 0usize;
-        while i < lines.len() {
-            let trimmed = lines[i].trim_start();
-            let is_target = (strip_tm && trimmed.starts_with("impl Default for tm"))
-                || (strip_timeval && trimmed.starts_with("impl Default for timeval"));
-            if is_target {
-                let end = Self::skip_impl_block(&lines, i);
-                let mut block = String::new();
-                for (idx, line) in lines[i..end].iter().enumerate() {
-                    if idx > 0 {
-                        block.push('\n');
-                    }
-                    block.push_str(line);
-                }
-                if block.contains("_opaque") {
-                    i = end;
-                    continue;
-                }
-            }
-
-            out.push_str(lines[i]);
-            if i + 1 < lines.len() || code.ends_with('\n') {
-                out.push('\n');
-            }
-            i += 1;
-        }
-        out
     }
 
     fn synthesize_empty_non_unit_function_bodies(code: &str) -> String {
@@ -6918,6 +6532,89 @@ impl AstCodeGen {
         out
     }
 
+    fn normalize_redundant_deref_scalar_casts(code: &str) -> String {
+        fn is_supported_scalar_cast_target(ty: &str) -> bool {
+            matches!(
+                ty,
+                "i8"
+                    | "u8"
+                    | "i16"
+                    | "u16"
+                    | "i32"
+                    | "u32"
+                    | "i64"
+                    | "u64"
+                    | "isize"
+                    | "usize"
+                    | "f32"
+                    | "f64"
+            )
+        }
+
+        let mut out = String::with_capacity(code.len());
+        for line in code.lines() {
+            let mut rewritten = line.to_string();
+            let mut search_from = 0usize;
+            while let Some(rel) = rewritten[search_from..].find("((*") {
+                let start = search_from + rel;
+                let ident_start = start + "((*".len();
+                let mut ident_end = ident_start;
+                while ident_end < rewritten.len() {
+                    let ch = rewritten[ident_end..].chars().next().unwrap();
+                    if AstCodeGen::is_identifier_char(ch) {
+                        ident_end += ch.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+                if ident_end == ident_start || !rewritten[ident_end..].starts_with(") as ") {
+                    search_from = ident_start;
+                    continue;
+                }
+
+                let ty_start = ident_end + ") as ".len();
+                let mut ty_end = ty_start;
+                while ty_end < rewritten.len() {
+                    let ch = rewritten[ty_end..].chars().next().unwrap();
+                    if AstCodeGen::is_identifier_char(ch) {
+                        ty_end += ch.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+                if ty_end == ty_start || !rewritten[ty_end..].starts_with(')') {
+                    search_from = ty_start;
+                    continue;
+                }
+
+                let ty = rewritten[ty_start..ty_end].trim();
+                if !is_supported_scalar_cast_target(ty) {
+                    search_from = ty_end + 1;
+                    continue;
+                }
+
+                let ident = rewritten[ident_start..ident_end].trim();
+                let replacement = if rewritten.trim_start().starts_with("let ")
+                    && rewritten[..start].contains(" = ")
+                {
+                    format!("*{}", ident)
+                } else {
+                    format!("(*{})", ident)
+                };
+                let end = ty_end + 1;
+                rewritten.replace_range(start..end, &replacement);
+                search_from = start + replacement.len();
+            }
+
+            out.push_str(&rewritten);
+            out.push('\n');
+        }
+        if !code.ends_with('\n') && !out.is_empty() {
+            out.pop();
+        }
+        out
+    }
+
     fn normalize_bare_identifier_expression_statements(code: &str) -> String {
         let mut out = String::with_capacity(code.len());
         for line in code.lines() {
@@ -7125,198 +6822,6 @@ impl AstCodeGen {
             out.push_str(&rewritten);
             out.push('\n');
         }
-        if !code.ends_with('\n') && !out.is_empty() {
-            out.pop();
-        }
-        out
-    }
-
-    /// Drop local `let` bindings whose initializer is an untyped
-    /// `Default::default()` and whose binding is never used in the enclosing
-    /// function body. These are degraded call placeholders that can trigger
-    /// E0790/E0282 when type inference has no remaining constraints.
-    fn normalize_unused_default_local_bindings(code: &str) -> String {
-        fn parse_default_local_binding_name(line: &str) -> Option<String> {
-            let trimmed = line.trim_start();
-            if !trimmed.starts_with("let ") {
-                return None;
-            }
-            let mut rest = trimmed["let ".len()..].trim_start();
-            if let Some(next) = rest.strip_prefix("mut ") {
-                rest = next.trim_start();
-            }
-            let eq_idx = rest.find('=')?;
-            let name = rest[..eq_idx].trim();
-            if name.is_empty() {
-                return None;
-            }
-            if name.contains(':')
-                || !name
-                    .chars()
-                    .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
-            {
-                return None;
-            }
-
-            let rhs = rest[eq_idx + 1..].trim().trim_end_matches(';').trim();
-            if rhs == "Default::default()"
-                || rhs == "std::default::Default::default()"
-                || rhs == "std::prelude::v1::Default::default()"
-            {
-                Some(name.to_string())
-            } else {
-                None
-            }
-        }
-
-        let lines: Vec<&str> = code.lines().collect();
-        let mut out = String::with_capacity(code.len());
-        let mut idx = 0usize;
-        while idx < lines.len() {
-            let line = lines[idx];
-            let trimmed = line.trim_start();
-            let is_fn_head = trimmed.starts_with("pub fn ")
-                || trimmed.starts_with("pub(crate) fn ")
-                || trimmed.starts_with("pub(super) fn ")
-                || trimmed.starts_with("unsafe fn ")
-                || trimmed.starts_with("fn ");
-            if !is_fn_head {
-                out.push_str(line);
-                out.push('\n');
-                idx += 1;
-                continue;
-            }
-
-            let mut end = idx;
-            let mut depth: i32 = 0;
-            let mut saw_open_brace = false;
-            while end < lines.len() {
-                let cur = lines[end];
-                for ch in cur.chars() {
-                    if ch == '{' {
-                        depth += 1;
-                        saw_open_brace = true;
-                    } else if ch == '}' && saw_open_brace {
-                        depth -= 1;
-                    }
-                }
-                end += 1;
-                if saw_open_brace && depth <= 0 {
-                    break;
-                }
-            }
-            if !saw_open_brace {
-                out.push_str(line);
-                out.push('\n');
-                idx += 1;
-                continue;
-            }
-
-            let fn_lines = &lines[idx..end];
-            let fn_text = fn_lines.join("\n");
-            for fn_line in fn_lines {
-                let should_drop = parse_default_local_binding_name(fn_line)
-                    .is_some_and(|name| Self::count_identifier_occurrences(&fn_text, &name) == 1);
-                if should_drop {
-                    continue;
-                }
-                out.push_str(fn_line);
-                out.push('\n');
-            }
-            idx = end;
-        }
-
-        if !code.ends_with('\n') && !out.is_empty() {
-            out.pop();
-        }
-        out
-    }
-
-    /// Fast-path cleanup for trivial degraded functions shaped like:
-    /// `let mut x = Default::default(); return ...;`
-    /// even if broader function-body scanning missed the local.
-    fn normalize_pre_return_unused_default_local_bindings(code: &str) -> String {
-        fn parse_default_local_binding_name(line: &str) -> Option<String> {
-            let trimmed = line.trim_start();
-            if !trimmed.starts_with("let ") {
-                return None;
-            }
-            let mut rest = trimmed["let ".len()..].trim_start();
-            if let Some(next) = rest.strip_prefix("mut ") {
-                rest = next.trim_start();
-            }
-            let eq_idx = rest.find('=')?;
-            let name = rest[..eq_idx].trim();
-            if name.is_empty() {
-                return None;
-            }
-            if name.contains(':')
-                || !name
-                    .chars()
-                    .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
-            {
-                return None;
-            }
-            let rhs = rest[eq_idx + 1..].trim().trim_end_matches(';').trim();
-            if rhs == "Default::default()"
-                || rhs == "std::default::Default::default()"
-                || rhs == "std::prelude::v1::Default::default()"
-            {
-                Some(name.to_string())
-            } else {
-                None
-            }
-        }
-
-        fn line_contains_identifier(line: &str, ident: &str) -> bool {
-            if ident.is_empty() {
-                return false;
-            }
-            let mut idx = 0usize;
-            while let Some(rel) = line[idx..].find(ident) {
-                let start = idx + rel;
-                let end = start + ident.len();
-                let prev = line[..start].chars().next_back();
-                let next = line[end..].chars().next();
-                let prev_ok = prev.is_none_or(|ch| !AstCodeGen::is_identifier_char(ch));
-                let next_ok = next.is_none_or(|ch| !AstCodeGen::is_identifier_char(ch));
-                if prev_ok && next_ok {
-                    return true;
-                }
-                idx = end;
-            }
-            false
-        }
-
-        let lines: Vec<&str> = code.lines().collect();
-        let mut out = String::with_capacity(code.len());
-        let mut idx = 0usize;
-        while idx < lines.len() {
-            let line = lines[idx];
-            let mut should_drop = false;
-            if let Some(name) = parse_default_local_binding_name(line) {
-                let mut probe = idx + 1;
-                while probe < lines.len() {
-                    let next_trimmed = lines[probe].trim();
-                    if next_trimmed.is_empty() || next_trimmed.starts_with("//") {
-                        probe += 1;
-                        continue;
-                    }
-                    if next_trimmed.starts_with("return ")
-                        && !line_contains_identifier(next_trimmed, &name)
-                    {
-                        should_drop = true;
-                    }
-                    break;
-                }
-            }
-            if !should_drop {
-                out.push_str(line);
-                out.push('\n');
-            }
-            idx += 1;
-        }
-
         if !code.ends_with('\n') && !out.is_empty() {
             out.pop();
         }
@@ -8228,8 +7733,9 @@ impl AstCodeGen {
         }
 
         fn replace_placeholder_calls(line: &str, placeholder: &str) -> String {
-            let needle = format!("{}(", placeholder);
+            let needle = format!("{}()", placeholder);
             let replacement = format!("{}::default()", placeholder);
+            let qualified_tail = format!("::{}", placeholder);
             let mut rewritten = line.to_string();
             let mut search_from = 0usize;
 
@@ -8238,12 +7744,6 @@ impl AstCodeGen {
                     break;
                 };
                 let call_idx = search_from + rel_idx;
-                let open_paren_idx = call_idx + placeholder.len();
-                let Some(close_paren_idx) =
-                    AstCodeGen::find_matching_close_paren(&rewritten, open_paren_idx)
-                else {
-                    break;
-                };
 
                 let mut start = call_idx;
                 while start > 0 {
@@ -8263,22 +7763,26 @@ impl AstCodeGen {
 
                 // Preserve function declarations like `pub fn default() -> ...`.
                 if matches!(previous_ident_token(&rewritten, start), Some("fn")) {
-                    search_from = close_paren_idx + 1;
+                    search_from = call_idx + needle.len();
                     continue;
                 }
 
-                // Only rewrite exact placeholder callees (`placeholder(...)`) or
-                // qualified path tails (`foo::bar::placeholder(...)`). Avoid suffix
-                // overmatches like `__fragile_extern_LZ4_create_size(...)` when the
-                // placeholder name is `_size`.
-                let callee = &rewritten[start..open_paren_idx];
-                let qualified_tail = format!("::{}", placeholder);
-                if callee != placeholder && !callee.ends_with(&qualified_tail) {
-                    search_from = close_paren_idx + 1;
+                // Only rewrite exact placeholder calls (`placeholder()`) or qualified
+                // path tails (`foo::bar::placeholder()`). Avoid suffix overmatches like
+                // `__fragile_extern_LZ4_create_size()` when placeholder is `_size`.
+                let callee = &rewritten[start..call_idx];
+                let has_qualified_path_prefix = callee.ends_with("::");
+                let is_unqualified_direct_call = callee.is_empty();
+                if !is_unqualified_direct_call
+                    && callee != placeholder
+                    && !callee.ends_with(&qualified_tail)
+                    && !has_qualified_path_prefix
+                {
+                    search_from = call_idx + needle.len();
                     continue;
                 }
 
-                let end = close_paren_idx + 1;
+                let end = call_idx + needle.len();
                 rewritten.replace_range(start..end, &replacement);
                 search_from = start + replacement.len();
             }
@@ -8371,48 +7875,43 @@ impl AstCodeGen {
             .sum()
     }
 
-    fn collect_emitted_global_storage_symbols(code: &str) -> HashSet<String> {
-        let mut symbols = HashSet::new();
-        for line in code.lines() {
-            let trimmed = line.trim_start();
-            if let Some(name) = Self::parse_static_item_name(trimmed) {
-                if name.starts_with("__gv_") {
-                    symbols.insert(name);
+    fn has_unresolved_function_symbol_markers(lines: &[&str]) -> bool {
+        fn has_invoked_global_symbol_call(line: &str) -> bool {
+            if !line.contains("__gv_") || !line.contains('(') {
+                return false;
+            }
+            let bytes = line.as_bytes();
+            let mut idx = 0usize;
+            while let Some(rel) = line[idx..].find("__gv_") {
+                let start = idx + rel;
+                let prev = line[..start].chars().next_back();
+                if prev.is_some_and(AstCodeGen::is_identifier_char) {
+                    idx = start + "__gv_".len();
+                    continue;
                 }
-            }
-        }
-        symbols
-    }
 
-    fn has_unknown_global_storage_symbol_reference(
-        line: &str,
-        known_global_symbols: &HashSet<String>,
-    ) -> bool {
-        let mut idx = 0usize;
-        while let Some(rel) = line[idx..].find("__gv_") {
-            let start = idx + rel;
-            let mut end = start + "__gv_".len();
-            while end < line.len() {
-                let ch = line[end..].chars().next().unwrap();
-                if Self::is_identifier_char(ch) {
-                    end += ch.len_utf8();
-                } else {
-                    break;
+                let mut end = start;
+                while end < bytes.len() {
+                    let ch = bytes[end] as char;
+                    if AstCodeGen::is_identifier_char(ch) || ch == '#' {
+                        end += 1;
+                    } else {
+                        break;
+                    }
                 }
-            }
-            let symbol = &line[start..end];
-            if !known_global_symbols.contains(symbol) {
-                return true;
-            }
-            idx = end;
-        }
-        false
-    }
+                let mut scan = end;
+                while scan < bytes.len() && (bytes[scan] as char).is_ascii_whitespace() {
+                    scan += 1;
+                }
+                if scan < bytes.len() && bytes[scan] == b'(' {
+                    return true;
+                }
 
-    fn has_unresolved_function_symbol_markers(
-        lines: &[&str],
-        known_global_symbols: &HashSet<String>,
-    ) -> bool {
+                idx = end;
+            }
+            false
+        }
+
         const UNRESOLVED_MARKERS: [&str; 59] = [
             "super::Exp::",
             "super::EncodeBase64(",
@@ -8478,11 +7977,8 @@ impl AstCodeGen {
             UNRESOLVED_MARKERS
                 .iter()
                 .any(|marker| line.contains(marker))
-                || Self::has_unknown_global_storage_symbol_reference(line, known_global_symbols)
                 || (line.contains("__gv_") && line.contains("}()"))
-                || (line.contains("__gv_")
-                    && line.contains('(')
-                    && !line.contains("std::mem::zeroed"))
+                || has_invoked_global_symbol_call(line)
         })
     }
 
@@ -8521,6 +8017,13 @@ impl AstCodeGen {
         known_module_roots: &HashSet<String>,
         known_type_methods: &HashSet<(String, String)>,
     ) -> bool {
+        fn is_constructor_like_method(name: &str) -> bool {
+            let Some(rest) = name.strip_prefix("new_") else {
+                return name.starts_with("__new_without_vbases_");
+            };
+            !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit() || ch == '_')
+        }
+
         fn is_call_head_char(b: u8) -> bool {
             b.is_ascii_alphanumeric() || b == b'_' || b == b'#' || b == b':'
         }
@@ -8582,6 +8085,19 @@ impl AstCodeGen {
                                 && !known_type_methods
                                     .contains(&(canonical_ty.to_string(), method.to_string()));
                             if type_method_missing {
+                                if is_constructor_like_method(method) {
+                                    search_idx = open_idx + 1;
+                                    continue;
+                                }
+                                if std::env::var_os("FRAGILE_DEBUG_NS_CALLS").is_some() {
+                                    eprintln!(
+                                        "[fragile-ns-call] missing method root='{}' canonical_root='{}' method='{}' line='{}'",
+                                        ty_segment,
+                                        canonical_ty,
+                                        method,
+                                        line.trim()
+                                    );
+                                }
                                 return true;
                             }
                             search_idx = open_idx + 1;
@@ -8596,6 +8112,19 @@ impl AstCodeGen {
                             && !known_type_methods
                                 .contains(&(canonical_root.to_string(), method.to_string()));
                         if type_method_missing {
+                            if is_constructor_like_method(method) {
+                                search_idx = open_idx + 1;
+                                continue;
+                            }
+                            if std::env::var_os("FRAGILE_DEBUG_NS_CALLS").is_some() {
+                                eprintln!(
+                                    "[fragile-ns-call] missing method root='{}' canonical_root='{}' method='{}' line='{}'",
+                                    root,
+                                    canonical_root,
+                                    method,
+                                    line.trim()
+                                );
+                            }
                             return true;
                         }
                         search_idx = open_idx + 1;
@@ -8614,6 +8143,14 @@ impl AstCodeGen {
                     {
                         search_idx = open_idx + 1;
                         continue;
+                    }
+                    if std::env::var_os("FRAGILE_DEBUG_NS_CALLS").is_some() {
+                        eprintln!(
+                            "[fragile-ns-call] unresolved root='{}' method='{}' line='{}'",
+                            canonical_root,
+                            method,
+                            line.trim()
+                        );
                     }
                     return true;
                 }
@@ -9018,6 +8555,23 @@ impl AstCodeGen {
                 }
                 let binding_name = &line[ident_start..ident_end];
                 let field_name = line[field_start..field_end].trim_start_matches("r#");
+                if field_name == "__vtable" {
+                    search_idx = field_end;
+                    continue;
+                }
+                let mut after_member = field_end;
+                while after_member < line.len()
+                    && line[after_member..]
+                        .chars()
+                        .next()
+                        .is_some_and(|ch| ch.is_whitespace())
+                {
+                    after_member += line[after_member..].chars().next().unwrap().len_utf8();
+                }
+                if line[after_member..].starts_with('(') {
+                    search_idx = field_end;
+                    continue;
+                }
                 if is_known_field_access(
                     &binding_types,
                     known_struct_fields,
@@ -9025,6 +8579,14 @@ impl AstCodeGen {
                     field_name,
                 ) == Some(false)
                 {
+                    if std::env::var_os("FRAGILE_DEBUG_STRUCT_FIELDS").is_some() {
+                        eprintln!(
+                            "[fragile-struct-field] unresolved ptr-deref binding='{}' field='{}' line='{}'",
+                            binding_name,
+                            field_name,
+                            line.trim()
+                        );
+                    }
                     return true;
                 }
                 search_idx = field_end;
@@ -9073,9 +8635,21 @@ impl AstCodeGen {
                 }
                 let receiver = line[recv_start..recv_end].trim().trim_start_matches("r#");
                 let member = line[member_start..member_end].trim().trim_start_matches("r#");
+                if member == "__vtable" {
+                    dot_idx = member_end;
+                    continue;
+                }
                 if is_known_field_access(&binding_types, known_struct_fields, receiver, member)
                     == Some(false)
                 {
+                    if std::env::var_os("FRAGILE_DEBUG_STRUCT_FIELDS").is_some() {
+                        eprintln!(
+                            "[fragile-struct-field] unresolved dot receiver='{}' member='{}' line='{}'",
+                            receiver,
+                            member,
+                            line.trim()
+                        );
+                    }
                     return true;
                 }
                 dot_idx = member_end;
@@ -9161,6 +8735,15 @@ impl AstCodeGen {
                         break;
                     };
                     if !known_here {
+                        if std::env::var_os("FRAGILE_DEBUG_STRUCT_FIELDS").is_some() {
+                            eprintln!(
+                                "[fragile-struct-field] unresolved chain root='{}' current_ty='{}' field='{}' line='{}'",
+                                root,
+                                current_ty,
+                                field,
+                                line.trim()
+                            );
+                        }
                         return true;
                     }
 
@@ -9903,6 +9486,16 @@ impl AstCodeGen {
                 if let Some(stripped) = expr.strip_prefix("unsafe {") {
                     expr = stripped.trim_start();
                 }
+                if expr.starts_with("if ")
+                    || expr.starts_with("if(")
+                    || expr.starts_with("match ")
+                    || expr.starts_with("while ")
+                    || expr.starts_with("for ")
+                    || expr.starts_with("loop ")
+                    || expr.starts_with('{')
+                {
+                    continue;
+                }
                 let Some(paren_idx) = expr.find('(') else {
                     continue;
                 };
@@ -9995,6 +9588,32 @@ impl AstCodeGen {
             AstCodeGen::is_identifier_char(ch) || ch == '#'
         }
 
+        fn is_inside_string_literal(line: &str, byte_idx: usize) -> bool {
+            let mut in_string = false;
+            let mut escaped = false;
+            for (idx, ch) in line.char_indices() {
+                if idx >= byte_idx {
+                    break;
+                }
+                if in_string {
+                    if escaped {
+                        escaped = false;
+                        continue;
+                    }
+                    if ch == '\\' {
+                        escaped = true;
+                    } else if ch == '"' {
+                        in_string = false;
+                    }
+                    continue;
+                }
+                if ch == '"' {
+                    in_string = true;
+                }
+            }
+            in_string
+        }
+
         let mut local_names = collect_param_names(signature_line);
         for line in lines {
             if let Some(name) = collect_local_binding_name(line) {
@@ -10010,6 +9629,10 @@ impl AstCodeGen {
             let mut search_idx = 0usize;
             while let Some(rel) = line[search_idx..].find('(') {
                 let open_idx = search_idx + rel;
+                if is_inside_string_literal(line, open_idx) {
+                    search_idx = open_idx + 1;
+                    continue;
+                }
                 let mut end = open_idx;
                 while end > 0 && line[..end].chars().next_back().is_some_and(|ch| ch.is_whitespace()) {
                     end -= 1;
@@ -10041,6 +9664,7 @@ impl AstCodeGen {
                         | "for"
                         | "loop"
                         | "match"
+                        | "mut"
                         | "return"
                         | "Some"
                         | "Ok"
@@ -10060,6 +9684,14 @@ impl AstCodeGen {
                 {
                     search_idx = open_idx + 1;
                     continue;
+                }
+                if std::env::var_os("FRAGILE_DEBUG_BARE_CALLS").is_some() {
+                    eprintln!(
+                        "[fragile-bare-call] unresolved head='{}' canonical='{}' line='{}'",
+                        head,
+                        canonical,
+                        line.trim()
+                    );
                 }
                 return true;
             }
@@ -10190,6 +9822,11 @@ impl AstCodeGen {
             }
         }
 
+        let receiver_types_with_methods: HashSet<String> = known_type_methods
+            .iter()
+            .map(|(receiver_ty, _)| receiver_ty.clone())
+            .collect();
+
         for line in lines {
             let bytes = line.as_bytes();
             let mut idx = 0usize;
@@ -10244,6 +9881,10 @@ impl AstCodeGen {
                     continue;
                 }
                 if is_allowed_method_name(method) {
+                    idx = method_end;
+                    continue;
+                }
+                if !receiver_types_with_methods.contains(&receiver_ty) {
                     idx = method_end;
                     continue;
                 }
@@ -10447,6 +10088,13 @@ impl AstCodeGen {
 
         fn is_alias_candidate_identifier(ident: &str) -> bool {
             if ident.is_empty() {
+                return false;
+            }
+            if ident
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_digit())
+            {
                 return false;
             }
             if matches!(
@@ -11486,6 +11134,20 @@ impl AstCodeGen {
                 || arg.starts_with('&'))
         }
 
+        fn is_unsuffixed_integer_literal_expr(arg: &str) -> bool {
+            let mut s = arg.trim();
+            while s.starts_with('(') && s.ends_with(')') && s.len() >= 2 {
+                let inner = &s[1..s.len() - 1];
+                if inner.trim().is_empty() {
+                    break;
+                }
+                s = inner.trim();
+            }
+            let s = s.strip_prefix('+').unwrap_or(s);
+            let s = s.strip_prefix('-').unwrap_or(s);
+            !s.is_empty() && s.chars().all(|ch| ch.is_ascii_digit())
+        }
+
         fn is_option_c_fn_param(ty: &str) -> bool {
             let compact: String = ty.chars().filter(|ch| !ch.is_whitespace()).collect();
             compact.starts_with("std::option::Option<extern\"C\"fn(")
@@ -11516,7 +11178,9 @@ impl AstCodeGen {
         for line in code.lines() {
             let trimmed = line.trim_end();
             let is_fn_decl = (trimmed.contains(" fn ") || trimmed.starts_with("fn "))
-                && (trimmed.ends_with('{') || trimmed.ends_with(';'));
+                && (trimmed.ends_with('{')
+                    || trimmed.ends_with(';')
+                    || (trimmed.contains('{') && trimmed.contains('}')));
             if is_fn_decl {
                 out.push_str(line);
                 out.push('\n');
@@ -11601,7 +11265,10 @@ impl AstCodeGen {
                             }
                             continue;
                         }
-                        if arg.contains(" as ") || !is_likely_integer_expr(arg) {
+                        if arg.contains(" as ")
+                            || !is_likely_integer_expr(arg)
+                            || is_unsuffixed_integer_literal_expr(arg)
+                        {
                             continue;
                         }
                         args[idx] = format!("({}) as {}", arg, target_ty);
@@ -12217,6 +11884,11 @@ impl AstCodeGen {
     fn normalize_deref_multiplication_widths(code: &str) -> String {
         let mut out = String::with_capacity(code.len());
         for line in code.lines() {
+            if !line.contains(".wrapping_") {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
             let mut rewritten = line.to_string();
             let mut search_idx = 0usize;
             while let Some(rel) = rewritten[search_idx..].find("(unsafe { *") {
@@ -12353,33 +12025,8 @@ impl AstCodeGen {
     }
 
     fn normalize_null_mut_placeholder_calls(code: &str) -> String {
-        let replaced = code
-            .replace("null_mut::default()", "std::ptr::null_mut()")
-            .replace("null_mut::new_0()", "std::ptr::null_mut()");
-        if !replaced.contains("std::ptr::null_mut();") && !replaced.contains("std::ptr::null();") {
-            return replaced;
-        }
-
-        let mut out = String::with_capacity(replaced.len() + 64);
-        for line in replaced.lines() {
-            let trimmed = line.trim();
-            let indent_len = line.len().saturating_sub(line.trim_start().len());
-            let indent = &line[..indent_len];
-            if trimmed == "std::ptr::null_mut();" {
-                out.push_str(indent);
-                out.push_str("let _ = std::ptr::null_mut::<std::ffi::c_void>();");
-            } else if trimmed == "std::ptr::null();" {
-                out.push_str(indent);
-                out.push_str("let _ = std::ptr::null::<std::ffi::c_void>();");
-            } else {
-                out.push_str(line);
-            }
-            out.push('\n');
-        }
-        if !replaced.ends_with('\n') && !out.is_empty() {
-            out.pop();
-        }
-        out
+        code.replace("null_mut::default()", "std::ptr::null_mut()")
+            .replace("null_mut::new_0()", "std::ptr::null_mut()")
     }
 
     /// Repair degraded pointer cast targets in pointer-typed local bindings.
@@ -12553,125 +12200,11 @@ impl AstCodeGen {
         out
     }
 
-    /// Keep typed null pointer returns aligned with the enclosing function
-    /// signature pointee (`return std::ptr::null_mut::<T>();` in `-> *mut U`).
-    fn normalize_typed_null_pointer_return_pointees(code: &str) -> String {
-        fn parse_pointer_return_pointee(signature_line: &str) -> Option<(bool, String)> {
-            let arrow_idx = signature_line.rfind("->")?;
-            let mut ret_ty = signature_line[arrow_idx + 2..].trim();
-            ret_ty = ret_ty.trim_end_matches('{').trim();
-            if let Some(rest) = ret_ty.strip_prefix("*mut ") {
-                let pointee = rest.trim();
-                if !pointee.is_empty() {
-                    return Some((true, pointee.to_string()));
-                }
-            } else if let Some(rest) = ret_ty.strip_prefix("*const ") {
-                let pointee = rest.trim();
-                if !pointee.is_empty() {
-                    return Some((false, pointee.to_string()));
-                }
-            }
-            None
-        }
-
-        fn rewrite_typed_null_return_line(
-            line: &str,
-            expect_mut_ptr: bool,
-            expected_pointee: &str,
-        ) -> String {
-            let trimmed = line.trim();
-            let (prefix, suffix) = if expect_mut_ptr {
-                ("return std::ptr::null_mut::<", ">();")
-            } else {
-                ("return std::ptr::null::<", ">();")
-            };
-            let Some(actual_pointee) = trimmed
-                .strip_prefix(prefix)
-                .and_then(|rest| rest.strip_suffix(suffix))
-            else {
-                return line.to_string();
-            };
-            let actual_pointee = actual_pointee.trim();
-            if actual_pointee.is_empty() || actual_pointee == expected_pointee {
-                return line.to_string();
-            }
-            let indent_len = line.len().saturating_sub(line.trim_start().len());
-            format!(
-                "{}{}{}{}",
-                &line[..indent_len],
-                prefix,
-                expected_pointee,
-                suffix
-            )
-        }
-
-        let lines: Vec<&str> = code.lines().collect();
-        if lines.is_empty() {
+    fn fallback_heavily_degraded_function_bodies(code: &str) -> String {
+        if std::env::var_os("FRAGILE_DISABLE_STUB_PASS").is_some() {
             return code.to_string();
         }
 
-        let mut out = String::with_capacity(code.len());
-        let mut i = 0usize;
-        while i < lines.len() {
-            let line = lines[i];
-            let trimmed = line.trim_end();
-            let is_fn_start =
-                (trimmed.contains(" fn ") || trimmed.starts_with("fn ")) && trimmed.ends_with('{');
-            if !is_fn_start {
-                out.push_str(line);
-                if i + 1 < lines.len() || code.ends_with('\n') {
-                    out.push('\n');
-                }
-                i += 1;
-                continue;
-            }
-
-            let mut j = i;
-            let mut depth = 0isize;
-            while j < lines.len() {
-                let current = lines[j];
-                depth += current.chars().filter(|c| *c == '{').count() as isize;
-                depth -= current.chars().filter(|c| *c == '}').count() as isize;
-                if depth == 0 {
-                    break;
-                }
-                j += 1;
-            }
-            if j >= lines.len() || depth != 0 {
-                out.push_str(line);
-                if i + 1 < lines.len() || code.ends_with('\n') {
-                    out.push('\n');
-                }
-                i += 1;
-                continue;
-            }
-
-            let pointer_ret = parse_pointer_return_pointee(trimmed);
-            out.push_str(line);
-            out.push('\n');
-            for body_line in &lines[i + 1..j] {
-                let rewritten = if let Some((is_mut, expected_pointee)) = pointer_ret.as_ref() {
-                    rewrite_typed_null_return_line(body_line, *is_mut, expected_pointee)
-                } else {
-                    (*body_line).to_string()
-                };
-                out.push_str(&rewritten);
-                out.push('\n');
-            }
-            out.push_str(lines[j]);
-            if j + 1 < lines.len() || code.ends_with('\n') {
-                out.push('\n');
-            }
-            i = j + 1;
-        }
-
-        if !code.ends_with('\n') && out.ends_with('\n') {
-            out.pop();
-        }
-        out
-    }
-
-    fn fallback_heavily_degraded_function_bodies(code: &str) -> String {
         fn parse_fn_name(line: &str) -> Option<String> {
             let trimmed = line.trim_start();
             AstCodeGen::extract_emitted_item_name(trimmed, "pub unsafe extern \"C\" fn ")
@@ -12798,7 +12331,6 @@ impl AstCodeGen {
         let known_module_roots = Self::collect_top_level_module_roots(code);
         let known_type_methods = Self::collect_emitted_inherent_associated_methods(code);
         let known_struct_fields = Self::collect_emitted_struct_field_names(code);
-        let known_global_symbols = Self::collect_emitted_global_storage_symbols(code);
 
         let mut out = String::new();
         let mut i = 0usize;
@@ -12842,8 +12374,7 @@ impl AstCodeGen {
             let has_enum_switch_mismatch = body_lines.iter().any(|l| l.contains("return value::"))
                 && body_lines.iter().any(|l| l.contains("match "))
                 && body_lines.iter().any(|l| l.contains("=>"));
-            let has_unresolved_symbols =
-                Self::has_unresolved_function_symbol_markers(body_lines, &known_global_symbols);
+            let has_unresolved_symbols = Self::has_unresolved_function_symbol_markers(body_lines);
             let has_unresolved_namespaced_calls = Self::has_unresolved_namespaced_call_markers(
                 body_lines,
                 &known_type_names,
@@ -12879,6 +12410,9 @@ impl AstCodeGen {
             let fn_name = parse_fn_name(trimmed).unwrap_or_default();
             let canonical_fn_name = fn_name.trim_start_matches("r#");
             let is_entry_main = canonical_fn_name == "main";
+            let has_unresolved_bare_statement_calls =
+                has_unresolved_bare_statement_calls && !is_entry_main;
+            let has_unresolved_bare_calls = has_unresolved_bare_calls && !is_entry_main;
             let should_stub =
                 (degraded_markers >= 8 && !is_entry_main)
                     || has_enum_switch_mismatch
@@ -12894,6 +12428,34 @@ impl AstCodeGen {
                     || has_noncallable_zeroed_invocations
                     || has_mismatched_pointer_scalar_identifier_comparisons
                     || has_non_pointer_is_null_calls;
+
+            if should_stub {
+                if let Ok(debug_target) = std::env::var("FRAGILE_DEBUG_STUB_FN") {
+                    let debug_match = debug_target == "1"
+                        || debug_target == canonical_fn_name
+                        || (!fn_name.is_empty() && debug_target == fn_name);
+                    if debug_match {
+                        eprintln!(
+                            "[fragile-stub] fn={} degraded={} enum_switch={} unresolved_symbols={} unresolved_ns_calls={} unresolved_bare_stmt_calls={} unresolved_bare_calls={} unresolved_typed_method_calls={} unresolved_struct_fields={} unresolved_non_callable_deref={} non_callable_local_invocations={} getter_field_artifacts={} noncallable_zeroed_invocations={} pointer_scalar_cmp={} non_pointer_is_null={}",
+                            canonical_fn_name,
+                            degraded_markers,
+                            has_enum_switch_mismatch,
+                            has_unresolved_symbols,
+                            has_unresolved_namespaced_calls,
+                            has_unresolved_bare_statement_calls,
+                            has_unresolved_bare_calls,
+                            has_unresolved_typed_method_calls,
+                            has_unresolved_struct_fields,
+                            has_unresolved_non_callable_deref_calls,
+                            has_non_callable_local_invocations,
+                            has_getter_field_artifacts,
+                            has_noncallable_zeroed_invocations,
+                            has_mismatched_pointer_scalar_identifier_comparisons,
+                            has_non_pointer_is_null_calls
+                        );
+                    }
+                }
+            }
 
             if should_stub {
                 out.push_str(line);
@@ -13694,7 +13256,9 @@ impl AstCodeGen {
                     }
                 }
                 let type_token = line[token_start..pos].trim();
-                let keep_original = type_token.is_empty() || has_new0_ctor.contains(type_token);
+                let keep_original = type_token.is_empty()
+                    || has_new0_ctor.contains(type_token)
+                    || (line.contains("std::ptr::write(") && line.contains("::new_0()"));
                 if keep_original {
                     idx = pos + needle.len();
                     continue;
@@ -14203,78 +13767,6 @@ impl AstCodeGen {
             out.push('\n');
         }
 
-        if !code.ends_with('\n') && !out.is_empty() {
-            out.pop();
-        }
-        out
-    }
-
-    fn normalize_global_range_for_paths_to_unsafe_borrows(code: &str) -> String {
-        fn is_prefixed_global_path(expr: &str) -> bool {
-            let trimmed = expr.trim();
-            if trimmed.is_empty() {
-                return false;
-            }
-            if trimmed.starts_with("&(unsafe {") || trimmed.starts_with("unsafe {") {
-                return false;
-            }
-            if !trimmed.contains("__gv_") && !trimmed.contains("__fsv_") {
-                return false;
-            }
-            if trimmed.contains('(')
-                || trimmed.contains(')')
-                || trimmed.contains('[')
-                || trimmed.contains(']')
-                || trimmed.contains('{')
-                || trimmed.contains('}')
-            {
-                return false;
-            }
-            trimmed
-                .chars()
-                .all(|ch| AstCodeGen::is_identifier_char(ch) || ch == ':')
-        }
-
-        if !code.contains("for ") || (!code.contains("__gv_") && !code.contains("__fsv_")) {
-            return code.to_string();
-        }
-
-        let mut out = String::with_capacity(code.len());
-        for line in code.lines() {
-            let trimmed = line.trim_start();
-            if !trimmed.starts_with("for ") {
-                out.push_str(line);
-                out.push('\n');
-                continue;
-            }
-
-            let Some(in_idx) = trimmed.find(" in ") else {
-                out.push_str(line);
-                out.push('\n');
-                continue;
-            };
-            let Some(body_idx) = trimmed.rfind(" {") else {
-                out.push_str(line);
-                out.push('\n');
-                continue;
-            };
-
-            let range_expr = trimmed[in_idx + 4..body_idx].trim();
-            if !is_prefixed_global_path(range_expr) {
-                out.push_str(line);
-                out.push('\n');
-                continue;
-            }
-
-            let indent_len = line.len().saturating_sub(trimmed.len());
-            out.push_str(&line[..indent_len]);
-            out.push_str(&trimmed[..in_idx]);
-            out.push_str(" in &(unsafe { ");
-            out.push_str(range_expr);
-            out.push_str(" })");
-            out.push_str(&trimmed[body_idx..]);
-            out.push('\n');
-        }
         if !code.ends_with('\n') && !out.is_empty() {
             out.pop();
         }
@@ -15855,7 +15347,12 @@ impl AstCodeGen {
         output = Self::normalize_self_recursive_struct_fields(&output);
         // Rust unions cannot be empty; degraded lowering can emit shell unions.
         output = Self::normalize_empty_union_definitions(&output);
-        // Keep vector-like static zeroed fallbacks stable across the pipeline.
+        // Unreferenced mutable globals frequently carry invalid/non-const
+        // initializers from degraded lowering; keep symbol surface while
+        // deferring initialization through MaybeUninit.
+        output = Self::normalize_unreferenced_static_mut_initializers(&output);
+        // Referenced vector-like globals cannot be zero-initialized safely.
+        // Normalize zeroed artifacts to const-capable empty constructors.
         output = Self::normalize_vector_static_zeroed_initializers(&output);
         // Some generated structs can miss `Default`/`Clone` impls under
         // degraded lowering even though downstream code requires them.
@@ -15873,9 +15370,6 @@ impl AstCodeGen {
         output = Self::normalize_unresolved_lowercase_item_type_tokens(&output);
         // Canonicalize unresolved type spellings against already-emitted definitions.
         output = Self::normalize_unresolved_type_spelling_variants(&output);
-        // libc time structs can degrade to opaque placeholders while call-sites
-        // still access standard fields (`tm_year`, `tv_usec`).
-        output = Self::normalize_known_libc_time_struct_placeholders(&output);
         // Degraded pointer casts can pick local value identifiers as target types.
         output = Self::normalize_unresolved_pointer_cast_targets_in_pointer_bindings(&output);
         // Preempt std-prelude shadowing from emitted placeholders named `Option`/`Box`.
@@ -15890,9 +15384,6 @@ impl AstCodeGen {
         // is only imported from the parent scope. Rewrite such alias rhs paths
         // to `crate::Type` to keep public typedefs visible.
         output = Self::normalize_private_module_glob_import_type_alias_paths(&output);
-        // Normalize Rusty wrapper aliases in all emitted type alias RHS paths
-        // so per-emitter alias surfaces remain std-native consistently.
-        output = Self::normalize_rusty_type_alias_rhs_paths(&output);
         // Break trivial alias cycles produced by degraded typedef lowering.
         output = Self::normalize_recursive_type_alias_cycles(&output);
         // Resolve duplicate item emissions where degraded typedef lowering emits
@@ -16021,6 +15512,10 @@ impl AstCodeGen {
         output = Self::synthesize_missing_non_unit_tail_returns(&output);
         // Repair obvious scalar-vs-pointer local declaration mismatches.
         output = Self::normalize_obvious_local_var_type_mismatches(&output);
+        // Degraded scalar-lane recovery can introduce redundant casts around
+        // direct pointer-deref expressions (`((*p) as i32)`); collapse these
+        // to plain deref forms to preserve idiomatic reference semantics.
+        output = Self::normalize_redundant_deref_scalar_casts(&output);
         // Bare identifier expression statements (`v;`) can move non-Copy locals.
         // Borrow them instead to preserve no-op statement semantics.
         output = Self::normalize_bare_identifier_expression_statements(&output);
@@ -16030,9 +15525,6 @@ impl AstCodeGen {
         // Degraded placeholder rewrites can leak call-shaped tokens into local
         // binding names (e.g. `let mut Default::default(): T = ...;`).
         output = Self::normalize_invalid_local_binding_identifiers(&output);
-        // Degraded expression lowering can strand unused untyped
-        // `let x = Default::default();` placeholders that fail type inference.
-        output = Self::normalize_unused_default_local_bindings(&output);
         // Degraded enum lowering can emit zeroed local placeholders for
         // all-caps constant identifiers (`_SC_*`), which shadows imported
         // constants and triggers Rust E0530. Drop those placeholders.
@@ -16075,19 +15567,17 @@ impl AstCodeGen {
         // Some globals are emitted with initializers that dereference missing
         // `__gv_*` placeholders; zero-initialize those statics to unblock build.
         output = Self::normalize_static_initializers_with_unresolved_global_refs(&output);
-        // Keep vector-like static zeroed fallbacks stable after late rewrites.
+        // Static-initializer normalization can still leave vector globals on
+        // zeroed fallbacks; fold those back to const-capable constructors.
         output = Self::normalize_vector_static_zeroed_initializers(&output);
+        // Re-run unreferenced static-mut cleanup at the end of the pipeline:
+        // late normalizations can remove residual references and expose globals
+        // whose zeroed/non-const initializers would otherwise fail const-eval.
+        output = Self::normalize_unreferenced_static_mut_initializers(&output);
         // Global lowering prefixes mutable/static symbols with `__gv_`; some
         // degraded qualified refs still use unprefixed tails (`...::name`).
         // Rewrite rooted path tails to the internal `...::__gv_name` symbol.
         output = Self::normalize_global_symbol_aliases_for_prefixed_statics(&output);
-        // `for .. in super::module::__gv_*` over mutable static globals needs an
-        // explicit unsafe read plus borrow to avoid moving out of static storage.
-        output = Self::normalize_global_range_for_paths_to_unsafe_borrows(&output);
-        // Run unreferenced static-mut cleanup after global alias normalization:
-        // rooted-path rewrites can materialize additional `__gv_*` references
-        // (`...::name` -> `...::__gv_name`) that must count as live uses.
-        output = Self::normalize_unreferenced_static_mut_initializers(&output);
         // Late unresolved-type closure can still append empty union shells.
         output = Self::normalize_empty_union_definitions(&output);
         // Run a final degraded-body fallback after late unresolved-type closure
@@ -16097,18 +15587,6 @@ impl AstCodeGen {
         // Final degraded fallback synthesis can reintroduce bare std-prelude
         // paths (for example `Option<...>` / `Vec<...>` in helper stubs).
         output = Self::normalize_shadowed_std_prelude_paths(&output);
-        // Late fallback/static normalizations can reintroduce untyped local
-        // default placeholders; drop those again before returning final output.
-        output = Self::normalize_unused_default_local_bindings(&output);
-        output = Self::normalize_pre_return_unused_default_local_bindings(&output);
-        // Degraded pointer fallback normalization can strand typed null returns
-        // with mismatched pointees (`null_mut::<param_name>()` in `-> *mut T`).
-        output = Self::normalize_typed_null_pointer_return_pointees(&output);
-        // Late unresolved-closure and degraded fallback passes can append fresh
-        // `type` aliases after the early alias-rhs normalization stage.
-        // Re-run Rusty wrapper alias normalization so final output keeps std
-        // alias targets wherever generic mapping exists.
-        output = Self::normalize_rusty_type_alias_rhs_paths(&output);
         output
     }
 
@@ -18225,12 +17703,7 @@ impl AstCodeGen {
                             | "f64"
                             | "isize"
                     ) {
-                        let default_val = if rust_type == "bool" {
-                            "false".to_string()
-                        } else {
-                            "0".to_string()
-                        };
-                        (rust_type.clone(), default_val)
+                        (rust_type.clone(), "0".into())
                     } else {
                         // Complex internal type (tree_end_node, allocator, comparator, etc.)
                         // Use pointer-sized opaque bytes since these are typically pointer-sized
@@ -20747,8 +20220,6 @@ impl AstCodeGen {
         if let Some(container_alias_target) =
             Self::stl_container_alias_target_from_template_args(&rust_name, type_args)
         {
-            let normalized_container_alias_target =
-                Self::normalize_namespace_alias_target(&container_alias_target);
             if !self.generated_aliases.contains(&rust_name) {
                 self.writeln(&format!(
                     "/// Alias C++ template instantiation `{}` to generic STL stub",
@@ -20756,12 +20227,12 @@ impl AstCodeGen {
                 ));
                 self.writeln(&format!(
                     "pub type {} = {};",
-                    rust_name, normalized_container_alias_target
+                    rust_name, container_alias_target
                 ));
                 self.writeln("");
                 self.generated_aliases.insert(rust_name.clone());
                 self.type_alias_targets
-                    .insert(rust_name.clone(), normalized_container_alias_target);
+                    .insert(rust_name.clone(), container_alias_target);
                 if self.current_rust_module_path().is_empty() {
                     self.global_type_names.insert(rust_name.clone());
                 }
@@ -20779,19 +20250,15 @@ impl AstCodeGen {
         // Skip if already generated
         if self.generated_structs.contains(&rust_name) {
             if raw_rust_name != rust_name && !self.generated_aliases.contains(&raw_rust_name) {
-                let normalized_rust_name = Self::normalize_namespace_alias_target(&rust_name);
                 self.writeln(&format!(
                     "/// Alias C++ template instantiation `{}` to canonical template shape",
                     inst_name
                 ));
-                self.writeln(&format!(
-                    "pub type {} = {};",
-                    raw_rust_name, normalized_rust_name
-                ));
+                self.writeln(&format!("pub type {} = {};", raw_rust_name, rust_name));
                 self.writeln("");
                 self.generated_aliases.insert(raw_rust_name.clone());
                 self.type_alias_targets
-                    .insert(raw_rust_name.clone(), normalized_rust_name);
+                    .insert(raw_rust_name.clone(), rust_name.clone());
                 if self.current_rust_module_path().is_empty() {
                     self.global_type_names.insert(raw_rust_name.clone());
                 }
@@ -21195,19 +20662,15 @@ impl AstCodeGen {
         self.generate_template_impl(inst_name, &rust_name, children);
 
         if raw_rust_name != rust_name && !self.generated_aliases.contains(&raw_rust_name) {
-            let normalized_rust_name = Self::normalize_namespace_alias_target(&rust_name);
             self.writeln(&format!(
                 "/// Alias C++ template instantiation `{}` to canonical template shape",
                 inst_name
             ));
-            self.writeln(&format!(
-                "pub type {} = {};",
-                raw_rust_name, normalized_rust_name
-            ));
+            self.writeln(&format!("pub type {} = {};", raw_rust_name, rust_name));
             self.writeln("");
             self.generated_aliases.insert(raw_rust_name.clone());
             self.type_alias_targets
-                .insert(raw_rust_name.clone(), normalized_rust_name);
+                .insert(raw_rust_name.clone(), rust_name.clone());
             if self.current_rust_module_path().is_empty() {
                 self.global_type_names.insert(raw_rust_name.clone());
             }
@@ -24234,55 +23697,8 @@ impl AstCodeGen {
         if leaf.starts_with("Some_") && args.len() == 1 {
             return Some((format!("std::option::Option::Some({})", args[0]), false));
         }
-        if (leaf == "None" || leaf.starts_with("None_")) && args.is_empty() {
-            return Some(("std::option::Option::None".to_string(), false));
-        }
-        if leaf.starts_with("Ok_") && args.len() == 1 {
-            return Some((format!("std::result::Result::Ok({})", args[0]), false));
-        }
-        if leaf.starts_with("Err_") && args.len() == 1 {
-            return Some((format!("std::result::Result::Err({})", args[0]), false));
-        }
         if leaf == "clock_gettime" || leaf == "sleep" {
             return Some(("0".to_string(), false));
-        }
-        if func_name == "now" {
-            return Some(("0".to_string(), false));
-        }
-        // Resolve qualified call-shapes (e.g., `super::strlen`) via leaf name
-        // so degraded namespace recovery still reaches builtin lowering.
-        match leaf {
-            "memcpy" => return Self::map_builtin_function("__builtin_memcpy", args),
-            "memmove" => return Self::map_builtin_function("__builtin_memmove", args),
-            "memset" => return Self::map_builtin_function("__builtin_memset", args),
-            "memcmp" => return Self::map_builtin_function("__builtin_memcmp", args),
-            "memchr" => return Self::map_builtin_function("__builtin_memchr", args),
-            "strlen" => return Self::map_builtin_function("__builtin_strlen", args),
-            "strcmp" => return Self::map_builtin_function("__builtin_strcmp", args),
-            "strncmp" => return Self::map_builtin_function("__builtin_strncmp", args),
-            _ => {}
-        }
-        // Degraded namespace recovery can strand POSIX libc helpers as `super::foo`
-        // without declarations in the transpiled TU. Use conservative stubs so
-        // call-sites remain compilable and side-effect free.
-        if func_name.starts_with("super::") || func_name.starts_with("self::") {
-            match leaf {
-                "time" => return Some(("0".to_string(), false)),
-                "sysconf" => return Some(("1".to_string(), false)),
-                "getpid" => return Some(("0".to_string(), false)),
-                "now" => return Some(("0".to_string(), false)),
-                "fcntl" => return Some(("0".to_string(), false)),
-                "numa_num_configured_nodes" | "numa_num_configured_cpus" => {
-                    return Some(("1".to_string(), false))
-                }
-                "readlink" => return Some(("-1".to_string(), false)),
-                "getdelim" => return Some(("-1".to_string(), false)),
-                "gettimeofday" => return Some(("0".to_string(), false)),
-                "localtime" | "localtime_r" => {
-                    return Some(("std::ptr::null_mut()".to_string(), false))
-                }
-                _ => {}
-            }
         }
         match func_name {
             // __builtin_is_constant_evaluated() is always false at runtime
@@ -24631,25 +24047,6 @@ impl AstCodeGen {
                          if c1 == 0 {{ break 0; }} \
                          __p1 = __p1.add(1); __p2 = __p2.add(1); }} }}",
                             args[0], args[1]
-                        ),
-                        true,
-                    ))
-                } else {
-                    None
-                }
-            }
-            "__builtin_strncmp" => {
-                // __builtin_strncmp(s1, s2, n) -> compare up to n bytes.
-                // Stops early on first mismatch or NUL terminator.
-                if args.len() >= 3 {
-                    Some((
-                        format!(
-                            "{{ let mut __p1 = {} as *const u8; let mut __p2 = {} as *const u8; \
-                         let __n = ({}) as usize; let mut __i = 0usize; let mut __out = 0i32; \
-                         while __i < __n {{ let c1 = *__p1; let c2 = *__p2; \
-                         if c1 != c2 {{ __out = (c1 as i32) - (c2 as i32); break; }} \
-                         if c1 == 0 {{ break; }} __p1 = __p1.add(1); __p2 = __p2.add(1); __i += 1; }} __out }}",
-                            args[0], args[1], args[2]
                         ),
                         true,
                     ))
@@ -33645,47 +33042,11 @@ impl AstCodeGen {
             || self.output.contains(&format!("pub type {} =", target))
     }
 
-    fn resolve_unique_public_type_item_path(&self, leaf: &str) -> Option<String> {
-        let mut candidates: Vec<String> = Self::collect_direct_public_type_items_by_module(
-            self.output.as_str(),
-        )
-        .into_iter()
-        .filter_map(|(module_path, item_name)| {
-            if item_name != leaf {
-                return None;
-            }
-            if module_path.is_empty() {
-                Some(item_name)
-            } else {
-                Some(format!("{}::{}", module_path, item_name))
-            }
-        })
-        .collect();
-        candidates.sort();
-        candidates.dedup();
-        if candidates.len() == 1 {
-            candidates.into_iter().next()
-        } else {
-            None
-        }
-    }
-
     fn resolve_missing_stub_concrete_alias_target(
         &self,
         rust_name: &str,
         cpp_name: &str,
     ) -> Option<String> {
-        // Treat qualifier-family variants as aliases of the canonical emitted
-        // surface whenever a sibling spelling is available.
-        for candidate in Self::qualifier_family_siblings(rust_name) {
-            if candidate.starts_with("rusty_is_send_") || candidate.starts_with("rusty_is_sync_") {
-                return Some(format!("rusty::{}", candidate));
-            }
-            if let Some(path) = self.resolve_unique_public_type_item_path(&candidate) {
-                return Some(path);
-            }
-        }
-
         if let Some(container_alias_target) =
             Self::unqualified_vector_alias_target_from_rust_cpp_name(rust_name, cpp_name)
         {
@@ -34183,10 +33544,6 @@ impl AstCodeGen {
             if self.global_type_names.contains(&alias) {
                 continue;
             }
-            if Self::is_rusty_marker_trait_namespace_alias(&alias, &target) {
-                continue;
-            }
-            let normalized_target = Self::normalize_namespace_alias_target(&target);
             let alias_decl = format!("pub type {} =", alias);
             if self.output.contains(&alias_decl) {
                 continue;
@@ -34198,10 +33555,7 @@ impl AstCodeGen {
                 continue;
             }
             if alias.starts_with('_') {
-                let target_leaf = normalized_target
-                    .rsplit("::")
-                    .next()
-                    .unwrap_or(normalized_target.as_str());
+                let target_leaf = target.rsplit("::").next().unwrap_or(target.as_str());
                 if target_leaf == alias {
                     continue;
                 }
@@ -34212,29 +33566,13 @@ impl AstCodeGen {
                 self.writeln("// Auto-exported aliases for uniquely-resolved namespaced types");
                 wrote_header = true;
             }
-            self.writeln(&format!("pub type {} = {};", alias, normalized_target));
+            self.writeln(&format!("pub type {} = {};", alias, target));
             self.generated_aliases.insert(alias.clone());
-            self.type_alias_targets.insert(alias, normalized_target);
+            self.type_alias_targets.insert(alias, target);
         }
         if wrote_header {
             self.writeln("");
         }
-    }
-
-    fn is_rusty_marker_trait_namespace_alias(alias: &str, target: &str) -> bool {
-        let mut cleaned = target.trim();
-        cleaned = cleaned.trim_start_matches("::").trim();
-        if let Some(rest) = cleaned.strip_prefix("crate::") {
-            cleaned = rest.trim();
-        }
-        let is_marker_target = cleaned.starts_with("rusty::rusty_is_send_")
-            || cleaned.starts_with("rusty::rusty_is_sync_");
-        let is_marker_alias = alias.starts_with("rusty_is_send_") || alias.starts_with("rusty_is_sync_");
-        is_marker_target || is_marker_alias
-    }
-
-    fn normalize_namespace_alias_target(target: &str) -> String {
-        normalize_rusty_type_alias_to_std(target)
     }
 
     /// Generate Rust stubs (signatures only, no bodies) from a Clang AST.
@@ -39025,8 +38363,6 @@ impl AstCodeGen {
             }
         }
 
-        rust_type = Self::normalize_namespace_alias_target(&rust_type);
-
         // Skip self-referential type aliases (e.g., typedef atomic<int> atomic_int
         // may generate pub type atomic_int = atomic_int when the template resolves to same name)
         if safe_name == rust_type {
@@ -39266,7 +38602,6 @@ impl AstCodeGen {
 
         let should_export_c_global = Self::should_export_c_global_symbol(
             name,
-            ty,
             is_static,
             is_extern,
             &self.current_namespace,
@@ -39472,7 +38807,6 @@ impl AstCodeGen {
 
     fn should_export_c_global_symbol(
         name: &str,
-        ty: &CppType,
         is_static: bool,
         is_extern: bool,
         current_namespace: &[(String, bool)],
@@ -39496,12 +38830,6 @@ impl AstCodeGen {
         if current_namespace.iter().any(|(_, is_inline)| !is_inline) {
             return false;
         }
-        // C++ trait variable templates commonly materialize as `*_v` bool globals.
-        // They are header-inline/ODR entities and should not be exported as raw
-        // C symbols from each translation unit.
-        if matches!(ty, CppType::Bool) && name.ends_with("_v") {
-            return false;
-        }
         let mut chars = name.chars();
         match chars.next() {
             Some(first) if first == '_' || first.is_ascii_alphabetic() => {}
@@ -39511,7 +38839,12 @@ impl AstCodeGen {
     }
 
     fn const_static_named_default_expr(rust_type: &str) -> Option<String> {
-        let _ty = rust_type.trim();
+        let ty = rust_type.trim();
+        // STL vector stubs are emitted with a const-capable `new_0` constructor
+        // and cannot be safely represented by zeroed bytes.
+        if ty.starts_with("std_vector<") || ty.starts_with("vector_") {
+            return Some(format!("{}::new_0()", ty));
+        }
         None
     }
 
@@ -41496,6 +40829,9 @@ impl AstCodeGen {
         }
 
         let stripped = Self::strip_namespace_and_template(name);
+        if stripped.starts_with("__builtin_") {
+            return true;
+        }
         if matches!(
             stripped.as_str(),
             "fill_n" | "copy_n" | "__fill_n" | "__copy_n"
@@ -41686,6 +41022,7 @@ impl AstCodeGen {
             || ident == "self"
             || ident.starts_with("__gv_")
             || ident.starts_with("__fsv_")
+            || ident.starts_with("__builtin_")
         {
             return;
         }
@@ -43407,13 +42744,8 @@ impl AstCodeGen {
             return Some(resolved);
         }
 
-        // Fallback for degraded call sites emitted before class-field metadata is
-        // fully available at generation time.
         if stem_ident == "kind" {
             return Some("k_".to_string());
-        }
-        if !stem_ident.is_empty() {
-            return Some(format!("{}_", stem_ident));
         }
 
         None
@@ -49446,7 +48778,21 @@ impl AstCodeGen {
                 if !node.children.is_empty() {
                     let mut base = self.expr_to_string_raw(&node.children[0]);
                     base = self.normalize_non_pointer_field_receiver_expr(&base);
-                    let member = sanitize_identifier(member_name);
+                    let mut member = sanitize_identifier(member_name);
+                    if member_name.starts_with("get_")
+                        && !matches!(ty, CppType::Function { .. })
+                        && !Self::is_function_pointer_type_or_typedef(ty)
+                    {
+                        let getter_marker =
+                            format!("fn {}(", sanitize_identifier(member_name));
+                        if !self.output.contains(&getter_marker) {
+                            if let Some(backing_field) =
+                                self.resolve_getter_backing_field_name(node)
+                            {
+                                member = backing_field;
+                            }
+                        }
+                    }
                     let base_type = Self::get_original_expr_type(&node.children[0])
                         .or_else(|| Self::get_expr_type(&node.children[0]));
                     let base_rust_type = base_type.as_ref().map(|ty| ty.to_rust_type_str());
@@ -55107,15 +54453,7 @@ impl AstCodeGen {
 
                     // Determine if we need base access and get the correct base field name
                     // Skip base access for anonymous struct members (they are flattened into parent)
-                    let mut member = sanitize_identifier(member_name);
-                    if member_name.starts_with("get_")
-                        && !matches!(ty, CppType::Function { .. })
-                        && !Self::is_function_pointer_type_or_typedef(ty)
-                    {
-                        if let Some(backing_field) = self.resolve_getter_backing_field_name(node) {
-                            member = backing_field;
-                        }
-                    }
+                    let member = sanitize_identifier(member_name);
                     let (mut needs_base_access, mut base_access) = if let Some(decl_class) =
                         declaring_class
                     {
@@ -57413,7 +56751,9 @@ mod tests {
             )],
         );
 
-        let rendered = codegen.expr_to_string(&expr);
+        let rendered = codegen
+            .rewrite_non_callable_member_getter_as_field(&expr, "value.get_kind")
+            .unwrap_or_default();
         assert!(
             rendered.contains(".k_"),
             "expected degraded getter member access to lower to backing field, got: {}",
@@ -65226,7 +64566,6 @@ mod tests {
         assert!(
             !AstCodeGen::should_export_c_global_symbol(
                 "dst",
-                &CppType::Int { signed: true },
                 false,
                 false,
                 &[],
@@ -65237,28 +64576,12 @@ mod tests {
         assert!(
             AstCodeGen::should_export_c_global_symbol(
                 "dst",
-                &CppType::Int { signed: true },
                 false,
                 false,
                 &[],
                 Some("/tmp/something.cpp"),
             ),
             "non-header globals should still be export-eligible"
-        );
-    }
-
-    #[test]
-    fn test_trait_style_bool_v_global_does_not_export_c_symbol_name() {
-        assert!(
-            !AstCodeGen::should_export_c_global_symbol(
-                "fits_in_sbo_v",
-                &CppType::Bool,
-                false,
-                false,
-                &[],
-                Some("/tmp/something.cpp"),
-            ),
-            "trait-style bool *_v globals should not export cross-TU C symbols"
         );
     }
 
@@ -68315,7 +67638,7 @@ pub fn touch() {
     }
 
     #[test]
-    fn test_normalize_vector_static_zeroed_initializers_rewrites_vector_zeroed_statics() {
+    fn test_normalize_vector_static_zeroed_initializers_rewrites_vector_statics_only() {
         let input = r#"
 pub(crate) static mut __gv_workers: vector_shared_ptr_PaxosWorker = unsafe { std::mem::zeroed() };
 pub(crate) static mut __gv_plain: ShardingPolicyCache = unsafe { std::mem::zeroed() };
@@ -68325,14 +67648,14 @@ pub(crate) static mut __gv_plain: ShardingPolicyCache = unsafe { std::mem::zeroe
             normalized.contains(
                 "pub(crate) static mut __gv_workers: vector_shared_ptr_PaxosWorker = vector_shared_ptr_PaxosWorker::new_0();"
             ),
-            "vector-static normalization should rewrite vector zeroed initializers to constructor form, got:\n{}",
+            "vector-static normalization should rewrite vector zeroed initializers to new_0(), got:\n{}",
             normalized
         );
         assert!(
             normalized.contains(
                 "pub(crate) static mut __gv_plain: ShardingPolicyCache = unsafe { std::mem::zeroed() };"
             ),
-            "vector-static normalization should keep non-vector static zeroed initializers unchanged, got:\n{}",
+            "vector-static normalization should leave non-vector static zeroed initializers unchanged, got:\n{}",
             normalized
         );
     }
@@ -68441,7 +67764,7 @@ pub(crate) static mut __gv_plain: i32 = 0;
     }
 
     #[test]
-    fn test_normalize_static_initializers_with_unresolved_global_refs_rewrites_vector_new0_ctor_calls(
+    fn test_normalize_static_initializers_with_unresolved_global_refs_keeps_const_safe_vector_new0_calls(
     ) {
         let input = r#"
 pub(crate) static mut __gv_workers: vector_shared_ptr_PaxosWorker = vector_shared_ptr_PaxosWorker::new_0();
@@ -68450,9 +67773,9 @@ pub(crate) static mut __gv_cache: ShardingPolicyCache = ShardingPolicyCache::new
         let normalized = AstCodeGen::normalize_static_initializers_with_unresolved_global_refs(input);
         assert!(
             normalized.contains(
-                "pub(crate) static mut __gv_workers: vector_shared_ptr_PaxosWorker = unsafe { std::mem::zeroed() };"
+                "pub(crate) static mut __gv_workers: vector_shared_ptr_PaxosWorker = vector_shared_ptr_PaxosWorker::new_0();"
             ),
-            "static initializer normalization should rewrite vector new_0 constructors that are not const in Rust static contexts, got:\n{}",
+            "static initializer normalization should preserve const-safe vector new_0 constructors, got:\n{}",
             normalized
         );
         assert!(
@@ -68460,6 +67783,38 @@ pub(crate) static mut __gv_cache: ShardingPolicyCache = ShardingPolicyCache::new
                 "pub(crate) static mut __gv_cache: ShardingPolicyCache = unsafe { std::mem::zeroed() };"
             ),
             "static initializer normalization should still rewrite other non-const constructor calls, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_static_initializers_with_unresolved_global_refs_keeps_const_safe_lazylock_and_atomic_new_calls(
+    ) {
+        let input = r#"
+static THREAD_HANDLES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<u64, std::thread::JoinHandle<usize>>>> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+static NEXT_THREAD_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+pub(crate) static mut __gv_cache: ShardingPolicyCache = ShardingPolicyCache::new_0();
+"#;
+        let normalized = AstCodeGen::normalize_static_initializers_with_unresolved_global_refs(input);
+        assert!(
+            normalized.contains(
+                "static THREAD_HANDLES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<u64, std::thread::JoinHandle<usize>>>> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));"
+            ),
+            "static initializer normalization should preserve const-safe LazyLock::new initializers, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains(
+                "static NEXT_THREAD_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);"
+            ),
+            "static initializer normalization should preserve const-safe atomic::new initializers, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains(
+                "pub(crate) static mut __gv_cache: ShardingPolicyCache = unsafe { std::mem::zeroed() };"
+            ),
+            "static initializer normalization should still rewrite non-const constructors, got:\n{}",
             normalized
         );
     }
@@ -68565,26 +67920,20 @@ thread_local! {
     }
 
     #[test]
-    fn test_normalize_static_initializers_with_unresolved_global_refs_rewrites_unresolved_const_like_symbols(
+    fn test_normalize_static_initializers_with_unresolved_global_refs_keeps_option_variant_initializers(
     ) {
         let input = r#"
-pub const TXN_FLAG_FULL_SCAN: u64 = 4;
-pub(crate) static mut __gv_flags: [u64; 2] = [(0) as u64, (TXN_FLAG_LOW_LEVEL_SCAN) as u64];
-pub(crate) static mut __gv_ok: [u64; 2] = [(0) as u64, (TXN_FLAG_FULL_SCAN) as u64];
+pub(crate) static mut __gv_configuration_table: [config; 1] = [config { good_length: 0, func: Some(deflate_stored) }];
 "#;
         let normalized = AstCodeGen::normalize_static_initializers_with_unresolved_global_refs(input);
         assert!(
-            normalized.contains(
-                "pub(crate) static mut __gv_flags: [u64; 2] = unsafe { std::mem::zeroed() };"
-            ),
-            "static initializer normalization should rewrite unresolved all-caps symbols in static initializers, got:\n{}",
+            normalized.contains("func: Some(deflate_stored)"),
+            "static initializer normalization should preserve Option variant constructors used in aggregate literals, got:\n{}",
             normalized
         );
         assert!(
-            normalized.contains(
-                "pub(crate) static mut __gv_ok: [u64; 2] = [(0) as u64, (TXN_FLAG_FULL_SCAN) as u64];"
-            ),
-            "static initializer normalization should preserve static initializers that reference in-TU const symbols, got:\n{}",
+            !normalized.contains("pub(crate) static mut __gv_configuration_table: [config; 1] = unsafe { std::mem::zeroed() };"),
+            "static initializer normalization should not collapse Option variant aggregate literals to zeroed(), got:\n{}",
             normalized
         );
     }
@@ -68896,6 +68245,24 @@ pub fn hash(_ptr: *const (), _len: u64, _seed: u32) -> u64 { _Hash_bytes(_ptr, _
     }
 
     #[test]
+    fn test_normalize_call_argument_integer_widths_keeps_unsuffixed_integer_literals() {
+        let input = r#"
+pub fn count_args_i32(a: i32, b: i32, c: i32) -> i32 {
+    0
+}
+pub fn probe() -> i32 {
+    return count_args_i32(1, 2, 3);
+}
+"#;
+        let normalized = AstCodeGen::normalize_call_argument_integer_widths(input);
+        assert!(
+            normalized.contains("return count_args_i32(1, 2, 3);"),
+            "call-arg width normalization should keep unsuffixed integer literals unchanged, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
     fn test_normalize_vector_capacity_call_argument_widths_casts_reserve_and_resize_args() {
         let input = r#"
 pub fn probe(worker_threads: &mut vector_thread, nthreads: u64) {
@@ -68936,6 +68303,24 @@ h32 = h32.wrapping_add((unsafe { *p }) * 374761393);
     }
 
     #[test]
+    fn test_normalize_deref_multiplication_widths_skips_non_wrapping_contexts() {
+        let input = r#"
+sum += (unsafe { *a }) * (unsafe { *b });
+"#;
+        let normalized = AstCodeGen::normalize_deref_multiplication_widths(input);
+        assert!(
+            normalized.contains("sum += (unsafe { *a }) * (unsafe { *b });"),
+            "deref-mul normalization should not inject placeholder casts outside wrapping arithmetic contexts, got:\n{}",
+            normalized
+        );
+        assert!(
+            !normalized.contains("as _"),
+            "deref-mul normalization should avoid placeholder casts for non-wrapping lines, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
     fn test_normalize_array_ref_pointer_cast_artifacts_rewrites_invalid_array_pointer_shapes() {
         let input = r#"
 XXH_memcpy((unsafe { unsafe { (&mut (*state).memory) }.add((unsafe { (*state).memsize }) as usize) }) as *mut (), input as *const (), len);
@@ -68964,8 +68349,6 @@ let mut p32: *const u32 = ((unsafe { (&mut (*state).memory) }) as *const u32).as
         let input = r#"
 let p: *mut i8 = null_mut::default();
 let q: *mut std::ffi::c_void = null_mut::new_0();
-std::ptr::null_mut();
-std::ptr::null();
 return (null_mut::default()) as *mut ();
 "#;
         let normalized = AstCodeGen::normalize_null_mut_placeholder_calls(input);
@@ -68982,12 +68365,6 @@ return (null_mut::default()) as *mut ();
         assert!(
             normalized.contains("return (std::ptr::null_mut()) as *mut ();"),
             "null-mut placeholder normalization should rewrite casted return expressions, got:\n{}",
-            normalized
-        );
-        assert!(
-            normalized.contains("let _ = std::ptr::null_mut::<std::ffi::c_void>();")
-                && normalized.contains("let _ = std::ptr::null::<std::ffi::c_void>();"),
-            "null-mut placeholder normalization should type-annotate standalone null/null_mut expression statements, got:\n{}",
             normalized
         );
         assert!(
@@ -69016,44 +68393,6 @@ pub fn b() -> *mut u32 {
         assert!(
             normalized.contains("return std::ptr::null_mut::<u32>();"),
             "unit-pointer cast normalization should rewrite unit-to-*mut casts to typed null-mut returns, got:\n{}",
-            normalized
-        );
-    }
-
-    #[test]
-    fn test_normalize_typed_null_pointer_return_pointees_rewrites_mut_pointer_mismatch() {
-        let input = r#"
-pub extern "C" fn nc_get_new_order_requests(par_id: i32) -> *mut vector_vector_int {
-    return std::ptr::null_mut::<par_id>();
-}
-"#;
-        let normalized = AstCodeGen::normalize_typed_null_pointer_return_pointees(input);
-        assert!(
-            normalized.contains("return std::ptr::null_mut::<vector_vector_int>();"),
-            "typed-null-pointer return normalization should align null-mut pointee with function return type, got:\n{}",
-            normalized
-        );
-    }
-
-    #[test]
-    fn test_normalize_typed_null_pointer_return_pointees_rewrites_const_pointer_mismatch() {
-        let input = r#"
-pub fn bad_const_ptr(flag: bool) -> *const Foo {
-    if flag {
-        return std::ptr::null::<bar>();
-    }
-    return std::ptr::null::<Foo>();
-}
-"#;
-        let normalized = AstCodeGen::normalize_typed_null_pointer_return_pointees(input);
-        assert!(
-            normalized.contains("return std::ptr::null::<Foo>();"),
-            "typed-null-pointer return normalization should align null pointee with function return type, got:\n{}",
-            normalized
-        );
-        assert!(
-            !normalized.contains("return std::ptr::null::<bar>();"),
-            "typed-null-pointer return normalization should remove mismatched null pointees, got:\n{}",
             normalized
         );
     }
@@ -69224,6 +68563,28 @@ pub fn probe(lhs: i32, rhs: i32) -> i32 {
         assert_eq!(
             normalized, input,
             "param alias normalization should not guess aliases when multiple unresolved identifiers exist, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_param_suffix_reference_aliases_does_not_rewrite_numeric_literals_to_unused_params(
+    ) {
+        let input = r#"
+pub extern "C" fn worker(arg: *mut ()) -> *mut () {
+    unsafe { __gv_result = ((42) as i32); __gv_result };
+    return ((unsafe { __gv_result }) as *mut ()) as *mut ();
+}
+"#;
+        let normalized = AstCodeGen::normalize_param_suffix_reference_aliases(input);
+        assert!(
+            normalized.contains("((42) as i32)"),
+            "param alias normalization should never rewrite numeric literals to parameter identifiers, got:\n{}",
+            normalized
+        );
+        assert!(
+            !normalized.contains("((arg) as i32)"),
+            "param alias normalization should not replace numeric literals with unused params, got:\n{}",
             normalized
         );
     }
@@ -69484,91 +68845,6 @@ pub fn probe() {
     }
 
     #[test]
-    fn test_unreferenced_static_cleanup_keeps_globals_referenced_via_late_alias_rewrite() {
-        let input = r#"
-pub(crate) static mut __gv_pxs_workers_g: vector_shared_ptr_PaxosWorker = unsafe { std::mem::zeroed() };
-pub fn probe() {
-    for worker in super::janus::pxs_workers_g {
-        worker;
-    }
-}
-"#;
-        let normalized_aliases =
-            AstCodeGen::normalize_global_symbol_aliases_for_prefixed_statics(input);
-        assert!(
-            normalized_aliases.contains("super::janus::__gv_pxs_workers_g"),
-            "alias normalization should rewrite rooted global path before static-use analysis, got:\n{}",
-            normalized_aliases
-        );
-        let normalized_ranges =
-            AstCodeGen::normalize_global_range_for_paths_to_unsafe_borrows(&normalized_aliases);
-        assert!(
-            normalized_ranges
-                .contains("for worker in &(unsafe { super::janus::__gv_pxs_workers_g }) {"),
-            "range-for normalization should wrap rewritten rooted global path in unsafe borrow, got:\n{}",
-            normalized_ranges
-        );
-        let normalized =
-            AstCodeGen::normalize_unreferenced_static_mut_initializers(&normalized_ranges);
-        assert!(
-            normalized.contains(
-                "pub(crate) static mut __gv_pxs_workers_g: vector_shared_ptr_PaxosWorker = unsafe { std::mem::zeroed() };"
-            ),
-            "referenced global should keep concrete storage initializer, got:\n{}",
-            normalized
-        );
-        assert!(
-            !normalized.contains(
-                "pub(crate) static mut __gv_pxs_workers_g: std::mem::MaybeUninit<vector_shared_ptr_PaxosWorker> = std::mem::MaybeUninit::uninit();"
-            ),
-            "referenced global must not be downgraded to MaybeUninit after alias rewrite, got:\n{}",
-            normalized
-        );
-    }
-
-    #[test]
-    fn test_normalize_global_range_for_paths_to_unsafe_borrows_wraps_prefixed_global_paths() {
-        let input = r#"
-pub fn probe() {
-    for worker in super::janus::__gv_pxs_workers_g {
-        worker;
-    }
-}
-"#;
-        let normalized = AstCodeGen::normalize_global_range_for_paths_to_unsafe_borrows(input);
-        assert!(
-            normalized.contains("for worker in &(unsafe { super::janus::__gv_pxs_workers_g }) {"),
-            "global range-for normalization should wrap rooted __gv_ paths with unsafe borrows, got:\n{}",
-            normalized
-        );
-    }
-
-    #[test]
-    fn test_normalize_global_range_for_paths_to_unsafe_borrows_preserves_existing_unsafe_borrow() {
-        let input = r#"
-pub fn probe() {
-    for worker in &(unsafe { super::janus::__gv_pxs_workers_g }) {
-        worker;
-    }
-}
-"#;
-        let normalized = AstCodeGen::normalize_global_range_for_paths_to_unsafe_borrows(input);
-        assert!(
-            normalized.contains("for worker in &(unsafe { super::janus::__gv_pxs_workers_g }) {"),
-            "global range-for normalization should preserve already-wrapped unsafe global borrows, got:\n{}",
-            normalized
-        );
-        assert_eq!(
-            normalized
-                .matches("for worker in &(unsafe { super::janus::__gv_pxs_workers_g }) {")
-                .count(),
-            1,
-            "global range-for normalization must not duplicate wrapping, got:\n{}",
-            normalized
-        );
-    }
-
-    #[test]
     fn test_normalize_struct_default_clone_derives_rewrites_struct_derives_to_manual_impls() {
         let input = r#"
 #[derive(Default, Clone, Copy)]
@@ -69761,87 +69037,6 @@ pub struct ScopedThread {
             normalized.contains("impl Default for ScopedThread {")
                 && normalized.contains("impl Clone for ScopedThread {"),
             "top-level struct trait impls should remain unqualified, got:\n{}",
-            normalized
-        );
-    }
-
-    #[test]
-    fn test_normalize_add_missing_struct_default_clone_impls_does_not_leaf_alias_nested_structs_to_std_paths(
-    ) {
-        let input = r#"
-pub type Barrier = std::sync::Barrier;
-
-pub mod janus {
-    pub struct Barrier {
-        pub inner: i32,
-    }
-}
-"#;
-        let normalized = AstCodeGen::normalize_add_missing_struct_default_clone_impls(input);
-        assert!(
-            normalized.contains("impl Default for janus::Barrier {")
-                && normalized.contains("impl Clone for janus::Barrier {"),
-            "leaf alias normalization should not redirect nested structs away from their local paths, got:\n{}",
-            normalized
-        );
-        assert!(
-            !normalized.contains("impl Default for std::sync::Barrier {")
-                && !normalized.contains("impl Clone for std::sync::Barrier {"),
-            "fallback impl synthesis should never target std paths via unrelated leaf aliases, got:\n{}",
-            normalized
-        );
-    }
-
-    #[test]
-    fn test_normalize_add_missing_struct_default_clone_impls_skips_rusty_wrapper_paths_that_normalize_to_std(
-    ) {
-        let input = r#"
-pub mod rusty {
-    pub struct Barrier {
-        pub inner: i32,
-    }
-    pub struct Once {
-        pub inner: i32,
-    }
-    pub struct ProbeSeq {
-        pub inner: i32,
-    }
-}
-"#;
-        let normalized = AstCodeGen::normalize_add_missing_struct_default_clone_impls(input);
-        assert!(
-            !normalized.contains("impl Default for rusty::Barrier {")
-                && !normalized.contains("impl Clone for rusty::Barrier {")
-                && !normalized.contains("impl Default for rusty::Once {")
-                && !normalized.contains("impl Clone for rusty::Once {"),
-            "fallback impl synthesis should skip Rusty wrapper paths that normalize to external std targets, got:\n{}",
-            normalized
-        );
-        assert!(
-            normalized.contains("impl Default for rusty::ProbeSeq {")
-                && normalized.contains("impl Clone for rusty::ProbeSeq {"),
-            "fallback impl synthesis should still emit impls for non-normalized Rusty paths, got:\n{}",
-            normalized
-        );
-    }
-
-    #[test]
-    fn test_normalize_add_missing_struct_default_clone_impls_keeps_lowered_rusty_thread_join_handle_fallbacks(
-    ) {
-        let input = r#"
-pub mod rusty {
-    pub mod thread {
-        pub struct rusty_thread_JoinHandle_void_ {
-            pub joined_: bool,
-        }
-    }
-}
-"#;
-        let normalized = AstCodeGen::normalize_add_missing_struct_default_clone_impls(input);
-        assert!(
-            normalized.contains("impl Default for rusty::thread::rusty_thread_JoinHandle_void_ {")
-                && normalized.contains("impl Clone for rusty::thread::rusty_thread_JoinHandle_void_ {"),
-            "fallback impl synthesis should preserve lowered Rusty thread JoinHandle wrapper impls, got:\n{}",
             normalized
         );
     }
@@ -70434,38 +69629,6 @@ pub mod testing {
     }
 
     #[test]
-    fn test_missing_stub_qualifier_family_aliases_constclass_variant_to_known_sibling() {
-        let mut codegen = AstCodeGen::new();
-        codegen.output = r#"
-pub mod rusty {
-    pub struct rusty_is_send_classrrr_PollThread_ {
-        _opaque: [u8; 1],
-    }
-}
-"#
-        .to_string();
-        codegen.used_types.insert(
-            "rusty_is_send_constclassrrr_PollThread_".to_string(),
-            "rusty::is::send::constclassrrr::PollThread::".to_string(),
-        );
-
-        codegen.generate_missing_type_stubs();
-        let code = codegen.output;
-        assert!(
-            code.contains(
-                "pub type rusty_is_send_constclassrrr_PollThread_ = rusty::rusty_is_send_classrrr_PollThread_;"
-            ),
-            "missing stub generation should alias qualifier-family constclass variants to emitted sibling paths (including module qualification) instead of emitting opaque placeholders, got:\n{}",
-            code
-        );
-        assert!(
-            !code.contains("pub struct rusty_is_send_constclassrrr_PollThread_ {"),
-            "missing stub generation should avoid opaque placeholders when a qualifier-family sibling type exists, got:\n{}",
-            code
-        );
-    }
-
-    #[test]
     fn test_missing_stub_generation_skips_existing_traits_and_prelude_traits() {
         let mut codegen = AstCodeGen::new();
         codegen
@@ -70522,8 +69685,6 @@ pub mod rusty {
                 && AstCodeGen::looks_like_stub_candidate_type_name("error_category")
                 && AstCodeGen::looks_like_stub_candidate_type_name("std_thread")
                 && AstCodeGen::looks_like_stub_candidate_type_name("shared_ptr_node_data")
-                && AstCodeGen::looks_like_stub_candidate_type_name("tm")
-                && AstCodeGen::looks_like_stub_candidate_type_name("timeval")
                 && AstCodeGen::looks_like_stub_candidate_type_name("forward_iterator_tag")
                 && AstCodeGen::looks_like_stub_candidate_type_name("vector_RegEx")
                 && AstCodeGen::looks_like_stub_candidate_type_name("deque_char")
@@ -70551,43 +69712,6 @@ pub mod rusty {
             !code.contains("pub struct input")
                 && !code.contains("pub struct minified"),
             "missing stub generation should ignore plain lowercase value-like names, got:\n{}",
-            code
-        );
-    }
-
-    #[test]
-    fn test_missing_stub_default_uses_false_for_bool_specialization_fields() {
-        let mut codegen = AstCodeGen::new();
-        let rust_name = "ConnState".to_string();
-        let cpp_name = "ConnState".to_string();
-        codegen
-            .used_types
-            .insert(rust_name.clone(), cpp_name.clone());
-
-        let mut spec_info = make_specialization_field_info(
-            &cpp_name,
-            vec![],
-            TemplateSpecializationKind::ImplicitInstantiation,
-        );
-        spec_info
-            .field_types
-            .insert("joined_".to_string(), CppType::Bool);
-        codegen
-            .specialization_field_types
-            .insert(cpp_name.clone(), spec_info);
-
-        codegen.generate_missing_type_stubs();
-        let code = codegen.output;
-        let struct_impl = code.split("impl Default for ConnState {").nth(1).unwrap_or("");
-
-        assert!(
-            struct_impl.contains("joined_: false,"),
-            "bool specialization fields in placeholder defaults should use `false`, got:\n{}",
-            code
-        );
-        assert!(
-            !struct_impl.contains("joined_: 0"),
-            "bool specialization fields must not default to integer zero, got:\n{}",
             code
         );
     }
@@ -72640,120 +71764,6 @@ pub mod rusty {
         assert_eq!(
             some_call.0, "std::option::Option::Some(x)",
             "Some_* fallback should normalize to Option::Some"
-        );
-
-        let none_call = AstCodeGen::map_builtin_function(
-            "super::rusty::None_Arc_class_rrr_PollThread",
-            &[],
-        )
-        .expect("None_* wrapper fallback should map");
-        assert_eq!(
-            none_call.0, "std::option::Option::None",
-            "None_* fallback should normalize to Option::None"
-        );
-
-        let ok_call =
-            AstCodeGen::map_builtin_function("super::rusty::Ok_AddrInfo", &["v".to_string()])
-                .expect("Ok_* wrapper fallback should map");
-        assert_eq!(
-            ok_call.0, "std::result::Result::Ok(v)",
-            "Ok_* fallback should normalize to Result::Ok"
-        );
-
-        let err_call =
-            AstCodeGen::map_builtin_function("super::rusty::Err_i32", &["e".to_string()])
-                .expect("Err_* wrapper fallback should map");
-        assert_eq!(
-            err_call.0, "std::result::Result::Err(e)",
-            "Err_* fallback should normalize to Result::Err"
-        );
-    }
-
-    #[test]
-    fn test_builtin_fallback_resolves_qualified_c_string_helpers() {
-        let strlen = AstCodeGen::map_builtin_function("super::strlen", &["p".to_string()])
-            .expect("qualified strlen should map through builtin lowering");
-        assert!(
-            strlen.0.contains("__len") && strlen.1,
-            "qualified strlen should lower to builtin strlen body, got:\n{:?}",
-            strlen
-        );
-
-        let strncmp = AstCodeGen::map_builtin_function(
-            "super::strncmp",
-            &["a".to_string(), "b".to_string(), "n".to_string()],
-        )
-        .expect("qualified strncmp should map through builtin lowering");
-        assert!(
-            strncmp.0.contains("while __i < __n") && strncmp.1,
-            "qualified strncmp should lower to builtin strncmp body, got:\n{:?}",
-            strncmp
-        );
-    }
-
-    #[test]
-    fn test_builtin_fallback_resolves_qualified_posix_helpers() {
-        let time_call = AstCodeGen::map_builtin_function("super::time", &["tp".to_string()])
-            .expect("qualified time should map through builtin lowering");
-        assert_eq!(
-            time_call.0, "0",
-            "qualified time fallback should return deterministic zero literal"
-        );
-
-        let sysconf =
-            AstCodeGen::map_builtin_function("super::sysconf", &["name".to_string()])
-                .expect("qualified sysconf should map through builtin lowering");
-        assert_eq!(
-            sysconf.0, "1",
-            "qualified sysconf fallback should return deterministic positive literal"
-        );
-
-        let fcntl = AstCodeGen::map_builtin_function(
-            "super::fcntl",
-            &["fd".to_string(), "cmd".to_string(), "arg".to_string()],
-        )
-        .expect("qualified fcntl should map through builtin lowering");
-        assert_eq!(
-            fcntl.0, "0",
-            "qualified fcntl fallback should return deterministic zero status"
-        );
-
-        let now_qualified = AstCodeGen::map_builtin_function("super::now", &[])
-            .expect("qualified now should map through builtin lowering");
-        assert_eq!(
-            now_qualified.0, "0",
-            "qualified now fallback should return deterministic zero literal"
-        );
-
-        let readlink = AstCodeGen::map_builtin_function(
-            "super::readlink",
-            &["p".to_string(), "buf".to_string(), "n".to_string()],
-        )
-        .expect("qualified readlink should map through builtin lowering");
-        assert_eq!(
-            readlink.0, "-1",
-            "qualified readlink fallback should return deterministic failure lane"
-        );
-
-        let numa_nodes = AstCodeGen::map_builtin_function("super::numa_num_configured_nodes", &[])
-            .expect("qualified numa_num_configured_nodes should map through builtin lowering");
-        assert_eq!(
-            numa_nodes.0, "1",
-            "qualified numa_num_configured_nodes fallback should return deterministic positive literal"
-        );
-
-        let numa_cpus = AstCodeGen::map_builtin_function("super::numa_num_configured_cpus", &[])
-            .expect("qualified numa_num_configured_cpus should map through builtin lowering");
-        assert_eq!(
-            numa_cpus.0, "1",
-            "qualified numa_num_configured_cpus fallback should return deterministic positive literal"
-        );
-
-        let now_bare =
-            AstCodeGen::map_builtin_function("now", &[]).expect("bare now should map");
-        assert_eq!(
-            now_bare.0, "0",
-            "bare now fallback should return deterministic zero literal"
         );
     }
 
@@ -75094,69 +74104,6 @@ pub type vector_LogEntry = std_vector<LogEntry>;
     }
 
     #[test]
-    fn test_normalize_unresolved_namespaced_type_aliases_normalizes_rusty_mpsc_targets() {
-        let input = r#"
-pub mod rusty {
-    pub mod sync {
-        pub mod mpsc {
-            pub struct RecvError {
-                _opaque: [u8; 1],
-            }
-        }
-    }
-}
-pub type queue_RecvError = std_queue<RecvError>;
-"#;
-        let output = AstCodeGen::normalize_unresolved_namespaced_type_aliases(input);
-        assert!(
-            output.contains("pub type RecvError = std::sync::mpsc::RecvError;"),
-            "namespaced unresolved alias normalization should rewrite rusty mpsc aliases to std::sync::mpsc targets, got:\n{}",
-            output
-        );
-        assert!(
-            !output.contains("pub type RecvError = rusty::sync::mpsc::RecvError;"),
-            "namespaced unresolved alias normalization should avoid unnormalized rusty mpsc alias targets, got:\n{}",
-            output
-        );
-    }
-
-    #[test]
-    fn test_normalize_unresolved_namespaced_type_aliases_skips_rusty_send_sync_marker_aliases() {
-        let input = r#"
-pub mod rusty {
-    pub struct rusty_is_send_classrrr_PollThread_ {
-        _opaque: [u8; 1],
-    }
-    pub struct rusty_is_sync_classrrr_PollThread_ {
-        _opaque: [u8; 1],
-    }
-    pub struct Group {
-        _opaque: [u8; 1],
-    }
-}
-pub type vector_rusty_is_send_classrrr_PollThread_ = std_vector<rusty_is_send_classrrr_PollThread_>;
-pub type vector_rusty_is_sync_classrrr_PollThread_ = std_vector<rusty_is_sync_classrrr_PollThread_>;
-pub type vector_Group = std_vector<Group>;
-"#;
-        let output = AstCodeGen::normalize_unresolved_namespaced_type_aliases(input);
-        assert!(
-            !output.contains("pub type rusty_is_send_classrrr_PollThread_ ="),
-            "namespaced unresolved alias normalization should skip rusty send marker helper aliases, got:\n{}",
-            output
-        );
-        assert!(
-            !output.contains("pub type rusty_is_sync_classrrr_PollThread_ ="),
-            "namespaced unresolved alias normalization should skip rusty sync marker helper aliases, got:\n{}",
-            output
-        );
-        assert!(
-            output.contains("pub type Group = rusty::Group;"),
-            "namespaced unresolved alias normalization should keep non-marker rusty aliases, got:\n{}",
-            output
-        );
-    }
-
-    #[test]
     fn test_normalize_unresolved_namespaced_type_aliases_skips_conflicted_leaf_names() {
         let input = r#"
 pub mod a {
@@ -75300,65 +74247,11 @@ pub type substring_type = lcdf::Str;
     }
 
     #[test]
-    fn test_normalize_rusty_type_alias_rhs_paths_rewrites_mapped_wrappers() {
-        let input = r#"
-pub type Barrier = rusty::Barrier;
-pub(crate) type Condvar = rusty::Condvar;
-type RecvError = rusty::sync::mpsc::RecvError;
-pub type WaitTimeoutResult = rusty::WaitTimeoutResult;
-"#;
-        let output = AstCodeGen::normalize_rusty_type_alias_rhs_paths(input);
-        assert!(
-            output.contains("pub type Barrier = std::sync::Barrier;")
-                && output.contains("pub(crate) type Condvar = std::sync::Condvar;")
-                && output.contains("type RecvError = std::sync::mpsc::RecvError;")
-                && output.contains("pub type WaitTimeoutResult = std::sync::WaitTimeoutResult;"),
-            "rusty alias rhs normalization should rewrite mapped wrapper aliases to std paths, got:\n{}",
-            output
-        );
-    }
-
-    #[test]
-    fn test_normalize_rusty_type_alias_rhs_paths_preserves_unmapped_rusty_targets_and_rewrites_trysenderror(
-    ) {
-        let input = r#"
-pub type Scope = rusty::thread::Scope;
-pub type TrySendError = rusty::sync::mpsc::TrySendError;
-"#;
-        let output = AstCodeGen::normalize_rusty_type_alias_rhs_paths(input);
-        assert!(
-            output.contains("pub type Scope = rusty::thread::Scope;")
-                && output.contains("pub type TrySendError = std::sync::mpsc::TrySendError;"),
-            "rusty alias rhs normalization should keep unmapped targets and rewrite mapped targets, got:\n{}",
-            output
-        );
-    }
-
-    #[test]
-    fn test_normalize_rusty_type_alias_rhs_paths_rewrites_visibility_variants_and_preserves_tails() {
-        let input = r#"
-pub type Seed = u32;
-pub(super) type LateRecv = rusty::sync::mpsc::RecvError;
-pub(self) type LateTrySend = rusty::sync::mpsc::TrySendError; // tail
-"#;
-        let output = AstCodeGen::normalize_rusty_type_alias_rhs_paths(input);
-        assert!(
-            output.contains("pub(super) type LateRecv = std::sync::mpsc::RecvError;")
-                && output.contains(
-                    "pub(self) type LateTrySend = std::sync::mpsc::TrySendError; // tail"
-                ),
-            "rusty alias rhs normalization should rewrite visibility variants and preserve trailing content, got:\n{}",
-            output
-        );
-    }
-
-    #[test]
-    fn test_normalize_shadowed_std_prelude_paths_qualifies_option_box_result_and_shadowed_vec() {
+    fn test_normalize_shadowed_std_prelude_paths_qualifies_bare_option_box_and_shadowed_vec() {
         let input = r#"
 pub struct Option;
 pub struct Box;
 pub struct Vec;
-pub struct Result;
 pub struct Holder {
     pub invoke: Option<extern "C" fn(*mut ()) -> ()>,
 }
@@ -75368,7 +74261,6 @@ pub fn alloc<T>(v: T) -> *mut T {
 pub fn keep() {
     let _tokens: Vec<&str> = "a,b".split(',').collect();
     let _v = Vec::new();
-    let _r: Result<i32, ()> = Result::Ok(1i32);
     let _x: std::option::Option<i32> = std::option::Option::None;
     let _y = std::boxed::Box::new(1i32);
 }
@@ -75388,13 +74280,6 @@ pub fn keep() {
             output.contains("let _tokens: std::vec::Vec<&str> = \"a,b\".split(',').collect();")
                 && output.contains("let _v = std::vec::Vec::new();"),
             "std-prelude shadow normalization should qualify bare Vec paths when Vec is shadowed by a non-generic type, got:\n{}",
-            output
-        );
-        assert!(
-            output.contains(
-                "let _r: std::result::Result<i32, ()> = std::result::Result::Ok(1i32);"
-            ),
-            "std-prelude shadow normalization should qualify bare Result paths when Result is shadowed by a non-generic type, got:\n{}",
             output
         );
         assert!(
@@ -75909,33 +74794,6 @@ pub struct get_sharding_policy_cache {
     }
 
     #[test]
-    fn test_normalize_placeholder_struct_invocation_artifacts_rewrites_placeholder_calls_with_args(
-    ) {
-        let input = r#"
-pub fn probe(log: *const i8, len: i32, par_id: u32) {
-    let mut paxos_entry = super::make_pair(&mut log, &mut super::make_pair(&mut len, &mut par_id));
-}
-
-/// Placeholder for C++ `make::pair`
-#[repr(C)]
-pub struct make_pair {
-    _opaque: [u8; 64],
-}
-"#;
-        let output = AstCodeGen::normalize_placeholder_struct_invocation_artifacts(input);
-        assert!(
-            output.contains("let mut paxos_entry = make_pair::default();"),
-            "placeholder-call normalization should rewrite placeholder invocations with arguments to concrete placeholder defaults, got:\n{}",
-            output
-        );
-        assert!(
-            !output.contains("make_pair(&mut"),
-            "placeholder-call normalization must eliminate non-callable placeholder argument invocations, got:\n{}",
-            output
-        );
-    }
-
-    #[test]
     fn test_normalize_placeholder_struct_invocation_artifacts_skips_ctor_like_placeholders() {
         let input = r#"
 pub fn probe() {
@@ -76366,159 +75224,6 @@ pub mod testing {
     }
 
     #[test]
-    fn test_emit_namespace_type_aliases_normalizes_rusty_string_to_std_string() {
-        let mut codegen = AstCodeGen::new();
-        codegen.output = r#"
-pub mod rusty {
-    pub struct String {
-    }
-}
-"#
-        .to_string();
-        codegen
-            .namespace_type_alias_targets
-            .insert("String".to_string(), "rusty::String".to_string());
-
-        codegen.emit_namespace_type_aliases();
-        let output = codegen.output;
-
-        assert!(
-            output.contains("pub type String = std::string::String;"),
-            "namespace alias emission should normalize rusty::String aliases to std::string::String, got:\n{}",
-            output
-        );
-        assert!(
-            !output.contains("pub type String = rusty::String;"),
-            "namespace alias emission should avoid emitting rusty::String aliases, got:\n{}",
-            output
-        );
-    }
-
-    #[test]
-    fn test_emit_namespace_type_aliases_skips_rusty_send_sync_marker_aliases() {
-        let mut codegen = AstCodeGen::new();
-        codegen.output = r#"
-pub mod rusty {
-    pub struct rusty_is_send_classrrr_PollThread_ {
-    }
-    pub struct rusty_is_sync_classrrr_PollThread_ {
-    }
-    pub struct Group {
-    }
-}
-"#
-        .to_string();
-        codegen.namespace_type_alias_targets.insert(
-            "rusty_is_send_classrrr_PollThread_".to_string(),
-            "rusty::rusty_is_send_classrrr_PollThread_".to_string(),
-        );
-        codegen.namespace_type_alias_targets.insert(
-            "rusty_is_sync_classrrr_PollThread_".to_string(),
-            "rusty::rusty_is_sync_classrrr_PollThread_".to_string(),
-        );
-        codegen
-            .namespace_type_alias_targets
-            .insert("Group".to_string(), "rusty::Group".to_string());
-
-        codegen.emit_namespace_type_aliases();
-        let output = codegen.output;
-
-        assert!(
-            !output.contains("pub type rusty_is_send_classrrr_PollThread_ ="),
-            "namespace alias emission should skip rusty send marker helper aliases, got:\n{}",
-            output
-        );
-        assert!(
-            !output.contains("pub type rusty_is_sync_classrrr_PollThread_ ="),
-            "namespace alias emission should skip rusty sync marker helper aliases, got:\n{}",
-            output
-        );
-        assert!(
-            output.contains("pub type Group = rusty::Group;"),
-            "namespace alias emission should keep non-marker rusty aliases unchanged when no std mapping exists, got:\n{}",
-            output
-        );
-    }
-
-    #[test]
-    fn test_normalize_namespace_alias_target_maps_rusty_wrappers_and_preserves_custom_paths() {
-        assert_eq!(
-            AstCodeGen::normalize_namespace_alias_target("rusty::Option<rusty::String>"),
-            "std::option::Option<std::string::String>"
-        );
-        assert_eq!(
-            AstCodeGen::normalize_namespace_alias_target("rusty::HashMap<int, long>"),
-            "std::collections::HashMap<i32, i64>"
-        );
-        assert_eq!(
-            AstCodeGen::normalize_namespace_alias_target("rusty::UnsafeCell<rusty::Vec<int>>"),
-            "std::cell::UnsafeCell<std::vec::Vec<i32>>"
-        );
-        assert_eq!(
-            AstCodeGen::normalize_namespace_alias_target("testing::internal::Visible"),
-            "testing::internal::Visible"
-        );
-        assert_eq!(
-            AstCodeGen::normalize_namespace_alias_target("rusty::sync::Weak<int>"),
-            "std::sync::Weak<i32>"
-        );
-        assert_eq!(
-            AstCodeGen::normalize_namespace_alias_target("rusty::thread::JoinHandle<void>"),
-            "std::thread::JoinHandle<()>"
-        );
-        assert_eq!(
-            AstCodeGen::normalize_namespace_alias_target("rusty::sync::mpsc::Receiver<int>"),
-            "std::sync::mpsc::Receiver<i32>"
-        );
-        assert_eq!(
-            AstCodeGen::normalize_namespace_alias_target("rusty::sync::mpsc::RecvError"),
-            "std::sync::mpsc::RecvError"
-        );
-        assert_eq!(
-            AstCodeGen::normalize_namespace_alias_target("rusty::sync::mpsc::TryRecvError"),
-            "std::sync::mpsc::TryRecvError"
-        );
-        assert_eq!(
-            AstCodeGen::normalize_namespace_alias_target("rusty::sync::mpsc::TrySendError"),
-            "std::sync::mpsc::TrySendError"
-        );
-        assert_eq!(
-            AstCodeGen::normalize_namespace_alias_target("rusty::sync::mpsc::Unit"),
-            "()"
-        );
-        assert_eq!(
-            AstCodeGen::normalize_namespace_alias_target(
-                "rusty::thread::rusty_thread_JoinHandle_void_"
-            ),
-            "std::thread::JoinHandle<()>"
-        );
-        assert_eq!(
-            AstCodeGen::normalize_namespace_alias_target("rusty::Barrier"),
-            "std::sync::Barrier"
-        );
-        assert_eq!(
-            AstCodeGen::normalize_namespace_alias_target("rusty::Condvar"),
-            "std::sync::Condvar"
-        );
-        assert_eq!(
-            AstCodeGen::normalize_namespace_alias_target("rusty::Once"),
-            "std::sync::Once"
-        );
-        assert_eq!(
-            AstCodeGen::normalize_namespace_alias_target("rusty::WaitTimeoutResult"),
-            "std::sync::WaitTimeoutResult"
-        );
-        assert_eq!(
-            AstCodeGen::normalize_namespace_alias_target("::rusty::Barrier"),
-            "std::sync::Barrier"
-        );
-        assert_eq!(
-            AstCodeGen::normalize_namespace_alias_target("crate::rusty::sync::mpsc::RecvError"),
-            "std::sync::mpsc::RecvError"
-        );
-    }
-
-    #[test]
     fn test_type_alias_skips_known_enum_name_collisions() {
         let mut codegen = AstCodeGen::new();
         codegen
@@ -76552,29 +75257,6 @@ pub enum r#type {
         assert!(
             output.contains("pub enum r#type {"),
             "alias-enum collision normalization should preserve enum declarations, got:\n{}",
-            output
-        );
-    }
-
-    #[test]
-    fn test_generate_type_alias_normalizes_namespace_alias_target_to_std() {
-        let mut codegen = AstCodeGen::new();
-        codegen.namespace_type_alias_targets.insert(
-            "RecvError".to_string(),
-            "rusty::sync::mpsc::RecvError".to_string(),
-        );
-
-        codegen.generate_type_alias("RecvErrorAlias", &CppType::Named("RecvError".to_string()));
-        let output = codegen.output;
-
-        assert!(
-            output.contains("pub type RecvErrorAlias = std::sync::mpsc::RecvError;"),
-            "type alias generation should normalize namespace-derived rusty mpsc aliases to std::sync::mpsc::RecvError, got:\n{}",
-            output
-        );
-        assert!(
-            !output.contains("pub type RecvErrorAlias = rusty::sync::mpsc::RecvError;"),
-            "type alias generation should avoid emitting unnormalized rusty mpsc alias targets, got:\n{}",
             output
         );
     }
@@ -76670,8 +75352,6 @@ pub fn Pretty() -> std::result::Result<std::string::String, ()> {
 }
 pub fn Fmt() -> std::fmt::Result {
 }
-pub fn Bare() -> Result<std::string::String, ()> {
-}
 "#;
         let output = AstCodeGen::synthesize_empty_non_unit_function_bodies(input);
         assert!(
@@ -76684,75 +75364,6 @@ pub fn Bare() -> Result<std::string::String, ()> {
         assert!(
             output.contains("pub fn Fmt() -> std::fmt::Result {\n    Ok(())\n}"),
             "empty non-unit body synthesis should use `Ok(())` for std::fmt::Result returns, got:\n{}",
-            output
-        );
-        assert!(
-            output.contains(
-                "pub fn Bare() -> Result<std::string::String, ()> {\n    Ok(Default::default())\n}"
-            ),
-            "empty non-unit body synthesis should use `Ok(Default::default())` for bare Result<T, E> returns, got:\n{}",
-            output
-        );
-    }
-
-    #[test]
-    fn test_normalize_known_libc_time_struct_placeholders_rewrites_opaque_defs() {
-        let input = r#"
-#[repr(C)] #[derive(Clone, Copy)] pub struct tm { _opaque: [u8; 56] }
-impl Default for tm { fn default() -> Self { Self { _opaque: [0u8; 56] } } }
-pub type timeval = i64;
-pub fn probe(t: tm, tv: timeval) -> i32 {
-    return t.tm_year + (tv.tv_usec as i32);
-}
-"#;
-        let output = AstCodeGen::normalize_known_libc_time_struct_placeholders(input);
-        assert!(
-            output.contains("pub tm_year: i32,"),
-            "tm placeholder normalization should synthesize known tm fields, got:\n{}",
-            output
-        );
-        assert!(
-            output.contains("pub struct timeval {\n    pub tv_sec: i64,\n    pub tv_usec: i64,\n}"),
-            "timeval placeholder normalization should synthesize timeval struct fields, got:\n{}",
-            output
-        );
-        assert!(
-            !output.contains("pub type timeval = i64;")
-                && !output.contains("pub struct tm { _opaque:")
-                && !output.contains("Self { _opaque: [0u8; 56] }"),
-            "opaque time placeholder definitions should be removed, got:\n{}",
-            output
-        );
-    }
-
-    #[test]
-    fn test_normalize_known_libc_time_struct_placeholders_drops_stale_timeval_opaque_default_impl()
-    {
-        let input = r#"
-pub type timeval = i64;
-impl Default for timeval {
-    fn default() -> Self {
-        Self { _opaque: [0u8; 64] }
-    }
-}
-pub fn probe(tv: timeval) -> i32 {
-    return tv.tv_sec as i32;
-}
-"#;
-        let output = AstCodeGen::normalize_known_libc_time_struct_placeholders(input);
-        assert!(
-            output.contains("pub struct timeval {\n    pub tv_sec: i64,\n    pub tv_usec: i64,\n}"),
-            "timeval placeholder normalization should synthesize timeval struct fields when field access exists, got:\n{}",
-            output
-        );
-        assert!(
-            output.matches("impl Default for timeval").count() == 1,
-            "timeval placeholder normalization should keep a single default impl after rewriting, got:\n{}",
-            output
-        );
-        assert!(
-            !output.contains("_opaque"),
-            "timeval placeholder normalization should drop stale opaque default impl bodies, got:\n{}",
             output
         );
     }
@@ -77075,123 +75686,6 @@ pub fn probe() {
         assert!(
             !output.contains("let mut Default::default(): allocator_char"),
             "invalid call-shaped local binding must not survive normalization, got:\n{}",
-            output
-        );
-    }
-
-    #[test]
-    fn test_normalize_unused_default_local_bindings_drops_unused_untyped_defaults() {
-        let input = r#"
-pub fn current_time_ms() -> u64 {
-    let mut now = Default::default();
-    return 0 as u64;
-}
-"#;
-        let output = AstCodeGen::normalize_unused_default_local_bindings(input);
-        assert!(
-            !output.contains("let mut now = Default::default();"),
-            "unused untyped Default local bindings should be removed, got:\n{}",
-            output
-        );
-        assert!(
-            output.contains("return 0 as u64;"),
-            "unused-Default local cleanup should keep remaining function body, got:\n{}",
-            output
-        );
-    }
-
-    #[test]
-    fn test_normalize_unused_default_local_bindings_keeps_used_default_bindings() {
-        let input = r#"
-pub fn probe() -> i32 {
-    let mut slot = Default::default();
-    slot = 7;
-    return slot;
-}
-"#;
-        let output = AstCodeGen::normalize_unused_default_local_bindings(input);
-        assert!(
-            output.contains("let mut slot = Default::default();"),
-            "used untyped Default local bindings should remain untouched, got:\n{}",
-            output
-        );
-    }
-
-    #[test]
-    fn test_normalize_unused_default_local_bindings_drops_realworld_current_time_ms_placeholder() {
-        let input = r#"
-/// C++ class `Event`
-#[repr(C)]
-#[derive(Default, Clone, Copy)]
-pub struct Event {
-}
-
-impl Event {
-    pub fn new_0() -> Self {
-        Default::default()
-    }
-}
-
-/// C++ function `current_time_ms`
-/// Mangled: `_ZN3rrrL15current_time_msEv`
-pub fn current_time_ms() -> u64 {
-    let mut now = Default::default();
-    return 0 as u64;
-}
-
-/// C++ class `IntEvent`
-#[repr(C)]
-#[derive(Default, Clone, Copy)]
-pub struct IntEvent {
-    pub value_: i32,
-}
-"#;
-        let output = AstCodeGen::normalize_unused_default_local_bindings(input);
-        assert!(
-            !output.contains("let mut now = Default::default();"),
-            "unused untyped default placeholder in real-world current_time_ms shape should be removed, got:\n{}",
-            output
-        );
-        assert!(
-            output.contains("pub fn current_time_ms() -> u64 {") && output.contains("return 0 as u64;"),
-            "cleanup should keep the function body around the removed placeholder, got:\n{}",
-            output
-        );
-    }
-
-    #[test]
-    fn test_normalize_pre_return_unused_default_local_bindings_drops_trivial_placeholder() {
-        let input = r#"
-pub fn current_time_ms() -> u64 {
-    let mut now = Default::default();
-    return 0 as u64;
-}
-"#;
-        let output = AstCodeGen::normalize_pre_return_unused_default_local_bindings(input);
-        assert!(
-            !output.contains("let mut now = Default::default();"),
-            "pre-return default-local cleanup should drop trivial unused placeholder locals, got:\n{}",
-            output
-        );
-        assert!(
-            output.contains("return 0 as u64;"),
-            "pre-return cleanup should keep the return statement, got:\n{}",
-            output
-        );
-    }
-
-    #[test]
-    fn test_normalize_pre_return_unused_default_local_bindings_keeps_return_value_use() {
-        let input = r#"
-pub fn current_time_ms() -> u64 {
-    let mut now = Default::default();
-    return now;
-}
-"#;
-        let output = AstCodeGen::normalize_pre_return_unused_default_local_bindings(input);
-        assert!(
-            output.contains("let mut now = Default::default();"),
-            "pre-return cleanup must keep placeholders when the return statement references the binding, got:\n{}",
             output
         );
     }
@@ -77603,6 +76097,36 @@ pub fn probe() {
     }
 
     #[test]
+    fn test_fallback_heavily_degraded_function_bodies_keeps_global_refs_in_call_args_and_return_if_expressions(
+    ) {
+        let input = r#"
+pub(crate) static mut __gv_counter: i32 = 0;
+pub fn lock(_ptr: *mut i32) {
+}
+pub fn probe() -> i32 {
+    lock(unsafe { &mut __gv_counter as *mut i32 });
+    return if (unsafe { __gv_counter }) == 0 { 42 } else { 1 };
+}
+"#;
+        let output = AstCodeGen::fallback_heavily_degraded_function_bodies(input);
+        assert!(
+            output.contains("lock(unsafe { &mut __gv_counter as *mut i32 });"),
+            "degraded-function fallback should preserve global references passed as regular call arguments, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("return if (unsafe { __gv_counter }) == 0 { 42 } else { 1 };"),
+            "degraded-function fallback should preserve `return if (...)` expressions, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("pub fn probe() -> i32 {\n    0\n}"),
+            "degraded-function fallback must not stub valid global-arg/return-if bodies, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
     fn test_fallback_heavily_degraded_function_bodies_keeps_gettimeofday_calls() {
         let input = r#"
 pub extern "C" fn capture_time(tv: *mut timeval) -> i32 {
@@ -77623,7 +76147,7 @@ pub extern "C" fn value_get_zero() -> i32 {
     return (0 as _).clone() as _;
 }
 pub extern "C" fn op_inc(lhs: &mut ()) -> &mut () {
-    return unsafe { &mut super::rusty::__gv_rhs };
+    return unsafe { &mut super::__gv_rhs };
 }
 pub extern "C" fn value_rr_get_next() -> i32 {
     unsafe { (*std::ptr::null_mut()).second(0) };
@@ -77638,7 +76162,7 @@ pub extern "C" fn value_rr_get_next() -> i32 {
         );
         assert!(
             !output.contains("super::__gv_rhs"),
-            "degraded-function fallback should stub unresolved namespaced `__gv_*` borrow artifacts, got:\n{}",
+            "degraded-function fallback should stub unresolved `__gv_*` borrow artifacts, got:\n{}",
             output
         );
         assert!(
@@ -77650,21 +76174,6 @@ pub extern "C" fn value_rr_get_next() -> i32 {
             output.contains("pub extern \"C\" fn value_get_zero() -> i32 {\n    0\n}"),
             "clone-cast artifact function should collapse to default return body, got:\n{}",
             output
-        );
-    }
-
-    #[test]
-    fn test_fallback_heavily_degraded_function_bodies_keeps_known_namespaced_global_refs() {
-        let input = r#"
-pub(crate) static mut __gv_rhs: i32 = 0;
-pub extern "C" fn read_rhs() -> &mut i32 {
-    return unsafe { &mut super::rusty::__gv_rhs };
-}
-"#;
-        let output = AstCodeGen::fallback_heavily_degraded_function_bodies(input);
-        assert_eq!(
-            output, input,
-            "degraded-function fallback should preserve references to emitted namespaced __gv_* statics"
         );
     }
 
@@ -77704,6 +76213,41 @@ pub fn probe(mut options: *mut KnownOptions) {
         assert_eq!(
             output, input,
             "degraded-function fallback should preserve valid field accesses on known struct fields"
+        );
+    }
+
+    #[test]
+    fn test_fallback_heavily_degraded_function_bodies_keeps_virtual_base_ctor_helper_calls() {
+        let input = r#"
+pub struct B;
+impl B {
+    pub(crate) fn __new_without_vbases_1(v: i32) -> Self {
+        Default::default()
+    }
+}
+pub struct C;
+impl C {
+    pub(crate) fn __new_without_vbases_1(v: i32) -> Self {
+        Default::default()
+    }
+}
+pub struct D {
+    pub __base: B,
+    pub __base1: C,
+}
+impl D {
+    pub(crate) fn __new_without_vbases_1(v: i32) -> Self {
+        let mut __self: Self = Default::default();
+        __self.__base = B::__new_without_vbases_1(v);
+        __self.__base1 = C::__new_without_vbases_1(v);
+        __self
+    }
+}
+"#;
+        let output = AstCodeGen::fallback_heavily_degraded_function_bodies(input);
+        assert_eq!(
+            output, input,
+            "degraded-function fallback should keep `__new_without_vbases_*` constructor helper calls"
         );
     }
 
@@ -80165,13 +78709,13 @@ stream.PutN(c, n);
     }
 
     #[test]
-    fn test_default_value_for_static_uses_zeroed_fallback_for_named_vectors() {
+    fn test_default_value_for_static_prefers_const_vector_constructor_for_named_vectors() {
         let vector_ty = CppType::Named("vector_shared_ptr_PaxosWorker".to_string());
         let opaque_ty = CppType::Named("ShardingPolicyCache".to_string());
 
         assert_eq!(
             AstCodeGen::default_value_for_static(&vector_ty),
-            "unsafe { std::mem::zeroed() }"
+            "vector_shared_ptr_PaxosWorker::new_0()"
         );
         assert_eq!(
             AstCodeGen::default_value_for_static(&opaque_ty),

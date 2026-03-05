@@ -41,7 +41,7 @@ impl<T> std_unique_ptr<T> {
 
     pub fn reset(&mut self) {
         if !self._ptr.is_null() {
-            unsafe { drop(Box::from_raw(self._ptr)); }
+            unsafe { drop(std::boxed::Box::from_raw(self._ptr)); }
         }
         self._ptr = std::ptr::null_mut();
     }
@@ -50,7 +50,7 @@ impl<T> std_unique_ptr<T> {
 impl<T> Drop for std_unique_ptr<T> {
     fn drop(&mut self) {
         if !self._ptr.is_null() {
-            unsafe { drop(Box::from_raw(self._ptr)); }
+            unsafe { drop(std::boxed::Box::from_raw(self._ptr)); }
         }
     }
 }
@@ -77,7 +77,7 @@ impl<T> std_shared_ptr<T> {
     }
 
     pub fn new_1(ptr: *mut T) -> Self {
-        let refcount = Box::into_raw(Box::new(1usize));
+        let refcount = std::boxed::Box::into_raw(std::boxed::Box::new(1usize));
         Self {
             _ptr: ptr,
             _refcount: refcount,
@@ -106,9 +106,9 @@ impl<T> std_shared_ptr<T> {
                 *self._refcount -= 1;
                 if *self._refcount == 0 {
                     if !self._ptr.is_null() {
-                        drop(Box::from_raw(self._ptr));
+                        drop(std::boxed::Box::from_raw(self._ptr));
                     }
-                    drop(Box::from_raw(self._refcount));
+                    drop(std::boxed::Box::from_raw(self._refcount));
                 }
             }
         }
@@ -136,9 +136,9 @@ impl<T> Drop for std_shared_ptr<T> {
                 *self._refcount -= 1;
                 if *self._refcount == 0 {
                     if !self._ptr.is_null() {
-                        drop(Box::from_raw(self._ptr));
+                        drop(std::boxed::Box::from_raw(self._ptr));
                     }
-                    drop(Box::from_raw(self._refcount));
+                    drop(std::boxed::Box::from_raw(self._refcount));
                 }
             }
         }

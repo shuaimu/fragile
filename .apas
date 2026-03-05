@@ -31,17 +31,17 @@
       "session_id": "03c6decb-a1a7-4910-b5c5-8ba8c83bfa53",
       "is_paused": false,
       "stop_requested": false,
-      "prompt": null,
+      "prompt": "Use vendor/mako as a test target to test if fragilec can work as a drop-in compiler and pass all build and test. When you build, first make clean for clean build, then use -j32 for faster build.  You probably will see errors in output. Investigate the first error file and do a generic fix (don't do any mako-specific fixes or hacks in fragile). When you investigate this error, try build that file alone (with the proper include path  from cmake). Also remember to revise mako-dev-book in docs dir. Commit and push your fix. Then build the project again, find the next error file and repeat this process until you fix all error files. ",
       "label": "Tab 616"
     },
     {
       "pane_id": 914,
       "provider": "codex",
-      "mode": "interactive",
+      "mode": "deadloop",
       "session_id": "3319cc66-19ee-4a9e-9d4d-ba11b943f69e",
       "is_paused": false,
       "stop_requested": false,
-      "prompt": "Work on tasks defined in TODO.md. Do the following steps. Don't ask me for advice, just pick the best option you think that is honest, complete, and not corner-cutting:\n\n1. Do a git pull to check if there are any remote updates. Pick the top high-priority undone task, choose its first leaf task. If there are no undone TODO items left, sleep a minute and exit.\n2. Analyze the task, check if this can be done with not too many LOC (i.e., smaller than 500 lines code give or take). If not, try to analyze this task and break it down into several smaller tasks, expanding it in the TODO.md. The breakdown can be nested and hierarchical. Try to make each leaf task small enough (<500 lines LOC). You can document your analysis in the doc folder for future reference.\n3. Try to execute the first leaf task. Make a plan for the task before execute. You can document key findings in either the TODO.md (a few sentences in the TODO item, or doc it in the docs folder for longer details and discussions.\n4. Make sure to add comprehensive test for the task executed. Run the whole test suites to make sure no regression happens. If tests fail, fix them using the best, honest, complete approach, run test suites again to verify fixes work. Repeat this step until no tests fail.\n5. Prepare for git commit, remove all temporary files, especially not to commit any binary files. For plan files, remove the implementation plan and keep the design rational and user manual and put it in the docs folder.\n6. Git commit the changes. First do git pull --rebase, and fix conflicts if any. Then do git push.",
+      "prompt": "Work in your own git worktree (codex/mako-safe-rust). Now we can compile vendor/mako using fragilec as a drop-in compiler and pass all build and test. Let us improve, many of mako's code is rusty-cpp safe. For these code, we should be able to transpile them into safe rust code. So improve your trasnpiler to try to transpile them into safe code and do test build and run tests. Rusty-cpp has a library for common rust-like types such as RefCell, HashMap, etc. Please transpile them to Rust std library. When you build, first make clean for clean build, then use -j32 for faster build.  You probably will see errors in output. Investigate the errors and try to do a generic fix (don't do any mako-specific fixes or hacks in fragile). If it is something that needs to fix rusty-cpp, you can also try to fix it in a generic way and push to its remote. If it is something that is worth documented, doc it into a section in fragile-dev-book in docs dir. Commit and push your fix. ",
       "label": "Tab 914"
     }
   ],

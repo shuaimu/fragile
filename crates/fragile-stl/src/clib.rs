@@ -47,6 +47,18 @@ unsafe extern "C" {
 // Thread and time functions
 #[inline] pub fn sched_yield() -> i32 { 0 }
 #[repr(C)] #[derive(Default, Clone, Copy)] pub struct timespec { pub tv_sec: i64, pub tv_nsec: i64 }
+#[repr(C)] #[derive(Default, Clone, Copy)] pub struct timeval { pub tv_sec: i64, pub tv_usec: i64 }
+unsafe extern "C" {
+    #[link_name = "time"]
+    fn __fragile_time_ffi(timer: *mut i64) -> i64;
+    #[link_name = "localtime_r"]
+    fn __fragile_localtime_r_ffi(timer: *const i64, result: *mut tm) -> *mut tm;
+    #[link_name = "gettimeofday"]
+    fn __fragile_gettimeofday_ffi(tv: *mut timeval, tz: *mut std::ffi::c_void) -> i32;
+}
+#[inline] pub fn time(timer: *mut i64) -> i64 { unsafe { __fragile_time_ffi(timer) } }
+#[inline] pub fn localtime_r(timer: *const i64, result: *mut tm) -> *mut tm { unsafe { __fragile_localtime_r_ffi(timer, result) } }
+#[inline] pub fn gettimeofday(tv: *mut timeval, tz: *mut std::ffi::c_void) -> i32 { unsafe { __fragile_gettimeofday_ffi(tv, tz) } }
 #[inline] pub fn __convert_to_timespec_chrono_nanoseconds(_ns: i64) -> timespec { timespec { tv_sec: _ns / 1000000000, tv_nsec: _ns % 1000000000 } }
 #[inline] pub fn nanosleep(_req: *const timespec, _rem: *mut timespec) -> i32 { 0 }
 
@@ -88,6 +100,29 @@ pub static _International: bool = false;
 pub static __pow10_128: [u128; 40] = [1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000, 10000000000, 100000000000, 1000000000000, 10000000000000, 100000000000000, 1000000000000000, 10000000000000000, 100000000000000000, 1000000000000000000, 10000000000000000000, 100000000000000000000, 1000000000000000000000, 10000000000000000000000, 100000000000000000000000, 1000000000000000000000000, 10000000000000000000000000, 100000000000000000000000000, 1000000000000000000000000000, 10000000000000000000000000000, 100000000000000000000000000000, 1000000000000000000000000000000, 10000000000000000000000000000000, 100000000000000000000000000000000, 1000000000000000000000000000000000, 10000000000000000000000000000000000, 100000000000000000000000000000000000, 1000000000000000000000000000000000000, 10000000000000000000000000000000000000, 100000000000000000000000000000000000000, 0];
 
 // C library function stubs
+unsafe extern "C" {
+    #[link_name = "getenv"]
+    fn __fragile_getenv_ffi(_name: *const i8) -> *mut i8;
+    #[link_name = "strdup"]
+    fn __fragile_strdup_ffi(_s: *const i8) -> *mut i8;
+}
+#[inline]
+pub fn getenv(_name: *const i8) -> *mut i8 {
+    unsafe { __fragile_getenv_ffi(_name) }
+}
+#[inline]
+pub fn strdup(_s: *const i8) -> *mut i8 {
+    unsafe { __fragile_strdup_ffi(_s) }
+}
+
+#[inline]
+pub unsafe extern "C" fn Py_BuildValue(
+    _format: *const i8,
+    mut _args: ...
+) -> *mut std::ffi::c_void {
+    std::ptr::null_mut()
+}
+
 #[inline]
 pub fn strtol(_s: *const i8, _endptr: *mut *mut i8, _base: i32) -> i64 {
     // Stub: just return 0 for now

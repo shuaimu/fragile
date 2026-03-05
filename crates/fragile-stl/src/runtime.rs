@@ -97,7 +97,12 @@ pub mod fragile_runtime {
     static THREAD_HANDLES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<u64, std::thread::JoinHandle<usize>>>> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
     static NEXT_THREAD_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     
-    pub unsafe fn fragile_pthread_create(thread_id: *mut u64, _attr: *const (), start_routine: Option<extern "C" fn(*mut ()) -> *mut ()>, arg: *mut ()) -> i32 {
+    pub unsafe fn fragile_pthread_create(
+        thread_id: *mut u64,
+        _attr: *const (),
+        start_routine: std::option::Option<extern "C" fn(*mut ()) -> *mut ()>,
+        arg: *mut (),
+    ) -> i32 {
         let func = match start_routine { Some(f) => f, None => return 22 };
         let func_ptr = func as usize;
         let info = ThreadStartInfo { func: func_ptr, arg: arg as usize };
@@ -156,4 +161,16 @@ pub mod fragile_runtime {
     pub unsafe fn fragile_pthread_rwlock_unlock(_: *mut std::ffi::c_void) -> i32 { 0 }
     pub unsafe fn fragile_pthread_rwlockattr_init(_: *mut std::ffi::c_void) -> i32 { 0 }
     pub unsafe fn fragile_pthread_rwlockattr_destroy(_: *mut std::ffi::c_void) -> i32 { 0 }
+}
+
+// libnuma fallback stubs used by some high-performance runtimes.
+// Keep deterministic defaults when NUMA libraries are unavailable at transpile time.
+#[inline]
+pub fn numa_num_configured_nodes() -> i32 { 1 }
+
+#[inline]
+pub fn numa_num_configured_cpus() -> i32 {
+    std::thread::available_parallelism()
+        .map(|n| n.get() as i32)
+        .unwrap_or(1)
 }

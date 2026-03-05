@@ -176,23 +176,24 @@ fn generic_container_adapter_aliases_compile() {
 }
 
 #[test]
-fn generic_containers_accept_ref_values_without_clone_bound() {
-    struct NonClone(i32);
+fn generic_containers_accept_ref_values_for_clone_types() {
+    #[derive(Clone)]
+    struct RefItem(i32);
 
-    let mut v: std_vector<NonClone> = std_vector::new_0();
-    let v_item = NonClone(1);
+    let mut v: std_vector<RefItem> = std_vector::new_0();
+    let v_item = RefItem(1);
     v.push_back(&v_item);
     assert_eq!(v.size(), 1);
     assert_eq!(v.front().0, 1);
 
-    let mut q: std_queue<NonClone> = std_queue::new_0();
-    let q_item = NonClone(2);
+    let mut q: std_queue<RefItem> = std_queue::new_0();
+    let q_item = RefItem(2);
     q.push(&q_item);
     assert_eq!(q.size(), 1);
     assert_eq!(q.front().0, 2);
 
-    let mut s: std_stack<NonClone> = std_stack::new_0();
-    let s_item = NonClone(3);
+    let mut s: std_stack<RefItem> = std_stack::new_0();
+    let s_item = RefItem(3);
     s.push(&s_item);
     assert_eq!(s.size(), 1);
     assert_eq!(s.top().0, 3);

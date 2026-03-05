@@ -43,7 +43,7 @@ pub fn max_u64_u64(a: u64, b: u64) -> u64 { if a > b { a } else { b } }
 #[inline]
 pub fn min_u64_u64(a: u64, b: u64) -> u64 { if a < b { a } else { b } }
 
-fn fragile_extract_input_bytes_from_stream<TInput>(is: &TInput) -> Vec<u8> {
+fn fragile_extract_input_bytes_from_stream<TInput>(is: &TInput) -> std::vec::Vec<u8> {
     unsafe {
         let __is_size = std::mem::size_of::<TInput>();
         // FileReadStream is 57+ bytes (8 pointer/u64 fields + 1 bool).
@@ -58,7 +58,7 @@ fn fragile_extract_input_bytes_from_stream<TInput>(is: &TInput) -> Vec<u8> {
             }
         }
         // Fallback: try Rust stdin (works for StringStream-like or pipe inputs).
-        let mut __buf = Vec::new();
+        let mut __buf = std::vec::Vec::new();
         let _ = std::io::Read::read_to_end(&mut std::io::stdin(), &mut __buf);
         __buf
     }
@@ -68,7 +68,7 @@ fn fragile_rapidjson_minify_json(input: &str) -> std::result::Result<std::string
     let mut out = std::string::String::with_capacity(input.len());
     let mut in_string = false;
     let mut escaped = false;
-    let mut stack: Vec<char> = Vec::new();
+    let mut stack: std::vec::Vec<char> = std::vec::Vec::new();
     for ch in input.chars() {
         if in_string {
             out.push(ch);
@@ -114,9 +114,7 @@ fn fragile_rapidjson_minify_json(input: &str) -> std::result::Result<std::string
     Ok(out)
 }
 
-fn fragile_rapidjson_pretty_json(
-    minified: &str,
-) -> std::result::Result<std::string::String, ()> {
+fn fragile_rapidjson_pretty_json(minified: &str) -> std::result::Result<std::string::String, ()> {
     let mut out = std::string::String::with_capacity(minified.len().saturating_mul(2));
     let mut in_string = false;
     let mut escaped = false;

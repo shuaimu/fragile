@@ -1337,7 +1337,8 @@ impl CppType {
                             .replace("=", "_") // Assignment/equality leftovers in dependent type spellings
                             .replace("?", "_cond_") // C++ ternary/conditional in template expressions
                             .replace("{", "_") // C++ initializer list / pack expansion
-                            .replace("}", "_"); // C++ initializer list / pack expansion
+                            .replace("}", "_") // C++ initializer list / pack expansion
+                            .replace("'", "_"); // Char-literal template args (e.g. '_' ) are invalid in Rust idents
 
                         // Log diagnostic for complex type transformations
                         if result != cleaned && (cleaned.contains('<') || cleaned.contains("::")) {
@@ -2458,6 +2459,14 @@ mod tests {
     }
 
     #[test]
+    fn test_template_char_literal_type_name_sanitizes_apostrophes() {
+        assert_eq!(
+            CppType::Named("inline_str_fixed<16U, '_'>".to_string()).to_rust_type_str(),
+            "inline_str_fixed_16U_____"
+        );
+    }
+
+    #[test]
     fn test_named_array_size_static_cast_normalizes_to_rust_usize_expr() {
         assert_eq!(
             CppType::Named("char[static_cast<size_t>(ITEM_SIZE)]".to_string()).to_rust_type_str(),
@@ -2648,6 +2657,14 @@ mod tests {
             )
             .to_rust_type_str(),
             "GenericStringBuffer_UTF8"
+        );
+    }
+
+    #[test]
+    fn test_timeval_named_type_maps_to_timeval_struct() {
+        assert_eq!(
+            CppType::Named("timeval".to_string()).to_rust_type_str(),
+            "timeval"
         );
     }
 

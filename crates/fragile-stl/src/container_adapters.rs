@@ -8,9 +8,9 @@ impl<T> std_deque_push_arg<T> for T {
     }
 }
 
-impl<T> std_deque_push_arg<T> for &T {
+impl<T: Clone> std_deque_push_arg<T> for &T {
     fn into_std_deque_value(self) -> T {
-        unsafe { std::ptr::read(self as *const T) }
+        self.clone()
     }
 }
 
@@ -93,9 +93,9 @@ impl<T> std_queue_push_arg<T> for T {
     }
 }
 
-impl<T> std_queue_push_arg<T> for &T {
+impl<T: Clone> std_queue_push_arg<T> for &T {
     fn into_std_queue_value(self) -> T {
-        unsafe { std::ptr::read(self as *const T) }
+        self.clone()
     }
 }
 
@@ -174,17 +174,17 @@ impl<T> std_stack_push_arg<T> for T {
     }
 }
 
-impl<T> std_stack_push_arg<T> for &T {
+impl<T: Clone> std_stack_push_arg<T> for &T {
     fn into_std_stack_value(self) -> T {
-        unsafe { std::ptr::read(self as *const T) }
+        self.clone()
     }
 }
 
-// Generic std::stack<T> stub implementation backed by Vec<T>.
+// Generic std::stack<T> stub implementation backed by std::vec::Vec<T>.
 #[repr(C)]
 #[derive(Default)]
 pub struct std_stack<T> {
-    inner: Vec<T>,
+    inner: std::vec::Vec<T>,
 }
 
 impl<T: Clone> Clone for std_stack<T> {
@@ -197,7 +197,9 @@ impl<T: Clone> Clone for std_stack<T> {
 
 impl<T> std_stack<T> {
     pub fn new_0() -> Self {
-        Self { inner: Vec::new() }
+        Self {
+            inner: std::vec::Vec::new(),
+        }
     }
 
     pub fn empty(&self) -> bool {
