@@ -886,6 +886,56 @@ fn map_std_hash_to_default_hasher(spelling: &str, root_is_unqualified: bool) -> 
     None
 }
 
+fn map_std_is_error_code_enum_marker_to_unit(
+    spelling: &str,
+    root_is_unqualified: bool,
+) -> Option<String> {
+    for prefix in ["std::is_error_code_enum<", "std::type_traits::is_error_code_enum<"] {
+        let Some(inner) = spelling
+            .strip_prefix(prefix)
+            .and_then(|rest| rest.strip_suffix('>'))
+        else {
+            continue;
+        };
+        if !parse_template_args(inner).is_empty() {
+            return Some("()".to_string());
+        }
+    }
+
+    if root_is_unqualified {
+        if let Some(inner) = spelling
+            .strip_prefix("is_error_code_enum<")
+            .and_then(|rest| rest.strip_suffix('>'))
+        {
+            if !parse_template_args(inner).is_empty() {
+                return Some("()".to_string());
+            }
+        }
+    }
+
+    if spelling.starts_with("std::is_error_code_enum::")
+        || spelling.starts_with("std::type_traits::is_error_code_enum::")
+        || (root_is_unqualified && spelling.starts_with("is_error_code_enum::"))
+    {
+        return Some("()".to_string());
+    }
+
+    if let Some(rest) = spelling.strip_prefix("std_is_error_code_enum_") {
+        if !rest.is_empty() && spelling.ends_with('_') {
+            return Some("()".to_string());
+        }
+    }
+    if root_is_unqualified {
+        if let Some(rest) = spelling.strip_prefix("is_error_code_enum_") {
+            if !rest.is_empty() && spelling.ends_with('_') {
+                return Some("()".to_string());
+            }
+        }
+    }
+
+    None
+}
+
 fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
     let mut cleaned = strip_cv_qualifiers_and_tag_prefix(spelling);
     cleaned = cleaned.trim_start_matches("::").trim();
@@ -976,6 +1026,10 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         return Some(mapped);
     }
     if let Some(mapped) = map_std_hash_to_default_hasher(cleaned, root_is_unqualified) {
+        return Some(mapped);
+    }
+    if let Some(mapped) = map_std_is_error_code_enum_marker_to_unit(cleaned, root_is_unqualified)
+    {
         return Some(mapped);
     }
 
@@ -3566,6 +3620,22 @@ mod tests {
         assert_eq!(
             normalize_rusty_type_alias_to_std("std_hash_classrusty_String_"),
             "std::collections::hash_map::DefaultHasher"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std::is_error_code_enum<enum asio::error::basic_errors>"),
+            "()"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("is_error_code_enum<enum asio::error::basic_errors>"),
+            "()"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std::is_error_code_enum::enumasio::error::basic_errors::"),
+            "()"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std_is_error_code_enum_enumasio_error_basic_errors_"),
+            "()"
         );
         let mutex_member_guard = normalize_rusty_type_alias_to_std("rusty::sync::Mutex<int>::Guard");
         assert!(

@@ -74724,6 +74724,27 @@ pub struct rusty_Function_void_void__ {
                 .as_deref(),
             Some("std::collections::hash_map::DefaultHasher")
         );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name(
+                "std::is_error_code_enum<enum asio::error::basic_errors>"
+            )
+            .as_deref(),
+            Some("()")
+        );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name(
+                "std::is_error_code_enum::enumasio::error::basic_errors::"
+            )
+            .as_deref(),
+            Some("()")
+        );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name(
+                "std_is_error_code_enum_enumasio_error_basic_errors_"
+            )
+            .as_deref(),
+            Some("()")
+        );
     }
 
     #[test]

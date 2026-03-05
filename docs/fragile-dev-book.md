@@ -1900,3 +1900,59 @@ These are Rusty-safe/std-backed hasher surfaces and can be represented by Rust s
   - confirms `std::hash<class rusty::String>` now emits alias to
     `std::collections::hash_map::DefaultHasher`
 - `ctest -j32 --output-on-failure` (only failure remains `rpcbench` path `./build/rpcbench`)
+
+## 32. Normalize `std::is_error_code_enum<...>` Marker Records to Unit `()` (2026-03-05)
+
+### Problem
+
+Generated sidecars still emitted marker-trait record placeholders for ASIO error enum traits, for
+example:
+
+- `std::is_error_code_enum<enum asio::error::basic_errors>`
+  -> `pub struct std_is_error_code_enum_enumasio_error_basic_errors_ { ... }`
+
+These are trait-marker-like surfaces with no runtime payload and should map to a Rust unit marker.
+
+### Rule
+
+- Normalize recognized `std::is_error_code_enum` spellings to `()`:
+  - `std::is_error_code_enum<...>`
+  - unqualified `is_error_code_enum<...>`
+  - degraded scoped `std::is_error_code_enum::...`
+  - lowered `std_is_error_code_enum_..._`
+
+### Implementation
+
+- In `crates/fragile-clang/src/types.rs`:
+  - Added `map_std_is_error_code_enum_marker_to_unit(...)`.
+  - Wired it into `map_rusty_type_to_std(...)` alongside existing std wrapper normalization rules.
+- In `crates/fragile-clang/src/ast_codegen.rs`:
+  - No additional emission logic required; existing wrapper alias path now resolves these record
+    names to `()` and emits `pub type ... = ();`.
+
+### Tests
+
+- Extended `test_normalize_rusty_type_alias_to_std_maps_wrappers_and_preserves_non_rusty_paths`
+  with:
+  - `std::is_error_code_enum<enum asio::error::basic_errors>`
+  - `is_error_code_enum<enum asio::error::basic_errors>`
+  - `std::is_error_code_enum::enumasio::error::basic_errors::`
+  - `std_is_error_code_enum_enumasio_error_basic_errors_`
+- Extended `test_rusty_wrapper_record_alias_helper_supports_join_handle_and_non_generic_wrappers`
+  with:
+  - `std::is_error_code_enum<enum asio::error::basic_errors>`
+  - `std::is_error_code_enum::enumasio::error::basic_errors::`
+  - `std_is_error_code_enum_enumasio_error_basic_errors_`
+
+### Validation
+
+- `cargo test -p fragile-clang --lib test_normalize_rusty_type_alias_to_std_maps_wrappers_and_preserves_non_rusty_paths`
+- `cargo test -p fragile-clang --lib test_rusty_wrapper_record_alias_helper_supports_join_handle_and_non_generic_wrappers`
+- `cargo build --release --bin fragilec`
+- clean rebuild (`vendor/mako/build_fragilec_dropin`):
+  - `make clean`
+  - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
+- sidecar spot check:
+  - `rg -n "pub type std_is_error_code_enum_" -g "*.fragile.rs" .`
+  - confirms marker records now emit `pub type ... = ();`
+- `ctest -j32 --output-on-failure` (only failure remains `rpcbench` path `./build/rpcbench`)
