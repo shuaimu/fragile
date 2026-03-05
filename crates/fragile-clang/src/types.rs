@@ -371,13 +371,13 @@ fn strip_lowered_cpp_prefix_tokens(name: &str) -> &str {
         let mut changed = false;
         for qualifier in ["const", "volatile"] {
             if let Some(rest) = current.strip_prefix(qualifier) {
-                current = rest;
+                current = rest.strip_prefix('_').unwrap_or(rest);
                 changed = true;
             }
         }
         for tag in ["class", "struct", "enum", "union"] {
             if let Some(rest) = current.strip_prefix(tag) {
-                current = rest;
+                current = rest.strip_prefix('_').unwrap_or(rest);
                 changed = true;
             }
         }
@@ -511,6 +511,53 @@ fn map_lowered_mpsc_endpoint_to_std(spelling: &str) -> Option<String> {
             } else {
                 CppType::Named(lowered.to_string()).to_rust_type_str()
             };
+            return Some(format!("{}<{}>", std_path, mapped));
+        }
+    }
+    None
+}
+
+fn map_lowered_rusty_single_template_alias_to_std(spelling: &str) -> Option<String> {
+    for lowered_spelling in [spelling, strip_lowered_cpp_prefix_tokens(spelling)] {
+        for (prefix, std_path) in [
+            ("rusty_Option_", "std::option::Option"),
+            ("Option_", "std::option::Option"),
+            ("rusty_Box_", "std::boxed::Box"),
+            ("Box_", "std::boxed::Box"),
+            ("rusty_Boxed_", "std::boxed::Box"),
+            ("Boxed_", "std::boxed::Box"),
+            ("rusty_Arc_", "std::sync::Arc"),
+            ("Arc_", "std::sync::Arc"),
+            ("rusty_ArcWeak_", "std::sync::Weak"),
+            ("ArcWeak_", "std::sync::Weak"),
+            ("rusty_Rc_", "std::rc::Rc"),
+            ("Rc_", "std::rc::Rc"),
+            ("rusty_Weak_", "std::rc::Weak"),
+            ("Weak_", "std::rc::Weak"),
+            ("rusty_Cell_", "std::cell::Cell"),
+            ("Cell_", "std::cell::Cell"),
+            ("rusty_RefCell_", "std::cell::RefCell"),
+            ("RefCell_", "std::cell::RefCell"),
+            ("rusty_UnsafeCell_", "std::cell::UnsafeCell"),
+            ("UnsafeCell_", "std::cell::UnsafeCell"),
+        ] {
+            let Some(rest) = lowered_spelling.strip_prefix(prefix) else {
+                continue;
+            };
+            let lowered = rest.trim_end_matches('_');
+            if lowered.is_empty()
+                || !lowered
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+            {
+                continue;
+            }
+
+            let lowered = strip_lowered_cpp_prefix_tokens(lowered);
+            if lowered.is_empty() {
+                continue;
+            }
+            let mapped = CppType::Named(lowered.to_string()).to_rust_type_str();
             return Some(format!("{}<{}>", std_path, mapped));
         }
     }
@@ -661,6 +708,47 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
     }
     if let Some(mapped) = map_lowered_mpsc_endpoint_to_std(cleaned) {
         return Some(mapped);
+    }
+    if let Some(mapped) = map_lowered_rusty_single_template_alias_to_std(cleaned) {
+        return Some(mapped);
+    }
+    for (prefix, std_path) in [
+        ("std::option::Option<", "std::option::Option"),
+        ("std::boxed::Box<", "std::boxed::Box"),
+        ("std::sync::Arc<", "std::sync::Arc"),
+        ("std::sync::Weak<", "std::sync::Weak"),
+        ("std::rc::Rc<", "std::rc::Rc"),
+        ("std::rc::Weak<", "std::rc::Weak"),
+        ("std::cell::Cell<", "std::cell::Cell"),
+        ("std::cell::RefCell<", "std::cell::RefCell"),
+        ("std::cell::UnsafeCell<", "std::cell::UnsafeCell"),
+        ("std::sync::Mutex<", "std::sync::Mutex"),
+        ("std::sync::RwLock<", "std::sync::RwLock"),
+        ("std::sync::mpsc::Sender<", "std::sync::mpsc::Sender"),
+        ("std::sync::mpsc::Receiver<", "std::sync::mpsc::Receiver"),
+        ("std::sync::mpsc::SyncSender<", "std::sync::mpsc::SyncSender"),
+        ("std::sync::mpsc::TrySendError<", "std::sync::mpsc::TrySendError"),
+    ] {
+        if let Some(mapped) = map_single_template_alias_to_std(cleaned, prefix, std_path) {
+            return Some(mapped);
+        }
+    }
+    if let Some(mapped) =
+        map_double_template_alias_to_std(cleaned, "std::result::Result<", "std::result::Result")
+    {
+        return Some(mapped);
+    }
+    for (prefix, std_path) in [
+        ("std::collections::HashMap<", "std::collections::HashMap"),
+        ("std::collections::BTreeMap<", "std::collections::BTreeMap"),
+    ] {
+        if let Some(mapped) = map_double_template_alias_to_std_allow_extra_args(
+            cleaned,
+            prefix,
+            std_path,
+        ) {
+            return Some(mapped);
+        }
     }
 
     for (alias, std_path, qualified_roots) in [
@@ -2754,6 +2842,46 @@ mod tests {
         assert_eq!(
             normalize_rusty_type_alias_to_std("std_sync_mpsc_TrySendError_"),
             "std::sync::mpsc::TrySendError<()>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty_Arc_struct_rrr_RpcServiceContext__"),
+            "std::sync::Arc<rrr_RpcServiceContext>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty_Rc_class_rrr_Reactor__"),
+            "std::rc::Rc<rrr_Reactor>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("classrusty_Rc_classrrr_Reactor__"),
+            "std::rc::Rc<rrr_Reactor>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("classrusty_Arc_classrrr_ClientConnection__"),
+            "std::sync::Arc<rrr_ClientConnection>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("constclassrusty_Arc_structrrr_RpcServiceContext__"),
+            "std::sync::Arc<rrr_RpcServiceContext>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("Option_classrusty_Rc_classrrr_Reactor___"),
+            "std::option::Option<std::rc::Rc<rrr_Reactor>>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std::option::Option<rusty_Rc_class_rrr_Reactor__>"),
+            "std::option::Option<std::rc::Rc<rrr_Reactor>>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std(
+                "std::option::Option<rusty_Arc_struct_rrr_RpcServiceContext__>"
+            ),
+            "std::option::Option<std::sync::Arc<rrr_RpcServiceContext>>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std(
+                "std::sync::Mutex<std::option::Option<rusty_Rc_class_rrr_Reactor__>>"
+            ),
+            "std::sync::Mutex<std::option::Option<std::rc::Rc<rrr_Reactor>>>"
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("enumrusty_sync_mpsc_RecvError"),
