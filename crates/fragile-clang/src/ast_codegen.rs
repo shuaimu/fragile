@@ -35416,6 +35416,20 @@ impl AstCodeGen {
                 return Some(path);
             }
         }
+        let mut wrapper_alias_target = Self::rusty_wrapper_alias_target_from_record_name(rust_name)
+            .or_else(|| Self::rusty_wrapper_alias_target_from_record_name(cpp_name));
+        if wrapper_alias_target.is_none() {
+            if let Some(qualified_cpp_name) = self.qualify_cpp_name_in_current_namespace(cpp_name)
+            {
+                wrapper_alias_target =
+                    Self::rusty_wrapper_alias_target_from_record_name(&qualified_cpp_name);
+            }
+        }
+        if let Some(wrapper_alias_target) = wrapper_alias_target {
+            if !Self::is_rusty_runtime_internal_namespace_alias_target(&wrapper_alias_target) {
+                return Some(wrapper_alias_target);
+            }
+        }
 
         // Canonicalize common `basic_string<char, ...>` spellings to the prebuilt
         // `std_string` surface so generated call sites can reuse string methods.
@@ -73717,16 +73731,69 @@ pub struct rusty_Arc_classrrr_Client_ {
 
         codegen.generate_missing_type_stubs();
         let code = codegen.output;
+        let aliases_to_sibling =
+            code.contains("pub type rusty_Arc_constclassrrr_Client_ = rusty_Arc_classrrr_Client_;");
+        let aliases_to_std = code.contains(
+            "pub type rusty_Arc_constclassrrr_Client_ = std::sync::Arc<rrr_Client>;",
+        );
         assert!(
-            code.contains(
-                "pub type rusty_Arc_constclassrrr_Client_ = rusty_Arc_classrrr_Client_;"
-            ),
-            "missing stub generation should alias qualifier-family constclass variants to emitted sibling paths (including module qualification) instead of emitting opaque placeholders, got:\n{}",
+            aliases_to_sibling || aliases_to_std,
+            "missing stub generation should resolve qualifier-family constclass variants to concrete aliases (emitted sibling or normalized std wrapper) instead of opaque placeholders, got:\n{}",
             code
         );
         assert!(
             !code.contains("pub struct rusty_Arc_constclassrrr_Client_ {"),
             "missing stub generation should avoid opaque placeholders when a qualifier-family sibling type exists, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_aliases_lowered_rusty_wrapper_name_when_cpp_path_is_degraded() {
+        let mut codegen = AstCodeGen::new();
+        let rust_name = "rusty_Arc_constclass_rrr_ClientConnection__";
+        let cpp_name = "rusty::Arc::constclass::rrr::ClientConnection::::";
+        let expected_alias_target =
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name(rust_name).expect(
+                "test precondition failed: lowered rusty wrapper helper did not normalize rust name",
+            );
+        codegen.used_types.insert(
+            rust_name.to_string(),
+            cpp_name.to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            code.contains(&format!("pub type {} = {};", rust_name, expected_alias_target)),
+            "missing stub generation should normalize lowered rusty wrapper names to std aliases even when cpp paths are degraded, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains(&format!("pub struct {} {{", rust_name)),
+            "missing stub generation should avoid emitting opaque structs for lowered rusty wrapper names even when cpp paths are degraded, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_aliases_unqualified_rusty_wrapper_in_namespace_context() {
+        let mut codegen = AstCodeGen::new();
+        codegen.current_namespace.push(("rusty".to_string(), false));
+        codegen
+            .used_types
+            .insert("Barrier".to_string(), "Barrier".to_string());
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            code.contains("pub type Barrier = std::sync::Barrier;"),
+            "missing stub generation should normalize unqualified rusty namespace wrappers to std aliases, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct Barrier {"),
+            "missing stub generation should avoid emitting opaque structs for unqualified rusty namespace wrappers, got:\n{}",
             code
         );
     }

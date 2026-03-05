@@ -331,6 +331,10 @@ fn map_alias_template_arg_to_rust(arg: &str) -> String {
         // wrapper spellings (for example recursive std-wrapper normalization).
         return "()".to_string();
     }
+    if trimmed.starts_with("*const ") || trimmed.starts_with("*mut ") {
+        // Preserve already-lowered raw-pointer template arguments.
+        return trimmed.to_string();
+    }
     if is_explicit_rust_function_pointer_type(trimmed) {
         // Preserve already-lowered Rust fn pointer spellings inside template args.
         return trimmed.to_string();
