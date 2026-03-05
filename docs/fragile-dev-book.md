@@ -275,6 +275,8 @@ Large codebases that include `rusty-cpp` headers frequently surface both fully q
   - `rusty::HashSet<T>` and `HashSet<T>` -> `std::collections::HashSet<T>`
 - Two-parameter aliases:
   - `rusty::Result<T, E>` and `Result<T, E>` -> `std::result::Result<T, E>`
+  - `Result<void, E>` / `Result<T, void>` normalize `void` lanes to `()`
+  - unresolved `Result<type-parameter-*, E>` lanes normalize to `()` to keep generated std `Result` aliases type-valid
   - `rusty::HashMap<K, V>` and `HashMap<K, V>` -> `std::collections::HashMap<K, V>`
 - Result convenience aliases:
   - `rusty::ResultVoid<T>` and `ResultVoid<T>` -> `std::result::Result<T, ()>`

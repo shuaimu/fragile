@@ -252,7 +252,19 @@ fn map_single_template_alias_to_std_allow_extra_args(
     Some(format!("{}<{}>", std_path, mapped))
 }
 
-fn map_double_template_alias_to_std(
+fn map_result_template_arg_to_rust(arg: &str) -> String {
+    let trimmed = arg.trim();
+    if trimmed == "()" {
+        return "()".to_string();
+    }
+    let normalized = strip_cv_qualifiers_and_tag_prefix(trimmed);
+    if normalized == "void" || is_unresolved_placeholder_type_name(normalized) {
+        return "()".to_string();
+    }
+    map_alias_template_arg_to_rust(trimmed)
+}
+
+fn map_double_template_result_alias_to_std(
     spelling: &str,
     alias_prefix: &str,
     std_path: &str,
@@ -262,9 +274,9 @@ fn map_double_template_alias_to_std(
     if args.len() != 2 {
         return None;
     }
-    let left = map_alias_template_arg_to_rust(&args[0]);
-    let right = map_alias_template_arg_to_rust(&args[1]);
-    Some(format!("{}<{}, {}>", std_path, left, right))
+    let ok = map_result_template_arg_to_rust(&args[0]);
+    let err = map_result_template_arg_to_rust(&args[1]);
+    Some(format!("{}<{}, {}>", std_path, ok, err))
 }
 
 fn map_double_template_alias_to_std_allow_extra_args(
@@ -766,9 +778,11 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
             return Some(mapped);
         }
     }
-    if let Some(mapped) =
-        map_double_template_alias_to_std(cleaned, "std::result::Result<", "std::result::Result")
-    {
+    if let Some(mapped) = map_double_template_result_alias_to_std(
+        cleaned,
+        "std::result::Result<",
+        "std::result::Result",
+    ) {
         return Some(mapped);
     }
     for (prefix, std_path) in [
@@ -1016,14 +1030,15 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         for root in qualified_roots {
             let qualified_prefix = format!("{}<", root);
             if let Some(mapped) =
-                map_double_template_alias_to_std(cleaned, &qualified_prefix, std_path)
+                map_double_template_result_alias_to_std(cleaned, &qualified_prefix, std_path)
             {
                 return Some(mapped);
             }
         }
         if root_is_unqualified {
             let bare_prefix = format!("{}<", alias);
-            if let Some(mapped) = map_double_template_alias_to_std(cleaned, &bare_prefix, std_path)
+            if let Some(mapped) =
+                map_double_template_result_alias_to_std(cleaned, &bare_prefix, std_path)
             {
                 return Some(mapped);
             }
@@ -2416,6 +2431,10 @@ mod tests {
             "std::result::Result<i32, std::string::String>"
         );
         assert_eq!(
+            CppType::Named("rusty::Result<void, int>".to_string()).to_rust_type_str(),
+            "std::result::Result<(), i32>"
+        );
+        assert_eq!(
             CppType::Named("rusty::Arc<int>".to_string()).to_rust_type_str(),
             "std::sync::Arc<i32>"
         );
@@ -2468,6 +2487,10 @@ mod tests {
         assert_eq!(
             CppType::Named("Result<int, String>".to_string()).to_rust_type_str(),
             "std::result::Result<i32, std::string::String>"
+        );
+        assert_eq!(
+            CppType::Named("Result<void, String>".to_string()).to_rust_type_str(),
+            "std::result::Result<(), std::string::String>"
         );
         assert_eq!(
             CppType::Named("ResultInt<long>".to_string()).to_rust_type_str(),
@@ -3005,6 +3028,14 @@ mod tests {
         assert_eq!(
             normalize_rusty_type_alias_to_std("std::option::Option<()>"),
             "std::option::Option<()>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty::Result<void, int>"),
+            "std::result::Result<(), i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std::result::Result<type-parameter-0-0, void>"),
+            "std::result::Result<(), ()>"
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("enumrusty_sync_mpsc_RecvError"),
