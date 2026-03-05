@@ -5047,7 +5047,9 @@ impl AstCodeGen {
     ) -> Option<String> {
         if let Some(target) = Self::stl_container_alias_target_from_rust_name(name) {
             let generic_base = target.split('<').next().unwrap_or("").trim();
-            if !generic_base.is_empty() && defined.contains(generic_base) {
+            if !generic_base.is_empty()
+                && (defined.contains(generic_base) || generic_base.starts_with("std::"))
+            {
                 return Some(target);
             }
         }
@@ -17249,6 +17251,9 @@ impl AstCodeGen {
         output = Self::normalize_unused_c_void_type_aliases(&output);
         output = Self::normalize_unused_c_void_use_aliases(&output);
         output = Self::normalize_c_void_type_aliases_to_use_imports(&output);
+        // Late alias/c_void normalizers can still synthesize unresolved lowered
+        // container spellings; run one last fixed-point closure before return.
+        output = Self::close_unresolved_type_reference_gaps(&output);
         output
     }
 
@@ -34545,6 +34550,12 @@ impl AstCodeGen {
             Some(("std_deque_", "std_deque"))
         } else if rust_name.starts_with("deque_") {
             Some(("deque_", "std_deque"))
+        } else if rust_name.starts_with("std_collections_VecDeque_") {
+            Some(("std_collections_VecDeque_", "std::collections::VecDeque"))
+        } else if rust_name.starts_with("std_collections_BTreeSet_") {
+            Some(("std_collections_BTreeSet_", "std::collections::BTreeSet"))
+        } else if rust_name.starts_with("std_collections_HashSet_") {
+            Some(("std_collections_HashSet_", "std::collections::HashSet"))
         } else if rust_name.starts_with("std_unique_ptr_") {
             Some(("std_unique_ptr_", "std_unique_ptr"))
         } else if rust_name.starts_with("unique_ptr_") {
@@ -34576,6 +34587,13 @@ impl AstCodeGen {
         let normalized = normalized.trim_matches('_');
         if normalized.is_empty() {
             return None;
+        }
+        let normalized_std = normalize_rusty_type_alias_to_std(normalized);
+        if normalized_std != normalized
+            && !normalized_std.is_empty()
+            && !Self::has_unresolved_template_placeholder(&normalized_std)
+        {
+            return Some(normalized_std);
         }
         if normalized == "unique_ptr" || normalized == "std_unique_ptr" {
             return Some("std_unique_ptr<std::ffi::c_void>".to_string());
@@ -72466,6 +72484,46 @@ pub mod testing {
     }
 
     #[test]
+    fn test_missing_stub_std_collections_aliases_to_std_containers() {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "std_collections_BTreeSet_std_rc_Rc_rrr_Fiber".to_string(),
+            "std::collections::BTreeSet<std::rc::Rc<rrr::Fiber>>".to_string(),
+        );
+        codegen.used_types.insert(
+            "std_collections_VecDeque_std_shared_ptr_class_rrr_Event".to_string(),
+            "std::collections::VecDeque<std::shared_ptr<class rrr::Event>>".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            code.contains(
+                "pub type std_collections_BTreeSet_std_rc_Rc_rrr_Fiber = std::collections::BTreeSet<std::rc::Rc<rrr_Fiber>>;"
+            ),
+            "missing stub generation should alias lowered std_collections BTreeSet names to std container paths, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains(
+                "pub type std_collections_VecDeque_std_shared_ptr_class_rrr_Event = std::collections::VecDeque<std_shared_ptr<rrr_Event>>;"
+            ),
+            "missing stub generation should alias lowered std_collections VecDeque names to std container paths, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct std_collections_BTreeSet_std_rc_Rc_rrr_Fiber {"),
+            "missing stub generation should avoid emitting opaque std_collections BTreeSet placeholders, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct std_collections_VecDeque_std_shared_ptr_class_rrr_Event {"),
+            "missing stub generation should avoid emitting opaque std_collections VecDeque placeholders, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
     fn test_missing_stub_unqualified_vector_aliases_to_generic_stub() {
         let mut codegen = AstCodeGen::new();
         codegen
@@ -78517,6 +78575,46 @@ pub mod YAML {
         assert!(
             output.contains("pub type vector_RegEx = std_vector<RegEx>;"),
             "closure pass should add unqualified vector alias fallback for module-scoped pub(crate) fields, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_close_unresolved_type_reference_gaps_adds_std_collections_aliases_without_local_generic_stubs(
+    ) {
+        let input = r#"
+pub struct Holder {
+    pub events: std_collections_VecDeque_std_shared_ptr_Event,
+    pub events_rrr: std_collections_VecDeque_std_shared_ptr_rrr_Event,
+    pub fibers: std_collections_BTreeSet_std_rc_Rc_rrr_Fiber,
+}
+"#;
+        let output = AstCodeGen::close_unresolved_type_reference_gaps(input);
+        assert!(
+            output.contains(
+                "pub type std_collections_VecDeque_std_shared_ptr_Event = std::collections::VecDeque<std_shared_ptr<Event>>;"
+            ),
+            "closure pass should alias lowered std_collections VecDeque spellings to std container paths even when no local generic base alias is defined, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains(
+                "pub type std_collections_VecDeque_std_shared_ptr_rrr_Event = std::collections::VecDeque<std_shared_ptr<rrr_Event>>;"
+            ),
+            "closure pass should alias lowered std_collections VecDeque spellings with rrr payloads to std container paths, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains(
+                "pub type std_collections_BTreeSet_std_rc_Rc_rrr_Fiber = std::collections::BTreeSet<std::rc::Rc<rrr_Fiber>>;"
+            ),
+            "closure pass should alias lowered std_collections BTreeSet spellings to std container paths even when no local generic base alias is defined, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("pub struct std_collections_VecDeque_std_shared_ptr_Event {")
+                && !output.contains("pub struct std_collections_BTreeSet_std_rc_Rc_rrr_Fiber {"),
+            "std_collections lowered aliases should not degrade into opaque placeholders when std container targets can be formed, got:\n{}",
             output
         );
     }

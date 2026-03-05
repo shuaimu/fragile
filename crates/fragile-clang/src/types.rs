@@ -615,6 +615,47 @@ fn map_lowered_rusty_single_template_alias_to_std(spelling: &str) -> Option<Stri
     None
 }
 
+fn map_lowered_std_single_template_alias_to_std(spelling: &str) -> Option<String> {
+    for lowered_spelling in [spelling, strip_lowered_cpp_prefix_tokens(spelling)] {
+        for (prefix, std_path) in [
+            ("std_vec_Vec_", "std::vec::Vec"),
+            ("std_collections_VecDeque_", "std::collections::VecDeque"),
+            ("std_collections_HashSet_", "std::collections::HashSet"),
+            ("std_collections_BTreeSet_", "std::collections::BTreeSet"),
+            ("std_rc_Rc_", "std::rc::Rc"),
+            ("std_rc_Weak_", "std::rc::Weak"),
+            ("std_sync_Arc_", "std::sync::Arc"),
+            ("std_sync_Weak_", "std::sync::Weak"),
+            ("std_cell_RefCell_", "std::cell::RefCell"),
+            ("std_cell_UnsafeCell_", "std::cell::UnsafeCell"),
+            ("std_shared_ptr_", "std_shared_ptr"),
+            ("shared_ptr_", "std_shared_ptr"),
+            ("std_unique_ptr_", "std_unique_ptr"),
+            ("unique_ptr_", "std_unique_ptr"),
+        ] {
+            let Some(rest) = lowered_spelling.strip_prefix(prefix) else {
+                continue;
+            };
+            let lowered = rest.trim_end_matches('_');
+            if lowered.is_empty()
+                || !lowered
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+            {
+                continue;
+            }
+
+            let lowered = strip_lowered_cpp_prefix_tokens(lowered);
+            if lowered.is_empty() {
+                continue;
+            }
+            let mapped = CppType::Named(lowered.to_string()).to_rust_type_str();
+            return Some(format!("{}<{}>", std_path, mapped));
+        }
+    }
+    None
+}
+
 fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
     let mut cleaned = strip_cv_qualifiers_and_tag_prefix(spelling);
     cleaned = cleaned.trim_start_matches("::").trim();
@@ -779,6 +820,9 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         return Some(mapped);
     }
     if let Some(mapped) = map_lowered_rusty_single_template_alias_to_std(cleaned) {
+        return Some(mapped);
+    }
+    if let Some(mapped) = map_lowered_std_single_template_alias_to_std(cleaned) {
         return Some(mapped);
     }
     for (prefix, std_path) in [
@@ -3132,6 +3176,22 @@ mod tests {
                 "std::collections::BTreeMap<std::rc::Rc<rrr_Fiber>, ()>"
             ),
             "std::collections::BTreeMap<std::rc::Rc<rrr_Fiber>, ()>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std_collections_BTreeSet_std_rc_Rc_rrr_Fiber"),
+            "std::collections::BTreeSet<std::rc::Rc<rrr_Fiber>>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std_collections_BTreeSet_std_rc_Rc_Fiber"),
+            "std::collections::BTreeSet<std::rc::Rc<Fiber>>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std_collections_VecDeque_std_shared_ptr_class_rrr_Event"),
+            "std::collections::VecDeque<std_shared_ptr<rrr_Event>>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("std_collections_VecDeque_shared_ptr_Event"),
+            "std::collections::VecDeque<std_shared_ptr<Event>>"
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("std::option::Option<()>"),

@@ -9,6 +9,7 @@
 - [4. C++ Declaration to Rust Item Mapping](#4-c-declaration-to-rust-item-mapping)
 - [5. C++ Type to Rust Type Mapping](#5-c-type-to-rust-type-mapping)
 - [5.4 Rusty-C++ alias normalization to Rust std types](#54-rusty-c-alias-normalization-to-rust-std-types)
+- [5.5 Lowered std_collections alias closure](#55-lowered-std_collections-alias-closure)
 - [6. Object Model and Inheritance Design](#6-object-model-and-inheritance-design)
 - [7. Function, Method, Constructor, Destructor Mapping](#7-function-method-constructor-destructor-mapping)
 - [8. Statement Mapping](#8-statement-mapping)
@@ -297,6 +298,27 @@ Large codebases that include `rusty-cpp` headers frequently surface both fully q
   - bare mpsc error enums (`RecvError`, `TryRecvError`, `TrySendError`) preserve `std::sync::mpsc::*` paths instead of degrading to sanitized identifiers
 
 This keeps generated Rust in safe/std-native form instead of preserving rusty-cpp wrapper type names in emitted signatures.
+
+### 5.5 Lowered `std_collections` alias closure
+
+Source:
+
+- `map_lowered_std_single_template_alias_to_std` in `crates/fragile-clang/src/types.rs`
+- `stl_container_alias_target_from_rust_name` / `close_unresolved_type_reference_gaps` in `crates/fragile-clang/src/ast_codegen.rs`
+
+Recent drop-in builds surfaced lowered spellings like:
+
+- `std_collections_VecDeque_std_shared_ptr_Event`
+- `std_collections_VecDeque_std_shared_ptr_rrr_Event`
+- `std_collections_BTreeSet_std_rc_Rc_rrr_Fiber`
+
+These names previously degraded into opaque placeholder structs (or unresolved-type invariant failures). Fragile now:
+
+- normalizes lowered `std_collections_*`, `std_rc_*`, and lowered smart-pointer spellings into concrete container targets (for example `std::collections::VecDeque<std_shared_ptr<...>>`, `std::collections::BTreeSet<std::rc::Rc<...>>`);
+- allows unresolved-gap closure to emit alias fallbacks even when the generic base is a std path (`std::...`) rather than a locally defined helper type;
+- runs one final unresolved-type closure pass at the end of codegen so late alias/c_void normalization stages cannot reintroduce unresolved lowered container names.
+
+This keeps generated output on concrete std container aliases and avoids fallback opaque structs for these safe Rusty-C++ container surfaces.
 
 ## 6. Object Model and Inheritance Design
 
