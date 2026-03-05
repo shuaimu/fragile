@@ -34379,6 +34379,10 @@ impl AstCodeGen {
 
     fn rusty_wrapper_alias_target_from_record_name(record_name: &str) -> Option<String> {
         let normalized = Self::normalize_namespace_alias_target(record_name);
+        let allowlisted_rusty_exacts = ["rusty::sync::mpsc::TrySendError"];
+        let allowlisted_rusty_exact = allowlisted_rusty_exacts
+            .iter()
+            .any(|exact| normalized == *exact);
         let allowlisted_prefixes = [
             "std::option::Option<",
             "std::result::Result<",
@@ -34412,16 +34416,18 @@ impl AstCodeGen {
             "std::sync::mpsc::TryRecvError",
         ];
         if normalized == record_name
-            || normalized.contains("rusty::")
-            || normalized.contains("crate::rusty::")
-            || normalized.contains("::rusty::")
+            || (!allowlisted_rusty_exact
+                && (normalized.contains("rusty::")
+                    || normalized.contains("crate::rusty::")
+                    || normalized.contains("::rusty::")))
             || Self::has_unresolved_template_placeholder(&normalized)
             || (!allowlisted_prefixes
                 .iter()
                 .any(|prefix| normalized.starts_with(prefix))
                 && !allowlisted_exacts
                     .iter()
-                    .any(|exact| normalized == *exact))
+                    .any(|exact| normalized == *exact)
+                && !allowlisted_rusty_exact)
         {
             return None;
         }
@@ -71019,6 +71025,34 @@ pub struct rusty_Arc_classrrr_Client_ {
     }
 
     #[test]
+    fn test_generate_struct_aliases_rusty_mpsc_try_send_error_record_in_namespace_context() {
+        let mut codegen = AstCodeGen::new();
+        codegen.current_namespace.push(("rusty".to_string(), false));
+        codegen.current_namespace.push(("sync".to_string(), false));
+        codegen.current_namespace.push(("mpsc".to_string(), false));
+        let cpp_name = "TrySendError";
+        let rust_name = sanitize_identifier(cpp_name);
+
+        codegen.generate_struct(cpp_name, true, &[]);
+
+        assert!(
+            codegen.output.contains(&format!(
+                "pub type {} = rusty::sync::mpsc::TrySendError;",
+                rust_name
+            )),
+            "namespace-qualified TrySendError wrappers should alias to rusty mpsc path, got:\n{}",
+            codegen.output
+        );
+        assert!(
+            !codegen
+                .output
+                .contains(&format!("pub struct {} {{", rust_name)),
+            "namespace-qualified TrySendError wrappers should not emit opaque structs, got:\n{}",
+            codegen.output
+        );
+    }
+
+    #[test]
     fn test_rusty_wrapper_record_alias_helper_supports_option_and_result() {
         assert_eq!(
             AstCodeGen::rusty_wrapper_alias_target_from_record_name("rusty::Option<int>")
@@ -71067,6 +71101,10 @@ pub struct rusty_Arc_classrrr_Client_ {
             )
             .as_deref(),
             Some("std::sync::mpsc::RecvError")
+        );
+        assert_eq!(
+            AstCodeGen::rusty_wrapper_alias_target_from_record_name("TrySendError").as_deref(),
+            Some("rusty::sync::mpsc::TrySendError")
         );
         assert_eq!(
             AstCodeGen::rusty_wrapper_alias_target_from_record_name("Unit").as_deref(),
