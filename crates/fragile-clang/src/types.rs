@@ -519,6 +519,129 @@ fn map_lowered_result_with_mpsc_error_to_std(spelling: &str) -> Option<String> {
     None
 }
 
+fn map_lowered_result_component_to_std(spelling: &str) -> String {
+    let cleaned = strip_lowered_cpp_prefix_tokens(spelling.trim_end_matches('_'));
+    if cleaned.is_empty() || cleaned == "void" || is_unresolved_placeholder_type_name(cleaned) {
+        return "()".to_string();
+    }
+    if let Some(unit) = map_lowered_mpsc_unit_to_std(cleaned) {
+        return unit;
+    }
+    CppType::Named(cleaned.to_string()).to_rust_type_str()
+}
+
+fn split_lowered_result_on_error_component(lowered: &str) -> Option<(&str, &str)> {
+    let tag_prefixes = [
+        "class",
+        "struct",
+        "enum",
+        "constclass",
+        "conststruct",
+        "constenum",
+        "volatileclass",
+        "volatilestruct",
+        "volatileenum",
+    ];
+
+    for split_idx in 1..lowered.len() {
+        if !lowered.is_char_boundary(split_idx) {
+            continue;
+        }
+        if !lowered[..split_idx].ends_with('_') {
+            continue;
+        }
+        let rhs = &lowered[split_idx..];
+        if !tag_prefixes.iter().any(|prefix| rhs.starts_with(prefix)) {
+            continue;
+        }
+
+        let rhs_cleaned = strip_lowered_cpp_prefix_tokens(rhs.trim_end_matches('_'));
+        let rhs_root = rhs_cleaned.split("__").next().unwrap_or(rhs_cleaned);
+        if !rhs_root.contains("Error") {
+            continue;
+        }
+
+        let lhs = lowered[..split_idx].trim_end_matches('_');
+        let rhs = rhs.trim_end_matches('_');
+        if lhs.is_empty() || rhs.is_empty() {
+            continue;
+        }
+        return Some((lhs, rhs));
+    }
+
+    None
+}
+
+fn split_lowered_result_on_simple_rhs_component(lowered: &str) -> Option<(&str, &str)> {
+    const SIMPLE_RHS_SUFFIXES: &[&str] = &[
+        "unsigned_long_long",
+        "unsigned_long",
+        "unsigned_int",
+        "unsigned_short",
+        "unsigned_char",
+        "long_long",
+        "long_double",
+        "double",
+        "float",
+        "long",
+        "int",
+        "short",
+        "char",
+        "bool",
+        "void",
+    ];
+
+    for rhs_suffix in SIMPLE_RHS_SUFFIXES {
+        let marker = format!("_{rhs_suffix}");
+        let Some(lhs_raw) = lowered.strip_suffix(&marker) else {
+            continue;
+        };
+        let lhs = lhs_raw.trim_end_matches('_');
+        if lhs.is_empty() {
+            continue;
+        }
+        return Some((lhs, *rhs_suffix));
+    }
+
+    if let Some(split_idx) = lowered.rfind("_type_parameter_") {
+        let lhs = lowered[..split_idx].trim_end_matches('_');
+        let rhs = &lowered[split_idx + 1..];
+        if !lhs.is_empty() && is_unresolved_placeholder_type_name(rhs) {
+            return Some((lhs, rhs));
+        }
+    }
+
+    None
+}
+
+fn map_lowered_result_alias_to_std(spelling: &str) -> Option<String> {
+    for prefix in ["rusty_Result_", "Result_"] {
+        let Some(rest) = spelling.strip_prefix(prefix) else {
+            continue;
+        };
+        let lowered = rest.strip_suffix('_').unwrap_or(rest);
+        if lowered.is_empty()
+            || !lowered
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        {
+            continue;
+        }
+
+        let split = split_lowered_result_on_error_component(lowered)
+            .or_else(|| split_lowered_result_on_simple_rhs_component(lowered));
+        let Some((ok_raw, err_raw)) = split else {
+            continue;
+        };
+
+        let ok_mapped = map_lowered_result_component_to_std(ok_raw);
+        let err_mapped = map_lowered_result_component_to_std(err_raw);
+        return Some(format!("std::result::Result<{}, {}>", ok_mapped, err_mapped));
+    }
+
+    None
+}
+
 fn map_lowered_mpsc_endpoint_to_std(spelling: &str) -> Option<String> {
     for (prefix, std_path) in [
         ("std_sync_mpsc_Sender_", "std::sync::mpsc::Sender"),
@@ -747,6 +870,9 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         return Some(mapped);
     }
     if let Some(mapped) = map_lowered_result_with_mpsc_error_to_std(cleaned) {
+        return Some(mapped);
+    }
+    if let Some(mapped) = map_lowered_result_alias_to_std(cleaned) {
         return Some(mapped);
     }
 
@@ -3254,6 +3380,18 @@ mod tests {
                 "rusty_Result_structrusty_sync_mpsc_Unit_enumrusty_sync_mpsc_TrySendError_"
             ),
             "std::result::Result<(), std::sync::mpsc::TrySendError<()>>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty_Result_classrrr_AddrInfo_int_"),
+            "std::result::Result<rrr_AddrInfo, i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty_Result_void_type_parameter_0_0_"),
+            "std::result::Result<(), ()>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std("rusty_Result_classrusty_Arc_classrrr_Future__int_"),
+            "std::result::Result<std::sync::Arc<rrr_Future>, i32>"
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty_Result_int_enumrusty_sync_mpsc_RecvError_"),

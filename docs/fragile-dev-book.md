@@ -1429,3 +1429,53 @@ Added missing-stub regression test:
   - `make clean`
   - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
   - `ctest -j32 --output-on-failure`
+
+## 23. Lowered `rusty_Result_*` Alias Recovery for Safe Std Surfaces (2026-03-05)
+
+### Problem
+
+Lowered/sanitized Rusty result spellings can appear without angle-bracket syntax, for example:
+
+- `rusty_Result_classrrr_AddrInfo_int_`
+- `rusty_Result_void_type_parameter_0_0_`
+- `rusty_Result_classrusty_Arc_classrrr_Future__int_`
+
+These previously stayed opaque and missed the existing `std::result::Result<...>` alias normalization path.
+
+### Rule
+
+- Keep the existing mpsc-specific lowered result mapper unchanged and first in precedence.
+- Add a generic lowered `rusty_Result_*` / `Result_*` mapper that:
+  - splits on an error-like RHS component (`*Error*`) when a conservative tagged boundary is found,
+  - otherwise falls back to simple RHS scalar/placeholder lanes (for example `int`, `void`, `type_parameter_*`),
+  - normalizes each component through existing type mapping before building `std::result::Result<Ok, Err>`.
+
+### Implementation
+
+- In `crates/fragile-clang/src/types.rs`:
+  - Added `map_lowered_result_component_to_std()`.
+  - Added lowered split helpers:
+    - `split_lowered_result_on_error_component()`
+    - `split_lowered_result_on_simple_rhs_component()`
+  - Added `map_lowered_result_alias_to_std()`.
+  - Wired the new mapper into `map_rusty_type_to_std()` after the mpsc-specialized lowered-result path.
+
+### Tests
+
+Extended `test_normalize_rusty_type_alias_to_std_maps_wrappers_and_preserves_non_rusty_paths` with:
+
+- `rusty_Result_classrrr_AddrInfo_int_ -> std::result::Result<rrr_AddrInfo, i32>`
+- `rusty_Result_void_type_parameter_0_0_ -> std::result::Result<(), ()>`
+- `rusty_Result_classrusty_Arc_classrrr_Future__int_ -> std::result::Result<std::sync::Arc<rrr_Future>, i32>`
+
+### Guardrails
+
+- mpsc error lowering remains handled by the dedicated specialized mapper.
+- Split heuristics stay conservative (ASCII-lowered lanes only, tagged error boundary or scalar/placeholder fallback).
+- Fresh validation remains green:
+  - `cargo test -p fragile-clang --lib normalize_rusty_type_alias_to_std`
+  - `cargo test -p fragile-clang --lib missing_stub_`
+  - `cargo build --release --bin fragilec`
+  - `make clean`
+  - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
+  - `ctest -j32 --output-on-failure`
