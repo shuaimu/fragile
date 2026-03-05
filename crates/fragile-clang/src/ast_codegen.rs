@@ -34604,10 +34604,25 @@ impl AstCodeGen {
 
     fn is_lowered_basic_string_component_suffix(suffix: &str) -> bool {
         let normalized = Self::strip_lowered_cpp_prefix_tokens_suffix(suffix.trim_matches('_'));
-        normalized == "basic_string_char"
-            || normalized == "std_basic_string_char"
-            || normalized.starts_with("basic_string_char__")
-            || normalized.starts_with("std_basic_string_char__")
+        let mut segments = normalized.split("__");
+        let Some(head) = segments.next() else {
+            return false;
+        };
+        if head != "basic_string_char" && head != "std_basic_string_char" {
+            return false;
+        }
+        for segment in segments {
+            let lane = Self::strip_lowered_cpp_prefix_tokens_suffix(segment);
+            if lane.is_empty() {
+                return false;
+            }
+            // Conservative: accept only explicit char-traits/allocator tails
+            // in lowered basic_string component spellings.
+            if lane != "std_char_traits_char" && lane != "std_allocator_char" {
+                return false;
+            }
+        }
+        true
     }
 
     fn stl_container_element_rust_type_from_suffix(suffix: &str) -> Option<String> {
@@ -34822,81 +34837,118 @@ impl AstCodeGen {
         Some(rust)
     }
 
-    fn stl_map_key_value_suffix_parts_from_suffix(suffix: &str) -> Option<(String, String)> {
+    fn stl_map_key_value_suffix_parts_candidates_from_suffix(suffix: &str) -> Vec<(String, String)> {
         let trimmed = suffix.trim_matches('_');
         if trimmed.is_empty() {
-            return None;
-        }
-        let (key_suffix, rest) = trimmed.split_once("__")?;
-        if key_suffix.is_empty() || rest.is_empty() {
-            return None;
+            return Vec::new();
         }
 
-        // Handle lowered full template spellings such as:
-        //   unordered_map_K__V__struct_std_hash_K__struct_std_equal_to_K__class_std_allocator_...
-        //   map_K__V__struct_std_less_K__class_std_allocator_...
-        let mut cutoff: Option<usize> = None;
-        for marker in [
-            "__struct_std_hash_",
-            "__class_std_hash_",
-            "__std_hash_",
-            "__struct_std_equal_to_",
-            "__class_std_equal_to_",
-            "__std_equal_to_",
-            "__struct_std_less_",
-            "__class_std_less_",
-            "__std_less_",
-            "__class_std_allocator_",
-            "__struct_std_allocator_",
-            "__std_allocator_",
-        ] {
-            if let Some(idx) = rest.find(marker) {
-                cutoff = Some(cutoff.map_or(idx, |prev| prev.min(idx)));
+        let mut split_positions = Vec::new();
+        let mut search_from = 0usize;
+        while let Some(rel_idx) = trimmed[search_from..].find("__") {
+            let idx = search_from + rel_idx;
+            split_positions.push(idx);
+            search_from = idx + 2;
+        }
+        if split_positions.is_empty() {
+            return Vec::new();
+        }
+
+        let mut candidates = Vec::new();
+
+        // Try right-to-left so key lanes with nested lowered spellings (for
+        // example full `basic_string<char, ...>` spellings) are preferred.
+        for split_idx in split_positions.into_iter().rev() {
+            let key_suffix = &trimmed[..split_idx];
+            let rest = &trimmed[split_idx + 2..];
+            if key_suffix.is_empty() || rest.is_empty() {
+                continue;
             }
+
+            // Handle lowered full template spellings such as:
+            //   unordered_map_K__V__struct_std_hash_K__struct_std_equal_to_K__class_std_allocator_...
+            //   map_K__V__struct_std_less_K__class_std_allocator_...
+            let mut cutoff: Option<usize> = None;
+            for marker in [
+                "__struct_std_hash_",
+                "__class_std_hash_",
+                "__std_hash_",
+                "__struct_std_equal_to_",
+                "__class_std_equal_to_",
+                "__std_equal_to_",
+                "__struct_std_less_",
+                "__class_std_less_",
+                "__std_less_",
+                "__class_std_allocator_",
+                "__struct_std_allocator_",
+                "__std_allocator_",
+            ] {
+                if let Some(idx) = rest.find(marker) {
+                    cutoff = Some(cutoff.map_or(idx, |prev| prev.min(idx)));
+                }
+            }
+
+            let value_suffix = if let Some(cutoff_idx) = cutoff {
+                if cutoff_idx == 0 {
+                    continue;
+                }
+                let candidate = &rest[..cutoff_idx];
+                // Keep full-template-signature recovery conservative: skip
+                // nested key/value lanes unless they are canonical lowered
+                // basic_string spellings.
+                if (key_suffix.contains("__")
+                    && !Self::is_lowered_basic_string_component_suffix(key_suffix))
+                    || (candidate.contains("__")
+                        && !Self::is_lowered_basic_string_component_suffix(candidate))
+                {
+                    continue;
+                }
+                candidate
+            } else {
+                // Simple lowered form: allow value side to carry nested lowered
+                // spellings (for example `map_basic_string_char__unsigned_long`).
+                rest
+            };
+
+            if value_suffix.is_empty() {
+                continue;
+            }
+
+            candidates.push((key_suffix.to_string(), value_suffix.to_string()));
         }
 
-        let Some(cutoff_idx) = cutoff else {
-            // Simple lowered form: allow value side to carry nested lowered
-            // spellings (for example `map_basic_string_char__unsigned_long`).
-            return Some((key_suffix.to_string(), rest.to_string()));
-        };
-        if cutoff_idx == 0 {
-            return None;
-        }
-        let value_suffix = &rest[..cutoff_idx];
-        if value_suffix.is_empty() {
-            return None;
-        }
-
-        // Keep full-template-signature recovery conservative: skip nested key
-        // lanes and deeply nested value spellings in this path. Permit the
-        // common `basic_string<char, ...>` lowered suffix lane.
-        if key_suffix.contains("__")
-            || (value_suffix.contains("__")
-                && !Self::is_lowered_basic_string_component_suffix(value_suffix))
-        {
-            return None;
-        }
-
-        Some((key_suffix.to_string(), value_suffix.to_string()))
+        candidates
     }
 
     fn stl_simple_map_key_value_rust_types_from_suffix(
         suffix: &str,
     ) -> Option<(String, String)> {
-        let (key_suffix, value_suffix) = Self::stl_map_key_value_suffix_parts_from_suffix(suffix)?;
-        let key = Self::stl_associative_component_rust_type_from_suffix(&key_suffix)?;
-        let value = Self::stl_associative_component_rust_type_from_suffix(&value_suffix)?;
-        if key.is_empty()
-            || value.is_empty()
-            || Self::has_unresolved_template_placeholder(&key)
-            || Self::has_unresolved_template_placeholder(&value)
-            || !Self::is_supported_associative_map_component_type(&key)
-            || !Self::is_supported_associative_map_value_type(&value)
+        for (key_suffix, value_suffix) in
+            Self::stl_map_key_value_suffix_parts_candidates_from_suffix(suffix)
         {
-            return None;
+            if key_suffix.contains("__")
+                && !Self::is_lowered_basic_string_component_suffix(&key_suffix)
+            {
+                continue;
+            }
+            let Some(key) = Self::stl_associative_component_rust_type_from_suffix(&key_suffix) else {
+                continue;
+            };
+            let Some(value) = Self::stl_associative_component_rust_type_from_suffix(&value_suffix) else {
+                continue;
+            };
+            if key.is_empty()
+                || value.is_empty()
+                || Self::has_unresolved_template_placeholder(&key)
+                || Self::has_unresolved_template_placeholder(&value)
+                || !Self::is_supported_associative_map_component_type(&key)
+                || !Self::is_supported_associative_map_value_type(&value)
+            {
+                continue;
+            }
+            return Some((key, value));
         }
-        Some((key, value))
+        None
     }
 
     fn stl_simple_sequence_component_rust_type_from_suffix(suffix: &str) -> Option<String> {
@@ -73348,6 +73400,33 @@ pub mod testing {
         assert!(
             !code.contains("pub struct map_int__basic_string_char__struct_std_char_traits_char__class_std_allocator_char {"),
             "missing stub generation should avoid opaque placeholders for lowered full-signature map spellings when string-valued std BTreeMap targets can be formed, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_map_full_signature_with_basic_string_key_and_scalar_value_splits_correctly()
+    {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "map_basic_string_char__struct_std_char_traits_char__class_std_allocator_char__unsigned_long".to_string(),
+            "map<basic_string<char, struct std::char_traits<char>, class std::allocator<char>>, unsigned long>".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            code.contains(
+                "pub type map_basic_string_char__struct_std_char_traits_char__class_std_allocator_char__unsigned_long = std::collections::BTreeMap<basic_string_char, u64>;"
+            ),
+            "missing stub generation should split full-signature basic_string key lanes from scalar value lanes correctly, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains(
+                "pub type map_basic_string_char__struct_std_char_traits_char__class_std_allocator_char__unsigned_long = std::collections::BTreeMap<basic_string_char, u128>;"
+            ),
+            "missing stub generation should not mis-split full-signature basic_string key lanes into integer placeholder value targets, got:\n{}",
             code
         );
     }

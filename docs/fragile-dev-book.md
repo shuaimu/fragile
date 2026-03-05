@@ -1378,3 +1378,53 @@ Added/updated missing-stub regression tests:
   - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
   - `ctest -j32 --output-on-failure`
 - Spot-check in generated `mako` sidecars confirms full-signature class-prefixed string map aliases now stay string-keyed/value-keyed (no `u128` collapse).
+
+## 22. Full-Signature `basic_string` Key Split Disambiguation (2026-03-05)
+
+### Problem
+
+One remaining full-signature lowered ordered-map lane could still mis-split key/value recovery:
+
+- `map_basic_string_char__struct_std_char_traits_char__class_std_allocator_char__unsigned_long`
+
+In this shape, naive single-split parsing can treat only `basic_string_char` as key and collapse the remainder into a value lane that later resolves to an incorrect integer surface (observed `u128` alias output) instead of `u64`.
+
+### Rule
+
+- For lowered map suffix recovery, evaluate multiple `__` split candidates and pick the first conservative candidate that resolves both key and value to supported concrete types.
+- Keep `basic_string<char, ...>` recognition conservative: only accept explicit char-traits/allocator tails for lowered component suffixes.
+
+### Implementation
+
+- In `crates/fragile-clang/src/ast_codegen.rs`:
+  - Replaced single-path map split helper with:
+    - `stl_map_key_value_suffix_parts_candidates_from_suffix()`
+  - Candidate generation now:
+    - enumerates all `__` split points,
+    - prefers right-to-left candidates (longer key lanes first),
+    - keeps existing full-signature marker handling (`hash`/`equal`/`less`/`allocator` tails),
+    - rejects nested full-signature lanes unless they are conservative `basic_string<char, ...>` shapes.
+  - `stl_simple_map_key_value_rust_types_from_suffix()` now iterates candidates and returns only when:
+    - key/value resolve,
+    - unresolved placeholder/c_void guards pass,
+    - key/value support gates pass.
+  - Tightened `is_lowered_basic_string_component_suffix()`:
+    - accepts only `basic_string_char` / `std_basic_string_char` heads,
+    - allows only `std_char_traits_char` and `std_allocator_char` as tail lanes.
+
+### Tests
+
+Added missing-stub regression test:
+
+- `test_missing_stub_map_full_signature_with_basic_string_key_and_scalar_value_splits_correctly`
+  - asserts alias is `std::collections::BTreeMap<basic_string_char, u64>`
+  - asserts it is not `...<basic_string_char, u128>`.
+
+### Guardrails
+
+- Simple and nested map-value recovery behavior remains unchanged.
+- Full-signature map recovery is still conservative for non-string deep nested lanes.
+- Fresh drop-in validation remains green:
+  - `make clean`
+  - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
+  - `ctest -j32 --output-on-failure`
