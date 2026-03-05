@@ -1284,3 +1284,45 @@ Some lowered map spellings carry safe sequence values (for example `vector<unsig
 `vendor/mako` uses `/target/release/fragilec` via the compiler wrapper and does not rebuild it automatically during `cmake --build`. After transpiler edits, rebuild the compiler first:
 
 `cargo build --release --bin fragilec`
+
+## 20. Map Value Recovery for `vector<Arc<T>>`-Like Lanes (2026-03-05)
+
+### Problem
+
+Lowered map spellings such as:
+
+- `unordered_map_basic_string_char__vector_Arc_Pollable`
+- `map_basic_string_char__vector_Arc_Client`
+
+were still emitted as opaque placeholder structs even though both key/value sides are recoverable to concrete std-container aliases. The previous sequence-value gate only accepted scalar/string-like element lanes.
+
+### Rule
+
+Keep key gating strict, but allow richer concrete map **value** payloads (including wrapper/object lanes like `std::sync::Arc<T>`) when they are fully resolved and not unresolved placeholders.
+
+### Implementation
+
+- In `crates/fragile-clang/src/ast_codegen.rs`:
+  - `stl_simple_sequence_component_rust_type_from_suffix()` now validates sequence elements with `is_supported_associative_map_value_type()` (value policy) instead of key policy.
+  - Extended lowered sequence recovery prefixes to include:
+    - `std_queue_` / `queue_` -> `std_queue<T>`
+    - `std_stack_` / `stack_` -> `std_stack<T>`
+  - `is_supported_associative_map_value_type()` now recursively validates supported container payloads (`std_vector`, `std_deque`, `std::collections::VecDeque`, `std_queue`, `std_stack`) using value policy on inner template args.
+
+### Tests
+
+Added/updated missing-stub regression tests:
+
+- `test_missing_stub_unordered_map_with_vector_arc_value_aliases_to_std_hashmap`
+- `test_missing_stub_map_with_vector_arc_value_aliases_to_std_btreemap`
+- `test_missing_stub_unordered_map_with_nested_lowered_vector_value_keeps_placeholder`
+
+### Guardrails
+
+- Keys still require conservative key surfaces (`is_supported_associative_map_key_type()`).
+- Values still reject unresolved placeholders and `c_void` lanes.
+- Nested lowered vector-of-lowered-vector lanes remain opaque when element recovery is not concrete.
+- Full drop-in validation remains green:
+  - `make clean`
+  - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
+  - `ctest -j32 --output-on-failure`

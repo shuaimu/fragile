@@ -34876,14 +34876,18 @@ impl AstCodeGen {
             ("std_deque_", "std_deque"),
             ("deque_", "std_deque"),
             ("std_collections_VecDeque_", "std::collections::VecDeque"),
+            ("std_queue_", "std_queue"),
+            ("queue_", "std_queue"),
+            ("std_stack_", "std_stack"),
+            ("stack_", "std_stack"),
         ] {
             let Some(element_suffix) = normalized.strip_prefix(prefix) else {
                 continue;
             };
             let element = Self::stl_container_element_rust_type_from_suffix(element_suffix)?;
-            // Keep nested sequence recovery conservative so value payloads stay
-            // on simple scalar/string-like surfaces.
-            if !Self::is_supported_associative_map_key_type(&element) {
+            // Map value components can safely carry richer element surfaces than
+            // keys, but still must avoid unresolved placeholders/c_void lanes.
+            if !Self::is_supported_associative_map_value_type(&element) {
                 continue;
             }
             return Some(format!("{}<{}>", target_base, element));
@@ -35054,7 +35058,13 @@ impl AstCodeGen {
             return true;
         }
 
-        for prefix in ["std_vector<", "std_deque<", "std::collections::VecDeque<"] {
+        for prefix in [
+            "std_vector<",
+            "std_deque<",
+            "std::collections::VecDeque<",
+            "std_queue<",
+            "std_stack<",
+        ] {
             let Some(inner) = trimmed
                 .strip_prefix(prefix)
                 .and_then(|rest| rest.strip_suffix('>'))
@@ -35062,10 +35072,12 @@ impl AstCodeGen {
                 continue;
             };
             let args = parse_template_args(inner);
-            if args.len() != 1 {
+            if args.is_empty() {
                 return false;
             }
-            return Self::is_supported_associative_map_key_type(args[0].trim());
+            // Value-side container payloads do not require key-level traits;
+            // recurse with the same value policy.
+            return Self::is_supported_associative_map_value_type(args[0].trim());
         }
 
         false
@@ -73142,7 +73154,7 @@ pub mod testing {
     }
 
     #[test]
-    fn test_missing_stub_unordered_map_with_non_conservative_vector_value_keeps_placeholder() {
+    fn test_missing_stub_unordered_map_with_vector_arc_value_aliases_to_std_hashmap() {
         let mut codegen = AstCodeGen::new();
         codegen.used_types.insert(
             "unordered_map_unsigned_long__vector_Arc_Job".to_string(),
@@ -73151,16 +73163,72 @@ pub mod testing {
 
         codegen.generate_missing_type_stubs();
         let code = codegen.output;
+        let alias_line = code
+            .lines()
+            .find(|line| {
+                line.contains("pub type unordered_map_unsigned_long__vector_Arc_Job =")
+            })
+            .unwrap_or("");
         assert!(
-            !code.contains(
-                "pub type unordered_map_unsigned_long__vector_Arc_Job = std::collections::HashMap"
-            ),
-            "missing stub generation should not force std HashMap aliases for lowered unordered_map names with non-conservative vector values, got:\n{}",
+            alias_line.contains("std::collections::HashMap<u64, std_vector<")
+                && alias_line.contains("Job"),
+            "missing stub generation should alias lowered unordered_map names with vector<Arc<T>> values to std HashMap vector-valued targets, got:\n{}",
             code
         );
         assert!(
-            code.contains("pub struct unordered_map_unsigned_long__vector_Arc_Job {"),
-            "missing stub generation should keep an opaque placeholder for lowered unordered_map names with non-conservative vector values, got:\n{}",
+            !code.contains("pub struct unordered_map_unsigned_long__vector_Arc_Job {"),
+            "missing stub generation should avoid opaque placeholders for lowered unordered_map names when vector<Arc<T>> std HashMap targets can be formed, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_map_with_vector_arc_value_aliases_to_std_btreemap() {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "map_basic_string_char__vector_Arc_Client".to_string(),
+            "map<basic_string<char>, vector<Arc<Client>>>".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        let alias_line = code
+            .lines()
+            .find(|line| line.contains("pub type map_basic_string_char__vector_Arc_Client ="))
+            .unwrap_or("");
+        assert!(
+            alias_line.contains("std::collections::BTreeMap<basic_string_char, std_vector<")
+                && alias_line.contains("Client"),
+            "missing stub generation should alias lowered map names with vector<Arc<T>> values to std BTreeMap vector-valued targets, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct map_basic_string_char__vector_Arc_Client {"),
+            "missing stub generation should avoid opaque placeholders for lowered map names when vector<Arc<T>> std BTreeMap targets can be formed, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_unordered_map_with_nested_lowered_vector_value_keeps_placeholder() {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "unordered_map_unsigned_long__vector_vector_Arc_Job".to_string(),
+            "unordered_map<unsigned long, vector<vector<Arc<Job>>>>".to_string(),
+        );
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        assert!(
+            !code.contains(
+                "pub type unordered_map_unsigned_long__vector_vector_Arc_Job = std::collections::HashMap"
+            ),
+            "missing stub generation should keep opaque placeholders for nested lowered vector lanes that cannot be recovered into concrete std container payloads, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub struct unordered_map_unsigned_long__vector_vector_Arc_Job {"),
+            "missing stub generation should emit an opaque placeholder for nested lowered vector value lanes that remain unresolved, got:\n{}",
             code
         );
     }
