@@ -261,6 +261,54 @@ fn map_single_template_alias_to_std_allow_extra_args(
     Some(format!("{}<{}>", std_path, mapped))
 }
 
+fn sanitize_cpp_type_like_record_identifier(name: &str) -> String {
+    let mut result = name.to_string();
+    result = result
+        .replace("::", "_")
+        .replace(['<', '>'], "_")
+        .replace(' ', "")
+        .replace(
+            [
+                '%', '=', '&', '|', '!', '*', '/', '+', '-', '[', ']', '(', ')', ',', ';', '.',
+                ':', '^', '~', '"', '\'', '#', '@', '$', '?', '\\',
+            ],
+            "_",
+        );
+    if result.is_empty() {
+        "_unnamed".to_string()
+    } else {
+        result
+    }
+}
+
+fn map_result_error_wrapper_arg_to_generated_record(arg: &str) -> Option<String> {
+    let mut cleaned = strip_cv_qualifiers_and_tag_prefix(arg).trim();
+    cleaned = cleaned.trim_start_matches("::").trim();
+    if let Some(rest) = cleaned.strip_prefix("crate::") {
+        cleaned = rest.trim();
+    }
+
+    let is_non_isomorphic_poison_wrapper = [
+        "rusty::PoisonError<",
+        "rusty::sync::PoisonError<",
+        "PoisonError<",
+    ]
+    .iter()
+    .any(|prefix| cleaned.starts_with(prefix))
+        && cleaned.ends_with('>');
+    if !is_non_isomorphic_poison_wrapper {
+        return None;
+    }
+
+    let lowered = sanitize_cpp_type_like_record_identifier(cleaned);
+    let lowered = strip_lowered_cpp_prefix_tokens(lowered.trim_end_matches('_'));
+    if lowered.is_empty() {
+        None
+    } else {
+        Some(lowered.to_string())
+    }
+}
+
 fn map_result_template_arg_to_rust(arg: &str) -> String {
     let trimmed = arg.trim();
     if trimmed == "()" {
@@ -269,6 +317,9 @@ fn map_result_template_arg_to_rust(arg: &str) -> String {
     let normalized = strip_cv_qualifiers_and_tag_prefix(trimmed);
     if normalized == "void" || is_unresolved_placeholder_type_name(normalized) {
         return "()".to_string();
+    }
+    if let Some(mapped) = map_result_error_wrapper_arg_to_generated_record(trimmed) {
+        return mapped;
     }
     map_alias_template_arg_to_rust(trimmed)
 }
@@ -3358,6 +3409,12 @@ mod tests {
         assert_eq!(
             normalize_rusty_type_alias_to_std("rusty::Result<void, int>"),
             "std::result::Result<(), i32>"
+        );
+        assert_eq!(
+            normalize_rusty_type_alias_to_std(
+                "rusty::Result<rusty::MutexGuard<int>, rusty::PoisonError<int>>"
+            ),
+            "std::result::Result<rusty_MutexGuard_int, rusty_PoisonError_int>"
         );
         assert_eq!(
             normalize_rusty_type_alias_to_std("std::result::Result<type-parameter-0-0, void>"),

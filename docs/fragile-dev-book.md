@@ -287,6 +287,7 @@ Large codebases that include `rusty-cpp` headers frequently surface both fully q
   - `rusty::Result<T, E>` and `Result<T, E>` -> `std::result::Result<T, E>`
   - `Result<void, E>` / `Result<T, void>` normalize `void` lanes to `()`
   - unresolved `Result<type-parameter-*, E>` lanes normalize to `()` to keep generated std `Result` aliases type-valid
+  - when `E` is a non-isomorphic Rusty sync wrapper like `rusty::PoisonError<U>`, `E` is normalized to the generated companion record identifier (for example `rusty_PoisonError_U`) so the outer alias can still land on `std::result::Result<..., ...>` without leaking unresolved Rusty namespace paths
   - `rusty::HashMap<K, V>` and `HashMap<K, V>` -> `std::collections::HashMap<K, V>`
 - Result convenience aliases:
   - `rusty::ResultVoid<T>` and `ResultVoid<T>` -> `std::result::Result<T, ()>`
@@ -1044,8 +1045,9 @@ Namespace alias target normalization must reuse the same Rusty-wrapper mapping l
 - Non-isomorphic Rusty sync guard/result wrappers are intentionally kept on Rusty paths to avoid invalid std rewrites:
   - member guard aliases remain Rusty (`rusty::Mutex<T>::Guard`, `rusty::RwLock<T>::ReadGuard`, `rusty::RwLock<T>::WriteGuard`)
   - direct guard aliases remain Rusty (`rusty::MutexGuard<T>`, `rusty::RwLockReadGuard<T>`, `rusty::RwLockWriteGuard<T>`)
-  - result wrappers remain Rusty (`rusty::PoisonError<T>`, `rusty::LockResult<T>`, `rusty::TryLockResult<T>`)
+  - direct result-wrapper aliases remain Rusty (`rusty::PoisonError<T>`, `rusty::LockResult<T>`, `rusty::TryLockResult<T>`)
   - rationale: std guard/result types carry lifetimes/private internals that are not represented by these Rusty aliases; forced std rewrites create invalid arity/lifetime/private-path outputs.
+  - exception for outer `Result` aliases: `rusty::Result<Ok, rusty::PoisonError<T>>` now keeps the outer std result surface (`std::result::Result<...>`) and rewrites the `PoisonError` lane to its generated companion record identifier (for example `rusty_PoisonError_T`) so alias targets remain resolvable without forcing invalid std poison-error signatures.
 - Rusty RefCell borrow wrappers now normalize as well:
   - `rusty::Ref<T>` / `Ref<T>` -> `std::cell::Ref<T>`
   - `rusty::RefMut<T>` / `RefMut<T>` -> `std::cell::RefMut<T>`
@@ -1476,6 +1478,48 @@ Extended `test_normalize_rusty_type_alias_to_std_maps_wrappers_and_preserves_non
   - `cargo test -p fragile-clang --lib normalize_rusty_type_alias_to_std`
   - `cargo test -p fragile-clang --lib missing_stub_`
   - `cargo build --release --bin fragilec`
+  - `make clean`
+  - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
+  - `ctest -j32 --output-on-failure`
+
+## 24. `Result<..., PoisonError<...>>` Alias Error-Lane Companion Mapping (2026-03-05)
+
+### Problem
+
+Some Rusty result aliases carry non-isomorphic sync wrappers in the error lane, for example:
+
+- `rusty::Result<rusty::MutexGuard<int>, rusty::PoisonError<int>>`
+
+The outer `Result` surface should still normalize to `std::result::Result<...>`, but preserving `rusty::PoisonError<...>` as-is in that lane can block wrapper-record alias recovery because generated sidecars typically reference monomorphized companion record names (for example `rusty_PoisonError_int`) rather than nested Rusty namespace template paths.
+
+### Rule
+
+- Keep direct `PoisonError` aliases non-std (do not force invalid lifetime/private std poison-error signatures).
+- For `Result` template normalization only, when the error lane is a `PoisonError<...>` wrapper, rewrite that lane to the generated companion record identifier form so the outer result alias can remain `std::result::Result<Ok, Err>`.
+
+### Implementation
+
+- In `crates/fragile-clang/src/types.rs`:
+  - Added `sanitize_cpp_type_like_record_identifier()` helper for deterministic C++-like template spelling sanitization into identifier-safe forms.
+  - Added `map_result_error_wrapper_arg_to_generated_record()` to map `PoisonError<...>` lane spellings to generated companion record identifiers.
+  - Wired this mapping into `map_result_template_arg_to_rust()` before generic alias-arg lowering.
+- In `crates/fragile-clang/src/ast_codegen.rs`:
+  - Updated wrapper-record alias helper regression to assert that `rusty::Result<rusty::MutexGuard<int>, rusty::PoisonError<int>>` now normalizes to `std::result::Result<rusty_MutexGuard_int, rusty_PoisonError_int>`.
+
+### Tests
+
+- `types::tests::test_normalize_rusty_type_alias_to_std_maps_wrappers_and_preserves_non_rusty_paths`
+  - added assertion for `rusty::Result<rusty::MutexGuard<int>, rusty::PoisonError<int>> -> std::result::Result<rusty_MutexGuard_int, rusty_PoisonError_int>`
+- `ast_codegen::tests::test_rusty_wrapper_record_alias_helper_maps_result_with_poison_error_to_generated_record_companions`
+  - validates wrapper-record alias helper returns the same normalized std result alias target.
+
+### Guardrails
+
+- Scope is limited to `Result` error-lane normalization for `PoisonError` wrappers.
+- Direct `PoisonError`/`LockResult`/`TryLockResult` alias surfaces remain intentionally non-std.
+- Fresh validation remains green:
+  - `cargo test -p fragile-clang --lib poison_error_to_generated_record`
+  - `cargo test -p fragile-clang --lib maps_wrappers_and_preserves_non_rusty_paths`
   - `make clean`
   - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
   - `ctest -j32 --output-on-failure`

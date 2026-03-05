@@ -74158,13 +74158,14 @@ pub struct rusty_Arc_classrrr_Client_ {
     }
 
     #[test]
-    fn test_rusty_wrapper_record_alias_helper_rejects_nested_rusty_only_paths() {
+    fn test_rusty_wrapper_record_alias_helper_maps_result_with_poison_error_to_generated_record_companions() {
         let poisoned = AstCodeGen::rusty_wrapper_alias_target_from_record_name(
             "rusty::Result<rusty::MutexGuard<int>, rusty::PoisonError<int>>",
         );
-        assert!(
-            poisoned.is_none(),
-            "result aliases with nested rusty-only wrappers should not collapse into std aliases, got: {:?}",
+        assert_eq!(
+            poisoned.as_deref(),
+            Some("std::result::Result<rusty_MutexGuard_int, rusty_PoisonError_int>"),
+            "result aliases with PoisonError lanes should normalize to std::result::Result with generated companion record types, got: {:?}",
             poisoned
         );
     }
