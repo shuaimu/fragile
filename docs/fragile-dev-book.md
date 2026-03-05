@@ -1082,9 +1082,11 @@ Drop top-level type aliases whose rhs is exactly `std::ffi::c_void` when the ali
 ### Implementation
 
 - Added `normalize_unused_c_void_type_aliases()` in `crates/fragile-clang/src/ast_codegen.rs`.
+- Added `normalize_type_alias_rhs_c_void_alias_references()` in `crates/fragile-clang/src/ast_codegen.rs`.
 - Wired the pass into `AstCodeGen::generate()` immediately after runtime-internal alias pruning.
 - The pass:
   - scans `pub type`/`pub(crate) type`/`pub(super) type`/`type` aliases,
+  - rewrites type-alias rhs expressions to inline known `std::ffi::c_void` aliases (for example `*mut __locale_struct` -> `*mut std::ffi::c_void`),
   - removes aliases targeting `std::ffi::c_void` when unused,
   - removes contiguous preceding `///` doc lines for dropped aliases,
   - removes one following blank line for output compaction.
@@ -1093,7 +1095,9 @@ Drop top-level type aliases whose rhs is exactly `std::ffi::c_void` when the ali
 
 - Referenced `std::ffi::c_void` aliases are preserved.
 - Non-`std::ffi::c_void` aliases are untouched.
+- Alias-rhs inlining runs before pruning, so transitive alias chains can collapse and become removable without touching non-alias item signatures.
 - Regression tests cover:
   - unused alias removal with doc cleanup,
   - used alias preservation,
-  - non-`c_void` alias passthrough.
+  - non-`c_void` alias passthrough,
+  - alias-rhs inlining and subsequent prune enablement.

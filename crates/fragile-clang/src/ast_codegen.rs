@@ -6552,6 +6552,167 @@ impl AstCodeGen {
         out
     }
 
+    fn normalize_type_alias_rhs_c_void_alias_references(code: &str) -> String {
+        fn is_ident_start(ch: char) -> bool {
+            ch == '_' || ch.is_ascii_alphabetic()
+        }
+
+        fn is_ident_char(ch: char) -> bool {
+            ch == '_' || ch.is_ascii_alphanumeric()
+        }
+
+        fn rewrite_type_expr_c_void_aliases(expr: &str, aliases: &HashSet<String>) -> String {
+            let chars: Vec<char> = expr.chars().collect();
+            let mut out = String::with_capacity(expr.len());
+            let mut i = 0usize;
+            while i < chars.len() {
+                if chars[i] == 'r' && i + 2 < chars.len() && chars[i + 1] == '#' && is_ident_start(chars[i + 2]) {
+                    let start = i;
+                    i += 2;
+                    let ident_start = i;
+                    i += 1;
+                    while i < chars.len() && is_ident_char(chars[i]) {
+                        i += 1;
+                    }
+                    let token_raw: String = chars[ident_start..i].iter().collect();
+                    if aliases.contains(&token_raw) {
+                        out.push_str("std::ffi::c_void");
+                    } else {
+                        out.extend(chars[start..i].iter());
+                    }
+                    continue;
+                }
+                if is_ident_start(chars[i]) {
+                    let start = i;
+                    i += 1;
+                    while i < chars.len() && is_ident_char(chars[i]) {
+                        i += 1;
+                    }
+                    let token: String = chars[start..i].iter().collect();
+                    if aliases.contains(&token) {
+                        out.push_str("std::ffi::c_void");
+                    } else {
+                        out.push_str(&token);
+                    }
+                    continue;
+                }
+                out.push(chars[i]);
+                i += 1;
+            }
+            out
+        }
+
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
+            return code.to_string();
+        }
+
+        let mut c_void_aliases: HashSet<String> = HashSet::new();
+        for line in &lines {
+            let trimmed = line.trim_start();
+            let Some(rest) = [
+                "pub type ",
+                "pub(crate) type ",
+                "pub(super) type ",
+                "type ",
+            ]
+            .iter()
+            .find_map(|prefix| trimmed.strip_prefix(prefix))
+            else {
+                continue;
+            };
+            let Some((lhs, rhs)) = rest.split_once('=') else {
+                continue;
+            };
+            let alias = lhs.trim().trim_start_matches("r#");
+            if alias.is_empty() {
+                continue;
+            }
+            let target = rhs.trim().trim_end_matches(';').trim();
+            if target == "std::ffi::c_void" {
+                c_void_aliases.insert(alias.to_string());
+            }
+        }
+        if c_void_aliases.is_empty() {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        let mut changed = false;
+
+        for line in &lines {
+            let trimmed = line.trim_start();
+            let Some(prefix) = [
+                "pub type ",
+                "pub(crate) type ",
+                "pub(super) type ",
+                "type ",
+            ]
+            .iter()
+            .find(|p| trimmed.starts_with(*p))
+            else {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            };
+
+            let indent_len = line.len().saturating_sub(trimmed.len());
+            let indent = &line[..indent_len];
+            let rest = &trimmed[prefix.len()..];
+            let Some((lhs_part, rhs_part)) = rest.split_once('=') else {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            };
+            let Some(semi_idx) = rhs_part.find(';') else {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            };
+
+            let before_semi = &rhs_part[..semi_idx];
+            let after_semi = &rhs_part[semi_idx..];
+            let leading_ws_len = before_semi.len() - before_semi.trim_start().len();
+            let trailing_ws_len = before_semi.len() - before_semi.trim_end().len();
+            if leading_ws_len + trailing_ws_len > before_semi.len() {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+            let core_start = leading_ws_len;
+            let core_end = before_semi.len() - trailing_ws_len;
+            let core = &before_semi[core_start..core_end];
+            let rewritten_core = rewrite_type_expr_c_void_aliases(core, &c_void_aliases);
+            let rewritten_before = format!(
+                "{}{}{}",
+                &before_semi[..core_start],
+                rewritten_core,
+                &before_semi[core_end..]
+            );
+
+            if rewritten_before != before_semi {
+                changed = true;
+            }
+
+            out.push_str(indent);
+            out.push_str(prefix);
+            out.push_str(lhs_part);
+            out.push('=');
+            out.push_str(&rewritten_before);
+            out.push_str(after_semi);
+            out.push('\n');
+        }
+
+        if !changed {
+            return code.to_string();
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
     fn normalize_private_module_glob_import_type_alias_paths(code: &str) -> String {
         #[derive(Default)]
         struct ModuleInfo {
@@ -16575,6 +16736,9 @@ impl AstCodeGen {
         // alias is never referenced in the generated TU. Prune only the
         // unreferenced aliases to keep code smaller without changing semantics.
         output = Self::normalize_unused_runtime_internal_type_aliases(&output);
+        // Inline c_void placeholder aliases in alias RHS paths so dependent
+        // aliases no longer force base placeholder aliases to stay live.
+        output = Self::normalize_type_alias_rhs_c_void_alias_references(&output);
         // Degraded lowering emits large numbers of placeholder c_void aliases.
         // Keep only aliases that are actually referenced in item type slots.
         output = Self::normalize_unused_c_void_type_aliases(&output);
@@ -77389,6 +77553,51 @@ pub type MaybeInt = std::option::Option<i32>;
             output.trim(),
             input.trim(),
             "non-c_void aliases should be unaffected, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_type_alias_rhs_c_void_alias_references_inlines_base_alias() {
+        let input = r#"
+pub type __locale_struct = std::ffi::c_void;
+pub type locale_t = *mut __locale_struct;
+pub type const_locale_t = *const __locale_struct;
+"#;
+        let output = AstCodeGen::normalize_type_alias_rhs_c_void_alias_references(input);
+        assert!(
+            output.contains("pub type locale_t = *mut std::ffi::c_void;"),
+            "alias rhs should inline c_void placeholder alias, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub type const_locale_t = *const std::ffi::c_void;"),
+            "const alias rhs should inline c_void placeholder alias, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub type __locale_struct = std::ffi::c_void;"),
+            "base alias declaration remains for pruning pass, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_type_alias_rhs_c_void_alias_references_enables_pruning() {
+        let input = r#"
+pub type __locale_struct = std::ffi::c_void;
+pub type locale_t = *mut __locale_struct;
+"#;
+        let inlined = AstCodeGen::normalize_type_alias_rhs_c_void_alias_references(input);
+        let output = AstCodeGen::normalize_unused_c_void_type_aliases(&inlined);
+        assert!(
+            !output.contains("pub type __locale_struct = std::ffi::c_void;"),
+            "base c_void alias should be removable after rhs inlining, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub type locale_t = *mut std::ffi::c_void;"),
+            "dependent alias should be preserved with inlined c_void rhs, got:\n{}",
             output
         );
     }
