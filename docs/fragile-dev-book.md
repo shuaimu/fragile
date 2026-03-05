@@ -2192,3 +2192,50 @@ safe/std-native (for example `Alias -> Target -> std::sync::Barrier`) remained u
 - test run:
   - `ctest -j32 --output-on-failure`
   - 117/117 tests passed.
+
+## 37. Brace-Aware Scope Tracking for Transitive Alias Collapse (2026-03-05)
+
+### Problem
+
+The scope-aware transitive alias pass (Section 36) originally tracked scope with raw `{`/`}`
+counts. In real generated Rust, braces frequently appear inside string literals/comments, which can
+distort lexical depth and prevent otherwise valid alias-chain collapses.
+
+### Rule
+
+- Scope tracking for alias visibility must ignore braces in:
+  - double-quoted string literals (including escaped quotes),
+  - raw string literals (`r#"..."#`, with arbitrary `#` count),
+  - line comments (`// ...`),
+  - block comments (`/* ... */`, including multi-line spans).
+- Alias-chain collapse remains restricted to std/core/alloc/primitive/pointer terminal targets.
+
+### Implementation
+
+- In `crates/fragile-clang/src/ast_codegen.rs`:
+  - `normalize_transitive_std_type_alias_rhs_paths(...)` scope scanning now masks non-code segments
+    before brace accounting.
+  - Added brace-scan state tracking for:
+    - block comments,
+    - quoted strings with escapes,
+    - raw strings with hash delimiters.
+
+### Tests
+
+- Added:
+  - `test_normalize_transitive_std_type_alias_rhs_paths_ignores_braces_in_strings_and_comments`
+- Existing transitive collapse tests still pass:
+  - std/primitive chain collapse,
+  - module scope + sibling leakage guard.
+
+### Validation
+
+- Targeted tests:
+  - `cargo test -p fragile-clang normalize_transitive_std_type_alias_rhs_paths -- --nocapture`
+  - `cargo test -p fragile-clang normalize_rusty_type_alias_rhs_paths -- --nocapture`
+- clean mako rebuild (`vendor/mako/build_fragilec_dropin`):
+  - `make clean`
+  - `FRAGILEC_KEEP_RS=1 cmake --build . -j32`
+- test run:
+  - `ctest -j32 --output-on-failure`
+  - 117/117 tests passed.

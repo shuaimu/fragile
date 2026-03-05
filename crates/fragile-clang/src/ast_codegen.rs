@@ -7405,18 +7405,129 @@ impl AstCodeGen {
             Vec<Option<usize>>,
             HashMap<usize, HashMap<String, String>>,
         ) {
+            fn mask_non_code_segments_for_brace_scan(
+                line: &str,
+                in_block_comment: &mut bool,
+                in_double_string: &mut bool,
+                in_double_string_escape: &mut bool,
+                in_raw_string_hashes: &mut Option<usize>,
+            ) -> String {
+                let bytes = line.as_bytes();
+                let mut masked = vec![b' '; bytes.len()];
+                let mut i = 0usize;
+
+                while i < bytes.len() {
+                    if *in_block_comment {
+                        if i + 1 < bytes.len() && bytes[i] == b'*' && bytes[i + 1] == b'/' {
+                            *in_block_comment = false;
+                            i += 2;
+                        } else {
+                            i += 1;
+                        }
+                        continue;
+                    }
+
+                    if let Some(hashes) = *in_raw_string_hashes {
+                        if bytes[i] == b'"' {
+                            let mut j = i + 1;
+                            let mut matched = true;
+                            for _ in 0..hashes {
+                                if j < bytes.len() && bytes[j] == b'#' {
+                                    j += 1;
+                                } else {
+                                    matched = false;
+                                    break;
+                                }
+                            }
+                            if matched {
+                                *in_raw_string_hashes = None;
+                                i = j;
+                                continue;
+                            }
+                        }
+                        i += 1;
+                        continue;
+                    }
+
+                    if *in_double_string {
+                        if *in_double_string_escape {
+                            *in_double_string_escape = false;
+                            i += 1;
+                            continue;
+                        }
+                        if bytes[i] == b'\\' {
+                            *in_double_string_escape = true;
+                            i += 1;
+                            continue;
+                        }
+                        if bytes[i] == b'"' {
+                            *in_double_string = false;
+                            i += 1;
+                            continue;
+                        }
+                        i += 1;
+                        continue;
+                    }
+
+                    if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'/' {
+                        break;
+                    }
+                    if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+                        *in_block_comment = true;
+                        i += 2;
+                        continue;
+                    }
+
+                    if bytes[i] == b'r' {
+                        let mut j = i + 1;
+                        while j < bytes.len() && bytes[j] == b'#' {
+                            j += 1;
+                        }
+                        if j < bytes.len() && bytes[j] == b'"' {
+                            *in_raw_string_hashes = Some(j - (i + 1));
+                            i = j + 1;
+                            continue;
+                        }
+                    }
+
+                    if bytes[i] == b'"' {
+                        *in_double_string = true;
+                        *in_double_string_escape = false;
+                        i += 1;
+                        continue;
+                    }
+
+                    masked[i] = bytes[i];
+                    i += 1;
+                }
+
+                String::from_utf8(masked).unwrap_or_else(|_| line.to_string())
+            }
+
             let mut line_scopes: Vec<usize> = Vec::with_capacity(code.lines().count());
             let mut parent_scope: Vec<Option<usize>> = vec![None];
             let mut scope_stack: Vec<usize> = vec![0];
             let mut next_scope_id = 1usize;
             let mut aliases_by_scope: HashMap<usize, HashMap<String, String>> = HashMap::new();
+            let mut in_block_comment = false;
+            let mut in_double_string = false;
+            let mut in_double_string_escape = false;
+            let mut in_raw_string_hashes: Option<usize> = None;
 
             for line in code.lines() {
                 let trimmed = line.trim_start();
+                let masked_line = mask_non_code_segments_for_brace_scan(
+                    line,
+                    &mut in_block_comment,
+                    &mut in_double_string,
+                    &mut in_double_string_escape,
+                    &mut in_raw_string_hashes,
+                );
+                let masked_trimmed = masked_line.trim_start();
 
                 // Closing braces at line start apply before items on the same line.
                 let mut leading_closes = 0usize;
-                for ch in trimmed.chars() {
+                for ch in masked_trimmed.chars() {
                     if ch == '}' {
                         leading_closes += 1;
                     } else {
@@ -7442,7 +7553,7 @@ impl AstCodeGen {
                 }
 
                 let mut consumed = 0usize;
-                for (idx, ch) in trimmed.char_indices() {
+                for (idx, ch) in masked_trimmed.char_indices() {
                     if ch == '}' {
                         consumed = idx + ch.len_utf8();
                     } else {
@@ -7450,7 +7561,7 @@ impl AstCodeGen {
                     }
                 }
 
-                for ch in trimmed[consumed..].chars() {
+                for ch in masked_trimmed[consumed..].chars() {
                     match ch {
                         '{' => {
                             let parent = *scope_stack.last().unwrap_or(&0);
@@ -81065,6 +81176,35 @@ pub mod right {
                 && output.contains("pub mod right {\n    pub struct LocalOpaque;")
                 && output.contains("    pub type Alias = Target;"),
             "transitive alias normalization should resolve module-local chains while avoiding sibling-module leakage, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_transitive_std_type_alias_rhs_paths_ignores_braces_in_strings_and_comments()
+    {
+        let input = r##"
+pub mod inner {
+    pub type Target = std::sync::Barrier;
+    pub fn marker() {
+        let _text = "} {";
+        let _raw = r#" } { "#;
+        // }{
+        /* }{ */
+    }
+    pub type Alias = Target;
+}
+pub type TopTarget = std::sync::Barrier;
+pub fn top_marker() {
+    let _text = "{";
+}
+pub type TopAlias = TopTarget;
+"##;
+        let output = AstCodeGen::normalize_transitive_std_type_alias_rhs_paths(input);
+        assert!(
+            output.contains("    pub type Alias = std::sync::Barrier;")
+                && output.contains("pub type TopAlias = std::sync::Barrier;"),
+            "transitive alias normalization should ignore braces inside string/comment text while tracking lexical scopes, got:\n{}",
             output
         );
     }
