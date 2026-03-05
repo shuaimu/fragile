@@ -16170,9 +16170,9 @@ impl AstCodeGen {
         // Some generated structs can miss `Default`/`Clone` impls under
         // degraded lowering even though downstream code requires them.
         output = Self::normalize_add_missing_struct_default_clone_impls(&output);
-        // c_void-backed lowered fields can make derive(Default/Clone) invalid
-        // even after missing-impl synthesis; rewrite those derives to manual impls.
-        if output.contains("std::ffi::c_void") && output.contains("#[derive(") {
+        // Wrapper/c_void-backed lowered fields can make derive(Default/Clone/Copy)
+        // invalid even after missing-impl synthesis; rewrite those derives.
+        if output.contains("#[derive(") {
             output = Self::normalize_struct_default_clone_derives(&output);
         }
         // Degraded signatures can emit module path roots (`std`/`core`/`alloc`)
@@ -34742,7 +34742,8 @@ impl AstCodeGen {
     }
 
     fn is_non_default_std_wrapper_type(type_name: &str) -> bool {
-        let normalized = type_name
+        let normalized_std = normalize_rusty_type_alias_to_std(type_name);
+        let normalized = normalized_std
             .trim()
             .trim_start_matches("crate::")
             .trim_start_matches("::");
@@ -34758,7 +34759,8 @@ impl AstCodeGen {
     }
 
     fn is_non_clone_std_wrapper_type(type_name: &str) -> bool {
-        let normalized = type_name
+        let normalized_std = normalize_rusty_type_alias_to_std(type_name);
+        let normalized = normalized_std
             .trim()
             .trim_start_matches("crate::")
             .trim_start_matches("::");
@@ -34770,7 +34772,8 @@ impl AstCodeGen {
     }
 
     fn is_non_copy_std_wrapper_type(type_name: &str) -> bool {
-        let normalized = type_name
+        let normalized_std = normalize_rusty_type_alias_to_std(type_name);
+        let normalized = normalized_std
             .trim()
             .trim_start_matches("crate::")
             .trim_start_matches("::");
@@ -70405,6 +70408,58 @@ pub struct MapHolder {
             "derive normalization should not synthesize fallback impls when only Copy is invalid, got:\n{}",
             normalized
         );
+    }
+
+    #[test]
+    fn test_normalize_struct_default_clone_derives_rewrites_rusty_wrapper_aliases() {
+        let input = r#"
+pub type RustySenderAlias = rusty::sync::mpsc::Sender<i32>;
+pub type RustyReceiverAlias = rusty::sync::mpsc::Receiver<i32>;
+
+#[derive(Default, Clone, Copy)]
+pub struct RustySenderHolder {
+    pub tx: RustySenderAlias,
+}
+
+#[derive(Default, Clone, Copy)]
+pub struct RustyReceiverHolder {
+    pub rx: RustyReceiverAlias,
+}
+"#;
+        let normalized = AstCodeGen::normalize_struct_default_clone_derives(input);
+        assert!(
+            normalized.contains("#[derive(Clone)]\npub struct RustySenderHolder {")
+                && !normalized.contains("#[derive(Default, Clone, Copy)]\npub struct RustySenderHolder {"),
+            "derive normalization should treat rusty sender aliases like std sender aliases, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("impl Default for RustySenderHolder {")
+                && !normalized.contains("impl Clone for RustySenderHolder {"),
+            "derive normalization should only synthesize Default for rusty sender aliases, got:\n{}",
+            normalized
+        );
+        assert!(
+            !normalized.contains("#[derive(Default, Clone, Copy)]\npub struct RustyReceiverHolder {")
+                && !normalized.contains("#[derive(Clone)]\npub struct RustyReceiverHolder {")
+                && normalized.contains("impl Default for RustyReceiverHolder {")
+                && !normalized.contains("impl Clone for RustyReceiverHolder {"),
+            "derive normalization should drop Default/Clone/Copy and avoid unsafe Clone fallback for rusty receiver aliases, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_wrapper_trait_detectors_normalize_rusty_alias_spellings() {
+        assert!(
+            AstCodeGen::is_non_default_std_wrapper_type("rusty::sync::mpsc::Sender<i32>")
+        );
+        assert!(AstCodeGen::is_non_clone_std_wrapper_type(
+            "rusty::thread::JoinHandle<()>"
+        ));
+        assert!(AstCodeGen::is_non_copy_std_wrapper_type(
+            "rusty::HashMap<i32, i32>"
+        ));
     }
 
     #[test]
