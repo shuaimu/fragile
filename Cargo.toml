@@ -6,6 +6,7 @@ members = [
     "crates/fragile-common",
     "crates/fragile-clang",
     "crates/fragile-runtime",
+    "crates/fragile-driver",
     "crates/fragile-build",
     "crates/fragile-ast-exporter",
     "crates/fragile-stl",
@@ -22,6 +23,7 @@ rust-version = "1.75"
 fragile-common = { path = "crates/fragile-common" }
 fragile-clang = { path = "crates/fragile-clang" }
 fragile-runtime = { path = "crates/fragile-runtime" }
+fragile-driver = { path = "crates/fragile-driver" }
 fragile-build = { path = "crates/fragile-build" }
 fragile-ast-exporter = { path = "crates/fragile-ast-exporter" }
 
