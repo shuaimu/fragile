@@ -149,7 +149,7 @@ impl LibToolingParser {
             r#"[
   {{
     "directory": "{}",
-    "command": "clang++ -std=c++17 -c {} -o /dev/null",
+    "command": "clang++ -c {} -o /dev/null",
     "file": "{}"
   }}
 ]"#,
