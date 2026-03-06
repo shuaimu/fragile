@@ -1,15 +1,20 @@
 [submodule "vendor/rust"]
 	path = vendor/rust
 	url = https://github.com/rust-lang/rust.git
+	update = none
 [submodule "vendor/llvm-project"]
 	path = vendor/llvm-project
 	url = https://github.com/llvm/llvm-project.git
+	update = none
 [submodule "vendor/doctest"]
 	path = vendor/doctest
 	url = https://github.com/doctest/doctest.git
+	update = none
 [submodule "vendor/c2rust"]
 	path = vendor/c2rust
 	url = https://github.com/immunant/c2rust.git
+	update = none
 [submodule "vendor/mako"]
 	path = vendor/mako
 	url = https://github.com/makodb/mako.git
+	update = none
