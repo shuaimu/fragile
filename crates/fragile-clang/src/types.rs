@@ -3806,7 +3806,7 @@ mod tests {
     }
 
     #[test]
-    fn test_template_char_literal_type_name_sanitizes_apostrophes() {
+    fn test_template_char_literal_type_name_sanitizes_apostrophes_shape() {
         let lowered = CppType::Named("inline_str_fixed<9, '_'>".to_string()).to_rust_type_str();
         assert!(
             !lowered.contains('\''),

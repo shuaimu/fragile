@@ -31,6 +31,56 @@ pub struct LibToolingParser {
 }
 
 impl LibToolingParser {
+    fn json_escape(value: &str) -> String {
+        let mut escaped = String::with_capacity(value.len());
+        for ch in value.chars() {
+            match ch {
+                '\\' => escaped.push_str("\\\\"),
+                '"' => escaped.push_str("\\\""),
+                '\n' => escaped.push_str("\\n"),
+                '\r' => escaped.push_str("\\r"),
+                '\t' => escaped.push_str("\\t"),
+                '\u{08}' => escaped.push_str("\\b"),
+                '\u{0C}' => escaped.push_str("\\f"),
+                c if c < '\u{20}' => {
+                    escaped.push_str(&format!("\\u{:04x}", c as u32));
+                }
+                c => escaped.push(c),
+            }
+        }
+        escaped
+    }
+
+    fn compile_commands_with_arguments(
+        directory: &Path,
+        file_path: &Path,
+        arguments: &[String],
+    ) -> String {
+        let mut args_json = String::new();
+        for (idx, arg) in arguments.iter().enumerate() {
+            if idx > 0 {
+                args_json.push_str(", ");
+            }
+            args_json.push('"');
+            args_json.push_str(&Self::json_escape(arg));
+            args_json.push('"');
+        }
+
+        let directory = Self::json_escape(&directory.display().to_string());
+        let file = Self::json_escape(&file_path.display().to_string());
+
+        format!(
+            r#"[
+  {{
+    "directory": "{}",
+    "arguments": [{}],
+    "file": "{}"
+  }}
+]"#,
+            directory, args_json, file
+        )
+    }
+
     /// Create a new LibTooling parser.
     pub fn new() -> Self {
         Self {
@@ -143,24 +193,7 @@ impl LibToolingParser {
         std::fs::create_dir_all(&compile_db_dir)
             .map_err(|e| miette!("Failed to create temp compile_commands dir: {}", e))?;
 
-        // Create a minimal fresh compile_commands.json for this invocation.
-        let compile_commands_path = compile_db_dir.join("compile_commands.json");
-        let compile_commands = format!(
-            r#"[
-  {{
-    "directory": "{}",
-    "command": "clang++ -c {} -o /dev/null",
-    "file": "{}"
-  }}
-]"#,
-            compile_working_dir.display(),
-            path.display(),
-            path.display()
-        );
-        std::fs::write(&compile_commands_path, compile_commands)
-            .map_err(|e| miette!("Failed to create compile_commands.json: {}", e))?;
-
-        // Build extra args: combine user-specified args with vendored libc++ paths
+        // Build compiler arguments: combine user-specified args with vendored libc++ paths.
         let mut all_extra_args: Vec<String> = self.extra_args.clone();
 
         // Auto-detect vendored libc++ paths (same as ClangParser)
@@ -185,16 +218,23 @@ impl LibToolingParser {
             all_extra_args.push("-Wno-non-pod-varargs".to_string());
         }
 
-        let extra_args: Vec<&str> = all_extra_args.iter().map(|s| s.as_str()).collect();
+        let mut compile_arguments = Vec::with_capacity(all_extra_args.len() + 5);
+        compile_arguments.push("clang++".to_string());
+        compile_arguments.extend(all_extra_args);
+        compile_arguments.push("-c".to_string());
+        compile_arguments.push(path.display().to_string());
+        compile_arguments.push("-o".to_string());
+        compile_arguments.push("/dev/null".to_string());
 
-        let parse_result = export_ast_with_options(
-            path,
-            &compile_db_dir,
-            &extra_args,
-            false,
-            self.skip_system_headers,
-        )
-        .map_err(|e| miette!("LibTooling parse failed: {}", e));
+        let compile_commands_path = compile_db_dir.join("compile_commands.json");
+        let compile_commands =
+            Self::compile_commands_with_arguments(&compile_working_dir, path, &compile_arguments);
+        std::fs::write(&compile_commands_path, compile_commands)
+            .map_err(|e| miette!("Failed to create compile_commands.json: {}", e))?;
+
+        let parse_result =
+            export_ast_with_options(path, &compile_db_dir, &[], false, self.skip_system_headers)
+                .map_err(|e| miette!("LibTooling parse failed: {}", e));
 
         let _ = std::fs::remove_file(&compile_commands_path);
         let _ = std::fs::remove_dir_all(&compile_db_dir);
@@ -2446,6 +2486,31 @@ mod tests {
         let parser = LibToolingParser::new();
         assert!(parser.compile_commands_dir.is_none());
         assert!(parser.extra_args.is_empty());
+    }
+
+    #[test]
+    fn test_json_escape_handles_quotes_backslashes_and_controls() {
+        let escaped = LibToolingParser::json_escape("a\"b\\c\n\t");
+        assert_eq!(escaped, "a\\\"b\\\\c\\n\\t");
+    }
+
+    #[test]
+    fn test_compile_commands_with_arguments_uses_arguments_array() {
+        let rendered = LibToolingParser::compile_commands_with_arguments(
+            Path::new("/tmp/dir with spaces"),
+            Path::new("/tmp/source\"name.cpp"),
+            &[
+                "clang++".to_string(),
+                "-std=gnu++23".to_string(),
+                "-DNAME=\"value\"".to_string(),
+            ],
+        );
+
+        assert!(rendered.contains("\"arguments\": ["));
+        assert!(!rendered.contains("\"command\""));
+        assert!(rendered.contains("-std=gnu++23"));
+        assert!(rendered.contains("\\\"value\\\""));
+        assert!(rendered.contains("source\\\"name.cpp"));
     }
 
     #[test]
