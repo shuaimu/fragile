@@ -1,9 +1,9 @@
 [package]
 name = "fragile-driver"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
 description = "Reusable strict compile driver APIs for Fragile"
 
 [dependencies]
-fragile-clang.workspace = true
+fragile-clang = { path = "../fragile-clang" }

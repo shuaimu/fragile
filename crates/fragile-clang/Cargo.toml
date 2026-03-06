@@ -1,23 +1,23 @@
 [package]
 name = "fragile-clang"
 description = "Clang AST parsing and MIR conversion for Fragile compiler"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 # Clang bindings - using clang-sys for low-level access
-clang-sys.workspace = true
+clang-sys = { version = "1.8", features = ["clang_18_0"] }
 
 # AST exporter using LibTooling for template instantiation support
 fragile-ast-exporter = { path = "../fragile-ast-exporter" }
 
 # Error handling
-miette.workspace = true
-thiserror.workspace = true
+miette = { version = "7", features = ["fancy"] }
+thiserror = "2"
 
 # Utilities
-smol_str.workspace = true
-rustc-hash.workspace = true
+smol_str = "0.3"
+rustc-hash = "2"
 
 [dev-dependencies]
