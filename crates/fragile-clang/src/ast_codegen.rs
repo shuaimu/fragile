@@ -7096,6 +7096,9 @@ impl AstCodeGen {
             return code.to_string();
         }
 
+        let mut alias_list: Vec<String> = c_void_aliases.into_iter().collect();
+        alias_list.sort();
+
         let mut changed = false;
         let mut out = String::with_capacity(code.len());
         for line in &lines {
@@ -7105,7 +7108,14 @@ impl AstCodeGen {
                 out.push('\n');
                 continue;
             }
-            let rewritten = Self::rewrite_identifier_tokens_to_c_void(line, &c_void_aliases);
+            let mut rewritten = line.to_string();
+            for alias in &alias_list {
+                rewritten = Self::rewrite_shadowed_ident_in_item_type_positions(
+                    &rewritten,
+                    alias,
+                    "std::ffi::c_void",
+                );
+            }
             if rewritten != *line {
                 changed = true;
             }
