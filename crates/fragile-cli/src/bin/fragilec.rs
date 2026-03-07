@@ -20,6 +20,9 @@ const FRAGILEC_KEEP_RS_ENV: &str = "FRAGILEC_KEEP_RS";
 const FRAGILEC_LINKER_ENV: &str = "FRAGILEC_LINKER";
 const FRAGILEC_PARSER_BACKEND_ENV: &str = "FRAGILEC_PARSER_BACKEND";
 const FRAGILEC_TRANSPILE_STAGE_TIMING_PATH_ENV: &str = "FRAGILEC_TRANSPILE_STAGE_TIMING_PATH";
+const FRAGILEC_RUSTC_BIN_ENV: &str = "FRAGILEC_RUSTC_BIN";
+const FRAGILEC_RUSTC_WRAPPER_ENV: &str = "FRAGILEC_RUSTC_WRAPPER";
+const FRAGILEC_RUNTIME_LINK_CACHE_DIR_ENV: &str = "FRAGILEC_RUNTIME_LINK_CACHE_DIR";
 
 fn validate_strict_mode_value(mode: &str) -> Result<(), String> {
     match mode.to_ascii_lowercase().as_str() {
@@ -40,6 +43,54 @@ fn validate_strict_mode_value(mode: &str) -> Result<(), String> {
 fn validate_strict_mode_env() -> Result<(), String> {
     let mode = std::env::var(FRAGILEC_MODE_ENV).unwrap_or_else(|_| "strict".to_string());
     validate_strict_mode_value(mode.as_str())
+}
+
+fn normalized_nonempty(raw: Option<&str>) -> Option<String> {
+    raw.map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn rustc_bin_from_value(raw: Option<&str>) -> String {
+    normalized_nonempty(raw).unwrap_or_else(|| "rustc".to_string())
+}
+
+fn rustc_wrapper_from_value(raw: Option<&str>) -> Option<String> {
+    normalized_nonempty(raw)
+}
+
+fn rustc_bin_from_env() -> String {
+    rustc_bin_from_value(std::env::var(FRAGILEC_RUSTC_BIN_ENV).ok().as_deref())
+}
+
+fn rustc_wrapper_from_env() -> Option<String> {
+    rustc_wrapper_from_value(std::env::var(FRAGILEC_RUSTC_WRAPPER_ENV).ok().as_deref())
+        .or_else(|| rustc_wrapper_from_value(std::env::var("RUSTC_WRAPPER").ok().as_deref()))
+}
+
+fn rustc_command() -> Command {
+    let rustc_bin = rustc_bin_from_env();
+    if let Some(wrapper) = rustc_wrapper_from_env() {
+        let mut cmd = Command::new(wrapper);
+        cmd.arg(rustc_bin);
+        cmd
+    } else {
+        Command::new(rustc_bin)
+    }
+}
+
+fn rustc_invocation_fingerprint() -> String {
+    let rustc_bin = rustc_bin_from_env();
+    let wrapper = rustc_wrapper_from_env().unwrap_or_else(|| "<none>".to_string());
+    format!(
+        "fragilec={} rustc_bin={} rustc_wrapper={} os={} arch={} toolchain={}",
+        env!("CARGO_PKG_VERSION"),
+        rustc_bin,
+        wrapper,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        std::env::var("RUSTUP_TOOLCHAIN").unwrap_or_else(|_| "<default>".to_string()),
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -821,6 +872,116 @@ fn crate_name_for_unit(source: &Path, out_obj: &Path) -> String {
     format!("{}_{}", base, format!("{suffix:08x}"))
 }
 
+fn safe_source_filename_for_temp(source: &Path) -> String {
+    source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|raw| {
+            raw.chars()
+                .map(|ch| {
+                    if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' || ch == '.' {
+                        ch
+                    } else {
+                        '_'
+                    }
+                })
+                .collect::<String>()
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "source".to_string())
+}
+
+fn deterministic_transpiled_rs_path(source: &Path, out_obj: &Path) -> PathBuf {
+    let mut hasher = DefaultHasher::new();
+    source.display().to_string().hash(&mut hasher);
+    out_obj.display().to_string().hash(&mut hasher);
+    let key = hasher.finish();
+    let filename = safe_source_filename_for_temp(source);
+    std::env::temp_dir()
+        .join("fragilec_transpiled")
+        .join(format!(
+            "{}_{:016x}_{}.rs",
+            filename,
+            key,
+            crate_name_for_source(source)
+        ))
+}
+
+fn runtime_link_cache_root() -> PathBuf {
+    if let Some(path) = normalized_nonempty(
+        std::env::var(FRAGILEC_RUNTIME_LINK_CACHE_DIR_ENV)
+            .ok()
+            .as_deref(),
+    ) {
+        return PathBuf::from(path);
+    }
+    std::env::temp_dir().join("fragilec_runtime_link_cache")
+}
+
+fn runtime_link_cache_paths() -> (PathBuf, PathBuf) {
+    let fingerprint = rustc_invocation_fingerprint();
+    let mut hasher = DefaultHasher::new();
+    fingerprint.hash(&mut hasher);
+    let key = format!("{:016x}", hasher.finish());
+    let cache_dir = runtime_link_cache_root().join(key);
+    (
+        cache_dir.join("libfragile_runtime_support.a"),
+        cache_dir.join("native_static_libs.txt"),
+    )
+}
+
+fn parse_native_static_libs_from_stream(stream: &[u8], out: &mut Vec<OsString>) {
+    let text = String::from_utf8_lossy(stream);
+    for line in text.lines() {
+        if let Some(rest) = line.split("native-static-libs:").nth(1) {
+            for token in rest.split_whitespace() {
+                out.push(OsString::from(token));
+            }
+        }
+    }
+}
+
+fn parse_native_static_libs_from_output(output: &std::process::Output) -> Vec<OsString> {
+    let mut native_libs = Vec::new();
+    parse_native_static_libs_from_stream(&output.stdout, &mut native_libs);
+    parse_native_static_libs_from_stream(&output.stderr, &mut native_libs);
+    native_libs
+}
+
+fn read_native_static_libs_file(path: &Path) -> Result<Vec<OsString>, String> {
+    let text = fs::read_to_string(path).map_err(|e| {
+        format!(
+            "failed to read native static libs cache {}: {}",
+            path.display(),
+            e
+        )
+    })?;
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let token = line.trim();
+        if token.is_empty() {
+            continue;
+        }
+        out.push(OsString::from(token));
+    }
+    Ok(out)
+}
+
+fn write_native_static_libs_file(path: &Path, libs: &[OsString]) -> Result<(), String> {
+    let mut serialized = String::new();
+    for lib in libs {
+        serialized.push_str(lib.to_string_lossy().as_ref());
+        serialized.push('\n');
+    }
+    fs::write(path, serialized).map_err(|e| {
+        format!(
+            "failed to write native static libs cache {}: {}",
+            path.display(),
+            e
+        )
+    })
+}
+
 #[allow(dead_code)]
 fn strict_compile_source_to_object(
     source_arg: &Path,
@@ -924,17 +1085,17 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
     let transpiled_rs = if keep_rs {
         out_obj.with_extension("fragile.rs")
     } else {
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|e| format!("failed to read wall clock: {}", e))?
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "fragilec_{}_{}_{}.rs",
-            std::process::id(),
-            stamp,
-            crate_name_for_source(&source)
-        ))
+        deterministic_transpiled_rs_path(&source, out_obj)
     };
+    if let Some(parent) = transpiled_rs.parent() {
+        fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "failed to create transpiled source directory {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
+    }
     fs::write(&transpiled_rs, transpiled).map_err(|e| {
         format!(
             "failed to write transpiled source {}: {}",
@@ -943,7 +1104,8 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
         )
     })?;
 
-    let rustc = Command::new("rustc")
+    let mut rustc_cmd = rustc_command();
+    rustc_cmd
         .arg("--edition")
         .arg("2021")
         .arg("-A")
@@ -955,7 +1117,8 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
         .arg(crate_name_for_unit(&source, out_obj))
         .arg(&transpiled_rs)
         .arg("-o")
-        .arg(out_obj)
+        .arg(out_obj);
+    let rustc = rustc_cmd
         .output()
         .map_err(|e| format!("failed to run rustc for {}: {}", source.display(), e))?;
 
@@ -1082,6 +1245,12 @@ fn link_driver_command() -> (String, Vec<OsString>) {
 }
 
 fn build_rust_runtime_link_support(temp_root: &Path) -> Result<(PathBuf, Vec<OsString>), String> {
+    let (cached_archive, cached_libs_file) = runtime_link_cache_paths();
+    if cached_archive.is_file() && cached_libs_file.is_file() {
+        let cached_libs = read_native_static_libs_file(&cached_libs_file)?;
+        return Ok((cached_archive, cached_libs));
+    }
+
     let runtime_rs = temp_root.join("fragile_runtime_support.rs");
     let runtime_archive = temp_root.join("libfragile_runtime_support.a");
     fs::write(
@@ -1096,7 +1265,8 @@ fn build_rust_runtime_link_support(temp_root: &Path) -> Result<(PathBuf, Vec<OsS
         )
     })?;
 
-    let output = Command::new("rustc")
+    let mut rustc_cmd = rustc_command();
+    rustc_cmd
         .arg("--edition")
         .arg("2021")
         .arg("-A")
@@ -1107,7 +1277,8 @@ fn build_rust_runtime_link_support(temp_root: &Path) -> Result<(PathBuf, Vec<OsS
         .arg("native-static-libs")
         .arg(&runtime_rs)
         .arg("-o")
-        .arg(&runtime_archive)
+        .arg(&runtime_archive);
+    let output = rustc_cmd
         .output()
         .map_err(|e| format!("failed to build rust runtime support archive: {}", e))?;
     if !output.status.success() {
@@ -1118,16 +1289,22 @@ fn build_rust_runtime_link_support(temp_root: &Path) -> Result<(PathBuf, Vec<OsS
         ));
     }
 
-    let mut native_libs: Vec<OsString> = Vec::new();
-    for stream in [&output.stdout, &output.stderr] {
-        let text = String::from_utf8_lossy(stream);
-        for line in text.lines() {
-            if let Some(rest) = line.split("native-static-libs:").nth(1) {
-                for token in rest.split_whitespace() {
-                    native_libs.push(OsString::from(token));
-                }
+    let native_libs = parse_native_static_libs_from_output(&output);
+
+    if let Some(cache_dir) = cached_archive.parent() {
+        if fs::create_dir_all(cache_dir).is_ok() {
+            if !cached_archive.exists() {
+                let _ = fs::copy(&runtime_archive, &cached_archive);
+            }
+            if !cached_libs_file.exists() {
+                let _ = write_native_static_libs_file(&cached_libs_file, &native_libs);
             }
         }
+    }
+
+    if cached_archive.is_file() && cached_libs_file.is_file() {
+        let cached_libs = read_native_static_libs_file(&cached_libs_file)?;
+        return Ok((cached_archive, cached_libs));
     }
 
     Ok((runtime_archive, native_libs))
@@ -1439,6 +1616,10 @@ Environment:
   FRAGILEC_ENFORCE_BUILD_ID=1        Enforce build-id on .o/.a inputs during link
   FRAGILEC_REQUIRE_META=1            Require metadata sidecars for link inputs
   FRAGILEC_KEEP_RS=1                 Keep transpiled Rust sidecar next to output object
+  FRAGILEC_RUSTC_BIN=<path>          rustc binary for strict compile/link helper steps
+  FRAGILEC_RUSTC_WRAPPER=<path>      rustc wrapper (for example sccache); falls back to RUSTC_WRAPPER
+  FRAGILEC_RUNTIME_LINK_CACHE_DIR=<path>
+                                     Cache dir for runtime link-support archive/native-static-libs
   FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=<path>
                                      Write transpile stage timing trace (parse/export/enrichment/codegen)
   FRAGILEC_LINKER=<path>             Link-driver executable for strict link (default: clang++ -fuse-ld=lld)
@@ -1534,6 +1715,64 @@ mod tests {
         assert!(
             driver_args.is_empty(),
             "custom linker override should not get implicit default args"
+        );
+    }
+
+    #[test]
+    fn rustc_bin_defaults_and_override() {
+        assert_eq!(rustc_bin_from_value(None), "rustc");
+        assert_eq!(rustc_bin_from_value(Some("  ")), "rustc");
+        assert_eq!(
+            rustc_bin_from_value(Some("/opt/toolchains/rustc-custom")),
+            "/opt/toolchains/rustc-custom"
+        );
+    }
+
+    #[test]
+    fn rustc_wrapper_parsing_trims_and_handles_empty() {
+        assert_eq!(rustc_wrapper_from_value(None), None);
+        assert_eq!(rustc_wrapper_from_value(Some("  ")), None);
+        assert_eq!(
+            rustc_wrapper_from_value(Some(" /usr/bin/sccache ")),
+            Some("/usr/bin/sccache".to_string())
+        );
+    }
+
+    #[test]
+    fn deterministic_transpiled_path_is_stable_for_same_inputs() {
+        let source = Path::new("/tmp/demo.cc");
+        let out_obj = Path::new("/tmp/build/demo.o");
+        let first = deterministic_transpiled_rs_path(source, out_obj);
+        let second = deterministic_transpiled_rs_path(source, out_obj);
+        assert_eq!(first, second);
+        let path = first.to_string_lossy();
+        assert!(path.ends_with(".rs"));
+        assert!(
+            path.contains("demo.cc_"),
+            "deterministic path should include source filename for readability: {}",
+            path
+        );
+    }
+
+    #[test]
+    fn parse_native_static_libs_extracts_from_both_streams() {
+        let mut libs = Vec::new();
+        parse_native_static_libs_from_stream(
+            b"note: native-static-libs: -lgcc_s -lutil",
+            &mut libs,
+        );
+        parse_native_static_libs_from_stream(
+            b"warning: native-static-libs: -lrt -lpthread",
+            &mut libs,
+        );
+        assert_eq!(
+            libs,
+            vec![
+                OsString::from("-lgcc_s"),
+                OsString::from("-lutil"),
+                OsString::from("-lrt"),
+                OsString::from("-lpthread"),
+            ]
         );
     }
 
