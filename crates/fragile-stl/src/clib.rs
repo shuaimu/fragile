@@ -6,14 +6,33 @@
 // Variadic C stdio shims
 unsafe extern "C" {
     #[link_name = "vsnprintf"]
-    fn __fragile_extern_vsnprintf(_s: *mut i8, _n: u64, _fmt: *const i8, _args: *mut std::ffi::VaList) -> i32;
+    fn __fragile_extern_vsnprintf(
+        _s: *mut i8,
+        _n: u64,
+        _fmt: *const i8,
+        _args: *mut FragileVaList,
+    ) -> i32;
 }
-#[inline] pub fn vsnprintf(_s: *mut i8, _n: u64, _fmt: *const i8, mut _args: [std::ffi::VaList; 1]) -> i32 { unsafe { __fragile_extern_vsnprintf(_s, _n, _fmt, _args.as_mut_ptr()) } }
+#[inline]
+pub fn vsnprintf(_s: *mut i8, _n: u64, _fmt: *const i8, mut _args: [FragileVaList; 1]) -> i32 {
+    unsafe { __fragile_extern_vsnprintf(_s, _n, _fmt, _args.as_mut_ptr()) }
+}
 unsafe extern "C" {
     #[link_name = "vasprintf"]
-    fn __fragile_extern_vasprintf(_strp: *mut *mut i8, _fmt: *const i8, _args: *mut std::ffi::VaList) -> i32;
+    fn __fragile_extern_vasprintf(
+        _strp: *mut *mut i8,
+        _fmt: *const i8,
+        _args: *mut FragileVaList,
+    ) -> i32;
 }
-#[inline] pub fn vasprintf(_strp: *mut *mut i8, _fmt: *const i8, mut _args: [std::ffi::VaList; 1]) -> i32 { unsafe { __fragile_extern_vasprintf(_strp, _fmt, _args.as_mut_ptr()) } }
+#[inline]
+pub fn vasprintf(
+    _strp: *mut *mut i8,
+    _fmt: *const i8,
+    mut _args: [FragileVaList; 1],
+) -> i32 {
+    unsafe { __fragile_extern_vasprintf(_strp, _fmt, _args.as_mut_ptr()) }
+}
 
 // sizeof pseudo-function
 #[inline] pub fn sizeof___<T>() -> usize { std::mem::size_of::<T>() }
@@ -116,10 +135,7 @@ pub fn strdup(_s: *const i8) -> *mut i8 {
 }
 
 #[inline]
-pub unsafe extern "C" fn Py_BuildValue(
-    _format: *const i8,
-    mut _args: ...
-) -> *mut std::ffi::c_void {
+pub fn __fragile_py_buildvalue_stub(_format: *const i8) -> *mut std::ffi::c_void {
     std::ptr::null_mut()
 }
 

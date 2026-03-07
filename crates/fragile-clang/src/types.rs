@@ -1773,7 +1773,7 @@ impl CppType {
                     "unsigned __int128" | "__uint128_t" => "u128".to_string(),
                     // C variadic function support
                     "va_list" | "__builtin_va_list" | "__va_list_tag" | "struct __va_list_tag" => {
-                        "std::ffi::VaList".to_string()
+                        "FragileVaList".to_string()
                     }
                     // C standard I/O
                     "FILE"

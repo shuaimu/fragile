@@ -7689,12 +7689,9 @@ impl AstCodeGen {
             }
 
             let scope_id = *line_scopes.get(line_idx).unwrap_or(&0);
-            let Some(resolved_rhs) = resolve_transitive_alias_target(
-                &rhs,
-                scope_id,
-                &parent_scope,
-                &aliases_by_scope,
-            ) else {
+            let Some(resolved_rhs) =
+                resolve_transitive_alias_target(&rhs, scope_id, &parent_scope, &aliases_by_scope)
+            else {
                 out.push_str(line);
                 out.push('\n');
                 continue;
@@ -18051,8 +18048,8 @@ impl AstCodeGen {
         // in-TU function surface, rewrite it to a no-op statement so compile can
         // continue while preserving surrounding control flow.
         output = Self::normalize_unresolved_super_call_statements(&output);
-        // Python C-API variadic builders can lower as direct `Py_BuildValue(...)`
-        // calls; wrap these in `unsafe` for Rust's variadic call rules.
+        // Python C-API variadic builders lower as `Py_BuildValue(...)`.
+        // Rewrite to a stable stub helper that drops variadic payloads.
         output = Self::normalize_python_variadic_buildvalue_calls(&output);
         // Recover compile-safe defaults for empty non-unit helper bodies.
         output = Self::synthesize_empty_non_unit_function_bodies(&output);
@@ -18167,7 +18164,37 @@ impl AstCodeGen {
         // Late alias/c_void normalizers can still synthesize unresolved lowered
         // container spellings; run one last fixed-point closure before return.
         output = Self::close_unresolved_type_reference_gaps(&output);
+        if Self::output_requires_c_variadic_feature(&output) {
+            output = Self::ensure_c_variadic_feature_attr(&output);
+        }
         output
+    }
+
+    fn output_requires_c_variadic_feature(code: &str) -> bool {
+        if code.contains("mut __va_args: ...") {
+            return true;
+        }
+        for line in code.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.contains(" fn ") && trimmed.contains("...") && trimmed.ends_with('{') {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn ensure_c_variadic_feature_attr(code: &str) -> String {
+        if code.contains("#![feature(c_variadic)]") {
+            return code.to_string();
+        }
+        if let Some(insert_at) = code.find("use std::io::Write;") {
+            let mut out = String::with_capacity(code.len() + "#![feature(c_variadic)]\n".len());
+            out.push_str(&code[..insert_at]);
+            out.push_str("#![feature(c_variadic)]\n");
+            out.push_str(&code[insert_at..]);
+            return out;
+        }
+        format!("#![feature(c_variadic)]\n{}", code)
     }
 
     fn strip_redundant_borrow_on_byte_string_ptr_casts(code: &str) -> String {
@@ -19118,6 +19145,53 @@ impl AstCodeGen {
         fn is_ident_char(ch: char) -> bool {
             ch.is_ascii_alphanumeric() || ch == '_'
         }
+        fn first_top_level_argument(args: &str) -> Option<&str> {
+            let mut paren_depth = 0usize;
+            let mut bracket_depth = 0usize;
+            let mut brace_depth = 0usize;
+            let mut in_string = false;
+            let mut in_char = false;
+            let mut escaped = false;
+
+            for (idx, ch) in args.char_indices() {
+                if in_string {
+                    if escaped {
+                        escaped = false;
+                    } else if ch == '\\' {
+                        escaped = true;
+                    } else if ch == '"' {
+                        in_string = false;
+                    }
+                    continue;
+                }
+                if in_char {
+                    if escaped {
+                        escaped = false;
+                    } else if ch == '\\' {
+                        escaped = true;
+                    } else if ch == '\'' {
+                        in_char = false;
+                    }
+                    continue;
+                }
+                match ch {
+                    '"' => in_string = true,
+                    '\'' => in_char = true,
+                    '(' => paren_depth += 1,
+                    ')' => paren_depth = paren_depth.saturating_sub(1),
+                    '[' => bracket_depth += 1,
+                    ']' => bracket_depth = bracket_depth.saturating_sub(1),
+                    '{' => brace_depth += 1,
+                    '}' => brace_depth = brace_depth.saturating_sub(1),
+                    ',' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                        return Some(args[..idx].trim());
+                    }
+                    _ => {}
+                }
+            }
+            let trimmed = args.trim();
+            (!trimmed.is_empty()).then_some(trimmed)
+        }
 
         let mut out = String::with_capacity(code.len());
         for line in code.lines() {
@@ -19132,18 +19206,23 @@ impl AstCodeGen {
                         continue;
                     }
                 }
+                let prefix = rewritten[..call_start].trim_end();
+                if prefix.ends_with("fn")
+                    || prefix.ends_with("pub fn")
+                    || prefix.ends_with("unsafe fn")
+                    || prefix.ends_with("extern \"C\" fn")
+                {
+                    search_idx = call_start + "Py_BuildValue(".len();
+                    continue;
+                }
                 let open_idx = call_start + "Py_BuildValue".len();
                 let Some(close_idx) = Self::find_matching_paren_in_line(&rewritten, open_idx)
                 else {
                     break;
                 };
-                if call_start >= "unsafe { ".len() && rewritten[..call_start].ends_with("unsafe { ")
-                {
-                    search_idx = close_idx + 1;
-                    continue;
-                }
-                let call_expr = rewritten[call_start..=close_idx].to_string();
-                let replacement = format!("unsafe {{ {} }}", call_expr);
+                let args = &rewritten[(open_idx + 1)..close_idx];
+                let first_arg = first_top_level_argument(args).unwrap_or("std::ptr::null()");
+                let replacement = format!("__fragile_py_buildvalue_stub({})", first_arg.trim());
                 rewritten.replace_range(call_start..=close_idx, &replacement);
                 search_idx = call_start + replacement.len();
             }
@@ -35378,7 +35457,6 @@ impl AstCodeGen {
         self.writeln("#![allow(unused_mut)]");
         self.writeln("#![allow(non_camel_case_types)]");
         self.writeln("#![allow(non_snake_case)]");
-        self.writeln("#![feature(c_variadic)]");
         self.writeln("");
         self.writeln("use std::io::Write;");
 
@@ -36457,7 +36535,10 @@ impl AstCodeGen {
 
     fn is_known_enum_alias_target(&self, target: &str) -> bool {
         let normalized = Self::normalize_namespace_alias_target(target);
-        let leaf = normalized.rsplit("::").next().unwrap_or(normalized.as_str());
+        let leaf = normalized
+            .rsplit("::")
+            .next()
+            .unwrap_or(normalized.as_str());
 
         if self.generated_enums.contains(&normalized) || self.generated_enums.contains(leaf) {
             return true;
@@ -36496,7 +36577,9 @@ impl AstCodeGen {
                 && !target_leaf.contains('[')
                 && !target_leaf.contains(']')
                 && Self::is_valid_rust_item_identifier(target_leaf)
-                && self.emitted_type_alias_target_for_name(target_leaf).is_some();
+                && self
+                    .emitted_type_alias_target_for_name(target_leaf)
+                    .is_some();
             if !target_leaf_is_alias_name {
                 return Some((current_alias, normalized_target));
             }
@@ -36515,7 +36598,8 @@ impl AstCodeGen {
         let mut trailing_leaf_preferred: Vec<String> = Vec::new();
 
         for candidate in candidate_names {
-            let resolved = if let Some(path) = self.resolve_unique_public_type_item_path(&candidate) {
+            let resolved = if let Some(path) = self.resolve_unique_public_type_item_path(&candidate)
+            {
                 path
             } else if self.missing_stub_alias_target_is_emitted(&candidate) {
                 candidate.clone()
@@ -36539,7 +36623,8 @@ impl AstCodeGen {
                     continue;
                 }
 
-                if terminal_alias != leaf && self.missing_stub_alias_target_is_emitted(&terminal_alias)
+                if terminal_alias != leaf
+                    && self.missing_stub_alias_target_is_emitted(&terminal_alias)
                 {
                     preferred_resolved = self
                         .resolve_unique_public_type_item_path(&terminal_alias)
@@ -36618,10 +36703,8 @@ impl AstCodeGen {
         // Keep this after STL/container alias resolution so lowered container
         // spellings like `std_unordered_map_*` map to std surfaces directly
         // instead of aliasing to sibling placeholders.
-        if let Some(candidate) =
-            self.select_preferred_concrete_alias_candidate(Self::qualifier_family_siblings(
-                rust_name,
-            ))
+        if let Some(candidate) = self
+            .select_preferred_concrete_alias_candidate(Self::qualifier_family_siblings(rust_name))
         {
             return Some(candidate);
         }
@@ -36630,16 +36713,15 @@ impl AstCodeGen {
         // (`struct_rrr` vs `structrrr`). If a unique emitted sibling shares
         // the same qualifier-family dense key, alias to that concrete surface.
         if let Some(key) = Self::qualifier_family_dense_key(rust_name) {
-            let dense_candidates: Vec<String> = Self::collect_defined_type_like_names(
-                self.output.as_str(),
-            )
-            .into_iter()
-            .filter(|candidate| candidate != rust_name)
-            .filter(|candidate| {
-                Self::qualifier_family_dense_key(candidate)
-                    .is_some_and(|candidate_key| candidate_key == key)
-            })
-            .collect();
+            let dense_candidates: Vec<String> =
+                Self::collect_defined_type_like_names(self.output.as_str())
+                    .into_iter()
+                    .filter(|candidate| candidate != rust_name)
+                    .filter(|candidate| {
+                        Self::qualifier_family_dense_key(candidate)
+                            .is_some_and(|candidate_key| candidate_key == key)
+                    })
+                    .collect();
             if let Some(candidate) =
                 self.select_preferred_concrete_alias_candidate(dense_candidates)
             {
@@ -42668,10 +42750,9 @@ impl AstCodeGen {
             return;
         }
 
-        // `std::ffi::VaList` requires an explicit lifetime parameter in type aliases.
         // Keep va_list handling in function signatures/runtime shims and avoid
-        // emitting alias forms like `type __builtin_va_list = [VaList; 1]`.
-        if rust_type.contains("std::ffi::VaList") {
+        // emitting alias forms like `type __builtin_va_list = [FragileVaList; 1]`.
+        if rust_type.contains("FragileVaList") {
             return;
         }
 
@@ -44532,7 +44613,7 @@ impl AstCodeGen {
             && !Self::is_pointer_arithmetic_expr(arg_node);
         if arg_is_array {
             if let Some(base_raw) = self.get_raw_var_name(arg_node) {
-                if base_raw == "__va_args" && target_rust.contains("std::ffi::VaList") {
+                if base_raw == "__va_args" && target_rust.contains("FragileVaList") {
                     return if target_is_const {
                         format!("(&__va_args) as {}", target_rust)
                     } else {
@@ -57077,7 +57158,7 @@ impl AstCodeGen {
                                         }
 
                                         let target_rust = types[i].to_rust_type_str();
-                                        if target_rust == "[std::ffi::VaList; 1]" {
+                                        if target_rust == "[FragileVaList; 1]" {
                                             let arg = self.expr_to_string(c);
                                             if arg == "__va_args" {
                                                 return "[__va_args]".to_string();
@@ -57825,7 +57906,7 @@ impl AstCodeGen {
                                     }
 
                                     let target_rust = types[i].to_rust_type_str();
-                                    if target_rust == "[std::ffi::VaList; 1]" {
+                                    if target_rust == "[FragileVaList; 1]" {
                                         let arg = self.expr_to_string(c);
                                         if arg == "__va_args" {
                                             return "[__va_args]".to_string();
@@ -72763,7 +72844,7 @@ pub fn capture(tv: *mut timeval) {
     }
 
     #[test]
-    fn test_normalize_python_variadic_buildvalue_calls_wraps_call_in_unsafe() {
+    fn test_normalize_python_variadic_buildvalue_calls_rewrites_to_stub() {
         let input = r#"
 pub fn wrap(wrapper: *mut std::ffi::c_void) -> *mut _object {
     return (Py_BuildValue((b"k\x00".as_ptr() as *const i8) as *const i8, wrapper)) as *mut _object;
@@ -72771,8 +72852,26 @@ pub fn wrap(wrapper: *mut std::ffi::c_void) -> *mut _object {
 "#;
         let normalized = AstCodeGen::normalize_python_variadic_buildvalue_calls(input);
         assert!(
-            normalized.contains("return (unsafe { Py_BuildValue((b\"k\\x00\".as_ptr() as *const i8) as *const i8, wrapper) }) as *mut _object;"),
-            "python build-value normalization should wrap variadic calls in unsafe blocks, got:\n{}",
+            normalized.contains("return (__fragile_py_buildvalue_stub((b\"k\\x00\".as_ptr() as *const i8) as *const i8)) as *mut _object;"),
+            "python build-value normalization should rewrite variadic calls to stub helper, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_python_variadic_buildvalue_calls_keeps_extern_declarations() {
+        let input = r#"
+unsafe extern "C" {
+    #[link_name = "__fragile_py_buildvalue_stub"]
+    pub fn Py_BuildValue(_format: *const i8, ...) -> *mut std::ffi::c_void;
+}
+"#;
+        let normalized = AstCodeGen::normalize_python_variadic_buildvalue_calls(input);
+        assert!(
+            normalized.contains(
+                "pub fn Py_BuildValue(_format: *const i8, ...) -> *mut std::ffi::c_void;"
+            ),
+            "python build-value normalization must not rewrite extern declarations, got:\n{}",
             normalized
         );
     }
@@ -78127,7 +78226,7 @@ pub mod rusty {
 
         let lowered = codegen.expr_to_string(&call_expr);
         assert!(
-            lowered.contains("(&mut __va_args) as *mut std::ffi::VaList"),
+            lowered.contains("(&mut __va_args) as *mut FragileVaList"),
             "va_list array-to-pointer decay should borrow __va_args instead of calling .as_mut_ptr(), got:\n{}",
             lowered
         );
@@ -81680,8 +81779,7 @@ pub mod right {
     }
 
     #[test]
-    fn test_normalize_transitive_std_type_alias_rhs_paths_ignores_braces_in_strings_and_comments()
-    {
+    fn test_normalize_transitive_std_type_alias_rhs_paths_ignores_braces_in_strings_and_comments() {
         let input = r##"
 pub mod inner {
     pub type Target = std::sync::Barrier;
@@ -91063,6 +91161,46 @@ stream.PutN(c, n);
     }
 
     #[test]
+    fn test_non_variadic_function_omits_c_variadic_feature() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "regular".to_string(),
+                    mangled_name: "regular".to_string(),
+                    is_static: false,
+                    return_type: CppType::Int { signed: true },
+                    params: vec![],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![make_node(
+                            ClangNodeKind::IntegerLiteral {
+                                value: 0,
+                                cpp_type: Some(CppType::Int { signed: true }),
+                            },
+                            vec![],
+                        )],
+                    )],
+                )],
+            )],
+        );
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            !code.contains("#![feature(c_variadic)]"),
+            "Non-variadic output should not enable c_variadic feature:\n{}",
+            code
+        );
+    }
+
+    #[test]
     fn test_bit_field_packing() {
         // Test that bit fields are packed into storage units
         let ast = make_node(
@@ -91796,7 +91934,7 @@ stream.PutN(c, n);
         );
         assert!(
             !code.contains(
-                "pub fn vsnprintf(_s: *mut i8, _n: u64, _fmt: *const i8, _args: [std::ffi::VaList; 1]) -> i32 { 0 }"
+                "pub fn vsnprintf(_s: *mut i8, _n: u64, _fmt: *const i8, _args: [FragileVaList; 1]) -> i32 { 0 }"
             ),
             "unexpected hardcoded vsnprintf zero-return stub remained in output:\n{}",
             code

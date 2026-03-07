@@ -19,7 +19,6 @@
 #![allow(unused_parens, unused_unsafe)]
 #![allow(clippy::all)]
 #![allow(static_mut_refs)]
-#![feature(c_variadic)]
 
 use std::io::Write;
 

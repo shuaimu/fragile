@@ -39,6 +39,11 @@ impl<T> FragileOptionIsNull for std::option::Option<T> {
         self.is_none()
     }
 }
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct FragileVaList {
+    _private: [u8; 0],
+}
 #[inline]
 pub fn pthread_setcanceltype(_newtype: i32, _oldtype: *mut i32) -> i32 {
     0
@@ -172,7 +177,7 @@ unsafe extern "C" {
     pub fn vfprintf(
         stream: *mut std::ffi::c_void,
         format: *const i8,
-        ap: [std::ffi::VaList; 1],
+        ap: [FragileVaList; 1],
     ) -> i32;
     pub fn stat(path: *const i8, buf: *mut std::ffi::c_void) -> i32;
     pub fn __errno_location() -> *mut i32;
