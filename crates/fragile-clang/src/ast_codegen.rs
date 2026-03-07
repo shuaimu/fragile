@@ -7080,6 +7080,18 @@ impl AstCodeGen {
             None
         }
 
+        fn is_binding_like_alias(alias: &str) -> bool {
+            let trimmed = alias.trim_start_matches("r#");
+            if !trimmed.starts_with('_') {
+                return false;
+            }
+            let raw = trimmed.trim_start_matches('_');
+            !raw.is_empty()
+                && raw
+                    .chars()
+                    .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+        }
+
         let lines: Vec<&str> = code.lines().collect();
         if lines.is_empty() {
             return code.to_string();
@@ -7096,8 +7108,13 @@ impl AstCodeGen {
             return code.to_string();
         }
 
-        let mut alias_list: Vec<String> = c_void_aliases.into_iter().collect();
-        alias_list.sort();
+        let rewrite_aliases: HashSet<String> = c_void_aliases
+            .into_iter()
+            .filter(|alias| !is_binding_like_alias(alias))
+            .collect();
+        if rewrite_aliases.is_empty() {
+            return code.to_string();
+        }
 
         let mut changed = false;
         let mut out = String::with_capacity(code.len());
@@ -7108,14 +7125,7 @@ impl AstCodeGen {
                 out.push('\n');
                 continue;
             }
-            let mut rewritten = line.to_string();
-            for alias in &alias_list {
-                rewritten = Self::rewrite_shadowed_ident_in_item_type_positions(
-                    &rewritten,
-                    alias,
-                    "std::ffi::c_void",
-                );
-            }
+            let rewritten = Self::rewrite_identifier_tokens_to_c_void(line, &rewrite_aliases);
             if rewritten != *line {
                 changed = true;
             }
