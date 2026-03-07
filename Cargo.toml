@@ -8,6 +8,7 @@ members = [
     "crates/fragile-runtime",
     "crates/fragile-driver",
     "crates/fragile-build",
+    "crates/fragile-cargo",
     "crates/fragile-ast-exporter",
     "crates/fragile-stl",
 ]
@@ -25,6 +26,7 @@ fragile-clang = { path = "crates/fragile-clang" }
 fragile-runtime = { path = "crates/fragile-runtime" }
 fragile-driver = { path = "crates/fragile-driver" }
 fragile-build = { path = "crates/fragile-build" }
+fragile-cargo = { path = "crates/fragile-cargo" }
 fragile-ast-exporter = { path = "crates/fragile-ast-exporter" }
 
 # Clang integration - using clang_18_0 feature (compatible with libclang 19)
