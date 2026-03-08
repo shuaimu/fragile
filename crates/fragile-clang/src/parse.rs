@@ -4551,7 +4551,7 @@ struct GenericStringRef {
     GenericStringRef(const CharType* str, SizeType len) : s(str), length(len) {}
     GenericStringRef& operator=(const GenericStringRef& rhs) { length = rhs.length; return *this; }
 };
-int main() { return 0; }
+int main() { GenericStringRef<char> a("a", 1), b("b", 1); a = b; return 0; }
 "#,
         )
         .expect("failed to write source");
@@ -4596,7 +4596,7 @@ struct GenericStringRef {
     GenericStringRef(const CharType* str, SizeType len) : s(str), length(len) {}
     GenericStringRef& operator=(const GenericStringRef& rhs) { length = rhs.length; return *this; }
 };
-int main() { return 0; }
+int main() { GenericStringRef<char> a("a", 1), b("b", 1); a = b; return 0; }
 "#,
         )
         .expect("failed to write source");
@@ -4642,7 +4642,7 @@ struct GenericStringRef {
     GenericStringRef(const CharType* str, SizeType len) : s(str), length(len) {}
     GenericStringRef& operator=(const GenericStringRef& rhs) { length = rhs.length; return *this; }
 };
-int main() { return 0; }
+int main() { GenericStringRef<char> a("a", 1), b("b", 1); a = b; return 0; }
 "#,
         )
         .expect("failed to write source");
@@ -4688,7 +4688,7 @@ struct GenericStringRef {
     GenericStringRef(const CharType* str, SizeType len) : s(str), length(len) {}
     GenericStringRef& operator=(const GenericStringRef& rhs) { length = rhs.length; return *this; }
 };
-int main() { return 0; }
+int main() { GenericStringRef<char> a("a", 1), b("b", 1); a = b; return 0; }
 "#,
         )
         .expect("failed to write source");
