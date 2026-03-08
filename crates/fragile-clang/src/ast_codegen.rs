@@ -1071,6 +1071,10 @@ pub struct AstCodeGen {
     /// Function names that have a definition in this translation unit.
     /// Used to suppress emitting duplicate extern declarations.
     defined_function_names: HashSet<String>,
+    /// Function signatures that have a definition in this translation unit.
+    /// Keyed by mangled symbol when available, otherwise by `(name + param lane)`.
+    /// Used to avoid suppressing declaration-only overloads that differ by signature.
+    defined_function_signatures: HashSet<String>,
     /// Global variable names that have a non-extern definition in this translation unit.
     /// Used to suppress emitting duplicate extern-style declarations from headers.
     defined_global_var_names: HashSet<String>,
@@ -1086,6 +1090,9 @@ pub struct AstCodeGen {
     generated_function_param_rust_types: HashMap<(String, usize), Vec<String>>,
     /// C extern declarations already emitted in this translation unit.
     emitted_extern_c_functions: HashSet<String>,
+    /// Declaration symbols already emitted as extern wrappers in this TU.
+    /// Uses mangled-name identity when available, otherwise `(name, arity)`.
+    emitted_extern_c_decl_symbols: HashSet<String>,
     /// Exported link symbols already emitted in this translation unit.
     /// Prevents duplicate `#[no_mangle]`/`#[export_name]` function emissions.
     emitted_exported_function_symbols: HashSet<String>,
@@ -1277,11 +1284,13 @@ impl AstCodeGen {
             generated_helper_template_signatures: HashSet::new(),
             function_overloads: HashMap::new(),
             defined_function_names: HashSet::new(),
+            defined_function_signatures: HashSet::new(),
             defined_global_var_names: HashSet::new(),
             declared_function_names: HashSet::new(),
             declared_function_param_types: HashMap::new(),
             generated_function_param_rust_types: HashMap::new(),
             emitted_extern_c_functions: HashSet::new(),
+            emitted_extern_c_decl_symbols: HashSet::new(),
             emitted_exported_function_symbols: HashSet::new(),
             module_depth: 0,
             current_struct_methods: HashMap::new(),
@@ -38941,6 +38950,22 @@ impl AstCodeGen {
         }
     }
 
+    fn function_decl_signature_key(
+        name: &str,
+        mangled_name: &str,
+        params: &[(String, CppType)],
+    ) -> String {
+        if !mangled_name.is_empty() {
+            return format!("mangled:{}", mangled_name);
+        }
+        let param_key = params
+            .iter()
+            .map(|(_, ty)| ty.to_rust_type_str())
+            .collect::<Vec<_>>()
+            .join("|");
+        format!("name:{}:params:{}", name, param_key)
+    }
+
     /// Emit an `extern "C"` declaration for unresolved C functions.
     fn generate_extern_c_function_decl(
         &mut self,
@@ -38955,27 +38980,51 @@ impl AstCodeGen {
         } else {
             mangled_name
         };
-        if !self.current_namespace.is_empty() || self.defined_function_names.contains(name) {
-            return;
-        }
-
-        let rust_name = sanitize_identifier(name);
-        let raw_rust_name = format!("__fragile_extern_{}", rust_name);
-        let has_existing_free_fn_decl = self.output.lines().any(|line| {
-            let trimmed = line.trim_start();
-            let matches_name = trimmed.contains(&format!("pub fn {}(", rust_name))
-                || trimmed.contains(&format!("pub unsafe fn {}(", rust_name))
-                || trimmed.starts_with(&format!("fn {}(", rust_name));
-            matches_name && !trimmed.contains("&self") && !trimmed.contains("&mut self")
-        });
-        let has_existing_top_level_wrapper =
-            has_existing_free_fn_decl || self.output.contains(&format!("fn {}(", raw_rust_name));
-        if self.generated_functions.contains_key(&rust_name)
-            || self.emitted_extern_c_functions.contains(&rust_name)
-            || has_existing_top_level_wrapper
+        let signature_key = Self::function_decl_signature_key(name, mangled_name, params);
+        if !self.current_namespace.is_empty()
+            || self.defined_function_signatures.contains(&signature_key)
         {
             return;
         }
+
+        if !self.emitted_extern_c_decl_symbols.insert(signature_key) {
+            return;
+        }
+
+        let base_rust_name = sanitize_identifier(name);
+        if base_rust_name.is_empty() {
+            return;
+        }
+        let mut suffix = self
+            .generated_functions
+            .get(&base_rust_name)
+            .copied()
+            .unwrap_or(0);
+        let (rust_name, raw_rust_name) = loop {
+            let candidate = if suffix == 0 {
+                base_rust_name.clone()
+            } else {
+                format!("{}_{}", base_rust_name, suffix)
+            };
+            let raw_candidate = format!("__fragile_extern_{}", candidate);
+            let has_existing_free_fn_decl = self.output.lines().any(|line| {
+                let trimmed = line.trim_start();
+                let matches_name = trimmed.contains(&format!("pub fn {}(", candidate))
+                    || trimmed.contains(&format!("pub unsafe fn {}(", candidate))
+                    || trimmed.starts_with(&format!("fn {}(", candidate));
+                matches_name && !trimmed.contains("&self") && !trimmed.contains("&mut self")
+            });
+            let has_existing_top_level_wrapper = has_existing_free_fn_decl
+                || self.output.contains(&format!("fn {}(", raw_candidate));
+            if !self.emitted_extern_c_functions.contains(&candidate)
+                && !has_existing_top_level_wrapper
+            {
+                break (candidate, raw_candidate);
+            }
+            suffix += 1;
+        };
+        self.generated_functions
+            .insert(base_rust_name.clone(), suffix + 1);
 
         let mut ret_ty = if *return_type == CppType::Void {
             String::new()
@@ -39042,6 +39091,7 @@ impl AstCodeGen {
             self.indent -= 1;
             self.writeln("}");
             self.writeln("");
+            self.register_function_overload(name, &rust_name, params, return_type, true);
             self.emitted_extern_c_functions.insert(rust_name);
             return;
         }
@@ -39083,6 +39133,7 @@ impl AstCodeGen {
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
+        self.register_function_overload(name, &rust_name, params, return_type, false);
         self.emitted_extern_c_functions.insert(rust_name);
     }
 
@@ -46200,13 +46251,16 @@ impl AstCodeGen {
     fn collect_defined_function_names(&mut self, node: &ClangNode) {
         if let ClangNodeKind::FunctionDecl {
             name,
+            mangled_name,
             params,
             is_definition,
             ..
         } = &node.kind
         {
+            let signature_key = Self::function_decl_signature_key(name, mangled_name, params);
             if *is_definition {
                 self.defined_function_names.insert(name.clone());
+                self.defined_function_signatures.insert(signature_key);
             } else {
                 self.declared_function_names.insert(name.clone());
             }
@@ -69175,6 +69229,127 @@ mod tests {
         assert!(
             code.contains("pub extern \"C\" fn adler32(x: i32) -> i32 {"),
             "definition should use C ABI when exported, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_extern_decl_not_suppressed_by_different_signature_definition() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "value".to_string(),
+                        mangled_name: "_Z5valuei".to_string(),
+                        is_static: false,
+                        return_type: CppType::Int { signed: true },
+                        params: vec![("x".to_string(), CppType::Int { signed: true })],
+                        is_definition: false,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "value".to_string(),
+                        mangled_name: "_Z5valued".to_string(),
+                        is_static: false,
+                        return_type: CppType::Int { signed: true },
+                        params: vec![("x".to_string(), CppType::Double)],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 0,
+                                    cpp_type: Some(CppType::Int { signed: true }),
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("#[link_name = \"_Z5valuei\"]")
+                && code.contains("fn __fragile_extern_value(")
+                && code.contains("pub fn value(_arg0: i32) -> i32 {"),
+            "declaration-only overload should still emit extern wrapper when only a different-signature definition exists, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("#[export_name = \"_Z5valued\"]")
+                && code.contains("pub extern \"C\" fn value_1(x: f64) -> i32 {"),
+            "definition should be emitted as a distinct overload surface when declaration wrapper already uses the base name, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_overloaded_non_definition_decls_emit_distinct_extern_wrappers() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "value".to_string(),
+                        mangled_name: "_Z5valuei".to_string(),
+                        is_static: false,
+                        return_type: CppType::Int { signed: true },
+                        params: vec![("x".to_string(), CppType::Int { signed: true })],
+                        is_definition: false,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "value".to_string(),
+                        mangled_name: "_Z5valued".to_string(),
+                        is_static: false,
+                        return_type: CppType::Int { signed: true },
+                        params: vec![("x".to_string(), CppType::Double)],
+                        is_definition: false,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("#[link_name = \"_Z5valuei\"]")
+                && code.contains("fn __fragile_extern_value(")
+                && code.contains("pub fn value(_arg0: i32) -> i32 {"),
+            "first declaration-only overload wrapper missing, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("#[link_name = \"_Z5valued\"]")
+                && code.contains("fn __fragile_extern_value_1(")
+                && code.contains("pub fn value_1(_arg0: f64) -> i32 {"),
+            "second declaration-only overload should emit suffixed wrapper, got:\n{}",
             code
         );
     }

@@ -259,6 +259,11 @@ Target call path:
 4. Keep generated ABI wrappers only where resolution is unknown or external.
 5. Compile/link with one pinned Rust toolchain for the whole project graph.
 
+Current implementation step (March 8, 2026):
+
+- Declaration-only free-function wrapper emission now uses signature-level identity (`mangled symbol` when available, otherwise name+parameter lanes), not name-only suppression.
+- Declaration-only overloads are registered in overload metadata and emitted with stable Rust suffixing (`foo`, `foo_1`, ...) so in-TU overload resolution has concrete callable surfaces without duplicate-name collisions.
+
 Practical implication:
 
 - Declaration-only wrappers (`extern "C"` + shim) remain as a compatibility fallback, not the default internal mechanism.
