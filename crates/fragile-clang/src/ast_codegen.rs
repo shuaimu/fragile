@@ -15170,14 +15170,14 @@ impl AstCodeGen {
                 Self::has_non_pointer_is_null_method_markers(trimmed, body_lines);
             let fn_name = parse_fn_name(trimmed).unwrap_or_default();
             let canonical_fn_name = fn_name.trim_start_matches("r#");
-            let is_entry_main = canonical_fn_name == "main";
+            let is_entry_main = canonical_fn_name == "main" || canonical_fn_name == "cpp_main";
             let is_internal_vbase_ctor = canonical_fn_name.starts_with("__new_without_vbases_");
             let should_stub = !is_internal_vbase_ctor
                 && ((degraded_markers >= 8 && !is_entry_main)
                     || has_enum_switch_mismatch
-                    || has_unresolved_symbols
+                    || (has_unresolved_symbols && !is_entry_main)
                     || has_unresolved_namespaced_calls
-                    || has_unresolved_bare_statement_calls
+                    || (has_unresolved_bare_statement_calls && !is_entry_main)
                     || (has_unresolved_bare_calls && !is_entry_main)
                     || has_unresolved_struct_fields
                     || has_unresolved_non_callable_deref_calls
@@ -84848,6 +84848,27 @@ pub extern "C" fn main() -> i32 {
         assert!(
             output.contains("    7"),
             "degraded-function fallback should preserve entry main tail values when only soft marker-count heuristics are hit, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_fallback_heavily_degraded_function_bodies_keeps_cpp_main_with_unresolved_bare_call_markers() {
+        let input = r#"
+pub extern "C" fn cpp_main() -> i32 {
+    return ext((7) as i64) as i32;
+    return 0;
+}
+"#;
+        let output = AstCodeGen::fallback_heavily_degraded_function_bodies(input);
+        assert!(
+            output.contains("return ext((7) as i64) as i32;"),
+            "degraded-function fallback should preserve cpp_main bodies when unresolved bare-call markers are the only issue, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("return 0;"),
+            "degraded-function fallback should keep cpp_main tail return when unresolved bare-call markers are tolerated, got:\n{}",
             output
         );
     }

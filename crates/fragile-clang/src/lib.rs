@@ -889,7 +889,10 @@ fn translation_unit_from_libtooling_context(ctx: &AstContext) -> ClangNode {
         }
 
         if node.tag == ASTEntryTag::TagFunctionDecl {
-            if !function_has_body(node, ctx) {
+            let has_reference_parent = parent_map
+                .get(&node.id)
+                .is_some_and(|parents| !parents.is_empty());
+            if !function_has_body(node, ctx) && !has_reference_parent {
                 continue;
             }
             let name = node.get_string(0).unwrap_or("");
@@ -1353,6 +1356,69 @@ mod tests {
                 |child| matches!(&child.kind, ClangNodeKind::VarDecl { name, .. } if name == "src")
             ),
             "root VarDecl with DeclStmt parent should be filtered as function-local"
+        );
+    }
+
+    #[test]
+    fn test_translation_unit_promotes_referenced_declaration_only_function_roots() {
+        let mut ast_nodes: HashMap<u64, AstNode> = HashMap::new();
+        ast_nodes.insert(
+            100,
+            ast_node(
+                100,
+                ASTEntryTag::TagFunctionDecl,
+                vec![Some(101)],
+                span(1, 1, 1, 20, 1),
+                vec![CborValue::Text("main".to_string())],
+            ),
+        );
+        ast_nodes.insert(
+            101,
+            ast_node(
+                101,
+                ASTEntryTag::TagCompoundStmt,
+                vec![Some(102)],
+                span(1, 2, 1, 18, 1),
+                vec![],
+            ),
+        );
+        ast_nodes.insert(
+            102,
+            ast_node(
+                102,
+                ASTEntryTag::TagCallExpr,
+                vec![Some(200)],
+                span(1, 3, 1, 17, 1),
+                vec![],
+            ),
+        );
+        ast_nodes.insert(
+            200,
+            ast_node(
+                200,
+                ASTEntryTag::TagFunctionDecl,
+                vec![],
+                span(1, 25, 1, 25, 30),
+                vec![CborValue::Text("ext".to_string())],
+            ),
+        );
+
+        let ctx = AstContext {
+            ast_nodes,
+            type_nodes: HashMap::new(),
+            top_nodes: vec![100],
+            files: vec![SrcFile {
+                path: None,
+                include_loc: None,
+            }],
+        };
+
+        let tu = translation_unit_from_libtooling_context(&ctx);
+        assert!(
+            tu.children.iter().any(
+                |child| matches!(&child.kind, ClangNodeKind::FunctionDecl { name, is_definition, .. } if name == "ext" && !is_definition)
+            ),
+            "referenced declaration-only FunctionDecl roots should be promoted into the translation unit"
         );
     }
 
