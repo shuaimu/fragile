@@ -1,8 +1,9 @@
 #include <cstdint>
 #include <iostream>
 
-extern "C" std::int32_t rust_add(std::int32_t a, std::int32_t b);
-extern "C" std::int32_t rust_mul(std::int32_t a, std::int32_t b);
+// C++ declarations without `extern "C"`, pinned to exported Rust symbol names.
+extern std::int32_t rust_add(std::int32_t a, std::int32_t b) asm("rust_add");
+extern std::int32_t rust_mul(std::int32_t a, std::int32_t b) asm("rust_mul");
 
 int main() {
   const std::int32_t x = 7;
