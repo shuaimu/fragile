@@ -13832,6 +13832,13 @@ impl AstCodeGen {
                         if arg.contains(" as ") || !is_likely_integer_expr(arg) {
                             continue;
                         }
+                        if target_ty == "i32"
+                            && is_integer_literal_str(arg)
+                            && strip_literal_suffix(arg) == arg
+                        {
+                            // Unsuffixed integer literals already infer to i32.
+                            continue;
+                        }
                         args[idx] = format!("({}) as {}", arg, target_ty);
                         changed = true;
                     }
@@ -47443,6 +47450,29 @@ impl AstCodeGen {
         false
     }
 
+    fn member_expr_has_known_method_named(
+        &self,
+        member_expr: &ClangNode,
+        member_name: &str,
+    ) -> bool {
+        let ClangNodeKind::MemberExpr { declaring_class, .. } = &member_expr.kind else {
+            return false;
+        };
+        let mut method_name = sanitize_identifier(member_name);
+        if method_name.is_empty() {
+            return false;
+        }
+        if let Some(unsuffixed) = Self::strip_generated_overload_suffix(&method_name) {
+            method_name = unsuffixed;
+        }
+        let class_candidates =
+            self.member_call_class_candidates(member_expr, declaring_class.as_deref());
+        class_candidates.iter().any(|class_name| {
+            self.get_class_method_overloads(class_name)
+                .is_some_and(|overloads| overloads.contains_key(&method_name))
+        })
+    }
+
     fn resolve_getter_backing_field_name(&self, callee: &ClangNode) -> Option<String> {
         let member_expr = Self::unwrap_to_member_expr(callee)?;
         let ClangNodeKind::MemberExpr { member_name, .. } = &member_expr.kind else {
@@ -59194,6 +59224,7 @@ impl AstCodeGen {
                     if member_name.starts_with("get_")
                         && !matches!(ty, CppType::Function { .. })
                         && !Self::is_function_pointer_type_or_typedef(ty)
+                        && !self.member_expr_has_known_method_named(node, member_name)
                     {
                         if let Some(backing_field) = self.resolve_getter_backing_field_name(node) {
                             member = backing_field;
@@ -61505,6 +61536,59 @@ mod tests {
         assert!(
             !rendered.contains("get_kind"),
             "expected getter name to be rewritten away, got: {}",
+            rendered
+        );
+    }
+
+    #[test]
+    fn test_member_expr_getter_field_rewrite_skips_known_method_overload() {
+        let mut codegen = AstCodeGen::new();
+        let mut overloads = HashMap::new();
+        overloads.insert(
+            "get_prot".to_string(),
+            vec![MethodOverloadInfo {
+                rust_name: "get_prot".to_string(),
+                param_types: vec![],
+                return_type: CppType::Int { signed: true },
+                is_const: false,
+                is_static: false,
+            }],
+        );
+        codegen
+            .class_method_overloads
+            .insert("Data".to_string(), overloads);
+
+        let expr = make_node(
+            ClangNodeKind::MemberExpr {
+                member_name: "get_prot".to_string(),
+                is_arrow: false,
+                ty: CppType::Int { signed: true },
+                declaring_class: Some("Data".to_string()),
+                is_static: false,
+            },
+            vec![make_node(
+                ClangNodeKind::DeclRefExpr {
+                    name: "d".to_string(),
+                    ty: CppType::Reference {
+                        referent: Box::new(CppType::Named("Data".to_string())),
+                        is_const: false,
+                        is_rvalue: false,
+                    },
+                    namespace_path: vec![],
+                },
+                vec![],
+            )],
+        );
+
+        let rendered = codegen.expr_to_string(&expr);
+        assert!(
+            rendered.contains("get_prot"),
+            "known getter method should remain method-like member access, got: {}",
+            rendered
+        );
+        assert!(
+            !rendered.contains("prot_"),
+            "known getter method should not be rewritten to fallback backing field, got: {}",
             rendered
         );
     }
@@ -72876,6 +72960,29 @@ pub fn use_make_int(now: *mut i8, tv_usec: i64) {
         assert!(
             normalized.contains("make_int(now, (tv_usec / 1000) as i32,"),
             "call-arg width normalization should cast integer expressions into declared i32 slots, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_call_argument_integer_widths_keeps_unsuffixed_i32_literals() {
+        let input = r#"
+pub fn count_args_i32(a: i32, b: i32, c: i32) -> i32 {
+    a + b + c
+}
+pub fn probe() -> i32 {
+    count_args_i32(1, 2, 3)
+}
+"#;
+        let normalized = AstCodeGen::normalize_call_argument_integer_widths(input);
+        assert!(
+            normalized.contains("count_args_i32(1, 2, 3)"),
+            "call-arg width normalization should keep unsuffixed i32 literals unchanged, got:\n{}",
+            normalized
+        );
+        assert!(
+            !normalized.contains("count_args_i32((1) as i32,"),
+            "call-arg width normalization should not force redundant i32 casts for unsuffixed literals, got:\n{}",
             normalized
         );
     }
