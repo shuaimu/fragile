@@ -3109,6 +3109,11 @@ impl AstCodeGen {
             symbols
         }
 
+        fn is_const_enum_variant_constructor_path(ident: &str) -> bool {
+            let leaf = ident.rsplit("::").next().unwrap_or(ident);
+            matches!(leaf, "Some" | "Ok" | "Err")
+        }
+
         fn contains_non_const_function_call(rhs_no_semi: &str) -> bool {
             let bytes = rhs_no_semi.as_bytes();
             let mut idx = 0usize;
@@ -3161,6 +3166,10 @@ impl AstCodeGen {
                 }
                 if scan < bytes.len() && bytes[scan] == b'(' {
                     let ident = &rhs_no_semi[idx..end];
+                    if is_const_enum_variant_constructor_path(ident) {
+                        idx = end;
+                        continue;
+                    }
                     if ident != "unsafe"
                         && ident != "if"
                         && ident != "while"
@@ -72689,6 +72698,37 @@ static mut __fsv_UseMAdvWillNeed_px_0: *const i8 = (getenv((b"DISABLE_MADV_WILLN
                 "static mut __fsv_UseMAdvWillNeed_px_0: *const i8 = unsafe { std::mem::zeroed() };"
             ),
             "static initializer normalization should rewrite non-const plain function calls (e.g. getenv) to zeroed fallbacks, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_static_initializers_with_unresolved_global_refs_keeps_enum_variant_constructors(
+    ) {
+        let input = r#"
+pub(crate) static mut __gv_func: std::option::Option<extern "C" fn() -> i32> = Some(deflate_fast);
+pub(crate) static mut __gv_ok: std::result::Result<i32, i32> = Ok(7);
+pub(crate) static mut __gv_err: std::result::Result<i32, i32> = Err(1);
+"#;
+        let normalized =
+            AstCodeGen::normalize_static_initializers_with_unresolved_global_refs(input);
+        assert!(
+            normalized.contains(
+                "pub(crate) static mut __gv_func: std::option::Option<extern \"C\" fn() -> i32> = Some(deflate_fast);"
+            ),
+            "enum variant constructors in static initializers should remain unchanged, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized
+                .contains("pub(crate) static mut __gv_ok: std::result::Result<i32, i32> = Ok(7);"),
+            "Result::Ok constructor should remain unchanged in static initializers, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized
+                .contains("pub(crate) static mut __gv_err: std::result::Result<i32, i32> = Err(1);"),
+            "Result::Err constructor should remain unchanged in static initializers, got:\n{}",
             normalized
         );
     }
