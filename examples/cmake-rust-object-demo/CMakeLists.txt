@@ -22,6 +22,18 @@ find_program(CLANGXX_BIN clang++ REQUIRED)
 
 set(RUST_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/math.rs")
 set(RUST_OBJ "${CMAKE_CURRENT_BINARY_DIR}/rust/math.rs.o")
+set(RUST_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/rust_math.hpp")
+
+add_custom_command(
+  OUTPUT "${RUST_HEADER}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${FRAGILEC_BIN}" --emit-rust-cpp-header "${RUST_SRC}" -o "${RUST_HEADER}"
+  DEPENDS "${RUST_SRC}"
+  VERBATIM
+  COMMENT "Generating C++ Rust header ${RUST_HEADER}"
+)
+
+add_custom_target(rust_math_header DEPENDS "${RUST_HEADER}")
 
 add_custom_command(
   OUTPUT "${RUST_OBJ}"
@@ -47,8 +59,9 @@ set_source_files_properties("${RUST_OBJ}" PROPERTIES
   EXTERNAL_OBJECT TRUE
 )
 
-add_executable(demo src/main.cpp "${RUST_OBJ}")
-add_dependencies(demo rust_math_obj)
+add_executable(demo src/main.cpp "${RUST_OBJ}" "${RUST_HEADER}")
+add_dependencies(demo rust_math_obj rust_math_header)
+target_include_directories(demo PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set_property(TARGET demo PROPERTY
   RULE_LAUNCH_LINK "${CMAKE_COMMAND} -E env FRAGILEC_LINKER=${CLANGXX_BIN}"
 )

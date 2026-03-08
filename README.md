@@ -21,6 +21,18 @@ fragile build main.rs utils.cpp helpers.go -o program
 ./program
 ```
 
+Object-mode Rust/C++ interop with auto-generated headers:
+
+```bash
+# Generate a C++ header from Rust structs + #[no_mangle] pub fn exports
+fragilec --emit-rust-cpp-header src/math.rs -o build/generated/rust_math.hpp
+
+# Compile C++ with fragilec and link with Rust object(s)
+fragilec -c src/main.cpp -o build/main.o
+rustc --emit=obj src/math.rs -o build/math.o
+fragilec build/main.o build/math.o -o demo
+```
+
 ## Cross-Language Interop
 
 Use C++ STL in Rust:

@@ -2,35 +2,26 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-
-struct RustAccumulator;
-
-// C++ declarations without `extern "C"`, pinned to exported Rust symbol names.
-extern std::size_t rust_accumulator_size() asm("rust_accumulator_size");
-extern std::size_t rust_accumulator_align() asm("rust_accumulator_align");
-extern bool rust_accumulator_init(RustAccumulator* obj, std::int64_t seed,
-                                  std::int64_t scale)
-    asm("rust_accumulator_init");
-extern std::int64_t rust_accumulator_push(RustAccumulator* obj, std::int64_t value)
-    asm("rust_accumulator_push");
-extern std::int64_t rust_accumulator_get(const RustAccumulator* obj)
-    asm("rust_accumulator_get");
-extern void rust_accumulator_drop(RustAccumulator* obj) asm("rust_accumulator_drop");
+#include "rust_math.hpp"
 
 int main() {
-  const std::size_t size = rust_accumulator_size();
-  void* storage = std::malloc(size);
-  if (storage == nullptr) {
+  RustAccumulator* acc =
+      static_cast<RustAccumulator*>(std::malloc(sizeof(RustAccumulator)));
+  if (acc == nullptr) {
     std::fprintf(stderr, "failed to allocate rust accumulator storage\n");
     return 1;
   }
-  RustAccumulator* acc = static_cast<RustAccumulator*>(storage);
 
   if (!rust_accumulator_init(acc, /*seed=*/10, /*scale=*/3)) {
     std::fprintf(stderr, "failed to create rust accumulator\n");
-    std::free(storage);
+    std::free(acc);
     return 1;
   }
+
+  std::printf("initial total -> %lld\n", static_cast<long long>(acc->total));
+  std::printf("scale -> %lld\n", static_cast<long long>(acc->scale));
+  acc->total += acc->scale;
+  std::printf("after manual bump -> %lld\n", static_cast<long long>(acc->total));
 
   const std::int64_t step1 = rust_accumulator_push(acc, 4);
   const std::int64_t step2 = rust_accumulator_push(acc, 2);
@@ -43,6 +34,6 @@ int main() {
   std::printf("final total -> %lld\n", static_cast<long long>(total));
 
   rust_accumulator_drop(acc);
-  std::free(storage);
+  std::free(acc);
   return 0;
 }

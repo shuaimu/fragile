@@ -104,6 +104,25 @@ struct ParsedInvocation {
     defines: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EmitRustCppHeaderInvocation {
+    rust_source: PathBuf,
+    output: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RustStructDef {
+    name: String,
+    fields: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RustFnExport {
+    name: String,
+    params: Vec<(String, String)>,
+    ret: Option<String>,
+}
+
 impl ParsedInvocation {
     fn parse(args: Vec<OsString>) -> Self {
         let mut compile_only = false;
@@ -227,6 +246,442 @@ impl ParsedInvocation {
             defines,
         }
     }
+}
+
+fn parse_emit_rust_cpp_header_invocation(
+    args: &[OsString],
+) -> Result<Option<EmitRustCppHeaderInvocation>, String> {
+    let has_mode_flag = args.iter().any(|arg| {
+        let token = arg.to_string_lossy();
+        token == "--emit-rust-cpp-header" || token.starts_with("--emit-rust-cpp-header=")
+    });
+    if !has_mode_flag {
+        return Ok(None);
+    }
+
+    let mut rust_source: Option<PathBuf> = None;
+    let mut output: Option<PathBuf> = None;
+    let mut i = 0usize;
+    while i < args.len() {
+        let token = args[i].to_string_lossy();
+        let cur = token.as_ref();
+        if cur == "--emit-rust-cpp-header" {
+            if i + 1 >= args.len() {
+                return Err(
+                    "missing source path after --emit-rust-cpp-header; expected a Rust source file"
+                        .to_string(),
+                );
+            }
+            rust_source = Some(PathBuf::from(args[i + 1].to_string_lossy().to_string()));
+            i += 2;
+            continue;
+        }
+        if let Some(path) = cur.strip_prefix("--emit-rust-cpp-header=") {
+            if path.trim().is_empty() {
+                return Err(
+                    "empty source path in --emit-rust-cpp-header=<path>; expected a Rust source file"
+                        .to_string(),
+                );
+            }
+            rust_source = Some(PathBuf::from(path));
+            i += 1;
+            continue;
+        }
+        if cur == "-o" || cur == "--output" {
+            if i + 1 >= args.len() {
+                return Err(format!("missing output path after {}", cur));
+            }
+            output = Some(PathBuf::from(args[i + 1].to_string_lossy().to_string()));
+            i += 2;
+            continue;
+        }
+        if let Some(path) = cur.strip_prefix("-o") {
+            if !path.trim().is_empty() {
+                output = Some(PathBuf::from(path));
+                i += 1;
+                continue;
+            }
+        }
+        if let Some(path) = cur.strip_prefix("--output=") {
+            if path.trim().is_empty() {
+                return Err("empty path in --output=<path>".to_string());
+            }
+            output = Some(PathBuf::from(path));
+            i += 1;
+            continue;
+        }
+        if cur == "--fragilec-help" || cur == "--help" {
+            i += 1;
+            continue;
+        }
+
+        return Err(format!(
+            "unsupported argument `{}` for --emit-rust-cpp-header mode",
+            cur
+        ));
+    }
+
+    let rust_source = rust_source.ok_or_else(|| {
+        "missing --emit-rust-cpp-header <source>; expected a Rust source file".to_string()
+    })?;
+    let output = output.ok_or_else(|| {
+        "missing output path; use -o <header.hpp> with --emit-rust-cpp-header".to_string()
+    })?;
+    Ok(Some(EmitRustCppHeaderInvocation {
+        rust_source,
+        output,
+    }))
+}
+
+fn strip_inline_comment(line: &str) -> &str {
+    if let Some(idx) = line.find("//") {
+        &line[..idx]
+    } else {
+        line
+    }
+}
+
+fn canonical_rust_ident(name: &str) -> String {
+    name.trim().trim_start_matches("r#").to_string()
+}
+
+fn split_top_level_comma_list(input: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut depth_paren = 0usize;
+    let mut depth_angle = 0usize;
+    let mut depth_bracket = 0usize;
+    let mut start = 0usize;
+    for (idx, ch) in input.char_indices() {
+        match ch {
+            '(' => depth_paren += 1,
+            ')' => depth_paren = depth_paren.saturating_sub(1),
+            '<' => depth_angle += 1,
+            '>' => depth_angle = depth_angle.saturating_sub(1),
+            '[' => depth_bracket += 1,
+            ']' => depth_bracket = depth_bracket.saturating_sub(1),
+            ',' if depth_paren == 0 && depth_angle == 0 && depth_bracket == 0 => {
+                out.push(input[start..idx].trim().to_string());
+                start = idx + 1;
+            }
+            _ => {}
+        }
+    }
+    let tail = input[start..].trim();
+    if !tail.is_empty() {
+        out.push(tail.to_string());
+    }
+    out
+}
+
+fn find_matching_close_paren(input: &str, open_idx: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (idx, ch) in input[open_idx..].char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(open_idx + idx);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn parse_rust_exported_function_signature(signature: &str) -> Result<RustFnExport, String> {
+    let signature = signature.split('{').next().unwrap_or(signature).trim();
+    let signature = signature
+        .strip_prefix("pub ")
+        .unwrap_or(signature)
+        .trim_start();
+    let signature = signature
+        .strip_prefix("unsafe ")
+        .unwrap_or(signature)
+        .trim_start();
+    let signature = signature
+        .strip_prefix("fn ")
+        .ok_or_else(|| format!("invalid Rust function signature: `{}`", signature))?;
+    let open_idx = signature
+        .find('(')
+        .ok_or_else(|| format!("missing parameter list in Rust function signature: `{}`", signature))?;
+    let close_idx = find_matching_close_paren(signature, open_idx)
+        .ok_or_else(|| format!("unbalanced parameter list in Rust function signature: `{}`", signature))?;
+    let name = canonical_rust_ident(signature[..open_idx].trim());
+    if name.is_empty() {
+        return Err(format!(
+            "missing function name in Rust function signature: `{}`",
+            signature
+        ));
+    }
+    let params_src = &signature[open_idx + 1..close_idx];
+    let mut params: Vec<(String, String)> = Vec::new();
+    for param in split_top_level_comma_list(params_src) {
+        if param.is_empty() || param == "self" || param == "&self" || param == "&mut self" {
+            continue;
+        }
+        let Some((lhs, rhs)) = param.split_once(':') else {
+            continue;
+        };
+        let mut param_name = lhs.trim();
+        if let Some(stripped) = param_name.strip_prefix("mut ") {
+            param_name = stripped.trim();
+        }
+        if let Some(last) = param_name.split_whitespace().last() {
+            param_name = last.trim();
+        }
+        let param_name = canonical_rust_ident(param_name);
+        if param_name.is_empty() {
+            continue;
+        }
+        let param_ty = rhs.trim().to_string();
+        if param_ty.is_empty() {
+            continue;
+        }
+        params.push((param_name, param_ty));
+    }
+    let mut ret: Option<String> = None;
+    let tail = signature[close_idx + 1..].trim();
+    if let Some(after_arrow) = tail.strip_prefix("->") {
+        let ret_raw = after_arrow.trim();
+        let ret_clean = ret_raw
+            .split(" where ")
+            .next()
+            .unwrap_or(ret_raw)
+            .trim()
+            .to_string();
+        if !ret_clean.is_empty() {
+            ret = Some(ret_clean);
+        }
+    }
+    Ok(RustFnExport { name, params, ret })
+}
+
+fn parse_rust_struct_name_from_line(trimmed_line: &str) -> Option<String> {
+    if !trimmed_line.starts_with("pub struct ") || !trimmed_line.ends_with('{') {
+        return None;
+    }
+    let body = trimmed_line["pub struct ".len()..trimmed_line.len() - 1].trim();
+    if body.is_empty() || body.contains('<') {
+        return None;
+    }
+    let name: String = body
+        .chars()
+        .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '#')
+        .collect();
+    let name = canonical_rust_ident(&name);
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+fn parse_rust_struct_field_line(trimmed_line: &str) -> Option<(String, String)> {
+    let line = trimmed_line.trim_end_matches(',').trim();
+    let (lhs, rhs) = line.split_once(':')?;
+    let rhs = rhs.trim();
+    if rhs.is_empty() {
+        return None;
+    }
+    let mut lhs = lhs.trim();
+    if let Some(stripped) = lhs.strip_prefix("pub ") {
+        lhs = stripped.trim();
+    } else if lhs.starts_with("pub(") {
+        if let Some(idx) = lhs.find(')') {
+            lhs = lhs[idx + 1..].trim();
+        }
+    }
+    let field_name = canonical_rust_ident(lhs);
+    if field_name.is_empty() {
+        return None;
+    }
+    Some((field_name, rhs.to_string()))
+}
+
+fn parse_rust_source_for_cpp_header(source: &str) -> Result<(Vec<RustStructDef>, Vec<RustFnExport>), String> {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut structs: Vec<RustStructDef> = Vec::new();
+    let mut exports: Vec<RustFnExport> = Vec::new();
+    let mut in_struct: Option<RustStructDef> = None;
+    let mut pending_no_mangle = false;
+    let mut i = 0usize;
+
+    while i < lines.len() {
+        let line = strip_inline_comment(lines[i]).trim();
+        if line.is_empty() {
+            i += 1;
+            continue;
+        }
+
+        if let Some(current) = in_struct.as_mut() {
+            if line.starts_with('}') {
+                structs.push(in_struct.take().unwrap());
+                pending_no_mangle = false;
+                i += 1;
+                continue;
+            }
+            if let Some(field) = parse_rust_struct_field_line(line) {
+                current.fields.push(field);
+            }
+            i += 1;
+            continue;
+        }
+
+        if line == "#[no_mangle]" {
+            pending_no_mangle = true;
+            i += 1;
+            continue;
+        }
+
+        if let Some(struct_name) = parse_rust_struct_name_from_line(line) {
+            in_struct = Some(RustStructDef {
+                name: struct_name,
+                fields: Vec::new(),
+            });
+            pending_no_mangle = false;
+            i += 1;
+            continue;
+        }
+
+        if pending_no_mangle && (line.starts_with("pub fn ") || line.starts_with("pub unsafe fn "))
+        {
+            let mut signature = line.to_string();
+            while !signature.contains('{') && i + 1 < lines.len() {
+                i += 1;
+                let continuation = strip_inline_comment(lines[i]).trim();
+                if continuation.is_empty() {
+                    continue;
+                }
+                signature.push(' ');
+                signature.push_str(continuation);
+            }
+            exports.push(parse_rust_exported_function_signature(&signature)?);
+            pending_no_mangle = false;
+            i += 1;
+            continue;
+        }
+
+        if !line.starts_with("#[") {
+            pending_no_mangle = false;
+        }
+        i += 1;
+    }
+
+    if let Some(current) = in_struct {
+        structs.push(current);
+    }
+
+    Ok((structs, exports))
+}
+
+fn rust_type_to_cpp_type(raw_ty: &str) -> String {
+    let ty = raw_ty.trim();
+
+    if let Some(inner) = ty.strip_prefix("*mut ") {
+        return format!("{}*", rust_type_to_cpp_type(inner));
+    }
+    if let Some(inner) = ty.strip_prefix("*const ") {
+        return format!("const {}*", rust_type_to_cpp_type(inner));
+    }
+    if let Some(inner) = ty.strip_prefix("&mut ") {
+        return format!("{}*", rust_type_to_cpp_type(inner));
+    }
+    if let Some(inner) = ty.strip_prefix('&') {
+        return format!("const {}*", rust_type_to_cpp_type(inner));
+    }
+
+    match ty {
+        "i8" => "std::int8_t".to_string(),
+        "u8" => "std::uint8_t".to_string(),
+        "i16" => "std::int16_t".to_string(),
+        "u16" => "std::uint16_t".to_string(),
+        "i32" => "std::int32_t".to_string(),
+        "u32" => "std::uint32_t".to_string(),
+        "i64" => "std::int64_t".to_string(),
+        "u64" => "std::uint64_t".to_string(),
+        "isize" => "std::ptrdiff_t".to_string(),
+        "usize" => "std::size_t".to_string(),
+        "f32" => "float".to_string(),
+        "f64" => "double".to_string(),
+        "bool" => "bool".to_string(),
+        "()" => "void".to_string(),
+        other => canonical_rust_ident(other),
+    }
+}
+
+fn render_rust_cpp_header(
+    source: &Path,
+    structs: &[RustStructDef],
+    exports: &[RustFnExport],
+) -> String {
+    let mut out = String::new();
+    out.push_str("#pragma once\n\n");
+    out.push_str("// Auto-generated by fragilec.\n");
+    out.push_str(&format!("// Source: {}\n", source.display()));
+    out.push_str("// Do not edit manually.\n\n");
+    out.push_str("#include <cstddef>\n");
+    out.push_str("#include <cstdint>\n\n");
+
+    for st in structs {
+        out.push_str(&format!("struct {} {{\n", st.name));
+        for (field_name, field_ty) in &st.fields {
+            out.push_str(&format!(
+                "  {} {};\n",
+                rust_type_to_cpp_type(field_ty),
+                canonical_rust_ident(field_name)
+            ));
+        }
+        out.push_str("};\n\n");
+    }
+
+    for exported_fn in exports {
+        let ret = exported_fn
+            .ret
+            .as_deref()
+            .map(rust_type_to_cpp_type)
+            .unwrap_or_else(|| "void".to_string());
+        let params = exported_fn
+            .params
+            .iter()
+            .map(|(name, ty)| format!("{} {}", rust_type_to_cpp_type(ty), canonical_rust_ident(name)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!(
+            "extern {} {}({}) asm(\"{}\");\n",
+            ret, exported_fn.name, params, exported_fn.name
+        ));
+    }
+    if !exports.is_empty() {
+        out.push('\n');
+    }
+
+    out
+}
+
+fn run_emit_rust_cpp_header(invocation: &EmitRustCppHeaderInvocation) -> Result<(), String> {
+    let cwd = std::env::current_dir().map_err(|e| format!("failed to read cwd: {}", e))?;
+    let source = resolve_path(&invocation.rust_source, &cwd);
+    if !source.exists() {
+        return Err(format!("Rust source does not exist: {}", source.display()));
+    }
+    let output = resolve_path(&invocation.output, &cwd);
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "failed to create output directory {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
+    }
+    let content = fs::read_to_string(&source)
+        .map_err(|e| format!("failed to read Rust source {}: {}", source.display(), e))?;
+    let (structs, exports) = parse_rust_source_for_cpp_header(&content)?;
+    let header = render_rust_cpp_header(&source, &structs, &exports);
+    fs::write(&output, header)
+        .map_err(|e| format!("failed to write header {}: {}", output.display(), e))
 }
 
 fn is_c_file(path: &Path) -> bool {
@@ -1236,7 +1691,7 @@ fn link_driver_command_from_value(linker_env: Option<&str>) -> (String, Vec<OsSt
         }
     }
 
-    ("clang++".to_string(), vec![OsString::from("-fuse-ld=lld")])
+    ("clang++".to_string(), Vec::new())
 }
 
 fn link_driver_command() -> (String, Vec<OsString>) {
@@ -1607,6 +2062,7 @@ fragilec - Fragile compiler driver shim
 
 Usage:
   fragilec [compiler args...]
+  fragilec --emit-rust-cpp-header <source.rs> -o <generated.hpp>
 
 Environment:
   FRAGILEC_MODE=strict               Optional; strict-only mode (default: strict)
@@ -1622,7 +2078,7 @@ Environment:
                                      Cache dir for runtime link-support archive/native-static-libs
   FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=<path>
                                      Write transpile stage timing trace (parse/export/enrichment/codegen)
-  FRAGILEC_LINKER=<path>             Link-driver executable for strict link (default: clang++ -fuse-ld=lld)
+  FRAGILEC_LINKER=<path>             Link-driver executable for strict link (default: clang++)
 "
     );
 }
@@ -1632,6 +2088,21 @@ fn main() -> ExitCode {
     if args.iter().any(|a| a == "--fragilec-help") || (args.len() == 1 && args[0] == "--help") {
         print_help();
         return ExitCode::SUCCESS;
+    }
+
+    match parse_emit_rust_cpp_header_invocation(&args) {
+        Ok(Some(invocation)) => match run_emit_rust_cpp_header(&invocation) {
+            Ok(()) => return ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("[fragilec] {}", err);
+                return ExitCode::from(1);
+            }
+        },
+        Ok(None) => {}
+        Err(err) => {
+            eprintln!("[fragilec] {}", err);
+            return ExitCode::from(2);
+        }
     }
 
     if let Err(err) = append_invocation_log(&args) {
@@ -1697,14 +2168,132 @@ mod tests {
     }
 
     #[test]
-    fn link_driver_command_defaults_to_clang_lld() {
+    fn parse_emit_rust_cpp_header_invocation_supports_split_and_equals_forms() {
+        let split = parse_emit_rust_cpp_header_invocation(&args(&[
+            "--emit-rust-cpp-header",
+            "src/math.rs",
+            "-o",
+            "build/rust_math.hpp",
+        ]))
+        .expect("split-form invocation should parse")
+        .expect("mode should be detected");
+        assert_eq!(split.rust_source, PathBuf::from("src/math.rs"));
+        assert_eq!(split.output, PathBuf::from("build/rust_math.hpp"));
+
+        let equals = parse_emit_rust_cpp_header_invocation(&args(&[
+            "--emit-rust-cpp-header=src/math.rs",
+            "--output=build/rust_math.hpp",
+        ]))
+        .expect("equals-form invocation should parse")
+        .expect("mode should be detected");
+        assert_eq!(equals.rust_source, PathBuf::from("src/math.rs"));
+        assert_eq!(equals.output, PathBuf::from("build/rust_math.hpp"));
+    }
+
+    #[test]
+    fn parse_rust_source_for_cpp_header_extracts_struct_and_exported_functions() {
+        let source = r#"
+pub struct RustAccumulator {
+    total: i64,
+    scale: i64,
+}
+
+#[no_mangle]
+pub fn rust_accumulator_init(ptr: *mut RustAccumulator, seed: i64, scale: i64) -> bool {
+    true
+}
+
+#[no_mangle]
+pub fn rust_accumulator_drop(ptr: *mut RustAccumulator) {
+}
+"#;
+        let (structs, exports) =
+            parse_rust_source_for_cpp_header(source).expect("parse should succeed");
+        assert_eq!(structs.len(), 1);
+        assert_eq!(structs[0].name, "RustAccumulator");
+        assert_eq!(
+            structs[0].fields,
+            vec![
+                ("total".to_string(), "i64".to_string()),
+                ("scale".to_string(), "i64".to_string())
+            ]
+        );
+        assert_eq!(exports.len(), 2);
+        assert_eq!(exports[0].name, "rust_accumulator_init");
+        assert_eq!(
+            exports[0].params,
+            vec![
+                ("ptr".to_string(), "*mut RustAccumulator".to_string()),
+                ("seed".to_string(), "i64".to_string()),
+                ("scale".to_string(), "i64".to_string()),
+            ]
+        );
+        assert_eq!(exports[0].ret.as_deref(), Some("bool"));
+        assert_eq!(exports[1].name, "rust_accumulator_drop");
+        assert_eq!(exports[1].ret, None);
+    }
+
+    #[test]
+    fn render_rust_cpp_header_maps_types_and_exports_symbols() {
+        let structs = vec![RustStructDef {
+            name: "RustAccumulator".to_string(),
+            fields: vec![
+                ("total".to_string(), "i64".to_string()),
+                ("scale".to_string(), "i64".to_string()),
+            ],
+        }];
+        let exports = vec![
+            RustFnExport {
+                name: "rust_accumulator_init".to_string(),
+                params: vec![
+                    ("ptr".to_string(), "*mut RustAccumulator".to_string()),
+                    ("seed".to_string(), "i64".to_string()),
+                    ("scale".to_string(), "i64".to_string()),
+                ],
+                ret: Some("bool".to_string()),
+            },
+            RustFnExport {
+                name: "rust_accumulator_drop".to_string(),
+                params: vec![("ptr".to_string(), "*mut RustAccumulator".to_string())],
+                ret: None,
+            },
+        ];
+        let header = render_rust_cpp_header(Path::new("src/math.rs"), &structs, &exports);
+        assert!(
+            header.contains("struct RustAccumulator"),
+            "rendered header should include struct declaration, got:\n{}",
+            header
+        );
+        assert!(
+            header.contains("std::int64_t total;") && header.contains("std::int64_t scale;"),
+            "rendered header should map i64 fields to std::int64_t, got:\n{}",
+            header
+        );
+        assert!(
+            header.contains(
+                "extern bool rust_accumulator_init(RustAccumulator* ptr, std::int64_t seed, std::int64_t scale) asm(\"rust_accumulator_init\");"
+            ),
+            "rendered header should include exported init declaration with asm symbol binding, got:\n{}",
+            header
+        );
+        assert!(
+            header.contains(
+                "extern void rust_accumulator_drop(RustAccumulator* ptr) asm(\"rust_accumulator_drop\");"
+            ),
+            "rendered header should include exported void declaration, got:\n{}",
+            header
+        );
+    }
+
+    #[test]
+    fn link_driver_command_defaults_to_clang() {
         let (driver, driver_args) = link_driver_command_from_value(None);
         assert_eq!(driver, "clang++");
-        assert_eq!(driver_args, vec![OsString::from("-fuse-ld=lld")]);
+        assert!(driver_args.is_empty());
 
         let (driver, driver_args) = link_driver_command_from_value(Some("   "));
         assert_eq!(driver, "clang++");
-        assert_eq!(driver_args, vec![OsString::from("-fuse-ld=lld")]);
+        assert!(driver_args.is_empty());
     }
 
     #[test]
