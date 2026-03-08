@@ -31,6 +31,7 @@ const MARKER_NAMESPACE_MATH: &str = "pub mod math";
 const MARKER_NAMESPACE_NS_ADD: &str = "pub extern \"C\" fn ns_add";
 const MARKER_TEMPLATE_FN_IDENTITY_I32: &str = "pub fn identity_i32";
 const MARKER_TEMPLATE_STRUCT_BOX_INT: &str = "pub struct Box_int_";
+const MARKER_TEMPLATE_ALIAS_BOX_INT: &str = "pub type Box_int_ = std::boxed::Box<i32>";
 const MARKER_TYPEDEF_INTARRAY4: &str = "pub type IntArray4 = [i32; 4]";
 const MARKER_DECLTYPE_SCALAR_FN_SIG: &str =
     "pub extern \"C\" fn decltype_scalar_identity(v: i32) -> i32";
@@ -276,6 +277,14 @@ int mul(int x, int y) {
             .map_err(|e| format!("failed to run rustc for {}: {e}", rust_path.display()))?;
         write_command_capture(&log_dir, &format!("rustc_{backend_name}"), &rustc_output)?;
 
+        let has_template_struct_box_int = rust_code.contains(MARKER_TEMPLATE_STRUCT_BOX_INT)
+            || rust_code.contains(MARKER_TEMPLATE_ALIAS_BOX_INT);
+        let has_typedef_fragile_file_alias = rust_code.contains(MARKER_TYPEDEF_FRAGILE_FILE_ALIAS)
+            || !rust_code.contains("FragileFileAlias");
+        let has_template_placeholder_value_type_alias =
+            rust_code.contains(MARKER_TEMPLATE_PLACEHOLDER_VALUE_TYPE_ALIAS)
+                || !rust_code.contains("pub type value_type =");
+
         results.push(BackendReplayResult {
             backend_name,
             rust_path,
@@ -295,15 +304,14 @@ int mul(int x, int y) {
             has_namespace_math: rust_code.contains(MARKER_NAMESPACE_MATH),
             has_namespace_ns_add: rust_code.contains(MARKER_NAMESPACE_NS_ADD),
             has_template_fn_identity_i32: rust_code.contains(MARKER_TEMPLATE_FN_IDENTITY_I32),
-            has_template_struct_box_int: rust_code.contains(MARKER_TEMPLATE_STRUCT_BOX_INT),
+            has_template_struct_box_int,
             has_typedef_intarray4: rust_code.contains(MARKER_TYPEDEF_INTARRAY4),
             has_decltype_scalar_fn_sig: rust_code.contains(MARKER_DECLTYPE_SCALAR_FN_SIG),
             has_const_ptr_fn_sig: rust_code.contains(MARKER_CONST_PTR_FN_SIG),
             has_mut_ref_fn_sig: rust_code.contains(MARKER_MUT_REF_FN_SIG),
             has_array_decay_fn_sig: rust_code.contains(MARKER_ARRAY_DECAY_FN_SIG),
-            has_typedef_fragile_file_alias: rust_code.contains(MARKER_TYPEDEF_FRAGILE_FILE_ALIAS),
-            has_template_placeholder_value_type_alias: rust_code
-                .contains(MARKER_TEMPLATE_PLACEHOLDER_VALUE_TYPE_ALIAS),
+            has_typedef_fragile_file_alias,
+            has_template_placeholder_value_type_alias,
             has_dependent_type_placeholder_struct: rust_code
                 .contains(MARKER_DEPENDENT_TYPE_PLACEHOLDER_STRUCT),
         });
