@@ -303,9 +303,9 @@ fn frontend_args_contains_define(frontend_args: &[String], define: &str) -> bool
 }
 
 fn frontend_args_has_template_parsing_override(frontend_args: &[String]) -> bool {
-    frontend_args.iter().any(|arg| {
-        arg == "-fdelayed-template-parsing" || arg == "-fno-delayed-template-parsing"
-    })
+    frontend_args
+        .iter()
+        .any(|arg| arg == "-fdelayed-template-parsing" || arg == "-fno-delayed-template-parsing")
 }
 
 fn libtooling_parser_for_path(
@@ -578,8 +578,11 @@ fn parse_libtooling_context(path: &Path, options: &TranspileOptions) -> Result<A
                 for &delayed_template_parsing in
                     template_parsing_attempts(options.language, options.template_parsing_mode)
                 {
-                    let parser =
-                        libtooling_parser_for_path(path, &stubbed_options, delayed_template_parsing);
+                    let parser = libtooling_parser_for_path(
+                        path,
+                        &stubbed_options,
+                        delayed_template_parsing,
+                    );
                     match parser.parse_file(path) {
                         Ok(ctx) => {
                             let _ = fs::remove_dir_all(&stub_dir);
@@ -1030,7 +1033,13 @@ mod tests {
         CborValue,
     };
 
-    fn span(file_id: u64, begin_line: u64, begin_column: u64, end_line: u64, end_column: u64) -> SrcSpan {
+    fn span(
+        file_id: u64,
+        begin_line: u64,
+        begin_column: u64,
+        end_line: u64,
+        end_column: u64,
+    ) -> SrcSpan {
         SrcSpan {
             file_id,
             begin_line,
@@ -1217,7 +1226,7 @@ mod tests {
                     CborValue::Bool(true), // isStaticLocal
                     CborValue::Bool(false),
                     CborValue::Bool(false),
-                    CborValue::Bool(true), // isStaticStorage
+                    CborValue::Bool(true),  // isStaticStorage
                     CborValue::Bool(false), // isExternStorage
                     CborValue::Text("f()::cache".to_string()),
                 ],
@@ -1355,7 +1364,8 @@ mod tests {
 
     #[test]
     fn template_parsing_attempts_cpp_standard_is_single_attempt() {
-        let attempts = template_parsing_attempts(ParserLanguage::Cpp, TemplateParsingMode::Standard);
+        let attempts =
+            template_parsing_attempts(ParserLanguage::Cpp, TemplateParsingMode::Standard);
         assert_eq!(attempts, &[false]);
     }
 

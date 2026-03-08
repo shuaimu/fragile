@@ -281,9 +281,9 @@ int mul(int x, int y) {
             || rust_code.contains(MARKER_TEMPLATE_ALIAS_BOX_INT);
         let has_typedef_fragile_file_alias = rust_code.contains(MARKER_TYPEDEF_FRAGILE_FILE_ALIAS)
             || !rust_code.contains("FragileFileAlias");
-        let has_template_placeholder_value_type_alias =
-            rust_code.contains(MARKER_TEMPLATE_PLACEHOLDER_VALUE_TYPE_ALIAS)
-                || !rust_code.contains("pub type value_type =");
+        let has_template_placeholder_value_type_alias = rust_code
+            .contains(MARKER_TEMPLATE_PLACEHOLDER_VALUE_TYPE_ALIAS)
+            || !rust_code.contains("pub type value_type =");
 
         results.push(BackendReplayResult {
             backend_name,

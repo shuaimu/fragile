@@ -256,7 +256,8 @@ int read_mask() {
         .ast_nodes
         .values()
         .find(|node| {
-            node.tag == ASTEntryTag::TagEnumConstantDecl && node.get_string(0).unwrap_or("") == "Value"
+            node.tag == ASTEntryTag::TagEnumConstantDecl
+                && node.get_string(0).unwrap_or("") == "Value"
         })
         .expect("expected BigMask::Value enum constant in exported AST");
 

@@ -563,7 +563,10 @@ fn map_lowered_result_with_mpsc_error_to_std(spelling: &str) -> Option<String> {
                 } else {
                     CppType::Named(ok_lowered.to_string()).to_rust_type_str()
                 };
-                return Some(format!("std::result::Result<{}, {}>", ok_mapped, err_mapped));
+                return Some(format!(
+                    "std::result::Result<{}, {}>",
+                    ok_mapped, err_mapped
+                ));
             }
         }
     }
@@ -687,7 +690,10 @@ fn map_lowered_result_alias_to_std(spelling: &str) -> Option<String> {
 
         let ok_mapped = map_lowered_result_component_to_std(ok_raw);
         let err_mapped = map_lowered_result_component_to_std(err_raw);
-        return Some(format!("std::result::Result<{}, {}>", ok_mapped, err_mapped));
+        return Some(format!(
+            "std::result::Result<{}, {}>",
+            ok_mapped, err_mapped
+        ));
     }
 
     None
@@ -698,7 +704,10 @@ fn map_lowered_mpsc_endpoint_to_std(spelling: &str) -> Option<String> {
         ("std_sync_mpsc_Sender_", "std::sync::mpsc::Sender"),
         ("std_sync_mpsc_Receiver_", "std::sync::mpsc::Receiver"),
         ("std_sync_mpsc_SyncSender_", "std::sync::mpsc::SyncSender"),
-        ("std_sync_mpsc_TrySendError_", "std::sync::mpsc::TrySendError"),
+        (
+            "std_sync_mpsc_TrySendError_",
+            "std::sync::mpsc::TrySendError",
+        ),
         ("rusty_sync_mpsc_Sender_", "std::sync::mpsc::Sender"),
         ("rusty_sync_mpsc_Receiver_", "std::sync::mpsc::Receiver"),
         ("rusty_sync_mpsc_SyncSender_", "std::sync::mpsc::SyncSender"),
@@ -890,7 +899,10 @@ fn map_std_is_error_code_enum_marker_to_unit(
     spelling: &str,
     root_is_unqualified: bool,
 ) -> Option<String> {
-    for prefix in ["std::is_error_code_enum<", "std::type_traits::is_error_code_enum<"] {
+    for prefix in [
+        "std::is_error_code_enum<",
+        "std::type_traits::is_error_code_enum<",
+    ] {
         let Some(inner) = spelling
             .strip_prefix(prefix)
             .and_then(|rest| rest.strip_suffix('>'))
@@ -1028,8 +1040,7 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
     if let Some(mapped) = map_std_hash_to_default_hasher(cleaned, root_is_unqualified) {
         return Some(mapped);
     }
-    if let Some(mapped) = map_std_is_error_code_enum_marker_to_unit(cleaned, root_is_unqualified)
-    {
+    if let Some(mapped) = map_std_is_error_code_enum_marker_to_unit(cleaned, root_is_unqualified) {
         return Some(mapped);
     }
 
@@ -1052,7 +1063,10 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         (
             "SyncSender",
             "std::sync::mpsc::SyncSender",
-            &["rusty::sync::mpsc::SyncSender", "std::sync::mpsc::SyncSender"] as &[&str],
+            &[
+                "rusty::sync::mpsc::SyncSender",
+                "std::sync::mpsc::SyncSender",
+            ] as &[&str],
         ),
     ] {
         for root in qualified_roots {
@@ -1061,8 +1075,7 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
                 cleaned,
                 &qualified_prefix,
                 std_path,
-            )
-            {
+            ) {
                 return Some(mapped);
             }
         }
@@ -1072,8 +1085,7 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
                 cleaned,
                 &bare_prefix,
                 std_path,
-            )
-            {
+            ) {
                 return Some(mapped);
             }
         }
@@ -1081,7 +1093,10 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
     for (alias, std_path, qualified_roots) in [(
         "TrySendError",
         "std::sync::mpsc::TrySendError",
-        &["rusty::sync::mpsc::TrySendError", "std::sync::mpsc::TrySendError"] as &[&str],
+        &[
+            "rusty::sync::mpsc::TrySendError",
+            "std::sync::mpsc::TrySendError",
+        ] as &[&str],
     )] {
         for root in qualified_roots {
             let qualified_prefix = format!("{}<", root);
@@ -1089,8 +1104,7 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
                 cleaned,
                 &qualified_prefix,
                 std_path,
-            )
-            {
+            ) {
                 return Some(mapped);
             }
         }
@@ -1100,8 +1114,7 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
                 cleaned,
                 &bare_prefix,
                 std_path,
-            )
-            {
+            ) {
                 return Some(mapped);
             }
         }
@@ -1146,8 +1159,14 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         ("std::sync::RwLock<", "std::sync::RwLock"),
         ("std::sync::mpsc::Sender<", "std::sync::mpsc::Sender"),
         ("std::sync::mpsc::Receiver<", "std::sync::mpsc::Receiver"),
-        ("std::sync::mpsc::SyncSender<", "std::sync::mpsc::SyncSender"),
-        ("std::sync::mpsc::TrySendError<", "std::sync::mpsc::TrySendError"),
+        (
+            "std::sync::mpsc::SyncSender<",
+            "std::sync::mpsc::SyncSender",
+        ),
+        (
+            "std::sync::mpsc::TrySendError<",
+            "std::sync::mpsc::TrySendError",
+        ),
     ] {
         if let Some(mapped) =
             map_single_template_alias_to_std_with_unit_payload_fallback(cleaned, prefix, std_path)
@@ -1166,11 +1185,9 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         ("std::collections::HashMap<", "std::collections::HashMap"),
         ("std::collections::BTreeMap<", "std::collections::BTreeMap"),
     ] {
-        if let Some(mapped) = map_double_template_alias_to_std_allow_extra_args(
-            cleaned,
-            prefix,
-            std_path,
-        ) {
+        if let Some(mapped) =
+            map_double_template_alias_to_std_allow_extra_args(cleaned, prefix, std_path)
+        {
             return Some(mapped);
         }
     }
@@ -1248,8 +1265,7 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
                 cleaned,
                 &qualified_prefix,
                 std_path,
-            )
-            {
+            ) {
                 return Some(mapped);
             }
         }
@@ -1259,8 +1275,7 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
                 cleaned,
                 &bare_prefix,
                 std_path,
-            )
-            {
+            ) {
                 return Some(mapped);
             }
         }
@@ -1328,8 +1343,7 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
                 cleaned,
                 bare_alias_prefix,
                 std_path,
-            )
-            {
+            ) {
                 return Some(mapped);
             }
         }
@@ -3076,7 +3090,10 @@ mod tests {
             CppType::Named("rusty::None_t".to_string()).to_rust_type_str(),
             "()"
         );
-        assert_eq!(CppType::Named("None_t".to_string()).to_rust_type_str(), "()");
+        assert_eq!(
+            CppType::Named("None_t".to_string()).to_rust_type_str(),
+            "()"
+        );
         assert_eq!(CppType::Named("Unit".to_string()).to_rust_type_str(), "()");
         assert_eq!(
             CppType::Named("rusty::sync::mpsc::RecvError".to_string()).to_rust_type_str(),
@@ -3162,8 +3179,7 @@ mod tests {
             CppType::Named("TryLockResult<int>".to_string()).to_rust_type_str(),
             "rusty::TryLockResult<i32>"
         );
-        let mutex_guard =
-            CppType::Named("rusty::MutexGuard<int>".to_string()).to_rust_type_str();
+        let mutex_guard = CppType::Named("rusty::MutexGuard<int>".to_string()).to_rust_type_str();
         assert!(
             mutex_guard.contains("MutexGuard")
                 && !mutex_guard.contains("std::sync::MutexGuard"),
@@ -3460,11 +3476,15 @@ mod tests {
             "std::sync::Mutex<std::option::Option<std::thread::JoinHandle<()>>>"
         );
         assert_eq!(
-            normalize_rusty_type_alias_to_std("rusty_BTreeSet_class_rusty_Rc_class_rrr_Fiber__Unit"),
+            normalize_rusty_type_alias_to_std(
+                "rusty_BTreeSet_class_rusty_Rc_class_rrr_Fiber__Unit"
+            ),
             "()"
         );
         assert_eq!(
-            normalize_rusty_type_alias_to_std("constclassrusty_BTreeSet_classrusty_Rc_classrrr_Fiber___Unit_"),
+            normalize_rusty_type_alias_to_std(
+                "constclassrusty_BTreeSet_classrusty_Rc_classrrr_Fiber___Unit_"
+            ),
             "()"
         );
         assert_eq!(
@@ -3494,7 +3514,9 @@ mod tests {
             "std::collections::BTreeSet<std::rc::Rc<Fiber>>"
         );
         assert_eq!(
-            normalize_rusty_type_alias_to_std("std_collections_VecDeque_std_shared_ptr_class_rrr_Event"),
+            normalize_rusty_type_alias_to_std(
+                "std_collections_VecDeque_std_shared_ptr_class_rrr_Event"
+            ),
             "std::collections::VecDeque<std_shared_ptr<rrr_Event>>"
         );
         assert_eq!(
@@ -3623,7 +3645,9 @@ mod tests {
             "std::collections::hash_map::DefaultHasher"
         );
         assert_eq!(
-            normalize_rusty_type_alias_to_std("std::is_error_code_enum<enum asio::error::basic_errors>"),
+            normalize_rusty_type_alias_to_std(
+                "std::is_error_code_enum<enum asio::error::basic_errors>"
+            ),
             "()"
         );
         assert_eq!(
@@ -3631,14 +3655,19 @@ mod tests {
             "()"
         );
         assert_eq!(
-            normalize_rusty_type_alias_to_std("std::is_error_code_enum::enumasio::error::basic_errors::"),
+            normalize_rusty_type_alias_to_std(
+                "std::is_error_code_enum::enumasio::error::basic_errors::"
+            ),
             "()"
         );
         assert_eq!(
-            normalize_rusty_type_alias_to_std("std_is_error_code_enum_enumasio_error_basic_errors_"),
+            normalize_rusty_type_alias_to_std(
+                "std_is_error_code_enum_enumasio_error_basic_errors_"
+            ),
             "()"
         );
-        let mutex_member_guard = normalize_rusty_type_alias_to_std("rusty::sync::Mutex<int>::Guard");
+        let mutex_member_guard =
+            normalize_rusty_type_alias_to_std("rusty::sync::Mutex<int>::Guard");
         assert!(
             mutex_member_guard.contains("Guard")
                 && !mutex_member_guard.contains("std::sync::MutexGuard"),
@@ -3778,9 +3807,7 @@ mod tests {
             "std_vector<u64>"
         );
         assert_eq!(
-            normalize_rusty_type_alias_to_std(
-                "std::collections::HashMap<u64, std_vector<u64>>"
-            ),
+            normalize_rusty_type_alias_to_std("std::collections::HashMap<u64, std_vector<u64>>"),
             "std::collections::HashMap<u64, std_vector<u64>>"
         );
         assert_eq!(

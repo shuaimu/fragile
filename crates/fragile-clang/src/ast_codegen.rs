@@ -3314,7 +3314,8 @@ impl AstCodeGen {
             let rhs_no_semi = rhs.trim_end_matches(';').trim();
             // Keep known const-safe runtime initializer forms intact. These are
             // valid in static contexts and must not be collapsed to zeroed state.
-            let has_known_const_static_initializer = rhs_no_semi.contains("std::sync::LazyLock::new(")
+            let has_known_const_static_initializer = rhs_no_semi
+                .contains("std::sync::LazyLock::new(")
                 || rhs_no_semi.contains("std::sync::OnceLock::new(")
                 || (rhs_no_semi.contains("std::sync::atomic::Atomic")
                     && rhs_no_semi.contains("::new("));
@@ -4990,8 +4991,7 @@ impl AstCodeGen {
                 }
                 if probe < type_expr.len() && type_expr[probe..].starts_with(':') {
                     let after_colon = probe + 1;
-                    if !(after_colon < type_expr.len()
-                        && type_expr[after_colon..].starts_with(':'))
+                    if !(after_colon < type_expr.len() && type_expr[after_colon..].starts_with(':'))
                     {
                         continue;
                     }
@@ -10684,9 +10684,7 @@ impl AstCodeGen {
                             .contains(&(root.to_string(), method.to_string()))
                             && !known_type_methods
                                 .contains(&(canonical_root.to_string(), method.to_string()));
-                        if type_method_missing
-                            && !method.starts_with("new_")
-                            && method != "default"
+                        if type_method_missing && !method.starts_with("new_") && method != "default"
                         {
                             return true;
                         }
@@ -12080,8 +12078,7 @@ impl AstCodeGen {
             }
             if matches!(
                 canonical,
-                "if"
-                    | "while"
+                "if" | "while"
                     | "for"
                     | "loop"
                     | "match"
@@ -15168,18 +15165,18 @@ impl AstCodeGen {
             let is_internal_vbase_ctor = canonical_fn_name.starts_with("__new_without_vbases_");
             let should_stub = !is_internal_vbase_ctor
                 && ((degraded_markers >= 8 && !is_entry_main)
-                || has_enum_switch_mismatch
-                || has_unresolved_symbols
-                || has_unresolved_namespaced_calls
-                || has_unresolved_bare_statement_calls
-                || (has_unresolved_bare_calls && !is_entry_main)
-                || has_unresolved_struct_fields
-                || has_unresolved_non_callable_deref_calls
-                || has_non_callable_local_invocations
-                || has_getter_field_artifacts
-                || has_noncallable_zeroed_invocations
-                || has_mismatched_pointer_scalar_identifier_comparisons
-                || has_non_pointer_is_null_calls);
+                    || has_enum_switch_mismatch
+                    || has_unresolved_symbols
+                    || has_unresolved_namespaced_calls
+                    || has_unresolved_bare_statement_calls
+                    || (has_unresolved_bare_calls && !is_entry_main)
+                    || has_unresolved_struct_fields
+                    || has_unresolved_non_callable_deref_calls
+                    || has_non_callable_local_invocations
+                    || has_getter_field_artifacts
+                    || has_noncallable_zeroed_invocations
+                    || has_mismatched_pointer_scalar_identifier_comparisons
+                    || has_non_pointer_is_null_calls);
 
             if should_stub {
                 out.push_str(line);
@@ -38381,7 +38378,8 @@ impl AstCodeGen {
         // Skip if already generated (handles duplicate template instantiations)
         if self.generated_structs.contains(&rust_name) {
             if !self.current_rust_module_path().is_empty() {
-                self.namespace_type_alias_conflicts.insert(rust_name.clone());
+                self.namespace_type_alias_conflicts
+                    .insert(rust_name.clone());
             }
             return;
         }
@@ -40852,7 +40850,8 @@ impl AstCodeGen {
         // Skip if already generated (handles duplicate template instantiations)
         if self.generated_structs.contains(&rust_name) {
             if !self.current_rust_module_path().is_empty() {
-                self.namespace_type_alias_conflicts.insert(rust_name.clone());
+                self.namespace_type_alias_conflicts
+                    .insert(rust_name.clone());
             }
             return;
         }
@@ -47464,7 +47463,10 @@ impl AstCodeGen {
         member_expr: &ClangNode,
         member_name: &str,
     ) -> bool {
-        let ClangNodeKind::MemberExpr { declaring_class, .. } = &member_expr.kind else {
+        let ClangNodeKind::MemberExpr {
+            declaring_class, ..
+        } = &member_expr.kind
+        else {
             return false;
         };
         let mut method_name = sanitize_identifier(member_name);
@@ -72726,8 +72728,9 @@ pub(crate) static mut __gv_err: std::result::Result<i32, i32> = Err(1);
             normalized
         );
         assert!(
-            normalized
-                .contains("pub(crate) static mut __gv_err: std::result::Result<i32, i32> = Err(1);"),
+            normalized.contains(
+                "pub(crate) static mut __gv_err: std::result::Result<i32, i32> = Err(1);"
+            ),
             "Result::Err constructor should remain unchanged in static initializers, got:\n{}",
             normalized
         );
