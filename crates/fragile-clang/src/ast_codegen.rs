@@ -3303,6 +3303,17 @@ impl AstCodeGen {
             // which rustc rejects in static initializers. Normalize those to a
             // compile-safe zeroed fallback.
             let rhs_no_semi = rhs.trim_end_matches(';').trim();
+            // Keep known const-safe runtime initializer forms intact. These are
+            // valid in static contexts and must not be collapsed to zeroed state.
+            let has_known_const_static_initializer = rhs_no_semi.contains("std::sync::LazyLock::new(")
+                || rhs_no_semi.contains("std::sync::OnceLock::new(")
+                || (rhs_no_semi.contains("std::sync::atomic::Atomic")
+                    && rhs_no_semi.contains("::new("));
+            if has_known_const_static_initializer {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
             let has_non_const_ctor_call = (rhs_no_semi.contains("::new_")
                 && rhs_no_semi.ends_with(')'))
                 || rhs_no_semi.contains("Default::default()");
@@ -9967,6 +9978,46 @@ impl AstCodeGen {
         out
     }
 
+    fn normalize_builtin_fn_local_zeroed_placeholders(code: &str) -> String {
+        if !code.contains("_builtin_fn_type")
+            || !code.contains("unsafe { std::mem::zeroed() }")
+            || !code.contains("let ")
+        {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        for line in code.lines() {
+            let trimmed = line.trim_start();
+            let mut drop_line = false;
+            if trimmed.starts_with("let ")
+                && trimmed.contains(": _builtin_fn_type")
+                && trimmed.contains("= unsafe { std::mem::zeroed() };")
+            {
+                if let Some((lhs, _)) = trimmed.split_once(": _builtin_fn_type") {
+                    if let Some(binding_name) = Self::parse_let_binding_name(lhs) {
+                        let binding_raw = binding_name.trim_start_matches("r#");
+                        if binding_raw.starts_with("__builtin_") {
+                            // Some degraded builtin wrappers synthesize an uninitialized
+                            // local shadow (`let __builtin_foo: _builtin_fn_type = ...`)
+                            // and then call it, which hides the preamble builtin helper.
+                            // Dropping that local restores direct calls to the helper.
+                            drop_line = true;
+                        }
+                    }
+                }
+            }
+            if !drop_line {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+        if !code.ends_with('\n') && !out.is_empty() {
+            out.pop();
+        }
+        out
+    }
+
     fn normalize_degraded_global_get_field_returns(code: &str) -> String {
         if !code.contains("return unsafe { (__gv_") || !code.contains(").get };") {
             return code.to_string();
@@ -10303,6 +10354,14 @@ impl AstCodeGen {
         if placeholder_names.is_empty() {
             return code.to_string();
         }
+        let known_fn_names = Self::collect_emitted_function_names(code);
+        placeholder_names.retain(|name| {
+            let canonical = name.trim_start_matches("r#");
+            !known_fn_names.contains(name) && !known_fn_names.contains(canonical)
+        });
+        if placeholder_names.is_empty() {
+            return code.to_string();
+        }
         placeholder_names.sort();
         placeholder_names.dedup();
 
@@ -10406,6 +10465,31 @@ impl AstCodeGen {
         lines: &[&str],
         known_global_symbols: &HashSet<String>,
     ) -> bool {
+        fn has_global_symbol_call_shape(line: &str) -> bool {
+            let mut idx = 0usize;
+            while let Some(rel) = line[idx..].find("__gv_") {
+                let start = idx + rel;
+                let mut end = start + "__gv_".len();
+                while end < line.len() {
+                    let ch = line[end..].chars().next().unwrap();
+                    if AstCodeGen::is_identifier_char(ch) {
+                        end += ch.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+                let mut probe = end;
+                while probe < line.len() && line.as_bytes()[probe].is_ascii_whitespace() {
+                    probe += 1;
+                }
+                if probe < line.len() && line.as_bytes()[probe] == b'(' {
+                    return true;
+                }
+                idx = end;
+            }
+            false
+        }
+
         const UNRESOLVED_MARKERS: [&str; 59] = [
             "super::Exp::",
             "super::EncodeBase64(",
@@ -10473,9 +10557,7 @@ impl AstCodeGen {
                 .any(|marker| line.contains(marker))
                 || Self::has_unknown_global_storage_symbol_reference(line, known_global_symbols)
                 || (line.contains("__gv_") && line.contains("}()"))
-                || (line.contains("__gv_")
-                    && line.contains('(')
-                    && !line.contains("std::mem::zeroed"))
+                || has_global_symbol_call_shape(line)
         })
     }
 
@@ -10576,7 +10658,10 @@ impl AstCodeGen {
                                 .contains(&(ty_segment.to_string(), method.to_string()))
                                 && !known_type_methods
                                     .contains(&(canonical_ty.to_string(), method.to_string()));
-                            if type_method_missing && !method.starts_with("new_") {
+                            if type_method_missing
+                                && !method.starts_with("new_")
+                                && method != "default"
+                            {
                                 return true;
                             }
                             search_idx = open_idx + 1;
@@ -10590,7 +10675,10 @@ impl AstCodeGen {
                             .contains(&(root.to_string(), method.to_string()))
                             && !known_type_methods
                                 .contains(&(canonical_root.to_string(), method.to_string()));
-                        if type_method_missing && !method.starts_with("new_") {
+                        if type_method_missing
+                            && !method.starts_with("new_")
+                            && method != "default"
+                        {
                             return true;
                         }
                         search_idx = open_idx + 1;
@@ -11681,10 +11769,8 @@ impl AstCodeGen {
         }
 
         fn type_is_callable(ty: &str) -> bool {
-            ty.contains("fn(")
-                || ty.contains("extern \"C\" fn(")
-                || ty.contains("unsafe fn(")
-                || ty.contains("unsafe extern \"C\" fn(")
+            let compact: String = ty.chars().filter(|ch| !ch.is_whitespace()).collect();
+            compact.contains("fn(") || compact.ends_with("_fn_type")
         }
 
         let mut binding_types = collect_param_types(signature_line);
@@ -11776,10 +11862,8 @@ impl AstCodeGen {
         }
 
         fn type_is_callable(ty: &str) -> bool {
-            ty.contains("fn(")
-                || ty.contains("extern \"C\" fn(")
-                || ty.contains("unsafe fn(")
-                || ty.contains("unsafe extern \"C\" fn(")
+            let compact: String = ty.chars().filter(|ch| !ch.is_whitespace()).collect();
+            compact.contains("fn(") || compact.ends_with("_fn_type")
         }
 
         fn extract_invoked_identifier(call_head: &str) -> Option<String> {
@@ -11983,6 +12067,24 @@ impl AstCodeGen {
             }
             let canonical = callee.trim_start_matches("r#");
             if canonical.starts_with("__to_") {
+                continue;
+            }
+            if matches!(
+                canonical,
+                "if"
+                    | "while"
+                    | "for"
+                    | "loop"
+                    | "match"
+                    | "return"
+                    | "mut"
+                    | "const"
+                    | "as"
+                    | "Some"
+                    | "Ok"
+                    | "Err"
+                    | "unsafe"
+            ) {
                 continue;
             }
             if known_fn_names.contains(callee)
@@ -12565,6 +12667,13 @@ impl AstCodeGen {
 
         fn is_alias_candidate_identifier(ident: &str) -> bool {
             if ident.is_empty() {
+                return false;
+            }
+            let mut chars = ident.chars();
+            let Some(first) = chars.next() else {
+                return false;
+            };
+            if !(first == '_' || first.is_ascii_alphabetic()) {
                 return false;
             }
             if matches!(
@@ -14372,6 +14481,10 @@ impl AstCodeGen {
             let mut search_idx = 0usize;
             while let Some(rel) = rewritten[search_idx..].find("(unsafe { *") {
                 let start = search_idx + rel;
+                if !rewritten[..start].contains(".wrapping_") {
+                    search_idx = start + "(unsafe { *".len();
+                    continue;
+                }
                 let after_start = start + "(unsafe { *".len();
                 let Some(close_rel) = rewritten[after_start..].find(" }) *") else {
                     break;
@@ -15036,7 +15149,9 @@ impl AstCodeGen {
             let fn_name = parse_fn_name(trimmed).unwrap_or_default();
             let canonical_fn_name = fn_name.trim_start_matches("r#");
             let is_entry_main = canonical_fn_name == "main";
-            let should_stub = (degraded_markers >= 8 && !is_entry_main)
+            let is_internal_vbase_ctor = canonical_fn_name.starts_with("__new_without_vbases_");
+            let should_stub = !is_internal_vbase_ctor
+                && ((degraded_markers >= 8 && !is_entry_main)
                 || has_enum_switch_mismatch
                 || has_unresolved_symbols
                 || has_unresolved_namespaced_calls
@@ -15048,7 +15163,7 @@ impl AstCodeGen {
                 || has_getter_field_artifacts
                 || has_noncallable_zeroed_invocations
                 || has_mismatched_pointer_scalar_identifier_comparisons
-                || has_non_pointer_is_null_calls;
+                || has_non_pointer_is_null_calls);
 
             if should_stub {
                 out.push_str(line);
@@ -18319,6 +18434,9 @@ impl AstCodeGen {
         // all-caps constant identifiers (`_SC_*`), which shadows imported
         // constants and triggers Rust E0530. Drop those placeholders.
         output = Self::normalize_const_like_unknown_enum_local_placeholders(&output);
+        // Builtin math wrappers can degrade into local `_builtin_fn_type`
+        // zeroed placeholders that shadow preamble helper functions.
+        output = Self::normalize_builtin_fn_local_zeroed_placeholders(&output);
         // Degraded pointer truthiness can lower as `if !ptr`; normalize to
         // explicit `.is_null()` checks for pointer-typed bindings.
         output = Self::normalize_pointer_negation_conditions(&output);
