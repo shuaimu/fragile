@@ -3,8 +3,13 @@
 Minimal demo showing how to compile a `.rs` file into a `.o` with `rustc --emit=obj`
 from CMake and link that object into a C++ executable.
 
-This variant demonstrates Rust functions without `extern "C"` on the Rust side.
-The C++ declarations bind to exact symbol names via `asm("...")`.
+This variant demonstrates a Rust-owned object being created and used from C++
+without `extern "C"` on the Rust side. C++ declarations bind to exact Rust
+symbol names via `asm("...")`.
+
+To keep `rustc --emit=obj` linking simple, the object lives in C++-allocated
+aligned storage. Rust provides `size/align/init/push/get/drop` functions, and
+C++ keeps the type opaque.
 
 ## Build and run
 
@@ -18,8 +23,10 @@ cmake --build build -j
 Expected output:
 
 ```text
-rust_add(7, 5) = 12
-rust_mul(7, 5) = 35
+push(4) -> 22
+push(-2) -> 16
+push(5) -> 31
+final total -> 31
 ```
 
 ## Key CMake pattern
@@ -40,3 +47,5 @@ Then `${RUST_OBJ}` is marked as an external generated object and attached to a n
 
 This demo intentionally calls non-`extern "C"` Rust functions from C++ and works
 for this local single-toolchain build. Rust ABI is not a stable cross-toolchain ABI.
+The object is passed as an opaque pointer and managed by Rust lifecycle functions
+(`size`/`align`/`init`/`drop`).
