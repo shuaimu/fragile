@@ -3,14 +3,18 @@
 ## Table of Contents
 
 - [1. Purpose and Scope](#1-purpose-and-scope)
+- [1.1 2026 Program Goal: Mode 1 Seamless Interop](#11-2026-program-goal-mode-1-seamless-interop)
+- [1.2 Mako as Primary Validation Target](#12-mako-as-primary-validation-target)
 - [2. End-to-End Architecture](#2-end-to-end-architecture)
 - [2.3 C++ `_v` trait globals and export linkage](#23-c-_v-trait-globals-and-export-linkage)
+- [2.4 Mode 1 call-stitching architecture (target state)](#24-mode-1-call-stitching-architecture-target-state)
 - [3. Internal Data Models](#3-internal-data-models)
 - [4. C++ Declaration to Rust Item Mapping](#4-c-declaration-to-rust-item-mapping)
 - [5. C++ Type to Rust Type Mapping](#5-c-type-to-rust-type-mapping)
 - [5.4 Rusty-C++ alias normalization to Rust std types](#54-rusty-c-alias-normalization-to-rust-std-types)
 - [5.5 Lowered std_collections alias closure](#55-lowered-std_collections-alias-closure)
 - [6. Object Model and Inheritance Design](#6-object-model-and-inheritance-design)
+- [6.4 Mode 1 non-primitive object interop contract](#64-mode-1-non-primitive-object-interop-contract)
 - [7. Function, Method, Constructor, Destructor Mapping](#7-function-method-constructor-destructor-mapping)
 - [8. Statement Mapping](#8-statement-mapping)
 - [9. Expression Mapping](#9-expression-mapping)
@@ -35,7 +39,48 @@ Scope of this book:
 Non-goals:
 
 - It is not a user tutorial.
-- It does not describe planned behavior; it describes current implementation.
+- It is still implementation-first, but now also records the active near-term program goal and rollout target.
+
+## 1.1 2026 Program Goal: Mode 1 Seamless Interop
+
+Fragile's active goal for 2026 is **Mode 1 full-transpile seamless interop**:
+
+- C++ translation units are transpiled to Rust and compiled as Rust objects.
+- User-written Rust and transpiled C++-origin Rust should call each other as normal Rust code in the same build graph.
+- Users should not need to introduce `extern "C"` for intra-project Rust/C++-origin interactions.
+- C ABI boundaries are kept only for true foreign interfaces (system libraries, external process/plugin boundaries).
+
+Operational constraints for this goal:
+
+- Build all participating code with one pinned Rust toolchain in the same project build.
+- Preserve current compile correctness on large codebases while tightening cross-TU Rust identity and symbol resolution.
+- Keep current declaration-only C-linkage fallbacks in place until equivalent Rust-native call stitching is proven for the same surfaces.
+
+Initial implementation focus areas:
+
+1. Stabilize cross-TU type identity (`cpp_fqn -> canonical rust path`) so non-primitive object types stay consistent.
+2. Prefer Rust-native call rewriting for transpiled call sites when callee identity is known in-project.
+3. Limit generated ABI shims to unresolved/foreign boundaries, not default internal paths.
+4. Validate each step on `vendor/mako` before broadening to other projects.
+
+## 1.2 Mako as Primary Validation Target
+
+`vendor/mako` is the primary integration target and release gate for this Mode 1 workstream.
+
+Milestone gates:
+
+1. **Smoke gate**: targeted `test_rpc` build+run path is stable.
+2. **Subset gate**: RPC-focused ctest subset remains green while removing internal interop friction.
+3. **Full gate**: clean full build + full ctest pass in the selected mako build directory.
+
+Verification command used for this update (March 8, 2026):
+
+```bash
+cd vendor/mako/build_fragilec_clanglld_probecompat
+ctest -R '^test_rpc$' --output-on-failure
+```
+
+Observed result: `1/1` passed (`test_rpc`).
 
 ## 2. End-to-End Architecture
 
@@ -199,6 +244,26 @@ Why this matters:
 - exporting these names as plain symbols can produce duplicate-symbol linker failures when many translation units instantiate the same header trait variable template.
 - keeping them as TU-local Rust-mangled statics preserves buildability without introducing mako-specific hacks.
 
+### 2.4 Mode 1 call-stitching architecture (target state)
+
+Mode 1 shifts internal interop from ABI shims to Rust-native call stitching.
+
+Target call path:
+
+1. Parse/export C++ and transpile to Rust text per TU.
+2. Build a project-wide symbol index from:
+  - transpiled Rust items,
+  - user-authored Rust items that are declared as C++-visible,
+  - namespace/type aliases resolved to canonical Rust paths.
+3. Rewrite resolvable call sites to direct Rust path calls (no C ABI wrapper).
+4. Keep generated ABI wrappers only where resolution is unknown or external.
+5. Compile/link with one pinned Rust toolchain for the whole project graph.
+
+Practical implication:
+
+- Declaration-only wrappers (`extern "C"` + shim) remain as a compatibility fallback, not the default internal mechanism.
+- Internal project calls should converge to direct Rust calls as symbol-index coverage improves.
+
 ## 3. Internal Data Models
 
 Core node model: `crates/fragile-clang/src/ast.rs`
@@ -359,6 +424,31 @@ Trait-only dispatch was removed in favor of explicit vtable design:
 - reference casts panic (`std::bad_cast` equivalent path)
 
 `typeid` lowers to `std::any::TypeId::of::<T>()` based forms.
+
+### 6.4 Mode 1 non-primitive object interop contract
+
+This section defines the target semantics for complex object interop under full-transpile Mode 1.
+
+Rust calling C++-origin objects:
+
+- Transpiled C++ classes are treated as normal Rust structs/impls in the final graph.
+- Method calls from user Rust should resolve to direct Rust method calls on those structs.
+- References/ownership follow Rust semantics (`&`, `&mut`, move), with transpiler-generated glue only for unsupported C++ constructs.
+
+C++ calling Rust-owned objects/functions:
+
+- User Rust items intended for C++ call sites are indexed as C++-visible Rust symbols.
+- During C++ transpilation, matching call sites are rewritten to direct Rust path calls against those symbols.
+- No user-written `extern "C"` is required for this in-project path.
+
+Boundary rule:
+
+- `extern "C"` is retained only for true foreign boundaries (system/external ABI), not for internal project calls where both sides end up as Rust in one build graph.
+
+Current state vs target:
+
+- Current implementation still emits some declaration-only ABI wrappers for compatibility.
+- Mode 1 work reduces those wrappers as canonical symbol mapping and call rewriting become complete.
 
 ## 7. Function, Method, Constructor, Destructor Mapping
 
