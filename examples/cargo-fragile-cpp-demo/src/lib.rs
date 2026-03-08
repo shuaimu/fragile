@@ -1,10 +1,10 @@
-unsafe extern "C" {
-    fn fragile_demo_add(a: i32, b: i32) -> i32;
+#[allow(warnings)]
+mod fragile_demo_cpp {
+    include!(concat!(env!("OUT_DIR"), "/fragile_demo_cpp.rs"));
 }
 
 pub fn add(a: i32, b: i32) -> i32 {
-    // The linked symbol is produced by the Fragile-built C++ static library.
-    unsafe { fragile_demo_add(a, b) }
+    fragile_demo_cpp::fragile_demo_add(a, b)
 }
 
 #[cfg(test)]
