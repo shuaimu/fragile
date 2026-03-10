@@ -8,7 +8,8 @@
 //! class templates like std::vector<T> with concrete types substituted.
 
 use crate::ast::{
-    AccessSpecifier, ClangNode, ClangNodeKind, SourceLocation, TemplateSpecializationKind,
+    AccessSpecifier, ClangNode, ClangNodeKind, ConstructorKind, SourceLocation,
+    TemplateSpecializationKind,
 };
 use crate::types::CppType;
 use fragile_ast_exporter::{
@@ -317,12 +318,34 @@ pub struct MethodInfo {
 pub fn extract_method_bodies_with_params(
     ctx: &AstContext,
 ) -> HashMap<(String, String), Vec<MethodInfo>> {
+    let debug_template_methods = std::env::var("FRAGILE_DEBUG_TEMPLATE_METHODS").is_ok();
+    fn collect_cxx_method_descendants(
+        ctx: &AstContext,
+        node_id: u64,
+        out: &mut Vec<u64>,
+    ) {
+        let Some(node) = ctx.ast_nodes.get(&node_id) else {
+            return;
+        };
+        if node.tag == ASTEntryTag::TagCXXMethodDecl {
+            out.push(node_id);
+            return;
+        }
+        for child_opt in &node.children {
+            let Some(child_id) = child_opt else {
+                continue;
+            };
+            collect_cxx_method_descendants(ctx, *child_id, out);
+        }
+    }
+
     // First, build a map from method node ID to parent class name
     let mut method_to_class: HashMap<u64, String> = HashMap::new();
 
     for (_id, node) in &ctx.ast_nodes {
         if node.tag == ASTEntryTag::TagCXXRecordDecl
             || node.tag == ASTEntryTag::TagClassTemplateSpecializationDecl
+            || node.tag == ASTEntryTag::TagClassTemplateDecl
         {
             let class_name = node.get_string(0).unwrap_or("").to_string();
             if class_name.is_empty() {
@@ -332,8 +355,22 @@ pub fn extract_method_bodies_with_params(
             for child_opt in &node.children {
                 if let Some(child_id) = child_opt {
                     if let Some(child_node) = ctx.ast_nodes.get(child_id) {
-                        if child_node.tag == ASTEntryTag::TagCXXMethodDecl {
-                            method_to_class.insert(*child_id, class_name.clone());
+                        match child_node.tag {
+                            ASTEntryTag::TagCXXMethodDecl => {
+                                method_to_class.insert(*child_id, class_name.clone());
+                            }
+                            // Template class methods are often nested under an inner
+                            // CXXRecordDecl child of ClassTemplateDecl.
+                            ASTEntryTag::TagCXXRecordDecl
+                                if node.tag == ASTEntryTag::TagClassTemplateDecl =>
+                            {
+                                let mut method_ids = Vec::new();
+                                collect_cxx_method_descendants(ctx, *child_id, &mut method_ids);
+                                for method_id in method_ids {
+                                    method_to_class.insert(method_id, class_name.clone());
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -367,10 +404,26 @@ pub fn extract_method_bodies_with_params(
                 }
             }
 
+            let class_name = method_to_class.get(id).cloned().unwrap_or_default();
+            if debug_template_methods
+                && matches!(
+                    method_name.as_str(),
+                    "insert" | "search" | "insert_if_absent" | "remove" | "clear" | "size"
+                )
+                && (class_name.contains("mbtree") || class_name.is_empty())
+            {
+                eprintln!(
+                    "[METHOD BODY EXTRACT] id={} class='{}' method='{}' has_body={} params={}",
+                    id,
+                    class_name,
+                    method_name,
+                    body_id.is_some(),
+                    param_names.len()
+                );
+            }
+
             if let Some(body_id) = body_id {
                 if let Some(body_node) = convert_to_clang_node(ctx, body_id) {
-                    let class_name = method_to_class.get(id).cloned().unwrap_or_default();
-
                     let method_info = MethodInfo {
                         param_names: param_names.clone(),
                         body: body_node,
@@ -564,6 +617,46 @@ fn dedup_function_decl_child_ids(ctx: &AstContext, parent: &AstNode) -> Vec<u64>
     }
 
     deduped
+}
+
+fn extract_case_stmt_value(ctx: &AstContext, node: &AstNode) -> i128 {
+    if let Some(value) = node.get_int(0) {
+        return value as i128;
+    }
+
+    fn value_from_node(ctx: &AstContext, node: &AstNode, depth: usize) -> Option<i128> {
+        if depth > 12 {
+            return None;
+        }
+
+        match node.tag {
+            ASTEntryTag::TagIntegerLiteral | ASTEntryTag::TagCharacterLiteral => {
+                node.get_int(0).map(|v| v as i128)
+            }
+            ASTEntryTag::TagUnaryOperator => {
+                let inner = node
+                    .children
+                    .iter()
+                    .flatten()
+                    .find_map(|child_id| ctx.ast_nodes.get(child_id))
+                    .and_then(|child| value_from_node(ctx, child, depth + 1));
+                let op = node.get_string(1).unwrap_or(node.get_string(0).unwrap_or(""));
+                match op {
+                    "-" => inner.map(|v| -v),
+                    "+" => inner,
+                    _ => inner,
+                }
+            }
+            _ => node
+                .children
+                .iter()
+                .flatten()
+                .find_map(|child_id| ctx.ast_nodes.get(child_id))
+                .and_then(|child| value_from_node(ctx, child, depth + 1)),
+        }
+    }
+
+    value_from_node(ctx, node, 0).unwrap_or(0)
 }
 
 fn convert_node_with_depth(
@@ -842,9 +935,21 @@ fn convert_node_with_depth(
         ASTEntryTag::TagFieldDecl => convert_field_decl_node(ctx, node),
 
         ASTEntryTag::TagCXXMethodDecl => {
-            // Method declarations within bodies - skip (these are inline definitions)
-            // Return a placeholder that won't generate code
-            ClangNodeKind::Unknown("InlineMethodDecl".to_string())
+            // Keep non-static methods on the existing libtooling body extraction path.
+            // For static inline methods with local bodies (common utility/factory
+            // helpers in headers), emit real method declarations so `Type::method()`
+            // calls can resolve in strict object mode.
+            let is_static = node.get_bool(1).unwrap_or(false);
+            let has_body = node.children.iter().any(|child_id_opt| {
+                child_id_opt
+                    .and_then(|child_id| ctx.ast_nodes.get(&child_id))
+                    .is_some_and(|child_node| child_node.tag == ASTEntryTag::TagCompoundStmt)
+            });
+            if is_static && has_body {
+                convert_cxx_method_decl_node(ctx, node)
+            } else {
+                ClangNodeKind::Unknown("InlineMethodDecl".to_string())
+            }
         }
 
         ASTEntryTag::TagCXXConstructorDecl | ASTEntryTag::TagCXXDestructorDecl => {
@@ -872,8 +977,8 @@ fn convert_node_with_depth(
 
         ASTEntryTag::TagCaseStmt => {
             // Case statements have a value expression and body
-            // Try to extract the case value
-            let value = node.get_int(0).unwrap_or(0) as i128;
+            // Value can be in extras or nested under ConstantExpr/wrapper children.
+            let value = extract_case_stmt_value(ctx, node);
             ClangNodeKind::CaseStmt {
                 value,
                 enum_name: None,
@@ -1121,6 +1226,224 @@ fn convert_function_decl_node(
         is_noexcept: false,
         is_coroutine: false,
         coroutine_info: None,
+    }
+}
+
+fn resolve_parent_record_name(
+    ctx: &AstContext,
+    node: &fragile_ast_exporter::clang_ast::AstNode,
+    parent_extra_index: usize,
+) -> String {
+    if let Some(parent_id) = node.get_u64(parent_extra_index).filter(|id| *id != 0) {
+        if let Some(parent) = ctx.ast_nodes.get(&parent_id) {
+            if matches!(
+                parent.tag,
+                ASTEntryTag::TagCXXRecordDecl
+                    | ASTEntryTag::TagClassTemplateDecl
+                    | ASTEntryTag::TagClassTemplateSpecializationDecl
+            ) {
+                let parent_name = parent.get_string(0).unwrap_or("").to_string();
+                if !parent_name.is_empty() {
+                    return parent_name;
+                }
+            }
+        }
+    }
+
+    // Fallback when parent pointer payload is unavailable: recover the direct
+    // record child relationship from exported children links.
+    for candidate in ctx.ast_nodes.values() {
+        if !matches!(
+            candidate.tag,
+            ASTEntryTag::TagCXXRecordDecl
+                | ASTEntryTag::TagClassTemplateDecl
+                | ASTEntryTag::TagClassTemplateSpecializationDecl
+        ) {
+            continue;
+        }
+        if !candidate
+            .children
+            .iter()
+            .any(|child| child.is_some_and(|id| id == node.id))
+        {
+            continue;
+        }
+        let parent_name = candidate.get_string(0).unwrap_or("").to_string();
+        if !parent_name.is_empty() {
+            return parent_name;
+        }
+    }
+
+    String::new()
+}
+
+fn convert_cxx_method_decl_node(
+    ctx: &AstContext,
+    node: &fragile_ast_exporter::clang_ast::AstNode,
+) -> ClangNodeKind {
+    let name = node.get_string(0).unwrap_or("").to_string();
+    if name.is_empty() {
+        return ClangNodeKind::Unknown("InlineMethodDecl".to_string());
+    }
+
+    let class_name = resolve_parent_record_name(ctx, node, 7);
+    let is_static = node.get_bool(1).unwrap_or(false);
+    let is_const = node.get_bool(2).unwrap_or(false);
+    let is_virtual = node.get_bool(3).unwrap_or(false);
+    let is_pure_virtual = node.get_bool(4).unwrap_or(false);
+    let access = decode_access_specifier(node.get_int(5));
+
+    let (return_type_opt, fn_param_types, _is_variadic) = if let Some(type_id) = node.type_id {
+        resolve_function_proto_type(ctx, type_id)
+    } else {
+        (None, Vec::new(), false)
+    };
+    let return_type = return_type_opt.unwrap_or(CppType::Void);
+
+    let mut params: Vec<(String, CppType)> = Vec::new();
+    let mut param_index = 0usize;
+    for child_id_opt in &node.children {
+        let Some(child_id) = child_id_opt else {
+            continue;
+        };
+        let Some(child_node) = ctx.ast_nodes.get(child_id) else {
+            continue;
+        };
+        if child_node.tag != ASTEntryTag::TagParmVarDecl {
+            continue;
+        }
+
+        let raw_param_name = child_node.get_string(0).unwrap_or("").to_string();
+        let param_name = if raw_param_name.is_empty() {
+            format!("arg{param_index}")
+        } else {
+            raw_param_name
+        };
+        let param_type = child_node
+            .type_id
+            .and_then(|type_id| resolve_type(ctx, type_id))
+            .or_else(|| fn_param_types.get(param_index).cloned())
+            .unwrap_or_else(|| CppType::Named("auto".to_string()));
+        params.push((param_name, param_type));
+        param_index += 1;
+    }
+    if params.is_empty() && !fn_param_types.is_empty() {
+        for (idx, ty) in fn_param_types.iter().cloned().enumerate() {
+            params.push((format!("arg{idx}"), ty));
+        }
+    }
+
+    let is_definition = node.children.iter().any(|child_id_opt| {
+        child_id_opt
+            .and_then(|child_id| ctx.ast_nodes.get(&child_id))
+            .is_some_and(|child_node| child_node.tag == ASTEntryTag::TagCompoundStmt)
+    });
+
+    ClangNodeKind::CXXMethodDecl {
+        class_name,
+        name,
+        return_type,
+        params,
+        is_definition,
+        is_static,
+        is_virtual,
+        is_pure_virtual,
+        is_override: false,
+        is_final: false,
+        is_const,
+        access,
+    }
+}
+
+fn convert_cxx_constructor_decl_node(
+    ctx: &AstContext,
+    node: &fragile_ast_exporter::clang_ast::AstNode,
+) -> ClangNodeKind {
+    let class_name = resolve_parent_record_name(ctx, node, 6);
+    let is_default_ctor = node.get_bool(0).unwrap_or(false);
+    let is_copy_ctor = node.get_bool(1).unwrap_or(false);
+    let is_move_ctor = node.get_bool(2).unwrap_or(false);
+    let access = decode_access_specifier(node.get_int(4));
+
+    let ctor_kind = if is_copy_ctor {
+        ConstructorKind::Copy
+    } else if is_move_ctor {
+        ConstructorKind::Move
+    } else if is_default_ctor {
+        ConstructorKind::Default
+    } else {
+        ConstructorKind::Other
+    };
+
+    let (_return_type_opt, fn_param_types, _is_variadic) = if let Some(type_id) = node.type_id {
+        resolve_function_proto_type(ctx, type_id)
+    } else {
+        (None, Vec::new(), false)
+    };
+
+    let mut params: Vec<(String, CppType)> = Vec::new();
+    let mut param_index = 0usize;
+    for child_id_opt in &node.children {
+        let Some(child_id) = child_id_opt else {
+            continue;
+        };
+        let Some(child_node) = ctx.ast_nodes.get(child_id) else {
+            continue;
+        };
+        if child_node.tag != ASTEntryTag::TagParmVarDecl {
+            continue;
+        }
+
+        let raw_param_name = child_node.get_string(0).unwrap_or("").to_string();
+        let param_name = if raw_param_name.is_empty() {
+            format!("arg{param_index}")
+        } else {
+            raw_param_name
+        };
+        let param_type = child_node
+            .type_id
+            .and_then(|type_id| resolve_type(ctx, type_id))
+            .or_else(|| fn_param_types.get(param_index).cloned())
+            .unwrap_or_else(|| CppType::Named("auto".to_string()));
+        params.push((param_name, param_type));
+        param_index += 1;
+    }
+    if params.is_empty() && !fn_param_types.is_empty() {
+        for (idx, ty) in fn_param_types.iter().cloned().enumerate() {
+            params.push((format!("arg{idx}"), ty));
+        }
+    }
+
+    let is_definition = node.children.iter().any(|child_id_opt| {
+        child_id_opt
+            .and_then(|child_id| ctx.ast_nodes.get(&child_id))
+            .is_some_and(|child_node| child_node.tag == ASTEntryTag::TagCompoundStmt)
+    });
+
+    ClangNodeKind::ConstructorDecl {
+        class_name,
+        params,
+        is_definition,
+        ctor_kind,
+        access,
+    }
+}
+
+fn convert_cxx_destructor_decl_node(
+    ctx: &AstContext,
+    node: &fragile_ast_exporter::clang_ast::AstNode,
+) -> ClangNodeKind {
+    let class_name = resolve_parent_record_name(ctx, node, 3);
+    let access = decode_access_specifier(node.get_int(1));
+    let is_definition = node.children.iter().any(|child_id_opt| {
+        child_id_opt
+            .and_then(|child_id| ctx.ast_nodes.get(&child_id))
+            .is_some_and(|child_node| child_node.tag == ASTEntryTag::TagCompoundStmt)
+    });
+    ClangNodeKind::DestructorDecl {
+        class_name,
+        is_definition,
+        access,
     }
 }
 
@@ -3443,6 +3766,60 @@ int use_passthrough() {
     }
 
     #[test]
+    fn test_parse_file_preserves_extern_call_expr_in_main_body() {
+        let _guard = libtooling_parse_test_lock()
+            .lock()
+            .expect("parse-test lock should not be poisoned");
+        let log_dir = unique_temp_dir("fragile_libtooling_extern_call_expr_main");
+        fs::create_dir_all(&log_dir).expect("failed to create temp dir");
+        let source_path = log_dir.join("extern_call_main_fixture.cpp");
+        fs::write(
+            &source_path,
+            r#"
+extern "C" long ext(long);
+
+int main() {
+    return (int)ext(7);
+}
+"#,
+        )
+        .expect("failed to write fixture source");
+
+        let parser = LibToolingParser::new().with_compile_commands_dir(
+            log_dir
+                .to_str()
+                .expect("temp dir path should be valid UTF-8"),
+        );
+        let ctx = parser
+            .parse_file(&source_path)
+            .expect("libtooling parse should succeed");
+
+        let main_decl = ctx
+            .ast_nodes
+            .values()
+            .find(|node| {
+                node.tag == ASTEntryTag::TagFunctionDecl && node.get_string(0) == Some("main")
+            })
+            .expect("expected main function declaration in exported AST");
+        let converted_main = convert_to_clang_node(&ctx, main_decl.id)
+            .expect("converted main function should be available");
+
+        // Walk main's converted body and assert a call expression is preserved.
+        fn contains_call_expr(node: &ClangNode) -> bool {
+            if matches!(node.kind, ClangNodeKind::CallExpr { .. }) {
+                return true;
+            }
+            node.children.iter().any(contains_call_expr)
+        }
+
+        assert!(
+            contains_call_expr(&converted_main),
+            "converted main should preserve CallExpr nodes for extern calls, got:\n{:#?}",
+            converted_main
+        );
+    }
+
+    #[test]
     fn test_parse_file_converts_class_template_specialization_decl_and_children() {
         let _guard = libtooling_parse_test_lock()
             .lock()
@@ -3732,6 +4109,106 @@ struct Box {
                 .iter()
                 .any(|child| matches!(child.kind, ClangNodeKind::TemplateTypeParmDecl { .. })),
             "class template conversion should map template parameter children"
+        );
+    }
+
+    #[test]
+    fn test_extract_method_bodies_with_params_collects_class_template_record_methods() {
+        let mut ast_nodes = HashMap::new();
+        ast_nodes.insert(
+            1,
+            make_node(
+                1,
+                ASTEntryTag::TagClassTemplateDecl,
+                vec![Some(2), Some(3)],
+                vec![
+                    CborValue::Text("mbtree".to_string()),
+                    CborValue::Array(vec![CborValue::Text("P".to_string())]),
+                    CborValue::Bool(true),
+                ],
+            ),
+        );
+        ast_nodes.insert(
+            2,
+            make_node(
+                2,
+                ASTEntryTag::TagTemplateTypeParmDecl,
+                vec![],
+                vec![
+                    CborValue::Text("P".to_string()),
+                    CborValue::Integer(0.into()),
+                    CborValue::Integer(0.into()),
+                    CborValue::Bool(false),
+                ],
+            ),
+        );
+        ast_nodes.insert(
+            3,
+            make_node(
+                3,
+                ASTEntryTag::TagCXXRecordDecl,
+                vec![Some(4)],
+                vec![
+                    CborValue::Text("".to_string()),
+                    CborValue::Bool(false),
+                    CborValue::Bool(true),
+                    CborValue::Bool(false),
+                    CborValue::Bool(false),
+                    CborValue::Bool(false),
+                    CborValue::Bool(false),
+                ],
+            ),
+        );
+        ast_nodes.insert(
+            4,
+            make_node(
+                4,
+                ASTEntryTag::TagCXXMethodDecl,
+                vec![Some(5), Some(6)],
+                vec![
+                    CborValue::Text("search".to_string()),
+                    CborValue::Bool(false),
+                    CborValue::Bool(false),
+                    CborValue::Bool(false),
+                    CborValue::Bool(false),
+                    CborValue::Integer(0.into()),
+                ],
+            ),
+        );
+        ast_nodes.insert(
+            5,
+            make_node(
+                5,
+                ASTEntryTag::TagParmVarDecl,
+                vec![],
+                vec![CborValue::Text("k".to_string())],
+            ),
+        );
+        ast_nodes.insert(
+            6,
+            make_node(
+                6,
+                ASTEntryTag::TagCompoundStmt,
+                vec![],
+                vec![],
+            ),
+        );
+
+        let ctx = AstContext {
+            ast_nodes,
+            type_nodes: HashMap::new(),
+            top_nodes: vec![1],
+            files: vec![],
+        };
+
+        let methods = extract_method_bodies_with_params(&ctx);
+        assert!(
+            methods.contains_key(&(String::from("mbtree"), String::from("search"))),
+            "class template method extraction should map nested record methods to the template class name"
+        );
+        assert!(
+            methods.contains_key(&(String::new(), String::from("search"))),
+            "class template method extraction should also register fallback empty-class method keys"
         );
     }
 }

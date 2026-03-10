@@ -39,6 +39,20 @@ impl<T> FragileOptionIsNull for std::option::Option<T> {
         self.is_none()
     }
 }
+pub trait FragileRustStringCompat {
+    fn data(&self) -> *const i8;
+    fn length(&self) -> i32;
+}
+impl FragileRustStringCompat for std::string::String {
+    #[inline]
+    fn data(&self) -> *const i8 {
+        self.as_ptr() as *const i8
+    }
+    #[inline]
+    fn length(&self) -> i32 {
+        self.len() as i32
+    }
+}
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct FragileVaList {
@@ -169,6 +183,39 @@ unsafe extern "C" {
     ) -> i64;
     #[link_name = "fcntl"]
     fn __fragile_fcntl_ffi(fd: i32, cmd: i32, arg: i32) -> i32;
+    #[link_name = "socket"]
+    fn __fragile_socket_ffi(domain: i32, ty: i32, protocol: i32) -> i32;
+    #[link_name = "bind"]
+    fn __fragile_bind_ffi(sockfd: i32, addr: *const std::ffi::c_void, addrlen: u32) -> i32;
+    #[link_name = "getsockname"]
+    fn __fragile_getsockname_ffi(
+        sockfd: i32,
+        addr: *mut std::ffi::c_void,
+        addrlen: *mut u32,
+    ) -> i32;
+    #[link_name = "gethostname"]
+    fn __fragile_gethostname_ffi(name: *mut i8, len: usize) -> i32;
+    #[link_name = "getaddrinfo"]
+    fn __fragile_getaddrinfo_ffi(
+        node: *const i8,
+        service: *const i8,
+        hints: *const std::ffi::c_void,
+        res: *mut *mut std::ffi::c_void,
+    ) -> i32;
+    #[link_name = "freeaddrinfo"]
+    fn __fragile_freeaddrinfo_ffi(res: *mut std::ffi::c_void);
+    #[link_name = "close"]
+    fn __fragile_close_ffi(fd: i32) -> i32;
+    #[link_name = "getopt"]
+    fn __fragile_getopt_ffi(argc: i32, argv: *mut *mut i8, optstring: *const i8) -> i32;
+    #[link_name = "optarg"]
+    pub static mut __fragile_optarg: *mut i8;
+    #[link_name = "optind"]
+    pub static mut __fragile_optind: i32;
+    #[link_name = "opterr"]
+    pub static mut __fragile_opterr: i32;
+    #[link_name = "optopt"]
+    pub static mut __fragile_optopt: i32;
     pub fn clock() -> i64;
     pub fn isatty(fd: i32) -> i32;
     pub fn printf(format: *const i8, ...) -> i32;
@@ -190,6 +237,7 @@ unsafe extern "C" {
 }
 
 pub const _SC_NPROCESSORS_ONLN: i32 = 84;
+pub const SOCK_STREAM: i32 = 1;
 
 #[inline]
 pub fn strlen(s: *const i8) -> i32 {
@@ -224,6 +272,93 @@ pub fn getdelim(lineptr: *mut *mut i8, n: *mut u64, delim: i8, stream: *mut std:
 #[inline]
 pub fn fcntl(fd: i32, cmd: i32, arg: i32) -> i32 {
     unsafe { __fragile_fcntl_ffi(fd, cmd, arg) }
+}
+
+#[inline]
+pub fn socket(domain: i32, ty: i32, protocol: i32) -> i32 {
+    unsafe { __fragile_socket_ffi(domain, ty, protocol) }
+}
+
+#[inline]
+pub fn bind<T>(sockfd: i32, addr: *const T, addrlen: u32) -> i32 {
+    unsafe { __fragile_bind_ffi(sockfd, addr as *const std::ffi::c_void, addrlen) }
+}
+
+#[inline]
+pub fn getsockname<T>(sockfd: i32, addr: *mut T, addrlen: *mut u32) -> i32 {
+    unsafe { __fragile_getsockname_ffi(sockfd, addr as *mut std::ffi::c_void, addrlen) }
+}
+
+#[inline]
+pub fn gethostname(name: *mut i8, len: i32) -> i32 {
+    let n = if len < 0 { 0usize } else { len as usize };
+    unsafe { __fragile_gethostname_ffi(name, n) }
+}
+
+#[inline]
+pub fn getaddrinfo<H, R>(
+    node: *const i8,
+    service: *const i8,
+    hints: *const H,
+    res: *mut *mut R,
+) -> i32 {
+    unsafe {
+        __fragile_getaddrinfo_ffi(
+            node,
+            service,
+            hints as *const std::ffi::c_void,
+            res as *mut *mut std::ffi::c_void,
+        )
+    }
+}
+
+#[inline]
+pub fn freeaddrinfo<T>(res: *mut T) {
+    unsafe { __fragile_freeaddrinfo_ffi(res as *mut std::ffi::c_void) }
+}
+
+#[inline]
+pub fn close(fd: i32) -> i32 {
+    unsafe { __fragile_close_ffi(fd) }
+}
+
+#[inline]
+pub fn __gv_error(_line: i32, _file: *const i8, msg: *const i8) {
+    eprintln!("{}", FragileCStrDisplay(msg));
+}
+
+#[inline]
+pub fn atoi(s: *const i8) -> i32 {
+    if s.is_null() {
+        return 0;
+    }
+    let cstr = unsafe { std::ffi::CStr::from_ptr(s) };
+    cstr.to_str()
+        .ok()
+        .and_then(|raw| raw.trim().parse::<i32>().ok())
+        .unwrap_or(0)
+}
+
+#[inline]
+pub fn getopt(argc: i32, argv: *const *mut i8, optstring: *const i8) -> i32 {
+    unsafe { __fragile_getopt_ffi(argc, argv as *mut *mut i8, optstring) }
+}
+
+#[inline]
+pub fn signal<T>(_sig: i32, _handler: T) -> i32 {
+    0
+}
+
+#[inline]
+pub fn tolower<T: Into<i32>>(ch: T) -> i32 {
+    let c = ch.into();
+    if (65..=90).contains(&c) { c + 32 } else { c }
+}
+
+#[inline]
+pub fn toupper<T: Into<i32>>(ch: T) -> i32 {
+    let c = ch.into();
+    if (97..=122).contains(&c) { c - 32 } else { c }
 }
 
 #[inline]
