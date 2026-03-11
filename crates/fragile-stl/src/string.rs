@@ -8,6 +8,36 @@ pub struct std_string {
 }
 
 impl std_string {
+    pub const npos: u64 = u64::MAX;
+
+    fn alloc_i8(capacity: usize) -> Option<*mut i8> {
+        let layout = match std::alloc::Layout::array::<i8>(capacity) {
+            Ok(layout) => layout,
+            Err(_) => return None,
+        };
+        let ptr = unsafe { std::alloc::alloc(layout) as *mut i8 };
+        if ptr.is_null() {
+            std::alloc::handle_alloc_error(layout);
+        }
+        Some(ptr)
+    }
+
+    fn dealloc_i8(ptr: *mut i8, capacity: usize) {
+        if ptr == std::ptr::null_mut() {
+            return;
+        }
+        if capacity == 0 {
+            return;
+        }
+        let layout = match std::alloc::Layout::array::<i8>(capacity) {
+            Ok(layout) => layout,
+            Err(_) => return,
+        };
+        unsafe {
+            std::alloc::dealloc(ptr as *mut u8, layout);
+        }
+    }
+
     pub fn new_0() -> Self {
         Self {
             _data: std::ptr::null_mut(),
@@ -25,24 +55,26 @@ impl std_string {
                 len += 1;
             }
         }
-        let cap = len + 1;
-        let layout = std::alloc::Layout::array::<i8>(cap).unwrap();
-        let data = unsafe { std::alloc::alloc(layout) as *mut i8 };
+        let cap = len.saturating_add(1);
+        let buf_ptr = match Self::alloc_i8(cap) {
+            Some(ptr) => ptr,
+            None => return Self::new_0(),
+        };
         unsafe {
-            std::ptr::copy_nonoverlapping(s, data, len);
+            std::ptr::copy_nonoverlapping(s, buf_ptr, len);
         }
         unsafe {
-            *data.add(len) = 0;
+            *buf_ptr.add(len) = 0;
         }
         Self {
-            _data: data,
+            _data: buf_ptr,
             _size: len,
             _capacity: cap,
         }
     }
-    fn ensure_capacity(&mut self, min_capacity: usize) {
-        if self._capacity >= min_capacity && !self._data.is_null() {
-            return;
+    fn ensure_capacity(&mut self, min_capacity: usize) -> bool {
+        if self._capacity >= min_capacity && self._data != std::ptr::null_mut() {
+            return true;
         }
         let mut new_cap = if self._capacity == 0 {
             16
@@ -50,25 +82,36 @@ impl std_string {
             self._capacity
         };
         while new_cap < min_capacity {
-            new_cap = new_cap.saturating_mul(2).max(min_capacity);
-        }
-        let new_layout = std::alloc::Layout::array::<i8>(new_cap).unwrap();
-        let new_data = unsafe { std::alloc::alloc(new_layout) as *mut i8 };
-        if !self._data.is_null() && self._size > 0 {
-            unsafe {
-                std::ptr::copy_nonoverlapping(self._data, new_data, self._size);
+            if new_cap > (usize::MAX / 2) {
+                new_cap = min_capacity;
+                break;
             }
-            let old_layout = std::alloc::Layout::array::<i8>(self._capacity).unwrap();
-            unsafe {
-                std::alloc::dealloc(self._data as *mut u8, old_layout);
-            }
+            new_cap *= 2;
         }
-        self._data = new_data;
+        if new_cap < min_capacity {
+            new_cap = min_capacity;
+        }
+        let new_buf_ptr = match Self::alloc_i8(new_cap) {
+            Some(ptr) => ptr,
+            None => return false,
+        };
+        if self._data != std::ptr::null_mut() {
+            if self._size > 0 {
+                unsafe {
+                    std::ptr::copy_nonoverlapping(self._data, new_buf_ptr, self._size);
+                }
+            }
+            Self::dealloc_i8(self._data, self._capacity);
+        }
+        self._data = new_buf_ptr;
         self._capacity = new_cap;
+        true
     }
     pub fn resize(&mut self, new_size: u64) {
         let new_size = new_size as usize;
-        self.ensure_capacity(new_size.saturating_add(1));
+        if self.ensure_capacity(new_size.saturating_add(1)) == false {
+            return;
+        }
         if new_size > self._size {
             for i in self._size..new_size {
                 unsafe {
@@ -85,19 +128,22 @@ impl std_string {
         let idx = index as usize;
         if idx >= self._size {
             self.resize((idx + 1) as u64);
+            if idx >= self._size || self._data == std::ptr::null_mut() {
+                panic!("std::string index expansion failed");
+            }
         }
         unsafe { &mut *self._data.add(idx) }
     }
     pub fn op_index_const(&self, index: u64) -> &i8 {
         let idx = index as usize;
-        if self._data.is_null() || idx >= self._size {
+        if self._data == std::ptr::null_mut() || idx >= self._size {
             static ZERO: i8 = 0;
             return &ZERO;
         }
         unsafe { &*self._data.add(idx) }
     }
     pub fn c_str(&self) -> *const i8 {
-        if self._data.is_null() {
+        if self._data == std::ptr::null_mut() {
             b"\0".as_ptr() as *const i8
         } else {
             self._data as *const i8
@@ -113,7 +159,9 @@ impl std_string {
         self._size == 0
     }
     pub fn push_back(&mut self, c: i8) {
-        self.ensure_capacity(self._size.saturating_add(2));
+        if self.ensure_capacity(self._size.saturating_add(2)) == false {
+            return;
+        }
         unsafe {
             *self._data.add(self._size) = c;
         }
@@ -142,7 +190,7 @@ impl std_string {
     }
     pub fn clear(&mut self) {
         self._size = 0;
-        if !self._data.is_null() {
+        if self._data != std::ptr::null_mut() {
             unsafe {
                 *self._data = 0;
             }
@@ -154,7 +202,7 @@ impl std_string {
     pub fn substr(&self, pos: u64, count: u64) -> std_string {
         let pos = pos as usize;
         let count = (count as usize).min(self._size.saturating_sub(pos));
-        if pos >= self._size || self._data.is_null() || count == 0 {
+        if pos >= self._size || self._data == std::ptr::null_mut() || count == 0 {
             return std_string::new_0();
         }
         let mut result = std_string::new_0();
@@ -167,18 +215,13 @@ impl std_string {
 
 impl Drop for std_string {
     fn drop(&mut self) {
-        if !self._data.is_null() && self._capacity > 0 {
-            let layout = std::alloc::Layout::array::<i8>(self._capacity).unwrap();
-            unsafe {
-                std::alloc::dealloc(self._data as *mut u8, layout);
-            }
-        }
+        Self::dealloc_i8(self._data, self._capacity);
     }
 }
 
 impl Clone for std_string {
     fn clone(&self) -> Self {
-        if self._data.is_null() || self._size == 0 {
+        if self._data == std::ptr::null_mut() || self._size == 0 {
             return Self::new_0();
         }
         Self::new_1(self._data as *const i8)
@@ -187,7 +230,7 @@ impl Clone for std_string {
 
 impl std::fmt::Display for std_string {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self._data.is_null() || self._size == 0 {
+        if self._data == std::ptr::null_mut() || self._size == 0 {
             return Ok(());
         }
         let slice = unsafe { std::slice::from_raw_parts(self._data as *const u8, self._size) };
