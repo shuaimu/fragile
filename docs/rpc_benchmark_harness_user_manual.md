@@ -4,7 +4,10 @@
 
 `mako_rpcbench_harness.py` provides deterministic command-plan and artifact-contract scaffolding for the active RPC bring-up benchmark lane.
 
-Current scope (leaf `1.1`): planning artifacts only.
+Current scope:
+
+- leaf `1.1`: planning artifacts
+- leaf `1.2`: configure/clean/build capture artifacts for both lanes
 
 ## Script
 
@@ -25,6 +28,18 @@ python3 scripts/mako_rpcbench_harness.py \
 
 The script prints `run_root` on success.
 
+Execution mode (`1.2`, omit `--plan-only`):
+
+```bash
+python3 scripts/mako_rpcbench_harness.py \
+  --workspace-root /home/shuai/workspace/fragile \
+  --mako-root /home/shuai/workspace/fragile/vendor/mako \
+  --run-root /tmp/fragile_mako_rpcbench_leaf_1_2 \
+  --trials 3 \
+  --jobs 16 \
+  --base-port 18900
+```
+
 ## Generated artifacts
 
 Under `run_root`:
@@ -35,6 +50,13 @@ Under `run_root`:
 - lane/trial directories:
   - `lane_clang/trial_01`...
   - `lane_fragilec/trial_01`...
+
+When running in execution mode (`1.2`), each lane also gets:
+
+- `lane_<lane>/configure.status|stdout|stderr`
+- `lane_<lane>/clean.status|stdout|stderr`
+- `lane_<lane>/build.status|stdout|stderr`
+- `lane_<lane>/failure_class.txt`
 
 ## Determinism contract
 
@@ -47,5 +69,5 @@ Under `run_root`:
 
 ## Notes
 
-- `leaf 1.1` does not execute configure/build/run commands.
-- Later leaves (`1.2` onward) consume these contracts to add execution and aggregation behavior.
+- `leaf 1.2` executes only configure/clean/build.
+- `test_rpc` runtime replay, rpcbench trial replay, and QPS aggregation are in later leaves (`1.3+`).

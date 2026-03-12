@@ -2451,3 +2451,45 @@ Aligned with Section 1.3 and `docs/dev/wrong.md`:
 
 - `python3 -m unittest tests/python/test_mako_rpcbench_harness.py -v`
 - full workspace suite (run after leaf integration): `cargo test`
+
+## 40. RPC Bench Harness Configure/Build Capture (2026-03-12)
+
+### Problem
+
+After leaf `1.1`, the harness only emitted plans/manifests. RPC bring-up still lacked
+actual deterministic configure/clean/build capture for both lanes.
+
+### Decision
+
+Implement leaf `1.2` in the harness script directly (generic dual-lane behavior):
+
+- execute `configure`/`clean`/`build` in fixed lane order (`clang`, `fragilec`)
+- capture per-step `status`/`stdout`/`stderr` artifacts under lane directories
+- classify lane failures (`none`, `*_failed`, `*_timeout`) and persist metadata
+- keep runtime replay/aggregation out of scope for later leaves (`1.3+`)
+
+### Wrong-Approach Check
+
+Aligned with Section 1.3 and `docs/dev/wrong.md`:
+
+- no compiler/codegen fallback stubs were added
+- no target-name conditionals were introduced in transpiler code
+- no force-native bypass path was used
+- failure handling is explicit metadata (`failure_class`, `status=-1` for skipped), not hidden
+
+### Implementation
+
+- Updated `scripts/mako_rpcbench_harness.py`:
+  - lane configure/clean/build command execution with timeout capture
+  - deterministic step artifact writing
+  - lane failure-class derivation and persistence
+  - manifest enrichment with per-lane status/failure metadata
+- Added regression tests in `tests/python/test_mako_rpcbench_harness.py`:
+  - execution-mode success capture path
+  - execution-mode configure failure + skipped follow-up path
+
+### Validation
+
+- `python3 -m unittest tests/python/test_mako_rpcbench_harness.py -v`
+- full workspace suite: `cargo test` (currently reports pre-existing `fragile-clang`
+  `ast_codegen` lib-test failures that reproduce on clean `origin/main` baseline)

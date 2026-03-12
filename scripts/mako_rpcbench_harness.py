@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Deterministic command-plan scaffolding for mako rpcbench benchmarking.
+"""Deterministic harness scaffolding for mako rpcbench benchmarking.
 
-This leaf intentionally focuses on planning artifacts only (`--plan-only`), so
-later leaves can plug in configure/build/run execution while keeping command
-shape, trial naming, and artifact contracts stable.
+Leaf 1.1 added plan-only command/manifest scaffolding.
+Leaf 1.2 adds deterministic configure/clean/build execution capture for both
+lanes with per-step status/stdout/stderr artifacts and failure metadata.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import os
 import shlex
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -18,6 +19,24 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 LANES: tuple[str, str] = ("clang", "fragilec")
+COMMAND_TIMEOUT_STATUS = 124
+SKIPPED_STATUS = -1
+
+
+@dataclass(frozen=True)
+class StepResult:
+    status: int
+    stdout: str
+    stderr: str
+    timed_out: bool
+
+
+@dataclass(frozen=True)
+class LaneExecutionSummary:
+    configure_status: int
+    clean_status: int
+    build_status: int
+    failure_class: str
 
 
 @dataclass(frozen=True)
@@ -38,8 +57,12 @@ class HarnessConfig:
     clang_cxx: str
     fragile_cxx: str
     c_compiler: str
+    cmake_bin: str
     build_type: str
     jobs: int
+    configure_timeout_seconds: int
+    clean_timeout_seconds: int
+    build_timeout_seconds: int
     trials: int
     base_port: int
     rpcbench: RpcBenchConfig
@@ -64,8 +87,12 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--clang-cxx", default="clang++")
     parser.add_argument("--fragile-cxx", type=Path, default=workspace_root / "target" / "release" / "fragilec")
     parser.add_argument("--c-compiler", default="clang")
+    parser.add_argument("--cmake-bin", default="cmake")
     parser.add_argument("--build-type", default="release")
     parser.add_argument("--jobs", type=int, default=max(os.cpu_count() or 1, 1))
+    parser.add_argument("--configure-timeout-seconds", type=int, default=900)
+    parser.add_argument("--clean-timeout-seconds", type=int, default=300)
+    parser.add_argument("--build-timeout-seconds", type=int, default=3600)
     parser.add_argument("--trials", type=int, default=3)
     parser.add_argument("--base-port", type=int, default=18900)
     parser.add_argument("--rpc-duration-seconds", type=int, default=10)
@@ -107,6 +134,9 @@ def lane_trial_port(base_port: int, lane: str, trial_index: int) -> int:
 
 def to_harness_config(ns: argparse.Namespace) -> HarnessConfig:
     ensure_positive("jobs", ns.jobs)
+    ensure_positive("configure-timeout-seconds", ns.configure_timeout_seconds)
+    ensure_positive("clean-timeout-seconds", ns.clean_timeout_seconds)
+    ensure_positive("build-timeout-seconds", ns.build_timeout_seconds)
     ensure_positive("trials", ns.trials)
     ensure_positive("rpc-duration-seconds", ns.rpc_duration_seconds)
     ensure_positive("rpc-client-threads", ns.rpc_client_threads)
@@ -125,8 +155,12 @@ def to_harness_config(ns: argparse.Namespace) -> HarnessConfig:
         clang_cxx=ns.clang_cxx,
         fragile_cxx=str(ns.fragile_cxx),
         c_compiler=ns.c_compiler,
+        cmake_bin=ns.cmake_bin,
         build_type=ns.build_type,
         jobs=ns.jobs,
+        configure_timeout_seconds=ns.configure_timeout_seconds,
+        clean_timeout_seconds=ns.clean_timeout_seconds,
+        build_timeout_seconds=ns.build_timeout_seconds,
         trials=ns.trials,
         base_port=ns.base_port,
         rpcbench=RpcBenchConfig(
@@ -157,7 +191,7 @@ def lane_cxx_compiler(cfg: HarnessConfig, lane: str) -> str:
 
 def configure_command(cfg: HarnessConfig, lane: str) -> list[str]:
     return [
-        "cmake",
+        cfg.cmake_bin,
         "-S",
         str(cfg.mako_root),
         "-B",
@@ -171,7 +205,7 @@ def configure_command(cfg: HarnessConfig, lane: str) -> list[str]:
 
 def clean_command(cfg: HarnessConfig, lane: str) -> list[str]:
     return [
-        "cmake",
+        cfg.cmake_bin,
         "--build",
         str(lane_build_dir(cfg.run_root, lane)),
         "--target",
@@ -181,7 +215,7 @@ def clean_command(cfg: HarnessConfig, lane: str) -> list[str]:
 
 def build_command(cfg: HarnessConfig, lane: str) -> list[str]:
     return [
-        "cmake",
+        cfg.cmake_bin,
         "--build",
         str(lane_build_dir(cfg.run_root, lane)),
         "-j",
@@ -255,6 +289,7 @@ def expected_artifacts(cfg: HarnessConfig) -> list[str]:
                 f"{lane_prefix}/build.status",
                 f"{lane_prefix}/build.stdout",
                 f"{lane_prefix}/build.stderr",
+                f"{lane_prefix}/failure_class.txt",
                 f"{lane_prefix}/test_rpc.status",
                 f"{lane_prefix}/test_rpc.stdout",
                 f"{lane_prefix}/test_rpc.stderr",
@@ -304,11 +339,16 @@ def command_plan_lines(cfg: HarnessConfig) -> list[str]:
     return lines
 
 
-def manifest_lines(cfg: HarnessConfig, plan_only: bool) -> list[str]:
+def manifest_lines(
+    cfg: HarnessConfig,
+    plan_only: bool,
+    lane_summaries: dict[str, LaneExecutionSummary] | None = None,
+) -> list[str]:
     rpc = cfg.rpcbench
+    task_leaf = "1.1" if plan_only else "1.2"
     lines = [
         "version=1",
-        "task_leaf=1.1",
+        f"task_leaf={task_leaf}",
         f"workspace_root={cfg.workspace_root}",
         f"mako_root={cfg.mako_root}",
         f"run_root={cfg.run_root}",
@@ -318,8 +358,12 @@ def manifest_lines(cfg: HarnessConfig, plan_only: bool) -> list[str]:
         f"jobs={cfg.jobs}",
         f"build_type={cfg.build_type}",
         f"c_compiler={cfg.c_compiler}",
+        f"cmake_bin={cfg.cmake_bin}",
         f"clang_cxx={cfg.clang_cxx}",
         f"fragile_cxx={cfg.fragile_cxx}",
+        f"configure_timeout_seconds={cfg.configure_timeout_seconds}",
+        f"clean_timeout_seconds={cfg.clean_timeout_seconds}",
+        f"build_timeout_seconds={cfg.build_timeout_seconds}",
         f"rpc_duration_seconds={rpc.duration_seconds}",
         f"rpc_client_threads={rpc.client_threads}",
         f"rpc_outstanding_requests={rpc.outstanding_requests}",
@@ -336,6 +380,12 @@ def manifest_lines(cfg: HarnessConfig, plan_only: bool) -> list[str]:
             lines.append(
                 f"lane_{lane}_trial_{trial:02d}_port={lane_trial_port(cfg.base_port, lane, trial)}"
             )
+        if lane_summaries is not None and lane in lane_summaries:
+            summary = lane_summaries[lane]
+            lines.append(f"lane_{lane}_configure_status={summary.configure_status}")
+            lines.append(f"lane_{lane}_clean_status={summary.clean_status}")
+            lines.append(f"lane_{lane}_build_status={summary.build_status}")
+            lines.append(f"lane_{lane}_failure_class={summary.failure_class}")
     return lines
 
 
@@ -352,10 +402,15 @@ def ensure_run_root_layout(cfg: HarnessConfig) -> None:
             lane_trial_dir(cfg.run_root, lane, trial).mkdir(parents=True, exist_ok=True)
 
 
-def emit_plan_artifacts(cfg: HarnessConfig, plan_only: bool) -> None:
+def emit_plan_artifacts(
+    cfg: HarnessConfig,
+    plan_only: bool,
+    lane_summaries: dict[str, LaneExecutionSummary] | None = None,
+) -> None:
     ensure_run_root_layout(cfg)
     write_text_file(
-        cfg.run_root / "benchmark_harness_manifest.txt", manifest_lines(cfg, plan_only)
+        cfg.run_root / "benchmark_harness_manifest.txt",
+        manifest_lines(cfg, plan_only, lane_summaries),
     )
     write_text_file(
         cfg.run_root / "benchmark_harness_command_plan.txt", command_plan_lines(cfg)
@@ -365,13 +420,142 @@ def emit_plan_artifacts(cfg: HarnessConfig, plan_only: bool) -> None:
     )
 
 
+def _ensure_text(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def run_command_capture(argv: list[str], timeout_seconds: int) -> StepResult:
+    try:
+        output = subprocess.run(
+            argv,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+        return StepResult(
+            status=output.returncode,
+            stdout=output.stdout,
+            stderr=output.stderr,
+            timed_out=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        timeout_msg = (
+            f"error: command timed out after {timeout_seconds} seconds: {shell_join(argv)}\n"
+        )
+        return StepResult(
+            status=COMMAND_TIMEOUT_STATUS,
+            stdout=_ensure_text(exc.stdout),
+            stderr=_ensure_text(exc.stderr) + timeout_msg,
+            timed_out=True,
+        )
+
+
+def skipped_step_result(reason: str) -> StepResult:
+    return StepResult(
+        status=SKIPPED_STATUS,
+        stdout="",
+        stderr=f"skipped: {reason}\n",
+        timed_out=False,
+    )
+
+
+def write_step_result(lane_dir: Path, step_name: str, result: StepResult) -> None:
+    write_text_file(lane_dir / f"{step_name}.status", [str(result.status)])
+    write_text_file(lane_dir / f"{step_name}.stdout", result.stdout.splitlines())
+    write_text_file(lane_dir / f"{step_name}.stderr", result.stderr.splitlines())
+
+
+def classify_lane_failure(
+    configure_result: StepResult,
+    clean_result: StepResult,
+    build_result: StepResult,
+) -> str:
+    if configure_result.timed_out:
+        return "configure_timeout"
+    if configure_result.status != 0:
+        return "configure_failed"
+    if clean_result.timed_out:
+        return "clean_timeout"
+    if clean_result.status != 0:
+        return "clean_failed"
+    if build_result.timed_out:
+        return "build_timeout"
+    if build_result.status != 0:
+        return "build_failed"
+    return "none"
+
+
+def execute_configure_build_capture(
+    cfg: HarnessConfig,
+) -> dict[str, LaneExecutionSummary]:
+    summaries: dict[str, LaneExecutionSummary] = {}
+
+    for lane in LANES:
+        lane_dir = cfg.run_root / f"lane_{lane}"
+        lane_dir.mkdir(parents=True, exist_ok=True)
+
+        configure_result = run_command_capture(
+            configure_command(cfg, lane), cfg.configure_timeout_seconds
+        )
+        write_step_result(lane_dir, "configure", configure_result)
+
+        if configure_result.status != 0:
+            clean_result = skipped_step_result("configure step failed")
+            build_result = skipped_step_result("configure step failed")
+        else:
+            clean_result = run_command_capture(clean_command(cfg, lane), cfg.clean_timeout_seconds)
+            if clean_result.status != 0:
+                build_result = skipped_step_result("clean step failed")
+            else:
+                build_result = run_command_capture(
+                    build_command(cfg, lane), cfg.build_timeout_seconds
+                )
+
+        write_step_result(lane_dir, "clean", clean_result)
+        write_step_result(lane_dir, "build", build_result)
+
+        failure_class = classify_lane_failure(
+            configure_result,
+            clean_result,
+            build_result,
+        )
+        write_text_file(lane_dir / "failure_class.txt", [failure_class])
+        summaries[lane] = LaneExecutionSummary(
+            configure_status=configure_result.status,
+            clean_status=clean_result.status,
+            build_status=build_result.status,
+            failure_class=failure_class,
+        )
+
+    return summaries
+
+
+def has_lane_failures(lane_summaries: dict[str, LaneExecutionSummary]) -> bool:
+    return any(summary.failure_class != "none" for summary in lane_summaries.values())
+
+
 def main(argv: Sequence[str]) -> int:
     try:
         ns = parse_args(argv)
         cfg = to_harness_config(ns)
         validate_layout(cfg)
-        emit_plan_artifacts(cfg, plan_only=bool(ns.plan_only))
+        lane_summaries: dict[str, LaneExecutionSummary] | None = None
+        ensure_run_root_layout(cfg)
+        if not ns.plan_only:
+            lane_summaries = execute_configure_build_capture(cfg)
+        emit_plan_artifacts(
+            cfg,
+            plan_only=bool(ns.plan_only),
+            lane_summaries=lane_summaries,
+        )
         print(cfg.run_root)
+        if lane_summaries is not None and has_lane_failures(lane_summaries):
+            return 1
         return 0
     except Exception as exc:  # pylint: disable=broad-except
         print(f"error: {exc}", file=sys.stderr)

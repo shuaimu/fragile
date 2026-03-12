@@ -1,3 +1,4 @@
+import os
 import subprocess
 import tempfile
 import unittest
@@ -17,7 +18,17 @@ class MakoRpcBenchHarnessPlanTests(unittest.TestCase):
         (workspace / "target" / "release").mkdir(parents=True, exist_ok=True)
         return workspace, mako_root
 
-    def _run_harness(self, workspace: Path, mako_root: Path, run_root: Path, *extra_args: str):
+    def _run_harness(
+        self,
+        workspace: Path,
+        mako_root: Path,
+        run_root: Path,
+        *,
+        plan_only: bool = True,
+        cmake_bin: Path | None = None,
+        env: dict[str, str] | None = None,
+        extra_args: list[str] | None = None,
+    ):
         cmd = [
             "python3",
             str(SCRIPT_PATH),
@@ -27,7 +38,6 @@ class MakoRpcBenchHarnessPlanTests(unittest.TestCase):
             str(mako_root),
             "--run-root",
             str(run_root),
-            "--plan-only",
             "--trials",
             "2",
             "--jobs",
@@ -36,9 +46,52 @@ class MakoRpcBenchHarnessPlanTests(unittest.TestCase):
             "23000",
             "--fragile-cxx",
             str(workspace / "target" / "release" / "fragilec"),
-            *extra_args,
         ]
-        return subprocess.run(cmd, check=False, text=True, capture_output=True)
+        if plan_only:
+            cmd.append("--plan-only")
+        if cmake_bin is not None:
+            cmd.extend(["--cmake-bin", str(cmake_bin)])
+        if extra_args:
+            cmd.extend(extra_args)
+        merged_env = os.environ.copy()
+        if env:
+            merged_env.update(env)
+        return subprocess.run(
+            cmd,
+            check=False,
+            text=True,
+            capture_output=True,
+            env=merged_env,
+        )
+
+    def _create_fake_cmake(self, root: Path) -> Path:
+        fake_cmake = root / "fake_cmake.sh"
+        fake_cmake.write_text(
+            "\n".join(
+                [
+                    "#!/usr/bin/env bash",
+                    "set -euo pipefail",
+                    "args=\"$*\"",
+                    "echo \"fake-cmake ${args}\"",
+                    "lane=\"clang\"",
+                    "if [[ \"${args}\" == *\"build_fragilec\"* ]]; then lane=\"fragilec\"; fi",
+                    "step=\"build\"",
+                    "if [[ \"${args}\" == *\"--target clean\"* ]]; then",
+                    "  step=\"clean\"",
+                    "elif [[ \"${args}\" == *\" -S \"* ]] || [[ \"${args}\" == \"-S \"* ]]; then",
+                    "  step=\"configure\"",
+                    "fi",
+                    "var_name=\"FAKE_${step^^}_${lane^^}_RC\"",
+                    "rc=\"${!var_name:-0}\"",
+                    "echo \"lane=${lane} step=${step} rc=${rc}\" >&2",
+                    "exit \"${rc}\"",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        fake_cmake.chmod(0o755)
+        return fake_cmake
 
     def test_plan_files_and_artifact_contract_are_emitted(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -106,9 +159,90 @@ class MakoRpcBenchHarnessPlanTests(unittest.TestCase):
             workspace, mako_root = self._create_workspace_fixture(tmp_path)
             run_root = tmp_path / "run"
 
-            result = self._run_harness(workspace, mako_root, run_root, "--base-port", "100")
+            result = self._run_harness(
+                workspace,
+                mako_root,
+                run_root,
+                extra_args=["--base-port", "100"],
+            )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("base-port", result.stderr)
+
+    def test_execution_mode_captures_configure_clean_build_for_both_lanes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            workspace, mako_root = self._create_workspace_fixture(tmp_path)
+            run_root = tmp_path / "run"
+            fake_cmake = self._create_fake_cmake(tmp_path)
+
+            result = self._run_harness(
+                workspace,
+                mako_root,
+                run_root,
+                plan_only=False,
+                cmake_bin=fake_cmake,
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            for lane in ("clang", "fragilec"):
+                lane_dir = run_root / f"lane_{lane}"
+                self.assertEqual((lane_dir / "configure.status").read_text(encoding="utf-8").strip(), "0")
+                self.assertEqual((lane_dir / "clean.status").read_text(encoding="utf-8").strip(), "0")
+                self.assertEqual((lane_dir / "build.status").read_text(encoding="utf-8").strip(), "0")
+                self.assertEqual((lane_dir / "failure_class.txt").read_text(encoding="utf-8").strip(), "none")
+                self.assertIn(
+                    "fake-cmake",
+                    (lane_dir / "configure.stdout").read_text(encoding="utf-8"),
+                )
+                self.assertIn(
+                    f"lane={lane} step=build rc=0",
+                    (lane_dir / "build.stderr").read_text(encoding="utf-8"),
+                )
+
+            manifest = (run_root / "benchmark_harness_manifest.txt").read_text(encoding="utf-8")
+            self.assertIn("task_leaf=1.2", manifest)
+            self.assertIn("plan_only=false", manifest)
+            self.assertIn("lane_clang_failure_class=none", manifest)
+            self.assertIn("lane_fragilec_failure_class=none", manifest)
+
+    def test_execution_mode_records_failure_class_and_skips_followup_steps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            workspace, mako_root = self._create_workspace_fixture(tmp_path)
+            run_root = tmp_path / "run"
+            fake_cmake = self._create_fake_cmake(tmp_path)
+
+            result = self._run_harness(
+                workspace,
+                mako_root,
+                run_root,
+                plan_only=False,
+                cmake_bin=fake_cmake,
+                env={"FAKE_CONFIGURE_FRAGILEC_RC": "5"},
+            )
+            self.assertNotEqual(result.returncode, 0)
+
+            clang_dir = run_root / "lane_clang"
+            self.assertEqual((clang_dir / "configure.status").read_text(encoding="utf-8").strip(), "0")
+            self.assertEqual((clang_dir / "build.status").read_text(encoding="utf-8").strip(), "0")
+            self.assertEqual((clang_dir / "failure_class.txt").read_text(encoding="utf-8").strip(), "none")
+
+            fragile_dir = run_root / "lane_fragilec"
+            self.assertEqual((fragile_dir / "configure.status").read_text(encoding="utf-8").strip(), "5")
+            self.assertEqual((fragile_dir / "clean.status").read_text(encoding="utf-8").strip(), "-1")
+            self.assertEqual((fragile_dir / "build.status").read_text(encoding="utf-8").strip(), "-1")
+            self.assertEqual(
+                (fragile_dir / "failure_class.txt").read_text(encoding="utf-8").strip(),
+                "configure_failed",
+            )
+            self.assertIn(
+                "skipped: configure step failed",
+                (fragile_dir / "clean.stderr").read_text(encoding="utf-8"),
+            )
+
+            manifest = (run_root / "benchmark_harness_manifest.txt").read_text(encoding="utf-8")
+            self.assertIn("lane_fragilec_failure_class=configure_failed", manifest)
+            self.assertIn("lane_fragilec_build_status=-1", manifest)
 
 
 if __name__ == "__main__":
