@@ -2633,3 +2633,61 @@ Aligned with Section 1.3 and `docs/dev/wrong.md`:
 - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests/python/test_mako_rpcbench_harness.py -v`
 - full workspace suite: `cargo test` (current workspace baseline remains `fragile-clang`
   `ast_codegen` lib-test failures: `711 passed / 49 failed`, matching known pre-existing cluster)
+
+## 44. RPC Compile Blocker Inventory Capture (2026-03-12)
+
+### Problem
+
+RPC harness runs produced build artifacts, but we lacked a deterministic summary of
+first-failing compile blockers per lane. That made blocker ranking and focused replay
+selection (`2.2+`) inconsistent and manual.
+
+### Decision
+
+Implement leaf `2.1` with a dedicated inventory script and fixture coverage:
+
+- parse lane build artifacts emitted by the harness
+- classify blocker family deterministically
+- extract first failing compile file from known fragilec log markers
+- count unresolved-name errors (`E0425`)
+- emit deterministic lane artifacts plus a single root manifest
+
+### Wrong-Approach Check
+
+Aligned with Section 1.3 and `docs/dev/wrong.md`:
+
+- no target-specific compiler/codegen behavior
+- no fake semantic method bodies or stubbed success paths
+- no force-native bypass
+- inventory data is derived from real artifacts, not synthesized
+
+### Implementation
+
+- Added `scripts/mako_rpc_compile_blocker_inventory.py`:
+  - inputs: `lane_<lane>/build.status`, `lane_<lane>/build.stderr`
+  - outputs per lane:
+    - `first_failing_compile_class.txt`
+    - `first_failing_compile_file.txt`
+    - `first_failing_compile_e0425_count.txt`
+  - output per run root:
+    - `rpc_compile_blocker_inventory_manifest.txt`
+  - blocker classes:
+    - `none`, `build_not_executed`, `transpile_failure`,
+      `unresolved_name_or_type_e0425`, `missing_method_e0599`,
+      `arity_mismatch_e0061`, `type_mismatch_e0308`,
+      `other_rustc_error`, `other_build_failure`
+- Added regression tests:
+  - `tests/python/test_mako_rpc_compile_blocker_inventory.py`
+  - covers rustc `E0425` classification/file extraction/counting,
+    success+skipped normalization (`none`/`0`), transpile-failure extraction,
+    `E0599` family classification, and missing-artifact failure behavior
+- Added docs:
+  - `docs/rpc_compile_blocker_inventory_leaf_2_1_design_2026_03_12.md`
+  - `docs/rpc_compile_blocker_inventory_user_manual.md`
+- Updated `TODO.md` leaf `2.1` with completion evidence.
+
+### Validation
+
+- `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests/python/test_mako_rpc_compile_blocker_inventory.py -v`
+- full workspace suite: `cargo test` (current workspace baseline remains `fragile-clang`
+  `ast_codegen` lib-test failures: `711 passed / 49 failed`, matching known pre-existing cluster)
