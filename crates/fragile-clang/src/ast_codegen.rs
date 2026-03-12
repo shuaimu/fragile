@@ -9559,50 +9559,107 @@ impl AstCodeGen {
     }
 
     fn normalize_bare_identifier_expression_statements(code: &str) -> String {
+        let is_rewritable_ident = |ident: &str| -> bool {
+            if ident.is_empty()
+                || !Self::is_simple_identifier_expr(ident)
+                || matches!(ident, "true" | "false")
+            {
+                return false;
+            }
+            let ident_raw = ident.strip_prefix("r#").unwrap_or(ident);
+            !matches!(
+                ident_raw,
+                "let"
+                    | "mut"
+                    | "return"
+                    | "break"
+                    | "continue"
+                    | "pub"
+                    | "struct"
+                    | "enum"
+                    | "type"
+                    | "impl"
+                    | "fn"
+                    | "mod"
+                    | "use"
+                    | "unsafe"
+                    | "extern"
+                    | "crate"
+                    | "super"
+                    | "self"
+            )
+        };
+
+        let rewrite_inline_block_ident_noops = |line: &str| -> Option<String> {
+            let mut rewritten_line = String::with_capacity(line.len());
+            let mut cursor = 0usize;
+            let mut changed = false;
+
+            while let Some(open_rel) = line[cursor..].find('{') {
+                let open_idx = cursor + open_rel;
+                let Some(close_rel) = line[open_idx + 1..].find('}') else {
+                    break;
+                };
+                let close_idx = open_idx + 1 + close_rel;
+
+                rewritten_line.push_str(&line[cursor..open_idx + 1]);
+                let inside = &line[open_idx + 1..close_idx];
+                let inside_trimmed = inside.trim();
+
+                if let Some(expr) = inside_trimmed.strip_suffix(';') {
+                    let ident = expr.trim();
+                    if is_rewritable_ident(ident) {
+                        let leading_ws_len =
+                            inside.len().saturating_sub(inside.trim_start().len());
+                        let trailing_ws_len = inside.len().saturating_sub(inside.trim_end().len());
+                        rewritten_line.push_str(&inside[..leading_ws_len]);
+                        rewritten_line.push_str("let _ = &");
+                        rewritten_line.push_str(ident);
+                        rewritten_line.push(';');
+                        if trailing_ws_len > 0 {
+                            rewritten_line.push_str(&inside[inside.len() - trailing_ws_len..]);
+                        }
+                        changed = true;
+                    } else {
+                        rewritten_line.push_str(inside);
+                    }
+                } else {
+                    rewritten_line.push_str(inside);
+                }
+                rewritten_line.push('}');
+                cursor = close_idx + 1;
+            }
+
+            if !changed {
+                return None;
+            }
+
+            rewritten_line.push_str(&line[cursor..]);
+            Some(rewritten_line)
+        };
+
         let mut out = String::with_capacity(code.len());
         for line in code.lines() {
             let trimmed = line.trim();
             let mut rewritten = false;
             if let Some(expr) = trimmed.strip_suffix(';') {
                 let ident = expr.trim();
-                if !ident.is_empty()
-                    && Self::is_simple_identifier_expr(ident)
-                    && !matches!(ident, "true" | "false")
-                {
-                    let ident_raw = ident.strip_prefix("r#").unwrap_or(ident);
-                    if !matches!(
-                        ident_raw,
-                        "let"
-                            | "mut"
-                            | "return"
-                            | "break"
-                            | "continue"
-                            | "pub"
-                            | "struct"
-                            | "enum"
-                            | "type"
-                            | "impl"
-                            | "fn"
-                            | "mod"
-                            | "use"
-                            | "unsafe"
-                            | "extern"
-                            | "crate"
-                            | "super"
-                            | "self"
-                    ) {
-                        let indent_len = line.len().saturating_sub(line.trim_start().len());
-                        let indent = &line[..indent_len];
-                        out.push_str(indent);
-                        out.push_str("let _ = &");
-                        out.push_str(ident);
-                        out.push_str(";\n");
-                        rewritten = true;
-                    }
+                if is_rewritable_ident(ident) {
+                    let indent_len = line.len().saturating_sub(line.trim_start().len());
+                    let indent = &line[..indent_len];
+                    out.push_str(indent);
+                    out.push_str("let _ = &");
+                    out.push_str(ident);
+                    out.push_str(";\n");
+                    rewritten = true;
                 }
             }
             if !rewritten {
-                out.push_str(line);
+                if let Some(inline_rewritten) = rewrite_inline_block_ident_noops(line) {
+                    out.push_str(&inline_rewritten);
+                } else {
+                    out.push_str(line);
+                }
                 out.push('\n');
             }
         }
@@ -100966,6 +101023,27 @@ pub fn probe() {
         assert!(
             !output.contains("\n    v;\n"),
             "bare-identifier statement normalization should remove move-inducing bare identifier statements, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_bare_identifier_expression_statements_rewrites_inline_block_identifier_noops(
+    ) {
+        let input = r#"
+pub fn probe(v: vector_shared_ptr_worker, i: i32) {
+    if !(i < 0) { v; }
+}
+"#;
+        let output = AstCodeGen::normalize_bare_identifier_expression_statements(input);
+        assert!(
+            output.contains("if !(i < 0) { let _ = &v; }"),
+            "bare-identifier statement normalization should rewrite inline block identifier no-op statements, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("{ v; }"),
+            "bare-identifier statement normalization should remove inline move-inducing bare identifier statements, got:\n{}",
             output
         );
     }
