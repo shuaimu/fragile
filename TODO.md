@@ -1,21 +1,7 @@
-# Fragile TODO (Current)
+# Fragile TODO (Deprecated Archive)
 
-Last updated: 2026-02-28
-Owner focus: Phase 5 LibTooling-primary parser unification with template-instantiation fidelity and fallback-stub burn-down.
-
-## Scope (active)
-Promote LibTooling to the strict primary AST backend, improve instantiated-template coverage, and reduce fallback stub reliance while preserving full strict RapidJSON build/runtime parity.
-
-Reference command:
-- `CXX=/home/shuai/workspace/fragile/target/debug/fragilec FRAGILEC_MODE=strict cmake -DRAPIDJSON_BUILD_TESTS=OFF ..`
-- `CXX=/home/shuai/workspace/fragile/target/debug/fragilec FRAGILEC_MODE=strict cmake --build . -j4`
-- `FRAGILEC_MODE=strict FRAGILEC_PARSER_BACKEND=libtooling fragilec -c example/tutorial/tutorial.cpp`
-
-Success criteria:
-- LibTooling-primary strict lane compiles all RapidJSON no-tests examples (`cmake_build.status=0`).
-- `bin/condense` and `bin/pretty` runtime output still matches native baseline with LibTooling-primary.
-- Active strict paths no longer depend on injected placeholder fallback stubs when concrete template instantiations are present in parser output.
-- `libclang` remains available as an explicit fallback backend until one full hardening cycle passes.
+Last updated: 2026-03-12
+Status: active TODO items are deprecated and have been removed from this document.
 
 ## Current status snapshot
 - Configure with tests disabled: passes.
@@ -24,52 +10,6 @@ Success criteria:
 - Cutover (2026-02-28): strict `fragilec` default parser backend is now LibTooling-primary; explicit hardening-window escape hatch remains via `FRAGILEC_PARSER_BACKEND=libclang|hybrid`.
 - Backend-matrix parity evidence (run root `/tmp/fragile_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_484423_1772259242504942926`): `backend=libtooling` matches baseline on configure/build/class/E0425 deltas (`0`) and runtime parity markers (`runtime_parity_vs_baseline=true`, `condense_run_status_delta_vs_baseline=0`, `pretty_run_status_delta_vs_baseline=0`), with both backends currently at `condense_run_status=-1` / `pretty_run_status=-1`.
 - Latest strict capitalize sidecar fallback-surface inventory delta (run root `/tmp/fragile_real_world_rapidjson_strict_capitalize_backend_surface_delta_3476060_1772238977899700230`): LibTooling vs baseline deltas are `surface_line_count=-34053`, `surface_placeholder_count=-44`, `surface_rapidjson_placeholder_count=-2`, `surface_c_void_alias_count=0`, `surface_parse_unspecific_count=-1`.
-
-## Known blocker classes (from current logs)
-
-### 1) Entrypoint correctness and false-positive links
-- Symptom: example object files can miss real `main`; linker fallback shim provides `main`; binaries run but do nothing.
-- Impact: masks transpilation failures and gives misleading “build success”.
-- Needed capability: robust `main` preservation (no rollback/drop), and hard failure when executable link has no real program entry.
-
-### 2) Parser/AST fidelity mismatch in real RapidJSON headers
-- Symptom: `document.h` parse failure in strict pipeline (`cannot assign to const-qualified member ... length`).
-- Impact: hard stop for some examples (`filterkeydom`) before Rust codegen.
-- Needed capability: align fragile parse mode/flags and const-init handling with native compile semantics.
-
-### 3) Duplicate symbol/type emission in single TU output
-- Symptom: many `E0428` duplicate definitions (functions/types/modules).
-- Impact: rustc fails early on examples like `capitalize`.
-- Needed capability: deterministic dedupe for helper/runtime shims, typedef/struct aliases, and template utility emissions.
-
-### 4) Placeholder fallback for real types causing API holes
-- Symptom: placeholder structs like `GenericReader_UTF8___UTF8_` appear where concrete impl is needed; missing methods (`Parse`, `GetErrorOffset`, etc.).
-- Impact: transpiled examples cannot compile/function.
-- Needed capability: stop degrading required rapidjson template instantiations to opaque placeholders in active code paths.
-
-### 5) C/C++ type normalization gaps
-- Symptom: unresolved or inconsistent type names (`__FILE`, `std_atomic_flag`, `void`, etc.).
-- Impact: many compile errors and invalid extern signatures.
-- Needed capability: canonical libc/libstd type mapping and alias reconciliation in generated Rust.
-
-### 6) Cast/decay/call-shape lowering bugs
-- Symptom: invalid casts (`[i8; N] as *mut i8`), bad pointer/value conversions, wrong argument forms.
-- Impact: rustc type errors in basic stream setup and utility calls.
-- Needed capability: correct array-to-pointer decay lowering and stricter argument-type normalization for member/static calls.
-
-### 7) Numeric/sign/enum lowering issues
-- Symptom: wrong signedness and literal typing (`u128` negatives, enum/int mismatch, invalid unary ops on unsigned).
-- Impact: compile failures in numeric helper tables and conversions.
-- Needed capability: integer literal/sign normalization for generated constants and expressions.
-
-## Execution plan
-
-## Priority order (effective 2026-02-26)
-- `P0` (highest): Phase 5 LibTooling-primary parser unification with instantiated-template fidelity + fallback-stub burn-down.
-- `P1`: Phase 4 hardening tasks.
-- `P2`: Remaining open Phase 3 validation tasks.
-- `P3` (completed/archive): Phase 6 Generic STL container rollout (done; keep for traceability).
-- `P4` (maintenance/archive): Historical Phase 0-2 guardrail/triage/correctness breakdown tasks unless needed by `P0`.
 
 ## Phase 0 [P4]: Guardrails (prevent misleading green builds)
 - [x] Remove/disable strict-link fallback shim `main` for RapidJSON example builds; fail link when no real `main` is defined. (Done 2026-02-24: strict link now errors for executable-style links that lack a real `main` in inspected objects.)
@@ -81,8 +21,8 @@ Success criteria:
 - [x] Add a local fixture variant that replays first-failure class for quick iteration. (Done 2026-02-24: added a deterministic local strict-cmake fixture test that forces one compile failure via a fake `fragilec` wrapper and verifies first failing command/stderr capture artifacts.)
 - [x] Record and maintain ordered failure classes in this file as each class is cleared. (Done 2026-02-24: added an explicit ordered clearance ledger with per-class status/evidence notes, plus a regression test that enforces marker presence and ordering in `TODO.md`.)
 
-### Ordered failure-class clearance ledger (active sequence)
-Use this as the authoritative clear order after Phase 0 guardrails. Update each item with `CLEARED (YYYY-MM-DD)` and a short evidence note when resolved.
+### Ordered failure-class clearance ledger (archived sequence)
+Historical clear order retained for traceability.
 - [x] 1) Parser/AST fidelity mismatch in real RapidJSON headers. Status: CLEARED (2026-02-24). Evidence: strict parser no longer uses RapidJSON ignore-pattern wiring; reran ignored strict `filterkeydom` and strict no-tests CMake captures and both now classify first failure as unresolved-name/type (`E0425`) with no `document.h` const-member assignment parser diagnostic in captured first-failure/build streams.
 - [x] 2) Duplicate symbol/type emission in single TU output. Status: CLEARED (2026-02-24). Evidence: strict replay captures for `example/capitalize/capitalize.cpp`, `example/filterkeydom/filterkeydom.cpp`, and strict no-tests CMake build all assert `error[E0428]` is absent across compile/build stdout+stderr and first-failure stderr; each replay still classifies first failure as unresolved-name/type (`E0425`), confirming duplicate-emission class is no longer first blocker.
 - [x] 3) Placeholder fallback for required rapidjson template types. Status: CLEARED (2026-02-24). Evidence: reran ignored strict `filterkeydom` compile capture plus strict no-tests CMake full-build capture; both pass with `E0425` first-failure classification and no placeholder API-hole markers (`FilterKeyReader_FileReadStream::new_0`, `GenericDocument_UTF8_::Populate`, `GenericDocument_UTF8_::Accept`) in captured first-failure stderr.
