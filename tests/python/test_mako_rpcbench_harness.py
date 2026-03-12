@@ -159,6 +159,22 @@ class MakoRpcBenchHarnessPlanTests(unittest.TestCase):
         fake_cmake.chmod(0o755)
         return fake_cmake
 
+    def _parse_key_value_file(self, path: Path) -> dict[str, str]:
+        pairs: dict[str, str] = {}
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            pairs[key.strip()] = value.strip()
+        return pairs
+
+    def _assert_expected_artifacts_exist(self, run_root: Path) -> None:
+        expected_paths = (
+            run_root / "benchmark_expected_artifacts.txt"
+        ).read_text(encoding="utf-8").splitlines()
+        for rel_path in expected_paths:
+            self.assertTrue((run_root / rel_path).exists(), msg=f"missing artifact: {rel_path}")
+
     def test_plan_files_and_artifact_contract_are_emitted(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -533,6 +549,108 @@ class MakoRpcBenchHarnessPlanTests(unittest.TestCase):
             self.assertIn("clang_avg_qps=none", comparison_manifest)
             self.assertIn("fragile_avg_qps=none", comparison_manifest)
             self.assertIn("no_regression_verdict=insufficient_data", comparison_manifest)
+
+    def test_regression_gate_local_fixture_asserts_full_leaf_1_1_to_1_4_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            workspace, mako_root = self._create_workspace_fixture(tmp_path)
+            run_root = tmp_path / "run"
+            fake_cmake = self._create_fake_cmake(tmp_path)
+
+            result = self._run_harness(
+                workspace,
+                mako_root,
+                run_root,
+                plan_only=False,
+                cmake_bin=fake_cmake,
+                env={
+                    "FAKE_RPC_CLIENT_CLANG_QPS": "1000",
+                    "FAKE_RPC_CLIENT_FRAGILEC_QPS": "1200",
+                },
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            self._assert_expected_artifacts_exist(run_root)
+
+            manifest = self._parse_key_value_file(run_root / "benchmark_harness_manifest.txt")
+            comparison = self._parse_key_value_file(
+                run_root / "benchmark_qps_comparison_manifest.txt"
+            )
+            plan = (run_root / "benchmark_harness_command_plan.txt").read_text(encoding="utf-8")
+
+            self.assertEqual(manifest["task_leaf"], "1.4")
+            self.assertEqual(manifest["plan_only"], "false")
+            self.assertEqual(manifest["comparison_manifest_file"], "benchmark_qps_comparison_manifest.txt")
+            self.assertEqual(manifest["no_regression_verdict"], "pass")
+            self.assertEqual(manifest["lane_clang_failure_class"], "none")
+            self.assertEqual(manifest["lane_fragilec_failure_class"], "none")
+            self.assertEqual(manifest["lane_clang_trial_01_qps"], "1000.000000")
+            self.assertEqual(manifest["lane_clang_trial_02_qps"], "1000.000000")
+            self.assertEqual(manifest["lane_fragilec_trial_01_qps"], "1200.000000")
+            self.assertEqual(manifest["lane_fragilec_trial_02_qps"], "1200.000000")
+            self.assertEqual(manifest["lane_clang_avg_qps"], "1000.000000")
+            self.assertEqual(manifest["lane_fragilec_avg_qps"], "1200.000000")
+            self.assertEqual(manifest["clang_avg_qps"], "1000.000000")
+            self.assertEqual(manifest["fragile_avg_qps"], "1200.000000")
+            self.assertEqual(manifest["fragile_minus_clang_qps"], "200.000000")
+
+            self.assertEqual(comparison["task_leaf"], "1.4")
+            self.assertEqual(comparison["no_regression_verdict"], "pass")
+            self.assertEqual(comparison["lane_clang_trial_01_qps"], "1000.000000")
+            self.assertEqual(comparison["lane_fragilec_trial_02_qps"], "1200.000000")
+
+            self.assertIn("[lane:clang]", plan)
+            self.assertIn("[lane:fragilec]", plan)
+            self.assertIn("test_rpc=", plan)
+            self.assertIn("trial_01_server=", plan)
+            self.assertIn("trial_01_client=", plan)
+
+    @unittest.skipUnless(
+        os.environ.get("FRAGILE_RUN_REAL_WORLD_RPCBENCH_HARNESS") == "1",
+        "set FRAGILE_RUN_REAL_WORLD_RPCBENCH_HARNESS=1 to run real-world replay gate",
+    )
+    def test_regression_gate_real_world_replay_emits_required_artifacts_and_manifests(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            workspace_root = REPO_ROOT
+            mako_root = REPO_ROOT / "vendor" / "mako"
+            run_root = tmp_path / "real_world_run"
+
+            result = self._run_harness(
+                workspace_root,
+                mako_root,
+                run_root,
+                plan_only=False,
+                extra_args=[
+                    "--trials",
+                    "1",
+                    "--jobs",
+                    "4",
+                    "--rpc-duration-seconds",
+                    "1",
+                    "--test-rpc-timeout-seconds",
+                    "30",
+                    "--rpc-client-timeout-seconds",
+                    "30",
+                    "--rpc-server-startup-wait-seconds",
+                    "0.5",
+                    "--rpc-server-shutdown-timeout-seconds",
+                    "10",
+                ],
+            )
+            self.assertNotEqual(result.stdout.strip(), "")
+            self.assertTrue(run_root.exists())
+
+            self._assert_expected_artifacts_exist(run_root)
+            manifest = self._parse_key_value_file(run_root / "benchmark_harness_manifest.txt")
+            comparison = self._parse_key_value_file(
+                run_root / "benchmark_qps_comparison_manifest.txt"
+            )
+            self.assertEqual(manifest["task_leaf"], "1.4")
+            self.assertEqual(manifest["comparison_manifest_file"], "benchmark_qps_comparison_manifest.txt")
+            self.assertIn(manifest["no_regression_verdict"], {"pass", "fail", "insufficient_data"})
+            self.assertIn(comparison["no_regression_verdict"], {"pass", "fail", "insufficient_data"})
+            self.assertEqual(manifest["no_regression_verdict"], comparison["no_regression_verdict"])
 
 
 if __name__ == "__main__":

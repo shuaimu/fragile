@@ -2589,3 +2589,47 @@ Aligned with Section 1.3 and `docs/dev/wrong.md`:
 - `python3 -m unittest tests/python/test_mako_rpcbench_harness.py -v`
 - full workspace suite: `cargo test` (current workspace baseline remains `fragile-clang`
   `ast_codegen` lib-test failures: `711 passed / 49 failed`, matching known pre-existing cluster)
+
+## 43. RPC Bench Harness Regression Gates (2026-03-12)
+
+### Problem
+
+Leaves `1.1`..`1.4` were implemented, but there was no single explicit gate that
+asserted the integrated artifact/manifest contract, and no opt-in real-world replay
+check wired into harness regression coverage.
+
+### Decision
+
+Implement leaf `1.5` as regression coverage only:
+
+- add a comprehensive local fixture gate that validates integrated `1.1`..`1.4` outputs
+- add an ignored (env-gated) real-world replay test for required artifact/verdict checks
+
+### Wrong-Approach Check
+
+Aligned with Section 1.3 and `docs/dev/wrong.md`:
+
+- no target-specific transpiler changes
+- no semantic fake method bodies
+- no force-native bypass path
+- real-world gate remains opt-in so default runs stay deterministic/fast while still
+  preserving a documented end-to-end replay assertion path
+
+### Implementation
+
+- Updated `tests/python/test_mako_rpcbench_harness.py`:
+  - added helper assertions for expected-artifact file materialization
+  - added integrated local regression gate:
+    - `test_regression_gate_local_fixture_asserts_full_leaf_1_1_to_1_4_contract`
+  - added ignored real-world replay gate:
+    - `test_regression_gate_real_world_replay_emits_required_artifacts_and_manifests`
+    - enabled with `FRAGILE_RUN_REAL_WORLD_RPCBENCH_HARNESS=1`
+- Updated docs:
+  - `docs/rpc_benchmark_harness_leaf_1_5_design_2026_03_12.md`
+  - `docs/rpc_benchmark_harness_user_manual.md`
+
+### Validation
+
+- `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests/python/test_mako_rpcbench_harness.py -v`
+- full workspace suite: `cargo test` (current workspace baseline remains `fragile-clang`
+  `ast_codegen` lib-test failures: `711 passed / 49 failed`, matching known pre-existing cluster)

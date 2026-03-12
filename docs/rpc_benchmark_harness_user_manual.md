@@ -1,4 +1,4 @@
-# RPC Benchmark Harness User Manual (Leaf 1.4)
+# RPC Benchmark Harness User Manual (Leaf 1.5)
 
 ## Purpose
 
@@ -10,6 +10,7 @@ Current scope:
 - leaf `1.2`: configure/clean/build capture artifacts for both lanes
 - leaf `1.3`: runtime replay for `test_rpc` and per-trial rpcbench server/client execution
 - leaf `1.4`: QPS aggregation/comparison manifests with no-regression verdict
+- leaf `1.5`: regression gates (fast local fixture + ignored real-world replay assertions)
 
 ## Script
 
@@ -93,3 +94,21 @@ Comparison fields (manifest + comparison manifest):
 - execution mode (default) runs configure/clean/build and runtime replay; lane-level failures are summarized in `failure_class.txt` and mirrored in `benchmark_harness_manifest.txt`.
 - no-regression gate is enforced in execution mode: if verdict is `fail` or `insufficient_data`, the script exits nonzero.
 - QPS parsing looks for `qps=<number>`/`<number> qps` markers in rpcbench client output and uses successful trials only.
+
+## Regression Gates
+
+Local fixture gate (`1.5`, always run):
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 \
+python3 -m unittest tests/python/test_mako_rpcbench_harness.py -v
+```
+
+Ignored real-world replay gate (`1.5`, opt-in):
+
+```bash
+FRAGILE_RUN_REAL_WORLD_RPCBENCH_HARNESS=1 \
+PYTHONDONTWRITEBYTECODE=1 \
+python3 -m unittest tests/python/test_mako_rpcbench_harness.py \
+  MakoRpcBenchHarnessPlanTests.test_regression_gate_real_world_replay_emits_required_artifacts_and_manifests -v
+```
