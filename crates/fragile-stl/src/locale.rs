@@ -142,21 +142,21 @@ pub type pthread_key_t = u32;
 pub fn __cloc() -> locale_t { std::ptr::null_mut() }
 
 // Additional pthread functions
-pub unsafe fn pthread_once(
+pub fn pthread_once(
     _once_control: *mut pthread_once_t,
     _init_routine: std::option::Option<extern "C" fn()>,
 ) -> i32 {
     0
 }
-pub unsafe fn pthread_setspecific(_key: pthread_key_t, _value: *const std::ffi::c_void) -> i32 { 0 }
-pub unsafe fn pthread_getspecific(_key: pthread_key_t) -> *mut std::ffi::c_void { std::ptr::null_mut() }
-pub unsafe fn pthread_key_create(
+pub fn pthread_setspecific(_key: pthread_key_t, _value: *const std::ffi::c_void) -> i32 { 0 }
+pub fn pthread_getspecific(_key: pthread_key_t) -> *mut std::ffi::c_void { std::ptr::null_mut() }
+pub fn pthread_key_create(
     _key: *mut pthread_key_t,
     _destructor: std::option::Option<extern "C" fn(*mut std::ffi::c_void)>,
 ) -> i32 {
     0
 }
-pub unsafe fn pthread_key_delete(_key: pthread_key_t) -> i32 { 0 }
+pub fn pthread_key_delete(_key: pthread_key_t) -> i32 { 0 }
 
 // ctype specialization stubs
 pub type ctype_char_ = std::ffi::c_void;

@@ -162,6 +162,39 @@ fn is_source_file_token(token: &str) -> bool {
     )
 }
 
+fn include_path_is_external_test_framework(path: &str) -> bool {
+    let normalized = path.replace('\\', "/").to_ascii_lowercase();
+    normalized.contains("/googletest/")
+        || normalized.ends_with("/googletest")
+        || normalized.contains("/googlemock/")
+        || normalized.ends_with("/googlemock")
+        || normalized.contains("/gtest/")
+        || normalized.ends_with("/gtest")
+        || normalized.contains("/gmock/")
+        || normalized.ends_with("/gmock")
+}
+
+fn maybe_promote_include_kind_to_system(
+    kind: IncludeDirectiveKind,
+    resolved_path: &str,
+) -> IncludeDirectiveKind {
+    if kind == IncludeDirectiveKind::Include
+        && include_path_is_external_test_framework(resolved_path)
+    {
+        IncludeDirectiveKind::System
+    } else {
+        kind
+    }
+}
+
+fn maybe_promote_frontend_include_flag(flag: &str, resolved_path: &str) -> String {
+    if flag == "-I" && include_path_is_external_test_framework(resolved_path) {
+        "-isystem".to_string()
+    } else {
+        flag.to_string()
+    }
+}
+
 fn resolve_path(path: &Path, cwd: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
@@ -188,9 +221,10 @@ fn resolve_include_directives(
                     joined
                 }
             };
+            let resolved = resolved_path.to_string_lossy().to_string();
             IncludeDirective {
-                kind: directive.kind,
-                path: resolved_path.to_string_lossy().to_string(),
+                kind: maybe_promote_include_kind_to_system(directive.kind, &resolved),
+                path: resolved,
             }
         })
         .collect()
@@ -271,12 +305,14 @@ fn collect_resolved_frontend_args(args: &[OsString], cwd: &Path) -> Vec<String> 
                 | "-ivfsoverlay"
         ) {
             if i + 1 < args.len() {
-                collected.push(cur.to_string());
                 let value = args[i + 1].to_string_lossy();
                 if matches!(cur, "-include" | "-imacros" | "-include-pch") {
+                    collected.push(cur.to_string());
                     collected.push(resolve_forced_include_value(value.as_ref(), cwd));
                 } else {
-                    collected.push(resolve_frontend_path_value(value.as_ref(), cwd));
+                    let resolved = resolve_frontend_path_value(value.as_ref(), cwd);
+                    collected.push(maybe_promote_frontend_include_flag(cur, &resolved));
+                    collected.push(resolved);
                 }
                 i += 2;
                 continue;
@@ -430,8 +466,9 @@ fn collect_resolved_frontend_args(args: &[OsString], cwd: &Path) -> Vec<String> 
             continue;
         }
         if let Some(rest) = split_joined_path_flag(cur, "-I") {
-            collected.push("-I".to_string());
-            collected.push(resolve_frontend_path_value(rest, cwd));
+            let resolved = resolve_frontend_path_value(rest, cwd);
+            collected.push(maybe_promote_frontend_include_flag("-I", &resolved));
+            collected.push(resolved);
             i += 1;
             continue;
         }
@@ -665,8 +702,10 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
             language_standard,
             ignored_error_patterns: strict_parser_ignored_error_patterns(language),
             backend: parser_backend,
-            template_parsing_mode: TemplateParsingMode::Auto,
-            libtooling_skip_system_headers: true,
+            template_parsing_mode: TemplateParsingMode::Standard,
+            // Keep system headers visible by default so libc/kernel symbols
+            // (e.g. socket/epoll/netdb) retain full declaration surfaces.
+            libtooling_skip_system_headers: false,
             stage_timing_trace_path,
         };
         let transpiled =
@@ -796,8 +835,50 @@ fn normalize_transpiled_main_entry(transpiled: String) -> String {
     )
 }
 
+fn has_fragile_runtime_glob_import(transpiled: &str) -> bool {
+    transpiled.lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed.contains("::*")
+            && (trimmed.starts_with("use fragile_stl::")
+                || trimmed.starts_with("pub use fragile_stl::")
+                || trimmed.starts_with("pub(crate) use fragile_stl::")
+                || trimmed.starts_with("pub(super) use fragile_stl::")
+                || trimmed.starts_with("use fragile_runtime::")
+                || trimmed.starts_with("pub use fragile_runtime::")
+                || trimmed.starts_with("pub(crate) use fragile_runtime::")
+                || trimmed.starts_with("pub(super) use fragile_runtime::"))
+    })
+}
+
+fn is_runtime_glob_import_resolved_type_name(name: &str) -> bool {
+    matches!(
+        name,
+        "FragileCStrDisplay"
+            | "error_category"
+            | "fpos_mbstate_t"
+            | "std_thread"
+            | "string_view"
+            | "wstring_view"
+            | "atomic_bool"
+            | "atomic_int"
+            | "atomic_long"
+            | "atomic_ulong"
+            | "atomic_llong"
+            | "atomic_ullong"
+            | "atomic_long_long"
+            | "atomic_unsigned_long"
+            | "atomic_unsigned_long_long"
+    ) || name.starts_with("__atomic_base_")
+        || name.starts_with("__pthread_")
+        || name.starts_with("reverse_iterator_")
+        || (name.contains("iterator") && name.ends_with("_value_type"))
+}
+
 fn enforce_unresolved_type_invariant(source: &Path, transpiled: &str) -> Result<(), String> {
-    let unresolved = fragile_clang::AstCodeGen::unresolved_named_type_references(transpiled);
+    let mut unresolved = fragile_clang::AstCodeGen::unresolved_named_type_references(transpiled);
+    if has_fragile_runtime_glob_import(transpiled) {
+        unresolved.retain(|name| !is_runtime_glob_import_resolved_type_name(name));
+    }
     if unresolved.is_empty() {
         return Ok(());
     }

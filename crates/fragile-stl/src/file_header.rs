@@ -53,6 +53,21 @@ impl FragileRustStringCompat for std::string::String {
         self.len() as i32
     }
 }
+pub trait FragileSharedPtrGet<T> {
+    fn get(&self) -> *const T;
+}
+impl<T> FragileSharedPtrGet<T> for std::sync::Arc<T> {
+    #[inline]
+    fn get(&self) -> *const T {
+        std::sync::Arc::as_ptr(self)
+    }
+}
+impl<T> FragileSharedPtrGet<T> for std::rc::Rc<T> {
+    #[inline]
+    fn get(&self) -> *const T {
+        std::rc::Rc::as_ptr(self)
+    }
+}
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct FragileVaList {
@@ -187,6 +202,14 @@ unsafe extern "C" {
     fn __fragile_socket_ffi(domain: i32, ty: i32, protocol: i32) -> i32;
     #[link_name = "bind"]
     fn __fragile_bind_ffi(sockfd: i32, addr: *const std::ffi::c_void, addrlen: u32) -> i32;
+    #[link_name = "select"]
+    fn __fragile_select_ffi(
+        nfds: i32,
+        readfds: *mut std::ffi::c_void,
+        writefds: *mut std::ffi::c_void,
+        exceptfds: *mut std::ffi::c_void,
+        timeout: *mut std::ffi::c_void,
+    ) -> i32;
     #[link_name = "getsockname"]
     fn __fragile_getsockname_ffi(
         sockfd: i32,
@@ -282,6 +305,25 @@ pub fn socket(domain: i32, ty: i32, protocol: i32) -> i32 {
 #[inline]
 pub fn bind<T>(sockfd: i32, addr: *const T, addrlen: u32) -> i32 {
     unsafe { __fragile_bind_ffi(sockfd, addr as *const std::ffi::c_void, addrlen) }
+}
+
+#[inline]
+pub fn select<T>(
+    nfds: i32,
+    readfds: *mut std::ffi::c_void,
+    writefds: *mut std::ffi::c_void,
+    exceptfds: *mut std::ffi::c_void,
+    timeout: *mut T,
+) -> i32 {
+    unsafe {
+        __fragile_select_ffi(
+            nfds,
+            readfds,
+            writefds,
+            exceptfds,
+            timeout as *mut std::ffi::c_void,
+        )
+    }
 }
 
 #[inline]

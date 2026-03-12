@@ -19,10 +19,12 @@ const FRAGILEC_REQUIRE_META_ENV: &str = "FRAGILEC_REQUIRE_META";
 const FRAGILEC_KEEP_RS_ENV: &str = "FRAGILEC_KEEP_RS";
 const FRAGILEC_LINKER_ENV: &str = "FRAGILEC_LINKER";
 const FRAGILEC_PARSER_BACKEND_ENV: &str = "FRAGILEC_PARSER_BACKEND";
+const FRAGILEC_SKIP_SYSTEM_HEADERS_ENV: &str = "FRAGILEC_SKIP_SYSTEM_HEADERS";
 const FRAGILEC_TRANSPILE_STAGE_TIMING_PATH_ENV: &str = "FRAGILEC_TRANSPILE_STAGE_TIMING_PATH";
 const FRAGILEC_RUSTC_BIN_ENV: &str = "FRAGILEC_RUSTC_BIN";
 const FRAGILEC_RUSTC_WRAPPER_ENV: &str = "FRAGILEC_RUSTC_WRAPPER";
 const FRAGILEC_RUNTIME_LINK_CACHE_DIR_ENV: &str = "FRAGILEC_RUNTIME_LINK_CACHE_DIR";
+const FRAGILEC_DUMP_UNRESOLVED_RS_ENV: &str = "FRAGILEC_DUMP_UNRESOLVED_RS";
 
 fn validate_strict_mode_value(mode: &str) -> Result<(), String> {
     match mode.to_ascii_lowercase().as_str() {
@@ -91,6 +93,85 @@ fn rustc_invocation_fingerprint() -> String {
         std::env::consts::ARCH,
         std::env::var("RUSTUP_TOOLCHAIN").unwrap_or_else(|_| "<default>".to_string()),
     )
+}
+
+fn env_flag_is_true(name: &str) -> bool {
+    std::env::var(name)
+        .map(|raw| {
+            matches!(
+                raw.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn skip_system_headers_from_env() -> bool {
+    match std::env::var(FRAGILEC_SKIP_SYSTEM_HEADERS_ENV) {
+        Ok(raw) => matches!(
+            raw.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => false,
+    }
+}
+
+fn include_path_is_external_test_framework(path: &str) -> bool {
+    let normalized = path.replace('\\', "/").to_ascii_lowercase();
+    normalized.contains("/googletest/")
+        || normalized.ends_with("/googletest")
+        || normalized.contains("/googlemock/")
+        || normalized.ends_with("/googlemock")
+        || normalized.contains("/gtest/")
+        || normalized.ends_with("/gtest")
+        || normalized.contains("/gmock/")
+        || normalized.ends_with("/gmock")
+}
+
+fn maybe_promote_include_kind_to_system(
+    kind: IncludeDirectiveKind,
+    resolved_path: &str,
+) -> IncludeDirectiveKind {
+    if !skip_system_headers_from_env() {
+        return kind;
+    }
+    if kind == IncludeDirectiveKind::Include
+        && include_path_is_external_test_framework(resolved_path)
+    {
+        IncludeDirectiveKind::System
+    } else {
+        kind
+    }
+}
+
+fn maybe_promote_frontend_include_flag(flag: &str, resolved_path: &str) -> String {
+    if !skip_system_headers_from_env() {
+        return flag.to_string();
+    }
+    if flag == "-I" && include_path_is_external_test_framework(resolved_path) {
+        "-isystem".to_string()
+    } else {
+        flag.to_string()
+    }
+}
+
+fn should_retry_with_system_headers_on_failure(err: &str) -> bool {
+    const RETRY_NEEDLES: &[&str] = &[
+        "cannot find function `gai_strerror`",
+        "cannot find function `connect`",
+        "cannot find function `setsockopt`",
+        "cannot find function `getaddrinfo`",
+        "cannot find function `freeaddrinfo`",
+        "cannot find type `sockaddr`",
+        "cannot find type `addrinfo`",
+        "no field `ai_family`",
+        "no field `ai_socktype`",
+        "no field `ai_protocol`",
+        "no field `ai_addr`",
+        "no field `ai_addrlen`",
+        "no field `ai_next`",
+    ];
+    RETRY_NEEDLES.iter().any(|needle| err.contains(needle))
 }
 
 #[derive(Debug, Clone)]
@@ -403,11 +484,18 @@ fn parse_rust_exported_function_signature(signature: &str) -> Result<RustFnExpor
     let signature = signature
         .strip_prefix("fn ")
         .ok_or_else(|| format!("invalid Rust function signature: `{}`", signature))?;
-    let open_idx = signature
-        .find('(')
-        .ok_or_else(|| format!("missing parameter list in Rust function signature: `{}`", signature))?;
-    let close_idx = find_matching_close_paren(signature, open_idx)
-        .ok_or_else(|| format!("unbalanced parameter list in Rust function signature: `{}`", signature))?;
+    let open_idx = signature.find('(').ok_or_else(|| {
+        format!(
+            "missing parameter list in Rust function signature: `{}`",
+            signature
+        )
+    })?;
+    let close_idx = find_matching_close_paren(signature, open_idx).ok_or_else(|| {
+        format!(
+            "unbalanced parameter list in Rust function signature: `{}`",
+            signature
+        )
+    })?;
     let name = canonical_rust_ident(signature[..open_idx].trim());
     if name.is_empty() {
         return Err(format!(
@@ -500,7 +588,9 @@ fn parse_rust_struct_field_line(trimmed_line: &str) -> Option<(String, String)> 
     Some((field_name, rhs.to_string()))
 }
 
-fn parse_rust_source_for_cpp_header(source: &str) -> Result<(Vec<RustStructDef>, Vec<RustFnExport>), String> {
+fn parse_rust_source_for_cpp_header(
+    source: &str,
+) -> Result<(Vec<RustStructDef>, Vec<RustFnExport>), String> {
     let lines: Vec<&str> = source.lines().collect();
     let mut structs: Vec<RustStructDef> = Vec::new();
     let mut exports: Vec<RustFnExport> = Vec::new();
@@ -645,7 +735,13 @@ fn render_rust_cpp_header(
         let params = exported_fn
             .params
             .iter()
-            .map(|(name, ty)| format!("{} {}", rust_type_to_cpp_type(ty), canonical_rust_ident(name)))
+            .map(|(name, ty)| {
+                format!(
+                    "{} {}",
+                    rust_type_to_cpp_type(ty),
+                    canonical_rust_ident(name)
+                )
+            })
             .collect::<Vec<_>>()
             .join(", ");
         out.push_str(&format!(
@@ -767,9 +863,10 @@ fn resolve_include_directives(
                     joined
                 }
             };
+            let resolved = resolved_path.to_string_lossy().to_string();
             IncludeDirective {
-                kind: directive.kind,
-                path: resolved_path.to_string_lossy().to_string(),
+                kind: maybe_promote_include_kind_to_system(directive.kind, &resolved),
+                path: resolved,
             }
         })
         .collect()
@@ -851,12 +948,14 @@ fn collect_resolved_frontend_args(args: &[OsString], cwd: &Path) -> Vec<String> 
                 | "-ivfsoverlay"
         ) {
             if i + 1 < args.len() {
-                collected.push(cur.to_string());
                 let value = args[i + 1].to_string_lossy();
                 if matches!(cur, "-include" | "-imacros" | "-include-pch") {
+                    collected.push(cur.to_string());
                     collected.push(resolve_forced_include_value(value.as_ref(), cwd));
                 } else {
-                    collected.push(resolve_frontend_path_value(value.as_ref(), cwd));
+                    let resolved = resolve_frontend_path_value(value.as_ref(), cwd);
+                    collected.push(maybe_promote_frontend_include_flag(cur, &resolved));
+                    collected.push(resolved);
                 }
                 i += 2;
                 continue;
@@ -1010,8 +1109,9 @@ fn collect_resolved_frontend_args(args: &[OsString], cwd: &Path) -> Vec<String> 
             continue;
         }
         if let Some(rest) = split_joined_path_flag(cur, "-I") {
-            collected.push("-I".to_string());
-            collected.push(resolve_frontend_path_value(rest, cwd));
+            let resolved = resolve_frontend_path_value(rest, cwd);
+            collected.push(maybe_promote_frontend_include_flag("-I", &resolved));
+            collected.push(resolved);
             i += 1;
             continue;
         }
@@ -1263,18 +1363,12 @@ fn read_build_id_from_meta(meta_path: &Path) -> Result<Option<String>, String> {
 }
 
 fn enforce_build_id_for_link_inputs(args: &[OsString]) -> Result<(), String> {
-    if std::env::var(FRAGILEC_ENFORCE_BUILD_ID_ENV)
-        .map(|v| v == "1")
-        .unwrap_or(false)
-        == false
-    {
+    if !env_flag_is_true(FRAGILEC_ENFORCE_BUILD_ID_ENV) {
         return Ok(());
     }
 
     let required_build_id = build_id();
-    let require_meta = std::env::var(FRAGILEC_REQUIRE_META_ENV)
-        .map(|v| v == "1")
-        .unwrap_or(false);
+    let require_meta = env_flag_is_true(FRAGILEC_REQUIRE_META_ENV);
 
     for arg in args {
         let token = arg.to_string_lossy();
@@ -1509,34 +1603,7 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
         .map(|raw| raw.trim().to_string())
         .filter(|raw| !raw.is_empty())
         .map(PathBuf::from);
-    let transpile_options = TranspileOptions {
-        include_paths: Vec::new(),
-        include_directives: includes.to_vec(),
-        frontend_args: frontend_args.to_vec(),
-        defines: defines.to_vec(),
-        language,
-        language_standard,
-        ignored_error_patterns: strict_parser_ignored_error_patterns(language),
-        backend: parser_backend,
-        template_parsing_mode: TemplateParsingMode::Auto,
-        libtooling_skip_system_headers: true,
-        stage_timing_trace_path,
-    };
-    let transpiled = fragile_clang::transpile_cpp_to_rust_with_options(&source, &transpile_options)
-        .map_err(|e| {
-            format!(
-                "failed to transpile {} with parser backend {:?}: {}",
-                source.display(),
-                parser_backend,
-                e
-            )
-        })?;
-    let transpiled = normalize_transpiled_main_entry(transpiled);
-    enforce_unresolved_type_invariant(&source, &transpiled)?;
-
-    let keep_rs = std::env::var(FRAGILEC_KEEP_RS_ENV)
-        .map(|v| v == "1")
-        .unwrap_or(false);
+    let keep_rs = env_flag_is_true(FRAGILEC_KEEP_RS_ENV);
     let transpiled_rs = if keep_rs {
         out_obj.with_extension("fragile.rs")
     } else {
@@ -1551,39 +1618,93 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
             )
         })?;
     }
-    fs::write(&transpiled_rs, transpiled).map_err(|e| {
-        format!(
-            "failed to write transpiled source {}: {}",
-            transpiled_rs.display(),
-            e
-        )
-    })?;
 
-    let mut rustc_cmd = rustc_command();
-    rustc_cmd
-        .arg("--edition")
-        .arg("2021")
-        .arg("-A")
-        .arg("warnings")
-        .arg("--crate-type")
-        .arg("lib")
-        .arg("--emit=obj")
-        .arg("--crate-name")
-        .arg(crate_name_for_unit(&source, out_obj))
-        .arg(&transpiled_rs)
-        .arg("-o")
-        .arg(out_obj);
-    let rustc = rustc_cmd
-        .output()
-        .map_err(|e| format!("failed to run rustc for {}: {}", source.display(), e))?;
+    let compile_once = |skip_system_headers: bool| -> Result<(), String> {
+        let transpile_options = TranspileOptions {
+            include_paths: Vec::new(),
+            include_directives: includes.to_vec(),
+            frontend_args: frontend_args.to_vec(),
+            defines: defines.to_vec(),
+            language: language.clone(),
+            language_standard: language_standard.clone(),
+            ignored_error_patterns: strict_parser_ignored_error_patterns(language.clone()),
+            backend: parser_backend,
+            template_parsing_mode: TemplateParsingMode::Standard,
+            libtooling_skip_system_headers: skip_system_headers,
+            stage_timing_trace_path: stage_timing_trace_path.clone(),
+        };
+        let transpiled =
+            fragile_clang::transpile_cpp_to_rust_with_options(&source, &transpile_options)
+                .map_err(|e| {
+                    format!(
+                        "failed to transpile {} with parser backend {:?} (skip_system_headers={}): {}",
+                        source.display(),
+                        parser_backend,
+                        skip_system_headers,
+                        e
+                    )
+                })?;
+        let transpiled = normalize_transpiled_main_entry(transpiled);
+        enforce_unresolved_type_invariant(&source, &transpiled)?;
 
-    if !rustc.status.success() {
-        return Err(format!(
-            "fragile rustc object compile failed for {}\nstdout:\n{}\nstderr:\n{}",
-            source.display(),
-            String::from_utf8_lossy(&rustc.stdout),
-            String::from_utf8_lossy(&rustc.stderr)
-        ));
+        fs::write(&transpiled_rs, transpiled).map_err(|e| {
+            format!(
+                "failed to write transpiled source {}: {}",
+                transpiled_rs.display(),
+                e
+            )
+        })?;
+
+        let mut rustc_cmd = rustc_command();
+        rustc_cmd
+            .arg("--edition")
+            .arg("2021")
+            .arg("-A")
+            .arg("warnings")
+            .arg("--crate-type")
+            .arg("lib")
+            .arg("--emit=obj")
+            .arg("--crate-name")
+            .arg(crate_name_for_unit(&source, out_obj))
+            .arg(&transpiled_rs)
+            .arg("-o")
+            .arg(out_obj);
+        let rustc = rustc_cmd
+            .output()
+            .map_err(|e| format!("failed to run rustc for {}: {}", source.display(), e))?;
+
+        if !rustc.status.success() {
+            return Err(format!(
+                "fragile rustc object compile failed for {} (skip_system_headers={})\nstdout:\n{}\nstderr:\n{}",
+                source.display(),
+                skip_system_headers,
+                String::from_utf8_lossy(&rustc.stdout),
+                String::from_utf8_lossy(&rustc.stderr)
+            ));
+        }
+        Ok(())
+    };
+
+    let preferred_skip = skip_system_headers_from_env();
+    match compile_once(preferred_skip) {
+        Ok(()) => {}
+        Err(primary_err) => {
+            if !preferred_skip {
+                return Err(primary_err);
+            }
+            if !should_retry_with_system_headers_on_failure(&primary_err) {
+                return Err(primary_err);
+            }
+            eprintln!(
+                "[fragilec] retrying {} with system headers enabled after strict compile failure",
+                source.display()
+            );
+            if let Err(retry_err) = compile_once(false) {
+                return Err(format!(
+                    "{primary_err}\n\n[fragilec] retry with skip_system_headers=false also failed:\n{retry_err}"
+                ));
+            }
+        }
     }
 
     if !keep_rs {
@@ -1623,8 +1744,65 @@ fn normalize_transpiled_main_entry(transpiled: String) -> String {
     )
 }
 
+fn has_fragile_runtime_glob_import(transpiled: &str) -> bool {
+    transpiled.lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed.contains("::*")
+            && (trimmed.starts_with("use fragile_stl::")
+                || trimmed.starts_with("pub use fragile_stl::")
+                || trimmed.starts_with("pub(crate) use fragile_stl::")
+                || trimmed.starts_with("pub(super) use fragile_stl::")
+                || trimmed.starts_with("use fragile_runtime::")
+                || trimmed.starts_with("pub use fragile_runtime::")
+                || trimmed.starts_with("pub(crate) use fragile_runtime::")
+                || trimmed.starts_with("pub(super) use fragile_runtime::"))
+    })
+}
+
+fn is_runtime_glob_import_resolved_type_name(name: &str) -> bool {
+    matches!(
+        name,
+        "FragileCStrDisplay"
+            | "error_category"
+            | "fpos_mbstate_t"
+            | "std_thread"
+            | "string_view"
+            | "wstring_view"
+    ) || name.starts_with("__atomic_base_")
+        || name.starts_with("__pthread_")
+        || name.starts_with("reverse_iterator_")
+        || (name.contains("iterator") && name.ends_with("_value_type"))
+}
+
+fn maybe_dump_unresolved_transpiled_rs(source: &Path, transpiled: &str) -> Option<PathBuf> {
+    if !env_flag_is_true(FRAGILEC_DUMP_UNRESOLVED_RS_ENV) {
+        return None;
+    }
+    let mut hasher = DefaultHasher::new();
+    source.display().to_string().hash(&mut hasher);
+    let hash = hasher.finish();
+    let file_stem = source
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("unit");
+    let out_path = std::env::temp_dir()
+        .join("fragilec_unresolved")
+        .join(format!("{}_{}.rs", file_stem, hash));
+    if let Some(parent) = out_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if fs::write(&out_path, transpiled).is_ok() {
+        Some(out_path)
+    } else {
+        None
+    }
+}
+
 fn enforce_unresolved_type_invariant(source: &Path, transpiled: &str) -> Result<(), String> {
-    let unresolved = fragile_clang::AstCodeGen::unresolved_named_type_references(transpiled);
+    let mut unresolved = fragile_clang::AstCodeGen::unresolved_named_type_references(transpiled);
+    if has_fragile_runtime_glob_import(transpiled) {
+        unresolved.retain(|name| !is_runtime_glob_import_resolved_type_name(name));
+    }
     if unresolved.is_empty() {
         return Ok(());
     }
@@ -1634,10 +1812,14 @@ fn enforce_unresolved_type_invariant(source: &Path, transpiled: &str) -> Result<
     if unresolved.len() > preview.len() {
         detail.push_str(&format!(" (and {} more)", unresolved.len() - preview.len()));
     }
+    let dump_note = maybe_dump_unresolved_transpiled_rs(source, transpiled)
+        .map(|path| format!(" [dumped transpiled Rust to {}]", path.display()))
+        .unwrap_or_default();
     Err(format!(
-        "fragile unresolved-type invariant failed for {}: {}",
+        "fragile unresolved-type invariant failed for {}: {}{}",
         source.display(),
-        detail
+        detail,
+        dump_note
     ))
 }
 
@@ -1949,9 +2131,7 @@ fn run_fragile_link(parsed: &ParsedInvocation) -> Result<(), String> {
     }
 
     let cwd = std::env::current_dir().map_err(|e| format!("failed to read cwd: {}", e))?;
-    let keep_rs = std::env::var(FRAGILEC_KEEP_RS_ENV)
-        .map(|v| v == "1")
-        .unwrap_or(false);
+    let keep_rs = env_flag_is_true(FRAGILEC_KEEP_RS_ENV);
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| format!("failed to read wall clock: {}", e))?
@@ -2064,9 +2244,13 @@ Usage:
   fragilec [compiler args...]
   fragilec --emit-rust-cpp-header <source.rs> -o <generated.hpp>
 
+Compile flag:
+  (none; fragilec is strict-only)
+
 Environment:
   FRAGILEC_MODE=strict               Optional; strict-only mode (default: strict)
   FRAGILEC_PARSER_BACKEND=<name>     Parser backend: libtooling
+  FRAGILEC_SKIP_SYSTEM_HEADERS=<0|1> Skip system/header-unit AST export (default: disabled)
   FRAGILEC_LOG=<path>                Append invocation log (cwd/args records)
   FRAGILEC_BUILD_ID=<id>             Build-id used for metadata writes/checks
   FRAGILEC_ENFORCE_BUILD_ID=1        Enforce build-id on .o/.a inputs during link
@@ -2136,7 +2320,6 @@ fn main() -> ExitCode {
             }
         };
     }
-
     // Enforce link-input metadata only when we are delegating a link command.
     if !parsed.compile_only {
         if let Err(err) = enforce_build_id_for_link_inputs(&parsed.args) {

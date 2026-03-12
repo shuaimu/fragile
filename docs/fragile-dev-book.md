@@ -76,7 +76,7 @@ Milestone gates:
 Verification command used for this update (March 8, 2026):
 
 ```bash
-cd vendor/mako/build_fragilec_clanglld_probecompat
+cd vendor/mako/build_fragilec_clang_probecompat
 ctest -R '^test_rpc$' --output-on-failure
 ```
 
@@ -216,6 +216,9 @@ Generic normalizations added in this replay cycle:
   - applies to both `used_types` and `referenced_but_undefined_structs` recovery paths, while preserving real lowercase type candidates.
   - recognizes numeric leaf segments and global-scope singleton paths in leaked pseudo types (for example `new::0`, `::size`, `::ptr`) and includes `from::raw::parts::mut`-style paths.
   - keeps `c::u128`-style surfaces eligible while still suppressing `c::void` in this pseudo-type filter.
+- `fragile-stl` `std_string` preamble hardening:
+  - replaced unchecked `Layout::array(...).unwrap()` allocation paths with checked `match`/early-return handling for layout overflow.
+  - retained explicit null checks via `ptr == std::ptr::null_mut()` / `ptr != std::ptr::null_mut()` and avoided `let-else`/tuple destructuring in this preamble block, because those forms were observed to be rewritten incorrectly in generated output during replay builds.
 
 Outcome snapshot:
 

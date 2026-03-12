@@ -1014,6 +1014,12 @@ fn map_rusty_type_to_std(spelling: &str) -> Option<String> {
         _ => {}
     }
 
+    if cleaned.starts_with("rusty::thread::Scope<")
+        || cleaned.starts_with("std::thread::Scope<")
+    {
+        return Some("std::thread::Scope<'static, 'static>".to_string());
+    }
+
     if let Some(mapped) = map_thread_join_handle_to_std(cleaned) {
         return Some(mapped);
     }
@@ -2049,6 +2055,15 @@ impl CppType {
                             .replace("::__1::", "::")
                             .replace("::__2::", "::")
                             .replace("::__ndk1::", "::"); // Android NDK uses __ndk1
+
+                        // Clang can encode elaborated keywords inside template arguments
+                        // (e.g. `leaf<struct params>`). Strip these globally so the same
+                        // C++ type maps to one canonical Rust identifier.
+                        let cleaned = cleaned
+                            .replace("struct ", "")
+                            .replace("class ", "")
+                            .replace("enum ", "")
+                            .replace("typename ", "");
 
                         // Handle remaining "unsigned TYPE" patterns
                         let cleaned: String = if cleaned.starts_with("unsigned ") {

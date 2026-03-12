@@ -1,5 +1,7 @@
 // fragile_runtime stub for memory allocation
 pub mod fragile_runtime {
+    static mut FRAGILE_UNIT_SINGLETON: () = ();
+
     #[inline]
     pub unsafe fn fragile_malloc(size: usize) -> *mut () {
         c_malloc(size) as *mut ()
@@ -36,6 +38,20 @@ pub mod fragile_runtime {
         #[link_name = "fputs"] fn c_fputs(s: *const i8, stream: *mut std::ffi::c_void) -> i32;
         #[link_name = "puts"] fn c_puts(s: *const i8) -> i32;
         #[link_name = "fgets"] fn c_fgets(s: *mut i8, n: i32, stream: *mut std::ffi::c_void) -> *mut i8;
+        #[link_name = "popen"] fn c_popen(command: *const i8, mode: *const i8) -> *mut std::ffi::c_void;
+        #[link_name = "pclose"] fn c_pclose(stream: *mut std::ffi::c_void) -> i32;
+        #[link_name = "rand_r"] fn c_rand_r(seed: *mut u32) -> i32;
+        #[link_name = "backtrace"] fn c_backtrace(buffer: *mut *mut std::ffi::c_void, size: i32) -> i32;
+        #[link_name = "backtrace_symbols"] fn c_backtrace_symbols(
+            buffer: *const *mut std::ffi::c_void,
+            size: i32,
+        ) -> *mut *mut i8;
+        #[link_name = "_ZN7testing14InitGoogleTestEPiPPc"]
+        fn c_gtest_init(argc: *mut i32, argv: *mut *mut i8);
+        #[link_name = "_ZN7testing8UnitTest11GetInstanceEv"]
+        fn c_gtest_get_instance() -> *mut fragile_gtest_unit_test;
+        #[link_name = "_ZN7testing8UnitTest3RunEv"]
+        fn c_gtest_run(this_: *mut fragile_gtest_unit_test) -> i32;
     }
     #[inline]
     pub unsafe fn fragile_calloc(nmemb: usize, size: usize) -> *mut () { c_calloc(nmemb, size) as *mut () }
@@ -87,6 +103,54 @@ pub mod fragile_runtime {
     pub unsafe fn puts(s: *const i8) -> i32 { c_puts(s) }
     #[inline]
     pub unsafe fn fgets(s: *mut i8, n: i32, stream: *mut std::ffi::c_void) -> *mut i8 { c_fgets(s, n, stream) }
+    #[inline]
+    pub unsafe fn popen(command: *const i8, mode: *const i8) -> *mut std::ffi::c_void { c_popen(command, mode) }
+    #[inline]
+    pub unsafe fn pclose(stream: *mut std::ffi::c_void) -> i32 { c_pclose(stream) }
+    #[inline]
+    pub fn fragile_rand_r(seed: *mut u32) -> i32 { unsafe { c_rand_r(seed) } }
+
+    #[repr(C)]
+    pub struct fragile_gtest_unit_test {
+        pub _opaque: [u8; 0],
+    }
+
+    #[inline]
+    pub fn fragile_gtest_init(argc: *mut i32, argv: *mut *mut i8) {
+        unsafe { c_gtest_init(argc, argv) }
+    }
+
+    #[inline]
+    pub fn fragile_gtest_run_all_tests() -> i32 {
+        unsafe {
+            let unit = c_gtest_get_instance();
+            if unit.is_null() {
+                1
+            } else {
+                c_gtest_run(unit)
+            }
+        }
+    }
+    #[inline]
+    pub unsafe fn backtrace(buffer: *mut *mut (), size: i32) -> i32 {
+        c_backtrace(buffer as *mut *mut std::ffi::c_void, size)
+    }
+    #[inline]
+    pub unsafe fn backtrace_symbols(
+        buffer: *const *mut (),
+        size: i32,
+    ) -> *mut *mut i8 {
+        c_backtrace_symbols(buffer as *const *mut std::ffi::c_void, size)
+    }
+    #[inline]
+    pub unsafe fn fragile_unit_mut() -> &'static mut () {
+        &mut FRAGILE_UNIT_SINGLETON
+    }
+
+    #[inline]
+    pub unsafe fn fragile_zeroed_mut<T>() -> &'static mut T {
+        std::boxed::Box::leak(std::boxed::Box::new(std::mem::zeroed::<T>()))
+    }
     
     // pthread implementations using Rust std::thread
     

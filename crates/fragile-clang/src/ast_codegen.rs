@@ -32469,7 +32469,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
                     .unwrap_or(trimmed);
                 out.push_str(indent);
                 out.push_str(prefix);
-                out.push_str(" = Default::default();\n");
+                out.push_str(" = unsafe { std::mem::zeroed() };\n");
             } else {
                 out.push_str(line);
                 out.push('\n');

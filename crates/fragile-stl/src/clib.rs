@@ -124,6 +124,20 @@ unsafe extern "C" {
     fn __fragile_getenv_ffi(_name: *const i8) -> *mut i8;
     #[link_name = "strdup"]
     fn __fragile_strdup_ffi(_s: *const i8) -> *mut i8;
+    #[link_name = "strtol"]
+    fn __fragile_strtol_ffi(_s: *const i8, _endptr: *mut *mut i8, _base: i32) -> i64;
+    #[link_name = "strtoul"]
+    fn __fragile_strtoul_ffi(_s: *const i8, _endptr: *mut *mut i8, _base: i32) -> u64;
+    #[link_name = "strtoll"]
+    fn __fragile_strtoll_ffi(_s: *const i8, _endptr: *mut *mut i8, _base: i32) -> i64;
+    #[link_name = "strtoull"]
+    fn __fragile_strtoull_ffi(_s: *const i8, _endptr: *mut *mut i8, _base: i32) -> u64;
+    #[link_name = "strtof"]
+    fn __fragile_strtof_ffi(_s: *const i8, _endptr: *mut *mut i8) -> f32;
+    #[link_name = "strtod"]
+    fn __fragile_strtod_ffi(_s: *const i8, _endptr: *mut *mut i8) -> f64;
+    #[link_name = "strtold"]
+    fn __fragile_strtold_ffi(_s: *const i8, _endptr: *mut *mut i8) -> f64;
 }
 #[inline]
 pub fn getenv(_name: *const i8) -> *mut i8 {
@@ -141,21 +155,92 @@ pub fn __fragile_py_buildvalue_stub(_format: *const i8) -> *mut std::ffi::c_void
 
 #[inline]
 pub fn strtol(_s: *const i8, _endptr: *mut *mut i8, _base: i32) -> i64 {
-    // Stub: just return 0 for now
-    0
+    if _s.is_null() {
+        return 0;
+    }
+    unsafe { __fragile_strtol_ffi(_s, _endptr, _base) }
 }
 #[inline]
-pub fn strtoul(_s: *const i8, _endptr: *mut *mut i8, _base: i32) -> u64 { 0 }
+pub fn strtoul(_s: *const i8, _endptr: *mut *mut i8, _base: i32) -> u64 {
+    if _s.is_null() {
+        return 0;
+    }
+    unsafe { __fragile_strtoul_ffi(_s, _endptr, _base) }
+}
 #[inline]
-pub fn strtoll(_s: *const i8, _endptr: *mut *mut i8, _base: i32) -> i64 { 0 }
+pub fn strtoll(_s: *const i8, _endptr: *mut *mut i8, _base: i32) -> i64 {
+    if _s.is_null() {
+        return 0;
+    }
+    unsafe { __fragile_strtoll_ffi(_s, _endptr, _base) }
+}
 #[inline]
-pub fn strtoull(_s: *const i8, _endptr: *mut *mut i8, _base: i32) -> u64 { 0 }
+pub fn strtoull(_s: *const i8, _endptr: *mut *mut i8, _base: i32) -> u64 {
+    if _s.is_null() {
+        return 0;
+    }
+    unsafe { __fragile_strtoull_ffi(_s, _endptr, _base) }
+}
+
 #[inline]
-pub fn strtof(_s: *const i8, _endptr: *mut *mut i8) -> f32 { 0.0 }
+fn fragile_store_parse_index(_idx: *mut u64, value: u64) {
+    if (_idx as usize) != 0 {
+        unsafe {
+            *_idx = value;
+        }
+    }
+}
 #[inline]
-pub fn strtod(_s: *const i8, _endptr: *mut *mut i8) -> f64 { 0.0 }
+pub fn stoull(_s: &std_string, _idx: *mut u64, _base: i32) -> u64 {
+    let parsed = strtoull(_s.c_str(), std::ptr::null_mut(), _base);
+    fragile_store_parse_index(_idx, _s.size() as u64);
+    parsed
+}
 #[inline]
-pub fn strtold(_s: *const i8, _endptr: *mut *mut i8) -> f64 { 0.0 }
+pub fn stoul(_s: &std_string, _idx: *mut u64, _base: i32) -> u64 {
+    let parsed = strtoul(_s.c_str(), std::ptr::null_mut(), _base);
+    fragile_store_parse_index(_idx, _s.size() as u64);
+    parsed
+}
+#[inline]
+pub fn stoi(_s: &std_string, _idx: *mut u64, _base: i32) -> i32 {
+    let parsed = strtol(_s.c_str(), std::ptr::null_mut(), _base) as i32;
+    fragile_store_parse_index(_idx, _s.size() as u64);
+    parsed
+}
+#[inline]
+pub fn stol(_s: &std_string, _idx: *mut u64, _base: i32) -> i64 {
+    let parsed = strtol(_s.c_str(), std::ptr::null_mut(), _base);
+    fragile_store_parse_index(_idx, _s.size() as u64);
+    parsed
+}
+#[inline]
+pub fn stoll(_s: &std_string, _idx: *mut u64, _base: i32) -> i64 {
+    let parsed = strtoll(_s.c_str(), std::ptr::null_mut(), _base);
+    fragile_store_parse_index(_idx, _s.size() as u64);
+    parsed
+}
+#[inline]
+pub fn strtof(_s: *const i8, _endptr: *mut *mut i8) -> f32 {
+    if _s.is_null() {
+        return 0.0;
+    }
+    unsafe { __fragile_strtof_ffi(_s, _endptr) }
+}
+#[inline]
+pub fn strtod(_s: *const i8, _endptr: *mut *mut i8) -> f64 {
+    if _s.is_null() {
+        return 0.0;
+    }
+    unsafe { __fragile_strtod_ffi(_s, _endptr) }
+}
+#[inline]
+pub fn strtold(_s: *const i8, _endptr: *mut *mut i8) -> f64 {
+    if _s.is_null() {
+        return 0.0;
+    }
+    unsafe { __fragile_strtold_ffi(_s, _endptr) }
+}
 #[inline]
 pub fn wcstol(_s: *const i32, _endptr: *mut *mut i32, _base: i32) -> i64 { 0 }
 #[inline]
