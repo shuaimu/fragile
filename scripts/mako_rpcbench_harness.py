@@ -2,8 +2,8 @@
 """Deterministic harness scaffolding for mako rpcbench benchmarking.
 
 Leaf 1.1 added plan-only command/manifest scaffolding.
-Leaf 1.2 adds deterministic configure/clean/build execution capture for both
-lanes with per-step status/stdout/stderr artifacts and failure metadata.
+Leaf 1.2 added deterministic configure/clean/build execution capture.
+Leaf 1.3 adds deterministic runtime replay for `test_rpc` and rpcbench trials.
 """
 
 from __future__ import annotations
@@ -16,10 +16,11 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable, Sequence, TextIO
 
 LANES: tuple[str, str] = ("clang", "fragilec")
 COMMAND_TIMEOUT_STATUS = 124
+COMMAND_NOT_FOUND_STATUS = 127
 SKIPPED_STATUS = -1
 
 
@@ -36,6 +37,8 @@ class LaneExecutionSummary:
     configure_status: int
     clean_status: int
     build_status: int
+    test_rpc_status: int
+    completed_trials: int
     failure_class: str
 
 
@@ -63,6 +66,10 @@ class HarnessConfig:
     configure_timeout_seconds: int
     clean_timeout_seconds: int
     build_timeout_seconds: int
+    test_rpc_timeout_seconds: int
+    rpc_client_timeout_seconds: int
+    rpc_server_startup_wait_seconds: float
+    rpc_server_shutdown_timeout_seconds: int
     trials: int
     base_port: int
     rpcbench: RpcBenchConfig
@@ -93,6 +100,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--configure-timeout-seconds", type=int, default=900)
     parser.add_argument("--clean-timeout-seconds", type=int, default=300)
     parser.add_argument("--build-timeout-seconds", type=int, default=3600)
+    parser.add_argument("--test-rpc-timeout-seconds", type=int, default=120)
+    parser.add_argument("--rpc-client-timeout-seconds", type=int, default=120)
+    parser.add_argument("--rpc-server-startup-wait-seconds", type=float, default=1.0)
+    parser.add_argument("--rpc-server-shutdown-timeout-seconds", type=int, default=10)
     parser.add_argument("--trials", type=int, default=3)
     parser.add_argument("--base-port", type=int, default=18900)
     parser.add_argument("--rpc-duration-seconds", type=int, default=10)
@@ -112,6 +123,11 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 def ensure_positive(name: str, value: int) -> None:
     if value <= 0:
         raise ValueError(f"{name} must be > 0, got {value}")
+
+
+def ensure_non_negative(name: str, value: float) -> None:
+    if value < 0:
+        raise ValueError(f"{name} must be >= 0, got {value}")
 
 
 def shell_join(argv: Iterable[str]) -> str:
@@ -137,6 +153,14 @@ def to_harness_config(ns: argparse.Namespace) -> HarnessConfig:
     ensure_positive("configure-timeout-seconds", ns.configure_timeout_seconds)
     ensure_positive("clean-timeout-seconds", ns.clean_timeout_seconds)
     ensure_positive("build-timeout-seconds", ns.build_timeout_seconds)
+    ensure_positive("test-rpc-timeout-seconds", ns.test_rpc_timeout_seconds)
+    ensure_positive("rpc-client-timeout-seconds", ns.rpc_client_timeout_seconds)
+    ensure_positive(
+        "rpc-server-shutdown-timeout-seconds", ns.rpc_server_shutdown_timeout_seconds
+    )
+    ensure_non_negative(
+        "rpc-server-startup-wait-seconds", ns.rpc_server_startup_wait_seconds
+    )
     ensure_positive("trials", ns.trials)
     ensure_positive("rpc-duration-seconds", ns.rpc_duration_seconds)
     ensure_positive("rpc-client-threads", ns.rpc_client_threads)
@@ -161,6 +185,10 @@ def to_harness_config(ns: argparse.Namespace) -> HarnessConfig:
         configure_timeout_seconds=ns.configure_timeout_seconds,
         clean_timeout_seconds=ns.clean_timeout_seconds,
         build_timeout_seconds=ns.build_timeout_seconds,
+        test_rpc_timeout_seconds=ns.test_rpc_timeout_seconds,
+        rpc_client_timeout_seconds=ns.rpc_client_timeout_seconds,
+        rpc_server_startup_wait_seconds=ns.rpc_server_startup_wait_seconds,
+        rpc_server_shutdown_timeout_seconds=ns.rpc_server_shutdown_timeout_seconds,
         trials=ns.trials,
         base_port=ns.base_port,
         rpcbench=RpcBenchConfig(
@@ -312,7 +340,7 @@ def expected_artifacts(cfg: HarnessConfig) -> list[str]:
 
 def command_plan_lines(cfg: HarnessConfig) -> list[str]:
     lines: list[str] = []
-    lines.append("# benchmark harness command plan (leaf 1.1)")
+    lines.append("# benchmark harness command plan (leaf 1.3)")
     lines.append(f"workspace_root={cfg.workspace_root}")
     lines.append(f"mako_root={cfg.mako_root}")
     lines.append(f"run_root={cfg.run_root}")
@@ -345,7 +373,7 @@ def manifest_lines(
     lane_summaries: dict[str, LaneExecutionSummary] | None = None,
 ) -> list[str]:
     rpc = cfg.rpcbench
-    task_leaf = "1.1" if plan_only else "1.2"
+    task_leaf = "1.1" if plan_only else "1.3"
     lines = [
         "version=1",
         f"task_leaf={task_leaf}",
@@ -364,6 +392,10 @@ def manifest_lines(
         f"configure_timeout_seconds={cfg.configure_timeout_seconds}",
         f"clean_timeout_seconds={cfg.clean_timeout_seconds}",
         f"build_timeout_seconds={cfg.build_timeout_seconds}",
+        f"test_rpc_timeout_seconds={cfg.test_rpc_timeout_seconds}",
+        f"rpc_client_timeout_seconds={cfg.rpc_client_timeout_seconds}",
+        f"rpc_server_startup_wait_seconds={cfg.rpc_server_startup_wait_seconds}",
+        f"rpc_server_shutdown_timeout_seconds={cfg.rpc_server_shutdown_timeout_seconds}",
         f"rpc_duration_seconds={rpc.duration_seconds}",
         f"rpc_client_threads={rpc.client_threads}",
         f"rpc_outstanding_requests={rpc.outstanding_requests}",
@@ -385,6 +417,8 @@ def manifest_lines(
             lines.append(f"lane_{lane}_configure_status={summary.configure_status}")
             lines.append(f"lane_{lane}_clean_status={summary.clean_status}")
             lines.append(f"lane_{lane}_build_status={summary.build_status}")
+            lines.append(f"lane_{lane}_test_rpc_status={summary.test_rpc_status}")
+            lines.append(f"lane_{lane}_completed_trials={summary.completed_trials}")
             lines.append(f"lane_{lane}_failure_class={summary.failure_class}")
     return lines
 
@@ -453,6 +487,13 @@ def run_command_capture(argv: list[str], timeout_seconds: int) -> StepResult:
             stderr=_ensure_text(exc.stderr) + timeout_msg,
             timed_out=True,
         )
+    except OSError as exc:
+        return StepResult(
+            status=COMMAND_NOT_FOUND_STATUS,
+            stdout="",
+            stderr=f"error: failed to run command: {shell_join(argv)} ({exc})\n",
+            timed_out=False,
+        )
 
 
 def skipped_step_result(reason: str) -> StepResult:
@@ -470,10 +511,179 @@ def write_step_result(lane_dir: Path, step_name: str, result: StepResult) -> Non
     write_text_file(lane_dir / f"{step_name}.stderr", result.stderr.splitlines())
 
 
+def write_runtime_skipped_results(
+    cfg: HarnessConfig,
+    lane: str,
+    reason: str,
+    *,
+    include_test_rpc: bool,
+) -> None:
+    lane_dir = cfg.run_root / f"lane_{lane}"
+    if include_test_rpc:
+        test_rpc_result = skipped_step_result(reason)
+        write_step_result(lane_dir, "test_rpc", test_rpc_result)
+    for trial in range(1, cfg.trials + 1):
+        trial_dir = lane_trial_dir(cfg.run_root, lane, trial)
+        write_step_result(trial_dir, "rpc_server", skipped_step_result(reason))
+        write_step_result(trial_dir, "rpc_client", skipped_step_result(reason))
+
+
+def run_background_process_to_files(
+    argv: list[str],
+    stdout_path: Path,
+    stderr_path: Path,
+) -> tuple[subprocess.Popen[str], TextIO, TextIO]:
+    stdout_handle = stdout_path.open("w", encoding="utf-8")
+    stderr_handle = stderr_path.open("w", encoding="utf-8")
+    try:
+        process = subprocess.Popen(
+            argv,
+            stdout=stdout_handle,
+            stderr=stderr_handle,
+            text=True,
+        )
+    except OSError:
+        stdout_handle.close()
+        stderr_handle.close()
+        raise
+    return process, stdout_handle, stderr_handle
+
+
+def read_text_file(path: Path) -> str:
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def finalize_server_process(
+    process: subprocess.Popen[str],
+    stdout_handle: TextIO,
+    stderr_handle: TextIO,
+    stdout_path: Path,
+    stderr_path: Path,
+    shutdown_timeout_seconds: int,
+) -> StepResult:
+    terminated_by_harness = False
+    timed_out = False
+    timeout_error = ""
+
+    if process.poll() is None:
+        terminated_by_harness = True
+        process.terminate()
+        try:
+            process.wait(timeout=shutdown_timeout_seconds)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            timeout_error = (
+                "error: rpc server did not exit after terminate within "
+                f"{shutdown_timeout_seconds} seconds\n"
+            )
+            process.kill()
+            process.wait()
+
+    stdout_handle.close()
+    stderr_handle.close()
+    stdout = read_text_file(stdout_path)
+    stderr = read_text_file(stderr_path) + timeout_error
+
+    if timed_out:
+        return StepResult(
+            status=COMMAND_TIMEOUT_STATUS,
+            stdout=stdout,
+            stderr=stderr,
+            timed_out=True,
+        )
+
+    returncode = process.returncode if process.returncode is not None else 0
+    if terminated_by_harness and returncode < 0:
+        returncode = 0
+    return StepResult(
+        status=returncode,
+        stdout=stdout,
+        stderr=stderr,
+        timed_out=False,
+    )
+
+
+def run_rpc_trial(
+    cfg: HarnessConfig,
+    lane: str,
+    trial_index: int,
+) -> tuple[StepResult, StepResult, str]:
+    trial_dir = lane_trial_dir(cfg.run_root, lane, trial_index)
+    server_stdout_path = trial_dir / "rpc_server.live.stdout"
+    server_stderr_path = trial_dir / "rpc_server.live.stderr"
+
+    try:
+        server_proc, server_stdout_handle, server_stderr_handle = run_background_process_to_files(
+            rpc_server_command(cfg, lane, trial_index),
+            server_stdout_path,
+            server_stderr_path,
+        )
+    except OSError as exc:
+        server_result = StepResult(
+            status=COMMAND_NOT_FOUND_STATUS,
+            stdout="",
+            stderr=(
+                "error: failed to start rpc server command: "
+                f"{shell_join(rpc_server_command(cfg, lane, trial_index))} ({exc})\n"
+            ),
+            timed_out=False,
+        )
+        client_result = skipped_step_result("rpc server failed to start")
+        server_stdout_path.unlink(missing_ok=True)
+        server_stderr_path.unlink(missing_ok=True)
+        return server_result, client_result, "rpc_server_failed"
+
+    if cfg.rpc_server_startup_wait_seconds > 0:
+        time.sleep(cfg.rpc_server_startup_wait_seconds)
+
+    if server_proc.poll() is not None:
+        server_stdout_handle.close()
+        server_stderr_handle.close()
+        server_result = StepResult(
+            status=server_proc.returncode if server_proc.returncode is not None else 1,
+            stdout=read_text_file(server_stdout_path),
+            stderr=read_text_file(server_stderr_path),
+            timed_out=False,
+        )
+        client_result = skipped_step_result("rpc server exited before client start")
+        server_stdout_path.unlink(missing_ok=True)
+        server_stderr_path.unlink(missing_ok=True)
+        return server_result, client_result, "rpc_server_failed"
+
+    client_result = run_command_capture(
+        rpc_client_command(cfg, lane, trial_index),
+        cfg.rpc_client_timeout_seconds,
+    )
+    server_result = finalize_server_process(
+        server_proc,
+        server_stdout_handle,
+        server_stderr_handle,
+        server_stdout_path,
+        server_stderr_path,
+        cfg.rpc_server_shutdown_timeout_seconds,
+    )
+    server_stdout_path.unlink(missing_ok=True)
+    server_stderr_path.unlink(missing_ok=True)
+
+    if server_result.timed_out:
+        return server_result, client_result, "rpc_server_timeout"
+    if server_result.status != 0:
+        return server_result, client_result, "rpc_server_failed"
+    if client_result.timed_out:
+        return server_result, client_result, "rpc_client_timeout"
+    if client_result.status != 0:
+        return server_result, client_result, "rpc_client_failed"
+    return server_result, client_result, "none"
+
+
 def classify_lane_failure(
     configure_result: StepResult,
     clean_result: StepResult,
     build_result: StepResult,
+    test_rpc_result: StepResult,
+    runtime_failure_class: str,
 ) -> str:
     if configure_result.timed_out:
         return "configure_timeout"
@@ -487,10 +697,16 @@ def classify_lane_failure(
         return "build_timeout"
     if build_result.status != 0:
         return "build_failed"
+    if test_rpc_result.timed_out:
+        return "test_rpc_timeout"
+    if test_rpc_result.status != 0:
+        return "test_rpc_failed"
+    if runtime_failure_class != "none":
+        return runtime_failure_class
     return "none"
 
 
-def execute_configure_build_capture(
+def execute_harness_capture(
     cfg: HarnessConfig,
 ) -> dict[str, LaneExecutionSummary]:
     summaries: dict[str, LaneExecutionSummary] = {}
@@ -519,16 +735,66 @@ def execute_configure_build_capture(
         write_step_result(lane_dir, "clean", clean_result)
         write_step_result(lane_dir, "build", build_result)
 
+        test_rpc_result = skipped_step_result("build step failed")
+        completed_trials = 0
+        runtime_failure_class = "none"
+
+        if build_result.status == 0:
+            test_rpc_result = run_command_capture(
+                test_rpc_command(cfg, lane), cfg.test_rpc_timeout_seconds
+            )
+            write_step_result(lane_dir, "test_rpc", test_rpc_result)
+
+            if test_rpc_result.status == 0:
+                for trial in range(1, cfg.trials + 1):
+                    trial_dir = lane_trial_dir(cfg.run_root, lane, trial)
+                    server_result, client_result, trial_failure = run_rpc_trial(
+                        cfg, lane, trial
+                    )
+                    write_step_result(trial_dir, "rpc_server", server_result)
+                    write_step_result(trial_dir, "rpc_client", client_result)
+                    if trial_failure == "none":
+                        completed_trials += 1
+                    elif runtime_failure_class == "none":
+                        runtime_failure_class = f"rpc_trial_{trial:02d}_{trial_failure}"
+            else:
+                write_runtime_skipped_results(
+                    cfg, lane, "test_rpc step failed", include_test_rpc=False
+                )
+        else:
+            write_runtime_skipped_results(
+                cfg, lane, "build step failed", include_test_rpc=True
+            )
+
+        if build_result.status != 0:
+            # `write_runtime_skipped_results` already wrote this artifact.
+            test_rpc_result = skipped_step_result("build step failed")
+        elif test_rpc_result.status != 0:
+            # Ensure all trial artifacts exist with skipped markers when test_rpc failed.
+            for trial in range(1, cfg.trials + 1):
+                trial_dir = lane_trial_dir(cfg.run_root, lane, trial)
+                if not (trial_dir / "rpc_server.status").exists():
+                    write_step_result(
+                        trial_dir, "rpc_server", skipped_step_result("test_rpc step failed")
+                    )
+                    write_step_result(
+                        trial_dir, "rpc_client", skipped_step_result("test_rpc step failed")
+                    )
+
         failure_class = classify_lane_failure(
             configure_result,
             clean_result,
             build_result,
+            test_rpc_result,
+            runtime_failure_class,
         )
         write_text_file(lane_dir / "failure_class.txt", [failure_class])
         summaries[lane] = LaneExecutionSummary(
             configure_status=configure_result.status,
             clean_status=clean_result.status,
             build_status=build_result.status,
+            test_rpc_status=test_rpc_result.status,
+            completed_trials=completed_trials,
             failure_class=failure_class,
         )
 
@@ -547,7 +813,7 @@ def main(argv: Sequence[str]) -> int:
         lane_summaries: dict[str, LaneExecutionSummary] | None = None
         ensure_run_root_layout(cfg)
         if not ns.plan_only:
-            lane_summaries = execute_configure_build_capture(cfg)
+            lane_summaries = execute_harness_capture(cfg)
         emit_plan_artifacts(
             cfg,
             plan_only=bool(ns.plan_only),

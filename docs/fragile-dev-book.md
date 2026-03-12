@@ -2493,3 +2493,50 @@ Aligned with Section 1.3 and `docs/dev/wrong.md`:
 - `python3 -m unittest tests/python/test_mako_rpcbench_harness.py -v`
 - full workspace suite: `cargo test` (currently reports pre-existing `fragile-clang`
   `ast_codegen` lib-test failures that reproduce on clean `origin/main` baseline)
+
+## 41. RPC Bench Harness Runtime Replay Capture (2026-03-12)
+
+### Problem
+
+After leaf `1.2`, runtime evidence was still missing. The harness could build targets
+but could not deterministically execute `test_rpc` and bounded rpcbench trials per lane.
+
+### Decision
+
+Implement leaf `1.3` runtime replay in the harness with deterministic process controls:
+
+- run lane `test_rpc` after successful `configure/clean/build`
+- run per-trial rpcbench server/client on deterministic lane ports
+- enforce bounded execution and shutdown controls
+- persist runtime status/failure metadata per lane/trial in artifacts + manifest
+
+### Wrong-Approach Check
+
+Aligned with Section 1.3 and `docs/dev/wrong.md`:
+
+- no `rpcbench`/`test_rpc` compiler target-name hacks
+- no synthetic semantic method-body fallbacks
+- no force-native bypass path
+- runtime failures are explicit artifacts (`status`, `failure_class`), not hidden
+
+### Implementation
+
+- Updated `scripts/mako_rpcbench_harness.py`:
+  - added runtime timeout/startup/shutdown CLI controls
+  - added bounded `test_rpc` and trial server/client execution
+  - added runtime skip artifact emission and runtime failure classification
+  - added manifest fields for `test_rpc` status and completed trial counts
+- Updated `tests/python/test_mako_rpcbench_harness.py`:
+  - runtime success coverage (both lanes)
+  - `test_rpc` failure + skipped trial artifact coverage
+  - first runtime trial failure-class coverage
+- Added design note:
+  - `docs/rpc_benchmark_harness_leaf_1_3_design_2026_03_12.md`
+- Updated user manual:
+  - `docs/rpc_benchmark_harness_user_manual.md`
+
+### Validation
+
+- `python3 -m unittest tests/python/test_mako_rpcbench_harness.py -v`
+- full workspace suite: `cargo test` (current workspace baseline remains `fragile-clang`
+  `ast_codegen` lib-test failures: `711 passed / 49 failed`, matching known pre-existing cluster)

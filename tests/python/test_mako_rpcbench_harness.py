@@ -44,6 +44,16 @@ class MakoRpcBenchHarnessPlanTests(unittest.TestCase):
             "4",
             "--base-port",
             "23000",
+            "--test-rpc-timeout-seconds",
+            "5",
+            "--rpc-client-timeout-seconds",
+            "5",
+            "--rpc-server-startup-wait-seconds",
+            "0.01",
+            "--rpc-server-shutdown-timeout-seconds",
+            "2",
+            "--rpc-duration-seconds",
+            "1",
             "--fragile-cxx",
             str(workspace / "target" / "release" / "fragilec"),
         ]
@@ -75,14 +85,55 @@ class MakoRpcBenchHarnessPlanTests(unittest.TestCase):
                     "echo \"fake-cmake ${args}\"",
                     "lane=\"clang\"",
                     "if [[ \"${args}\" == *\"build_fragilec\"* ]]; then lane=\"fragilec\"; fi",
+                    "lane_upper=\"${lane^^}\"",
                     "step=\"build\"",
                     "if [[ \"${args}\" == *\"--target clean\"* ]]; then",
                     "  step=\"clean\"",
                     "elif [[ \"${args}\" == *\" -S \"* ]] || [[ \"${args}\" == \"-S \"* ]]; then",
                     "  step=\"configure\"",
                     "fi",
-                    "var_name=\"FAKE_${step^^}_${lane^^}_RC\"",
+                    "build_dir=\"\"",
+                    "for ((i=1; i<=$#; i++)); do",
+                    "  token=\"${!i}\"",
+                    "  if [[ \"${token}\" == \"-B\" ]] || [[ \"${token}\" == \"--build\" ]]; then",
+                    "    next_index=$((i + 1))",
+                    "    build_dir=\"${!next_index:-}\"",
+                    "  fi",
+                    "done",
+                    "var_name=\"FAKE_${step^^}_${lane_upper}_RC\"",
                     "rc=\"${!var_name:-0}\"",
+                    "if [[ \"${step}\" == \"build\" ]] && [[ \"${rc}\" == \"0\" ]]; then",
+                    "  mkdir -p \"${build_dir}\"",
+                    "  cat > \"${build_dir}/test_rpc\" <<EOF",
+                    "#!/usr/bin/env bash",
+                    "set -euo pipefail",
+                    "sleep_s=\"\\${FAKE_TEST_RPC_${lane_upper}_SLEEP_SECONDS:-0}\"",
+                    "if [[ \"\\${sleep_s}\" != \"0\" ]]; then sleep \"\\${sleep_s}\"; fi",
+                    "rc=\"\\${FAKE_TEST_RPC_${lane_upper}_RC:-0}\"",
+                    "echo \"fake-test-rpc lane=${lane} rc=\\${rc}\"",
+                    "exit \"\\${rc}\"",
+                    "EOF",
+                    "  cat > \"${build_dir}/rpcbench\" <<EOF",
+                    "#!/usr/bin/env bash",
+                    "set -euo pipefail",
+                    "mode=\"\\${1:-}\"",
+                    "if [[ \"\\${mode}\" == \"-s\" ]]; then",
+                    "  if [[ \"\\${FAKE_RPC_SERVER_${lane_upper}_EXIT_IMMEDIATE:-0}\" == \"1\" ]]; then",
+                    "    echo \"fake-rpc-server lane=${lane} immediate-exit\"",
+                    "    exit 3",
+                    "  fi",
+                    "  trap 'exit 0' TERM INT",
+                    "  echo \"fake-rpc-server lane=${lane} started\"",
+                    "  while true; do sleep 1; done",
+                    "fi",
+                    "sleep_s=\"\\${FAKE_RPC_CLIENT_${lane_upper}_SLEEP_SECONDS:-0}\"",
+                    "if [[ \"\\${sleep_s}\" != \"0\" ]]; then sleep \"\\${sleep_s}\"; fi",
+                    "rc=\"\\${FAKE_RPC_CLIENT_${lane_upper}_RC:-0}\"",
+                    "echo \"fake-rpc-client lane=${lane} rc=\\${rc}\"",
+                    "exit \"\\${rc}\"",
+                    "EOF",
+                    "  chmod +x \"${build_dir}/test_rpc\" \"${build_dir}/rpcbench\"",
+                    "fi",
                     "echo \"lane=${lane} step=${step} rc=${rc}\" >&2",
                     "exit \"${rc}\"",
                     "",
@@ -189,6 +240,7 @@ class MakoRpcBenchHarnessPlanTests(unittest.TestCase):
                 self.assertEqual((lane_dir / "configure.status").read_text(encoding="utf-8").strip(), "0")
                 self.assertEqual((lane_dir / "clean.status").read_text(encoding="utf-8").strip(), "0")
                 self.assertEqual((lane_dir / "build.status").read_text(encoding="utf-8").strip(), "0")
+                self.assertEqual((lane_dir / "test_rpc.status").read_text(encoding="utf-8").strip(), "0")
                 self.assertEqual((lane_dir / "failure_class.txt").read_text(encoding="utf-8").strip(), "none")
                 self.assertIn(
                     "fake-cmake",
@@ -198,12 +250,34 @@ class MakoRpcBenchHarnessPlanTests(unittest.TestCase):
                     f"lane={lane} step=build rc=0",
                     (lane_dir / "build.stderr").read_text(encoding="utf-8"),
                 )
+                self.assertIn(
+                    f"fake-test-rpc lane={lane} rc=0",
+                    (lane_dir / "test_rpc.stdout").read_text(encoding="utf-8"),
+                )
+                for trial in (1, 2):
+                    trial_dir = lane_dir / f"trial_{trial:02d}"
+                    self.assertEqual(
+                        (trial_dir / "rpc_server.status").read_text(encoding="utf-8").strip(),
+                        "0",
+                    )
+                    self.assertEqual(
+                        (trial_dir / "rpc_client.status").read_text(encoding="utf-8").strip(),
+                        "0",
+                    )
+                    self.assertIn(
+                        f"fake-rpc-client lane={lane} rc=0",
+                        (trial_dir / "rpc_client.stdout").read_text(encoding="utf-8"),
+                    )
 
             manifest = (run_root / "benchmark_harness_manifest.txt").read_text(encoding="utf-8")
-            self.assertIn("task_leaf=1.2", manifest)
+            self.assertIn("task_leaf=1.3", manifest)
             self.assertIn("plan_only=false", manifest)
             self.assertIn("lane_clang_failure_class=none", manifest)
             self.assertIn("lane_fragilec_failure_class=none", manifest)
+            self.assertIn("lane_clang_test_rpc_status=0", manifest)
+            self.assertIn("lane_fragilec_test_rpc_status=0", manifest)
+            self.assertIn("lane_clang_completed_trials=2", manifest)
+            self.assertIn("lane_fragilec_completed_trials=2", manifest)
 
     def test_execution_mode_records_failure_class_and_skips_followup_steps(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -231,6 +305,7 @@ class MakoRpcBenchHarnessPlanTests(unittest.TestCase):
             self.assertEqual((fragile_dir / "configure.status").read_text(encoding="utf-8").strip(), "5")
             self.assertEqual((fragile_dir / "clean.status").read_text(encoding="utf-8").strip(), "-1")
             self.assertEqual((fragile_dir / "build.status").read_text(encoding="utf-8").strip(), "-1")
+            self.assertEqual((fragile_dir / "test_rpc.status").read_text(encoding="utf-8").strip(), "-1")
             self.assertEqual(
                 (fragile_dir / "failure_class.txt").read_text(encoding="utf-8").strip(),
                 "configure_failed",
@@ -239,10 +314,110 @@ class MakoRpcBenchHarnessPlanTests(unittest.TestCase):
                 "skipped: configure step failed",
                 (fragile_dir / "clean.stderr").read_text(encoding="utf-8"),
             )
+            self.assertIn(
+                "skipped: build step failed",
+                (fragile_dir / "test_rpc.stderr").read_text(encoding="utf-8"),
+            )
+            fragile_trial = fragile_dir / "trial_01"
+            self.assertEqual(
+                (fragile_trial / "rpc_server.status").read_text(encoding="utf-8").strip(),
+                "-1",
+            )
+            self.assertEqual(
+                (fragile_trial / "rpc_client.status").read_text(encoding="utf-8").strip(),
+                "-1",
+            )
 
             manifest = (run_root / "benchmark_harness_manifest.txt").read_text(encoding="utf-8")
             self.assertIn("lane_fragilec_failure_class=configure_failed", manifest)
             self.assertIn("lane_fragilec_build_status=-1", manifest)
+            self.assertIn("lane_fragilec_test_rpc_status=-1", manifest)
+            self.assertIn("lane_fragilec_completed_trials=0", manifest)
+
+    def test_execution_mode_records_test_rpc_failure_and_skips_trials(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            workspace, mako_root = self._create_workspace_fixture(tmp_path)
+            run_root = tmp_path / "run"
+            fake_cmake = self._create_fake_cmake(tmp_path)
+
+            result = self._run_harness(
+                workspace,
+                mako_root,
+                run_root,
+                plan_only=False,
+                cmake_bin=fake_cmake,
+                env={"FAKE_TEST_RPC_FRAGILEC_RC": "7"},
+            )
+            self.assertNotEqual(result.returncode, 0)
+
+            fragile_dir = run_root / "lane_fragilec"
+            self.assertEqual((fragile_dir / "build.status").read_text(encoding="utf-8").strip(), "0")
+            self.assertEqual((fragile_dir / "test_rpc.status").read_text(encoding="utf-8").strip(), "7")
+            self.assertEqual(
+                (fragile_dir / "failure_class.txt").read_text(encoding="utf-8").strip(),
+                "test_rpc_failed",
+            )
+            self.assertIn(
+                "fake-test-rpc lane=fragilec rc=7",
+                (fragile_dir / "test_rpc.stdout").read_text(encoding="utf-8"),
+            )
+
+            for trial in (1, 2):
+                trial_dir = fragile_dir / f"trial_{trial:02d}"
+                self.assertEqual(
+                    (trial_dir / "rpc_server.status").read_text(encoding="utf-8").strip(),
+                    "-1",
+                )
+                self.assertEqual(
+                    (trial_dir / "rpc_client.status").read_text(encoding="utf-8").strip(),
+                    "-1",
+                )
+                self.assertIn(
+                    "skipped: test_rpc step failed",
+                    (trial_dir / "rpc_client.stderr").read_text(encoding="utf-8"),
+                )
+
+            manifest = (run_root / "benchmark_harness_manifest.txt").read_text(encoding="utf-8")
+            self.assertIn("lane_fragilec_failure_class=test_rpc_failed", manifest)
+            self.assertIn("lane_fragilec_test_rpc_status=7", manifest)
+            self.assertIn("lane_fragilec_completed_trials=0", manifest)
+
+    def test_execution_mode_records_first_runtime_trial_failure_class(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            workspace, mako_root = self._create_workspace_fixture(tmp_path)
+            run_root = tmp_path / "run"
+            fake_cmake = self._create_fake_cmake(tmp_path)
+
+            result = self._run_harness(
+                workspace,
+                mako_root,
+                run_root,
+                plan_only=False,
+                cmake_bin=fake_cmake,
+                env={"FAKE_RPC_CLIENT_CLANG_RC": "9"},
+            )
+            self.assertNotEqual(result.returncode, 0)
+
+            clang_dir = run_root / "lane_clang"
+            self.assertEqual((clang_dir / "test_rpc.status").read_text(encoding="utf-8").strip(), "0")
+            self.assertEqual(
+                (clang_dir / "failure_class.txt").read_text(encoding="utf-8").strip(),
+                "rpc_trial_01_rpc_client_failed",
+            )
+            self.assertEqual(
+                (clang_dir / "trial_01" / "rpc_client.status").read_text(encoding="utf-8").strip(),
+                "9",
+            )
+            self.assertEqual(
+                (clang_dir / "trial_02" / "rpc_client.status").read_text(encoding="utf-8").strip(),
+                "9",
+            )
+
+            manifest = (run_root / "benchmark_harness_manifest.txt").read_text(encoding="utf-8")
+            self.assertIn("lane_clang_failure_class=rpc_trial_01_rpc_client_failed", manifest)
+            self.assertIn("lane_clang_completed_trials=0", manifest)
 
 
 if __name__ == "__main__":
