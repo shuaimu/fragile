@@ -26,7 +26,6 @@ const FRAGILEC_RUSTC_WRAPPER_ENV: &str = "FRAGILEC_RUSTC_WRAPPER";
 const FRAGILEC_RUNTIME_LINK_CACHE_DIR_ENV: &str = "FRAGILEC_RUNTIME_LINK_CACHE_DIR";
 const FRAGILEC_DUMP_UNRESOLVED_RS_ENV: &str = "FRAGILEC_DUMP_UNRESOLVED_RS";
 const FRAGILEC_NATIVE_FALLBACK_CXX_ENV: &str = "FRAGILEC_NATIVE_FALLBACK_CXX";
-const FRAGILEC_FORCE_NATIVE_SOURCES_ENV: &str = "FRAGILEC_FORCE_NATIVE_SOURCES";
 
 fn validate_strict_mode_value(mode: &str) -> Result<(), String> {
     match mode.to_ascii_lowercase().as_str() {
@@ -193,17 +192,6 @@ fn should_native_fallback_on_failure(err: &str) -> bool {
     NATIVE_FALLBACK_NEEDLES
         .iter()
         .any(|needle| err.contains(needle))
-}
-
-fn should_force_native_for_source(source: &Path) -> bool {
-    let Ok(raw) = std::env::var(FRAGILEC_FORCE_NATIVE_SOURCES_ENV) else {
-        return false;
-    };
-    let source_text = source.to_string_lossy();
-    raw.split(',')
-        .map(str::trim)
-        .filter(|needle| !needle.is_empty())
-        .any(|needle| source_text.contains(needle))
 }
 
 fn compile_with_native_fallback(args: &[OsString], source: &Path) -> Result<(), String> {
@@ -1660,17 +1648,6 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
     let source = resolve_path(source_arg, &cwd);
     if !source.exists() {
         return Err(format!("source file does not exist: {}", source.display()));
-    }
-
-    if should_force_native_for_source(&source) {
-        eprintln!(
-            "[fragilec] forcing native compile for {} via {}",
-            source.display(),
-            FRAGILEC_FORCE_NATIVE_SOURCES_ENV
-        );
-        compile_with_native_fallback(args_for_meta, source.as_path())?;
-        write_meta_file(&source, out_obj, args_for_meta)?;
-        return Ok(());
     }
 
     if let Some(parent) = out_obj.parent() {
