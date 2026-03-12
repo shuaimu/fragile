@@ -28,6 +28,11 @@ Acceptance gates:
 
 Execution plan:
 - [ ] 1) Establish deterministic clean benchmark harness for `clang` and `fragilec` (`configure`, `clean`, `build`, `run`, trial aggregation, artifact logs).
+  - [x] 1.1) Add deterministic command-plan + manifest scaffolding for dual-lane (`clang`/`fragilec`) rpcbench runs (shared args, stable lane/trial naming, artifact-file contract) with local-fixture regression coverage. Done 2026-03-12. Evidence: added `scripts/mako_rpcbench_harness.py` (`--plan-only` leaf mode) to emit deterministic `benchmark_harness_command_plan.txt`/`benchmark_harness_manifest.txt`/`benchmark_expected_artifacts.txt` under a run root with stable lane/trial naming and deterministic per-lane trial ports; added regression coverage `tests/python/test_mako_rpcbench_harness.py` (artifact-contract emission, idempotent plan regeneration, invalid-port rejection) and docs `docs/rpc_benchmark_harness_breakdown_2026_03_12.md` + `docs/rpc_benchmark_harness_user_manual.md`.
+  - [ ] 1.2) Implement clean configure/build execution capture for both lanes (`cmake configure`, clean rebuild, target build) with per-step status/stdout/stderr artifacts and failure-class metadata.
+  - [ ] 1.3) Implement runtime replay harness for `test_rpc` and rpcbench server/client trial execution (bounded-time process lifecycle, deterministic per-trial ports, lane-isolated logs).
+  - [ ] 1.4) Implement trial aggregation/parsing for rpcbench QPS metrics and emit deterministic comparison manifests (`clang_avg_qps`, `fragile_avg_qps`, per-trial values, no-regression verdict).
+  - [ ] 1.5) Add regression gates for 1.1-1.4 (fast local fixture + ignored real-world replay) and wire required artifact/manifest assertions.
 - [ ] 2) Close fragile compile blockers for `test_rpc`/`rpcbench` using generic fixes in parser/codegen/type-lowering/call-shape passes (no target-name conditionals).
 - [ ] 3) Close runtime crash blockers (current PollThread/Sender drop path) via generic non-zeroable default/initialization correctness fixes.
 - [ ] 4) Add focused compiler regressions for each fixed blocker to prevent reintroduction (unit + real-world replay where possible).

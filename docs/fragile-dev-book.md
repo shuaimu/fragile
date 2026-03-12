@@ -2408,3 +2408,46 @@ safe concrete alias chain existed (for example to `std::sync::MutexGuard` /
   - `test_rpc_circuit_breaker_integration` generated aliases now resolve
     `rusty_MutexGuard_*Future_State` / `rusty_PoisonError_*Future_State` to `std::sync::*`
     targets (no `= State` fallback for this family).
+
+## 39. RPC Bench Harness Deterministic Plan Scaffold (2026-03-12)
+
+### Problem
+
+The active RPC bring-up track needs a reproducible benchmark harness that compares
+`clang` and `fragilec` lanes with identical parameters and artifact capture.
+Implementing configure/build/run/replay/aggregation in one pass is too large for
+one safe leaf change.
+
+### Decision
+
+Implement leaf `1.1` first as a deterministic planning scaffold:
+
+- add `scripts/mako_rpcbench_harness.py`
+- emit stable command plan + manifest + expected-artifact contract
+- define lane/trial naming and deterministic per-lane trial ports
+- keep this leaf in `--plan-only` mode (no runtime execution yet)
+
+This keeps the harness structure testable before introducing heavy execution
+paths in later leaves.
+
+### Wrong-Approach Check
+
+Aligned with Section 1.3 and `docs/dev/wrong.md`:
+
+- no `rpcbench`/`test_rpc` codegen conditionals were introduced
+- no semantic fake method bodies or forced compile-success stubs were added
+- no force-native bypass path was used
+
+### Implementation
+
+- Script: `scripts/mako_rpcbench_harness.py`
+- Docs:
+  - `docs/rpc_benchmark_harness_breakdown_2026_03_12.md`
+  - `docs/rpc_benchmark_harness_user_manual.md`
+- Regression tests:
+  - `tests/python/test_mako_rpcbench_harness.py`
+
+### Validation
+
+- `python3 -m unittest tests/python/test_mako_rpcbench_harness.py -v`
+- full workspace suite (run after leaf integration): `cargo test`
