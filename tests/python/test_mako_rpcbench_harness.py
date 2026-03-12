@@ -126,10 +126,25 @@ class MakoRpcBenchHarnessPlanTests(unittest.TestCase):
                     "  echo \"fake-rpc-server lane=${lane} started\"",
                     "  while true; do sleep 1; done",
                     "fi",
+                    "endpoint=\"\"",
+                    "for ((i=1; i<=$#; i++)); do",
+                    "  token=\"\\${!i}\"",
+                    "  if [[ \"\\${token}\" == \"-c\" ]]; then",
+                    "    next_index=$((i + 1))",
+                    "    endpoint=\"\\${!next_index:-}\"",
+                    "  fi",
+                    "done",
+                    "port=\"\\${endpoint##*:}\"",
                     "sleep_s=\"\\${FAKE_RPC_CLIENT_${lane_upper}_SLEEP_SECONDS:-0}\"",
                     "if [[ \"\\${sleep_s}\" != \"0\" ]]; then sleep \"\\${sleep_s}\"; fi",
                     "rc=\"\\${FAKE_RPC_CLIENT_${lane_upper}_RC:-0}\"",
+                    "qps_var=\"FAKE_RPC_CLIENT_${lane_upper}_PORT_\\${port}_QPS\"",
+                    "qps=\"\\${!qps_var:-\\${FAKE_RPC_CLIENT_${lane_upper}_QPS:-1000}}\"",
+                    "emit_qps=\"\\${FAKE_RPC_CLIENT_${lane_upper}_EMIT_QPS:-1}\"",
                     "echo \"fake-rpc-client lane=${lane} rc=\\${rc}\"",
+                    "if [[ \"\\${emit_qps}\" == \"1\" ]]; then",
+                    "  echo \"summary qps=\\${qps}\"",
+                    "fi",
                     "exit \"\\${rc}\"",
                     "EOF",
                     "  chmod +x \"${build_dir}/test_rpc\" \"${build_dir}/rpcbench\"",
@@ -156,9 +171,11 @@ class MakoRpcBenchHarnessPlanTests(unittest.TestCase):
             manifest_path = run_root / "benchmark_harness_manifest.txt"
             plan_path = run_root / "benchmark_harness_command_plan.txt"
             expected_artifacts_path = run_root / "benchmark_expected_artifacts.txt"
+            comparison_manifest_path = run_root / "benchmark_qps_comparison_manifest.txt"
             self.assertTrue(manifest_path.exists())
             self.assertTrue(plan_path.exists())
             self.assertTrue(expected_artifacts_path.exists())
+            self.assertTrue(comparison_manifest_path.exists())
 
             manifest = manifest_path.read_text(encoding="utf-8")
             plan = plan_path.read_text(encoding="utf-8")
@@ -181,6 +198,7 @@ class MakoRpcBenchHarnessPlanTests(unittest.TestCase):
             self.assertIn("lane_fragilec/build.stderr", expected_artifacts)
             self.assertIn("lane_clang/trial_02/rpc_client.stdout", expected_artifacts)
             self.assertIn("lane_fragilec/trial_01/rpc_server.stderr", expected_artifacts)
+            self.assertIn("benchmark_qps_comparison_manifest.txt", expected_artifacts)
 
     def test_plan_generation_is_idempotent_for_same_inputs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -232,6 +250,10 @@ class MakoRpcBenchHarnessPlanTests(unittest.TestCase):
                 run_root,
                 plan_only=False,
                 cmake_bin=fake_cmake,
+                env={
+                    "FAKE_RPC_CLIENT_CLANG_QPS": "1000",
+                    "FAKE_RPC_CLIENT_FRAGILEC_QPS": "1200",
+                },
             )
             self.assertEqual(result.returncode, 0, msg=result.stderr)
 
@@ -268,9 +290,14 @@ class MakoRpcBenchHarnessPlanTests(unittest.TestCase):
                         f"fake-rpc-client lane={lane} rc=0",
                         (trial_dir / "rpc_client.stdout").read_text(encoding="utf-8"),
                     )
+                    expected_qps = "1000" if lane == "clang" else "1200"
+                    self.assertIn(
+                        f"summary qps={expected_qps}",
+                        (trial_dir / "rpc_client.stdout").read_text(encoding="utf-8"),
+                    )
 
             manifest = (run_root / "benchmark_harness_manifest.txt").read_text(encoding="utf-8")
-            self.assertIn("task_leaf=1.3", manifest)
+            self.assertIn("task_leaf=1.4", manifest)
             self.assertIn("plan_only=false", manifest)
             self.assertIn("lane_clang_failure_class=none", manifest)
             self.assertIn("lane_fragilec_failure_class=none", manifest)
@@ -278,6 +305,20 @@ class MakoRpcBenchHarnessPlanTests(unittest.TestCase):
             self.assertIn("lane_fragilec_test_rpc_status=0", manifest)
             self.assertIn("lane_clang_completed_trials=2", manifest)
             self.assertIn("lane_fragilec_completed_trials=2", manifest)
+            self.assertIn("lane_clang_trial_01_qps=1000.000000", manifest)
+            self.assertIn("lane_fragilec_trial_02_qps=1200.000000", manifest)
+            self.assertIn("lane_clang_avg_qps=1000.000000", manifest)
+            self.assertIn("lane_fragilec_avg_qps=1200.000000", manifest)
+            self.assertIn("clang_avg_qps=1000.000000", manifest)
+            self.assertIn("fragile_avg_qps=1200.000000", manifest)
+            self.assertIn("no_regression_verdict=pass", manifest)
+
+            comparison_manifest = (
+                run_root / "benchmark_qps_comparison_manifest.txt"
+            ).read_text(encoding="utf-8")
+            self.assertIn("no_regression_verdict=pass", comparison_manifest)
+            self.assertIn("lane_clang_trial_01_qps=1000.000000", comparison_manifest)
+            self.assertIn("lane_fragilec_trial_02_qps=1200.000000", comparison_manifest)
 
     def test_execution_mode_records_failure_class_and_skips_followup_steps(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -333,6 +374,7 @@ class MakoRpcBenchHarnessPlanTests(unittest.TestCase):
             self.assertIn("lane_fragilec_build_status=-1", manifest)
             self.assertIn("lane_fragilec_test_rpc_status=-1", manifest)
             self.assertIn("lane_fragilec_completed_trials=0", manifest)
+            self.assertIn("no_regression_verdict=insufficient_data", manifest)
 
     def test_execution_mode_records_test_rpc_failure_and_skips_trials(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -382,6 +424,7 @@ class MakoRpcBenchHarnessPlanTests(unittest.TestCase):
             self.assertIn("lane_fragilec_failure_class=test_rpc_failed", manifest)
             self.assertIn("lane_fragilec_test_rpc_status=7", manifest)
             self.assertIn("lane_fragilec_completed_trials=0", manifest)
+            self.assertIn("no_regression_verdict=insufficient_data", manifest)
 
     def test_execution_mode_records_first_runtime_trial_failure_class(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -418,6 +461,78 @@ class MakoRpcBenchHarnessPlanTests(unittest.TestCase):
             manifest = (run_root / "benchmark_harness_manifest.txt").read_text(encoding="utf-8")
             self.assertIn("lane_clang_failure_class=rpc_trial_01_rpc_client_failed", manifest)
             self.assertIn("lane_clang_completed_trials=0", manifest)
+            self.assertIn("no_regression_verdict=insufficient_data", manifest)
+
+    def test_execution_mode_fails_when_fragile_qps_regresses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            workspace, mako_root = self._create_workspace_fixture(tmp_path)
+            run_root = tmp_path / "run"
+            fake_cmake = self._create_fake_cmake(tmp_path)
+
+            result = self._run_harness(
+                workspace,
+                mako_root,
+                run_root,
+                plan_only=False,
+                cmake_bin=fake_cmake,
+                env={
+                    "FAKE_RPC_CLIENT_CLANG_QPS": "2000",
+                    "FAKE_RPC_CLIENT_FRAGILEC_QPS": "1500",
+                },
+            )
+            self.assertNotEqual(result.returncode, 0)
+
+            for lane in ("clang", "fragilec"):
+                lane_dir = run_root / f"lane_{lane}"
+                self.assertEqual(
+                    (lane_dir / "failure_class.txt").read_text(encoding="utf-8").strip(),
+                    "none",
+                )
+
+            manifest = (run_root / "benchmark_harness_manifest.txt").read_text(encoding="utf-8")
+            self.assertIn("clang_avg_qps=2000.000000", manifest)
+            self.assertIn("fragile_avg_qps=1500.000000", manifest)
+            self.assertIn("no_regression_verdict=fail", manifest)
+
+            comparison_manifest = (
+                run_root / "benchmark_qps_comparison_manifest.txt"
+            ).read_text(encoding="utf-8")
+            self.assertIn("no_regression_verdict=fail", comparison_manifest)
+
+    def test_execution_mode_fails_with_insufficient_qps_data(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            workspace, mako_root = self._create_workspace_fixture(tmp_path)
+            run_root = tmp_path / "run"
+            fake_cmake = self._create_fake_cmake(tmp_path)
+
+            result = self._run_harness(
+                workspace,
+                mako_root,
+                run_root,
+                plan_only=False,
+                cmake_bin=fake_cmake,
+                env={
+                    "FAKE_RPC_CLIENT_CLANG_EMIT_QPS": "0",
+                    "FAKE_RPC_CLIENT_FRAGILEC_EMIT_QPS": "0",
+                },
+            )
+            self.assertNotEqual(result.returncode, 0)
+
+            for lane in ("clang", "fragilec"):
+                lane_dir = run_root / f"lane_{lane}"
+                self.assertEqual(
+                    (lane_dir / "failure_class.txt").read_text(encoding="utf-8").strip(),
+                    "none",
+                )
+
+            comparison_manifest = (
+                run_root / "benchmark_qps_comparison_manifest.txt"
+            ).read_text(encoding="utf-8")
+            self.assertIn("clang_avg_qps=none", comparison_manifest)
+            self.assertIn("fragile_avg_qps=none", comparison_manifest)
+            self.assertIn("no_regression_verdict=insufficient_data", comparison_manifest)
 
 
 if __name__ == "__main__":

@@ -2540,3 +2540,52 @@ Aligned with Section 1.3 and `docs/dev/wrong.md`:
 - `python3 -m unittest tests/python/test_mako_rpcbench_harness.py -v`
 - full workspace suite: `cargo test` (current workspace baseline remains `fragile-clang`
   `ast_codegen` lib-test failures: `711 passed / 49 failed`, matching known pre-existing cluster)
+
+## 42. RPC Bench Harness QPS Aggregation and No-Regression Gate (2026-03-12)
+
+### Problem
+
+After leaf `1.3`, runtime replay artifacts existed but no deterministic QPS aggregation
+or lane comparison verdict was emitted, so performance-gate progress remained manual.
+
+### Decision
+
+Implement leaf `1.4` in the harness:
+
+- parse per-trial rpcbench client QPS markers from captured output
+- persist per-trial and average lane QPS metadata
+- emit deterministic comparison metadata (`clang` vs `fragilec`)
+- enforce no-regression gate in execution mode (`fail`/`insufficient_data` => nonzero)
+
+### Wrong-Approach Check
+
+Aligned with Section 1.3 and `docs/dev/wrong.md`:
+
+- no target-name-specific compiler/codegen changes
+- no synthetic semantic stubs
+- no force-native bypass path
+- missing performance data is explicit (`insufficient_data`), not silently treated as pass
+
+### Implementation
+
+- Updated `scripts/mako_rpcbench_harness.py`:
+  - added trial QPS parsing helpers and lane-average aggregation
+  - added comparison summary (`clang_avg_qps`, `fragile_avg_qps`, delta, ratio)
+  - added deterministic `benchmark_qps_comparison_manifest.txt`
+  - added manifest per-trial/lane QPS fields and no-regression verdict
+  - added execution gate for no-regression verdict (`fail`/`insufficient_data`)
+- Updated `tests/python/test_mako_rpcbench_harness.py`:
+  - pass verdict coverage (`fragile` faster than/equal to `clang`)
+  - fail verdict coverage (`fragile` slower than `clang`)
+  - insufficient-data coverage (QPS markers absent)
+  - existing runtime failure-path assertions kept and updated for comparison metadata
+- Added design note:
+  - `docs/rpc_benchmark_harness_leaf_1_4_design_2026_03_12.md`
+- Updated user manual:
+  - `docs/rpc_benchmark_harness_user_manual.md`
+
+### Validation
+
+- `python3 -m unittest tests/python/test_mako_rpcbench_harness.py -v`
+- full workspace suite: `cargo test` (current workspace baseline remains `fragile-clang`
+  `ast_codegen` lib-test failures: `711 passed / 49 failed`, matching known pre-existing cluster)

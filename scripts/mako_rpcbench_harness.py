@@ -4,12 +4,14 @@
 Leaf 1.1 added plan-only command/manifest scaffolding.
 Leaf 1.2 added deterministic configure/clean/build execution capture.
 Leaf 1.3 adds deterministic runtime replay for `test_rpc` and rpcbench trials.
+Leaf 1.4 adds deterministic rpcbench QPS aggregation/comparison metadata.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -22,6 +24,14 @@ LANES: tuple[str, str] = ("clang", "fragilec")
 COMMAND_TIMEOUT_STATUS = 124
 COMMAND_NOT_FOUND_STATUS = 127
 SKIPPED_STATUS = -1
+QPS_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"(?i)\bqps\b[^0-9+-]*([+-]?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)"
+    ),
+    re.compile(
+        r"(?i)\b([+-]?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)\s*qps\b"
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -39,6 +49,8 @@ class LaneExecutionSummary:
     build_status: int
     test_rpc_status: int
     completed_trials: int
+    trial_qps_values: tuple[float | None, ...]
+    avg_qps: float | None
     failure_class: str
 
 
@@ -73,6 +85,15 @@ class HarnessConfig:
     trials: int
     base_port: int
     rpcbench: RpcBenchConfig
+
+
+@dataclass(frozen=True)
+class ComparisonSummary:
+    clang_avg_qps: float | None
+    fragile_avg_qps: float | None
+    fragile_minus_clang_qps: float | None
+    fragile_over_clang_ratio: float | None
+    no_regression_verdict: str
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -128,6 +149,32 @@ def ensure_positive(name: str, value: int) -> None:
 def ensure_non_negative(name: str, value: float) -> None:
     if value < 0:
         raise ValueError(f"{name} must be >= 0, got {value}")
+
+
+def format_qps(value: float | None) -> str:
+    if value is None:
+        return "none"
+    return f"{value:.6f}"
+
+
+def parse_qps_from_text(text: str) -> float | None:
+    matches: list[float] = []
+    for pattern in QPS_PATTERNS:
+        for match in pattern.finditer(text):
+            try:
+                matches.append(float(match.group(1)))
+            except ValueError:
+                continue
+    if not matches:
+        return None
+    return matches[-1]
+
+
+def compute_average_qps(values: Sequence[float | None]) -> float | None:
+    present = [value for value in values if value is not None]
+    if not present:
+        return None
+    return sum(present) / len(present)
 
 
 def shell_join(argv: Iterable[str]) -> str:
@@ -302,6 +349,7 @@ def expected_artifacts(cfg: HarnessConfig) -> list[str]:
         "benchmark_harness_manifest.txt",
         "benchmark_harness_command_plan.txt",
         "benchmark_expected_artifacts.txt",
+        "benchmark_qps_comparison_manifest.txt",
     ]
 
     for lane in LANES:
@@ -340,7 +388,7 @@ def expected_artifacts(cfg: HarnessConfig) -> list[str]:
 
 def command_plan_lines(cfg: HarnessConfig) -> list[str]:
     lines: list[str] = []
-    lines.append("# benchmark harness command plan (leaf 1.3)")
+    lines.append("# benchmark harness command plan (leaf 1.4)")
     lines.append(f"workspace_root={cfg.workspace_root}")
     lines.append(f"mako_root={cfg.mako_root}")
     lines.append(f"run_root={cfg.run_root}")
@@ -367,13 +415,93 @@ def command_plan_lines(cfg: HarnessConfig) -> list[str]:
     return lines
 
 
+def lane_trial_qps_values(
+    cfg: HarnessConfig,
+    lane: str,
+    lane_summaries: dict[str, LaneExecutionSummary] | None,
+) -> list[float | None]:
+    if lane_summaries is None or lane not in lane_summaries:
+        return [None] * cfg.trials
+    values = list(lane_summaries[lane].trial_qps_values)
+    if len(values) < cfg.trials:
+        values.extend([None] * (cfg.trials - len(values)))
+    return values[: cfg.trials]
+
+
+def compute_comparison_summary(
+    lane_summaries: dict[str, LaneExecutionSummary] | None,
+) -> ComparisonSummary:
+    if lane_summaries is None:
+        return ComparisonSummary(
+            clang_avg_qps=None,
+            fragile_avg_qps=None,
+            fragile_minus_clang_qps=None,
+            fragile_over_clang_ratio=None,
+            no_regression_verdict="not_executed",
+        )
+
+    clang_summary = lane_summaries.get("clang")
+    fragile_summary = lane_summaries.get("fragilec")
+    clang_avg_qps = None if clang_summary is None else clang_summary.avg_qps
+    fragile_avg_qps = None if fragile_summary is None else fragile_summary.avg_qps
+
+    if clang_avg_qps is None or fragile_avg_qps is None:
+        return ComparisonSummary(
+            clang_avg_qps=clang_avg_qps,
+            fragile_avg_qps=fragile_avg_qps,
+            fragile_minus_clang_qps=None,
+            fragile_over_clang_ratio=None,
+            no_regression_verdict="insufficient_data",
+        )
+
+    delta = fragile_avg_qps - clang_avg_qps
+    ratio = None if clang_avg_qps == 0 else fragile_avg_qps / clang_avg_qps
+    verdict = "pass" if fragile_avg_qps >= clang_avg_qps else "fail"
+    return ComparisonSummary(
+        clang_avg_qps=clang_avg_qps,
+        fragile_avg_qps=fragile_avg_qps,
+        fragile_minus_clang_qps=delta,
+        fragile_over_clang_ratio=ratio,
+        no_regression_verdict=verdict,
+    )
+
+
+def comparison_manifest_lines(
+    cfg: HarnessConfig,
+    plan_only: bool,
+    lane_summaries: dict[str, LaneExecutionSummary] | None,
+    comparison_summary: ComparisonSummary,
+) -> list[str]:
+    task_leaf = "1.1" if plan_only else "1.4"
+    lines = [
+        "version=1",
+        f"task_leaf={task_leaf}",
+        f"run_root={cfg.run_root}",
+        f"plan_only={str(plan_only).lower()}",
+        f"trials={cfg.trials}",
+        f"clang_avg_qps={format_qps(comparison_summary.clang_avg_qps)}",
+        f"fragile_avg_qps={format_qps(comparison_summary.fragile_avg_qps)}",
+        f"fragile_minus_clang_qps={format_qps(comparison_summary.fragile_minus_clang_qps)}",
+        f"fragile_over_clang_ratio={format_qps(comparison_summary.fragile_over_clang_ratio)}",
+        f"no_regression_verdict={comparison_summary.no_regression_verdict}",
+    ]
+    for lane in LANES:
+        trial_values = lane_trial_qps_values(cfg, lane, lane_summaries)
+        for trial in range(1, cfg.trials + 1):
+            lines.append(
+                f"lane_{lane}_trial_{trial:02d}_qps={format_qps(trial_values[trial - 1])}"
+            )
+    return lines
+
+
 def manifest_lines(
     cfg: HarnessConfig,
     plan_only: bool,
     lane_summaries: dict[str, LaneExecutionSummary] | None = None,
 ) -> list[str]:
     rpc = cfg.rpcbench
-    task_leaf = "1.1" if plan_only else "1.3"
+    task_leaf = "1.1" if plan_only else "1.4"
+    comparison_summary = compute_comparison_summary(lane_summaries)
     lines = [
         "version=1",
         f"task_leaf={task_leaf}",
@@ -404,13 +532,23 @@ def manifest_lines(
         f"rpc_payload_bytes={rpc.payload_bytes}",
         "artifact_contract_file=benchmark_expected_artifacts.txt",
         "command_plan_file=benchmark_harness_command_plan.txt",
+        "comparison_manifest_file=benchmark_qps_comparison_manifest.txt",
+        f"clang_avg_qps={format_qps(comparison_summary.clang_avg_qps)}",
+        f"fragile_avg_qps={format_qps(comparison_summary.fragile_avg_qps)}",
+        f"fragile_minus_clang_qps={format_qps(comparison_summary.fragile_minus_clang_qps)}",
+        f"fragile_over_clang_ratio={format_qps(comparison_summary.fragile_over_clang_ratio)}",
+        f"no_regression_verdict={comparison_summary.no_regression_verdict}",
     ]
 
     for lane in LANES:
         lines.append(f"lane_{lane}_build_dir={lane_build_dir(cfg.run_root, lane)}")
+        trial_qps_values = lane_trial_qps_values(cfg, lane, lane_summaries)
         for trial in range(1, cfg.trials + 1):
             lines.append(
                 f"lane_{lane}_trial_{trial:02d}_port={lane_trial_port(cfg.base_port, lane, trial)}"
+            )
+            lines.append(
+                f"lane_{lane}_trial_{trial:02d}_qps={format_qps(trial_qps_values[trial - 1])}"
             )
         if lane_summaries is not None and lane in lane_summaries:
             summary = lane_summaries[lane]
@@ -419,6 +557,7 @@ def manifest_lines(
             lines.append(f"lane_{lane}_build_status={summary.build_status}")
             lines.append(f"lane_{lane}_test_rpc_status={summary.test_rpc_status}")
             lines.append(f"lane_{lane}_completed_trials={summary.completed_trials}")
+            lines.append(f"lane_{lane}_avg_qps={format_qps(summary.avg_qps)}")
             lines.append(f"lane_{lane}_failure_class={summary.failure_class}")
     return lines
 
@@ -440,7 +579,10 @@ def emit_plan_artifacts(
     cfg: HarnessConfig,
     plan_only: bool,
     lane_summaries: dict[str, LaneExecutionSummary] | None = None,
+    comparison_summary: ComparisonSummary | None = None,
 ) -> None:
+    if comparison_summary is None:
+        comparison_summary = compute_comparison_summary(lane_summaries)
     ensure_run_root_layout(cfg)
     write_text_file(
         cfg.run_root / "benchmark_harness_manifest.txt",
@@ -451,6 +593,10 @@ def emit_plan_artifacts(
     )
     write_text_file(
         cfg.run_root / "benchmark_expected_artifacts.txt", expected_artifacts(cfg)
+    )
+    write_text_file(
+        cfg.run_root / "benchmark_qps_comparison_manifest.txt",
+        comparison_manifest_lines(cfg, plan_only, lane_summaries, comparison_summary),
     )
 
 
@@ -678,6 +824,12 @@ def run_rpc_trial(
     return server_result, client_result, "none"
 
 
+def extract_trial_qps(client_result: StepResult, trial_failure: str) -> float | None:
+    if trial_failure != "none":
+        return None
+    return parse_qps_from_text(client_result.stdout + "\n" + client_result.stderr)
+
+
 def classify_lane_failure(
     configure_result: StepResult,
     clean_result: StepResult,
@@ -737,6 +889,7 @@ def execute_harness_capture(
 
         test_rpc_result = skipped_step_result("build step failed")
         completed_trials = 0
+        trial_qps_values: list[float | None] = [None] * cfg.trials
         runtime_failure_class = "none"
 
         if build_result.status == 0:
@@ -755,6 +908,9 @@ def execute_harness_capture(
                     write_step_result(trial_dir, "rpc_client", client_result)
                     if trial_failure == "none":
                         completed_trials += 1
+                        trial_qps_values[trial - 1] = extract_trial_qps(
+                            client_result, trial_failure
+                        )
                     elif runtime_failure_class == "none":
                         runtime_failure_class = f"rpc_trial_{trial:02d}_{trial_failure}"
             else:
@@ -789,12 +945,15 @@ def execute_harness_capture(
             runtime_failure_class,
         )
         write_text_file(lane_dir / "failure_class.txt", [failure_class])
+        avg_qps = compute_average_qps(trial_qps_values)
         summaries[lane] = LaneExecutionSummary(
             configure_status=configure_result.status,
             clean_status=clean_result.status,
             build_status=build_result.status,
             test_rpc_status=test_rpc_result.status,
             completed_trials=completed_trials,
+            trial_qps_values=tuple(trial_qps_values),
+            avg_qps=avg_qps,
             failure_class=failure_class,
         )
 
@@ -805,23 +964,33 @@ def has_lane_failures(lane_summaries: dict[str, LaneExecutionSummary]) -> bool:
     return any(summary.failure_class != "none" for summary in lane_summaries.values())
 
 
+def comparison_requires_failure(comparison_summary: ComparisonSummary) -> bool:
+    return comparison_summary.no_regression_verdict in {"fail", "insufficient_data"}
+
+
 def main(argv: Sequence[str]) -> int:
     try:
         ns = parse_args(argv)
         cfg = to_harness_config(ns)
         validate_layout(cfg)
         lane_summaries: dict[str, LaneExecutionSummary] | None = None
+        comparison_summary = compute_comparison_summary(None)
         ensure_run_root_layout(cfg)
         if not ns.plan_only:
             lane_summaries = execute_harness_capture(cfg)
+            comparison_summary = compute_comparison_summary(lane_summaries)
         emit_plan_artifacts(
             cfg,
             plan_only=bool(ns.plan_only),
             lane_summaries=lane_summaries,
+            comparison_summary=comparison_summary,
         )
         print(cfg.run_root)
-        if lane_summaries is not None and has_lane_failures(lane_summaries):
-            return 1
+        if lane_summaries is not None:
+            if has_lane_failures(lane_summaries):
+                return 1
+            if comparison_requires_failure(comparison_summary):
+                return 1
         return 0
     except Exception as exc:  # pylint: disable=broad-except
         print(f"error: {exc}", file=sys.stderr)
