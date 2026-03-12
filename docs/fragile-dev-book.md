@@ -5,6 +5,7 @@
 - [1. Purpose and Scope](#1-purpose-and-scope)
 - [1.1 2026 Program Goal: Mode 1 Seamless Interop](#11-2026-program-goal-mode-1-seamless-interop)
 - [1.2 Mako as Primary Validation Target](#12-mako-as-primary-validation-target)
+- [1.3 Wrong Approaches (Do Not Do)](#13-wrong-approaches-do-not-do)
 - [2. End-to-End Architecture](#2-end-to-end-architecture)
 - [2.3 C++ `_v` trait globals and export linkage](#23-c-_v-trait-globals-and-export-linkage)
 - [2.4 Mode 1 call-stitching architecture (target state)](#24-mode-1-call-stitching-architecture-target-state)
@@ -81,6 +82,27 @@ ctest -R '^test_rpc$' --output-on-failure
 ```
 
 Observed result: `1/1` passed (`test_rpc`).
+
+## 1.3 Wrong Approaches (Do Not Do)
+
+The Fragile dev process explicitly forbids shortcut fixes that hide transpiler gaps.
+
+Forbidden approaches:
+
+- Do not add target-specific hacks (for example `mako`-specific or `rpc`-specific conditionals in parser/codegen logic).
+- Do not bypass Fragile translation by delegating selected TUs to a native C++ compiler.
+- Do not add fake semantic stubs/fallback bodies just to make compile/tests pass.
+- Do not rely on force-native escape hatches as a development strategy.
+
+Required approach:
+
+1. Implement a generic parser/codegen/runtime fix that applies beyond one benchmark target.
+2. Add regression coverage (unit test and replay/integration coverage when available).
+3. Re-validate on both target workload and non-target workload to prevent overfitting.
+
+Authoritative anti-pattern policy and examples are documented in:
+
+- `docs/dev/wrong.md`
 
 ## 2. End-to-End Architecture
 
