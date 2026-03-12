@@ -202,6 +202,16 @@ unsafe extern "C" {
     fn __fragile_socket_ffi(domain: i32, ty: i32, protocol: i32) -> i32;
     #[link_name = "bind"]
     fn __fragile_bind_ffi(sockfd: i32, addr: *const std::ffi::c_void, addrlen: u32) -> i32;
+    #[link_name = "connect"]
+    fn __fragile_connect_ffi(sockfd: i32, addr: *const std::ffi::c_void, addrlen: u32) -> i32;
+    #[link_name = "setsockopt"]
+    fn __fragile_setsockopt_ffi(
+        sockfd: i32,
+        level: i32,
+        optname: i32,
+        optval: *const std::ffi::c_void,
+        optlen: u32,
+    ) -> i32;
     #[link_name = "select"]
     fn __fragile_select_ffi(
         nfds: i32,
@@ -227,6 +237,8 @@ unsafe extern "C" {
     ) -> i32;
     #[link_name = "freeaddrinfo"]
     fn __fragile_freeaddrinfo_ffi(res: *mut std::ffi::c_void);
+    #[link_name = "gai_strerror"]
+    fn __fragile_gai_strerror_ffi(errcode: i32) -> *const i8;
     #[link_name = "close"]
     fn __fragile_close_ffi(fd: i32) -> i32;
     #[link_name = "getopt"]
@@ -261,6 +273,50 @@ unsafe extern "C" {
 
 pub const _SC_NPROCESSORS_ONLN: i32 = 84;
 pub const SOCK_STREAM: i32 = 1;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct sockaddr {
+    pub sa_family: u16,
+    pub sa_data: [i8; 14],
+}
+
+impl Default for sockaddr {
+    fn default() -> Self {
+        Self {
+            sa_family: 0,
+            sa_data: [0; 14],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct addrinfo {
+    pub ai_flags: i32,
+    pub ai_family: i32,
+    pub ai_socktype: i32,
+    pub ai_protocol: i32,
+    pub ai_addrlen: u32,
+    pub ai_addr: *mut sockaddr,
+    pub ai_canonname: *mut i8,
+    pub ai_next: *mut addrinfo,
+}
+
+impl Default for addrinfo {
+    fn default() -> Self {
+        Self {
+            ai_flags: 0,
+            ai_family: 0,
+            ai_socktype: 0,
+            ai_protocol: 0,
+            ai_addrlen: 0,
+            ai_addr: std::ptr::null_mut(),
+            ai_canonname: std::ptr::null_mut(),
+            ai_next: std::ptr::null_mut(),
+        }
+    }
+}
 
 #[inline]
 pub fn strlen(s: *const i8) -> i32 {
@@ -305,6 +361,24 @@ pub fn socket(domain: i32, ty: i32, protocol: i32) -> i32 {
 #[inline]
 pub fn bind<T>(sockfd: i32, addr: *const T, addrlen: u32) -> i32 {
     unsafe { __fragile_bind_ffi(sockfd, addr as *const std::ffi::c_void, addrlen) }
+}
+
+#[inline]
+pub fn connect<T>(sockfd: i32, addr: *const T, addrlen: u32) -> i32 {
+    unsafe { __fragile_connect_ffi(sockfd, addr as *const std::ffi::c_void, addrlen) }
+}
+
+#[inline]
+pub fn setsockopt<T>(sockfd: i32, level: i32, optname: i32, optval: *const T, optlen: u32) -> i32 {
+    unsafe {
+        __fragile_setsockopt_ffi(
+            sockfd,
+            level,
+            optname,
+            optval as *const std::ffi::c_void,
+            optlen,
+        )
+    }
 }
 
 #[inline]
@@ -357,6 +431,11 @@ pub fn getaddrinfo<H, R>(
 #[inline]
 pub fn freeaddrinfo<T>(res: *mut T) {
     unsafe { __fragile_freeaddrinfo_ffi(res as *mut std::ffi::c_void) }
+}
+
+#[inline]
+pub fn gai_strerror(errcode: i32) -> *const i8 {
+    unsafe { __fragile_gai_strerror_ffi(errcode) }
 }
 
 #[inline]

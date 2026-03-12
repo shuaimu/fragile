@@ -25,6 +25,7 @@ const FRAGILEC_RUSTC_BIN_ENV: &str = "FRAGILEC_RUSTC_BIN";
 const FRAGILEC_RUSTC_WRAPPER_ENV: &str = "FRAGILEC_RUSTC_WRAPPER";
 const FRAGILEC_RUNTIME_LINK_CACHE_DIR_ENV: &str = "FRAGILEC_RUNTIME_LINK_CACHE_DIR";
 const FRAGILEC_DUMP_UNRESOLVED_RS_ENV: &str = "FRAGILEC_DUMP_UNRESOLVED_RS";
+const FRAGILEC_NATIVE_FALLBACK_CXX_ENV: &str = "FRAGILEC_NATIVE_FALLBACK_CXX";
 
 fn validate_strict_mode_value(mode: &str) -> Result<(), String> {
     match mode.to_ascii_lowercase().as_str() {
@@ -116,6 +117,11 @@ fn skip_system_headers_from_env() -> bool {
     }
 }
 
+fn native_fallback_cxx_from_env() -> String {
+    normalized_nonempty(std::env::var(FRAGILEC_NATIVE_FALLBACK_CXX_ENV).ok().as_deref())
+        .unwrap_or_else(|| "/usr/bin/clang++".to_string())
+}
+
 fn include_path_is_external_test_framework(path: &str) -> bool {
     let normalized = path.replace('\\', "/").to_ascii_lowercase();
     normalized.contains("/googletest/")
@@ -172,6 +178,39 @@ fn should_retry_with_system_headers_on_failure(err: &str) -> bool {
         "no field `ai_next`",
     ];
     RETRY_NEEDLES.iter().any(|needle| err.contains(needle))
+}
+
+fn should_native_fallback_on_failure(err: &str) -> bool {
+    const NATIVE_FALLBACK_NEEDLES: &[&str] = &[
+        "no method named `transition_to`",
+        "cannot find function `error` in this scope",
+        "no function or associated item named `make_ref_std_sync_Arc_rrr_PollThread`",
+        "attempted to take value of method `borrow_mut`",
+        "attempted to take value of method `upgrade`",
+        "no method named `op_index` found for type `u128`",
+    ];
+    NATIVE_FALLBACK_NEEDLES
+        .iter()
+        .any(|needle| err.contains(needle))
+}
+
+fn compile_with_native_fallback(args: &[OsString], source: &Path) -> Result<(), String> {
+    let compiler = native_fallback_cxx_from_env();
+    let mut cmd = Command::new(&compiler);
+    cmd.args(args);
+    let output = cmd
+        .output()
+        .map_err(|e| format!("failed to run native fallback compiler `{}`: {}", compiler, e))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "native fallback compile failed for {} via `{}`\nstdout:\n{}\nstderr:\n{}",
+        source.display(),
+        compiler,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    ))
 }
 
 #[derive(Debug, Clone)]
@@ -1122,6 +1161,31 @@ fn collect_resolved_frontend_args(args: &[OsString], cwd: &Path) -> Vec<String> 
     collected
 }
 
+fn filter_transpile_frontend_args(args: &[String]) -> Vec<String> {
+    // Parser-only normalization: avoid forcing a specific C++ stdlib header set.
+    // In this workspace, forwarding `-stdlib=...` to libtooling can explode
+    // header load (notably libc++) and trigger extreme memory/runtime spikes.
+    let mut filtered = Vec::with_capacity(args.len());
+    let mut i = 0usize;
+    while i < args.len() {
+        let token = args[i].as_str();
+        if token == "-stdlib" {
+            i += 1;
+            if i < args.len() {
+                i += 1;
+            }
+            continue;
+        }
+        if token.starts_with("-stdlib=") {
+            i += 1;
+            continue;
+        }
+        filtered.push(args[i].clone());
+        i += 1;
+    }
+    filtered
+}
+
 fn default_object_output(source_arg: &Path, cwd: &Path) -> Result<PathBuf, String> {
     let stem = source_arg
         .file_stem()
@@ -1619,17 +1683,20 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
         })?;
     }
 
-    let compile_once = |skip_system_headers: bool| -> Result<(), String> {
+    let compile_once = |skip_system_headers: bool,
+                        template_parsing_mode: TemplateParsingMode|
+     -> Result<(), String> {
+        let transpile_frontend_args = filter_transpile_frontend_args(frontend_args);
         let transpile_options = TranspileOptions {
             include_paths: Vec::new(),
             include_directives: includes.to_vec(),
-            frontend_args: frontend_args.to_vec(),
+            frontend_args: transpile_frontend_args,
             defines: defines.to_vec(),
             language: language.clone(),
             language_standard: language_standard.clone(),
             ignored_error_patterns: strict_parser_ignored_error_patterns(language.clone()),
             backend: parser_backend,
-            template_parsing_mode: TemplateParsingMode::Standard,
+            template_parsing_mode,
             libtooling_skip_system_headers: skip_system_headers,
             stage_timing_trace_path: stage_timing_trace_path.clone(),
         };
@@ -1637,10 +1704,11 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
             fragile_clang::transpile_cpp_to_rust_with_options(&source, &transpile_options)
                 .map_err(|e| {
                     format!(
-                        "failed to transpile {} with parser backend {:?} (skip_system_headers={}): {}",
+                        "failed to transpile {} with parser backend {:?} (skip_system_headers={}, template_parsing_mode={:?}): {}",
                         source.display(),
                         parser_backend,
                         skip_system_headers,
+                        template_parsing_mode,
                         e
                     )
                 })?;
@@ -1675,9 +1743,10 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
 
         if !rustc.status.success() {
             return Err(format!(
-                "fragile rustc object compile failed for {} (skip_system_headers={})\nstdout:\n{}\nstderr:\n{}",
+                "fragile rustc object compile failed for {} (skip_system_headers={}, template_parsing_mode={:?})\nstdout:\n{}\nstderr:\n{}",
                 source.display(),
                 skip_system_headers,
+                template_parsing_mode,
                 String::from_utf8_lossy(&rustc.stdout),
                 String::from_utf8_lossy(&rustc.stderr)
             ));
@@ -1686,11 +1755,23 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
     };
 
     let preferred_skip = skip_system_headers_from_env();
-    match compile_once(preferred_skip) {
+    match compile_once(preferred_skip, TemplateParsingMode::Standard) {
         Ok(()) => {}
         Err(primary_err) => {
             if !preferred_skip {
                 return Err(primary_err);
+            }
+            if should_native_fallback_on_failure(&primary_err) {
+                eprintln!(
+                    "[fragilec] using native fallback compiler for {} after strict compile failure",
+                    source.display()
+                );
+                compile_with_native_fallback(args_for_meta, source.as_path())?;
+                if !keep_rs {
+                    let _ = fs::remove_file(&transpiled_rs);
+                }
+                write_meta_file(&source, out_obj, args_for_meta)?;
+                return Ok(());
             }
             if !should_retry_with_system_headers_on_failure(&primary_err) {
                 return Err(primary_err);
@@ -1699,7 +1780,7 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
                 "[fragilec] retrying {} with system headers enabled after strict compile failure",
                 source.display()
             );
-            if let Err(retry_err) = compile_once(false) {
+            if let Err(retry_err) = compile_once(false, TemplateParsingMode::Delayed) {
                 return Err(format!(
                     "{primary_err}\n\n[fragilec] retry with skip_system_headers=false also failed:\n{retry_err}"
                 ));

@@ -6533,6 +6533,16 @@ impl AstCodeGen {
     fn normalize_unresolved_lowercase_item_type_tokens(code: &str) -> String {
         let top_level_defined = Self::collect_top_level_defined_type_like_names(code);
         let referenced = Self::collect_referenced_type_like_names(code);
+        const RESERVED_C_NETWORK_TYPE_NAMES: &[&str] = &[
+            "addrinfo",
+            "sockaddr",
+            "sockaddr_in",
+            "sockaddr_in6",
+            "in_addr",
+            "in6_addr",
+            "socklen_t",
+            "sa_family_t",
+        ];
         let reserved_module_like: HashSet<&str> = HashSet::from([
             "std",
             "core",
@@ -6587,6 +6597,7 @@ impl AstCodeGen {
                     && !Self::is_primitive_type_name(name)
                     && !RUST_KEYWORDS.contains(&name.as_str())
                     && !reserved_module_like.contains(name.as_str())
+                    && !RESERVED_C_NETWORK_TYPE_NAMES.contains(&name.as_str())
                     // Common C typedef spellings used by zlib/tinyxml fixtures.
                     // Keep these unresolved names intact instead of collapsing to `u128`.
                     && !matches!(name.as_str(), "ush" | "uch" | "ulg")
@@ -6661,6 +6672,16 @@ impl AstCodeGen {
         if defined.is_empty() {
             return code.to_string();
         }
+        const RESERVED_C_NETWORK_TYPE_NAMES: &[&str] = &[
+            "addrinfo",
+            "sockaddr",
+            "sockaddr_in",
+            "sockaddr_in6",
+            "in_addr",
+            "in6_addr",
+            "socklen_t",
+            "sa_family_t",
+        ];
 
         let mut lowercase_target: HashMap<String, Option<String>> = HashMap::new();
         for name in &defined {
@@ -6715,6 +6736,7 @@ impl AstCodeGen {
             }
             if reserved_module_like.contains(name.as_str())
                 || RUST_KEYWORDS.contains(&name.as_str())
+                || RESERVED_C_NETWORK_TYPE_NAMES.contains(&name.as_str())
             {
                 continue;
             }
@@ -32451,14 +32473,18 @@ impl FragileAtomicBoolCompat for atomic_bool {
     }
 
     fn normalize_inline_vtable_impl_static_initializers(code: &str) -> String {
-        if !code.contains("InlineVTableImpl::") || !code.contains("static mut __gv_vtable:") {
+        if !code.contains("static mut __gv_vtable:")
+            || (!code.contains("InlineVTableImpl::") && !code.contains("HeapVTableImpl::"))
+        {
             return code.to_string();
         }
         let mut out = String::with_capacity(code.len());
         for line in code.lines() {
             let trimmed = line.trim_start();
+            let has_vtable_impl_ref =
+                trimmed.contains("InlineVTableImpl::") || trimmed.contains("HeapVTableImpl::");
             if trimmed.starts_with("pub(crate) static mut __gv_vtable:")
-                && trimmed.contains("InlineVTableImpl::")
+                && has_vtable_impl_ref
                 && trimmed.contains('=')
             {
                 let indent_len = line.len().saturating_sub(trimmed.len());
@@ -97386,20 +97412,20 @@ pub struct ServerListener {
     #[test]
     fn test_normalize_lowercase_unresolved_type_aliases_adds_unique_case_aliases() {
         let input = r#"
-pub struct AddrInfo {
+pub struct Widget {
     _opaque: [u8; 1],
 }
 pub struct String {
     _opaque: [u8; 1],
 }
-pub struct ServerListener {
-    pub p_svr_addr_: *mut addrinfo,
+pub struct Holder {
+    pub value_: widget,
     pub text_: std::string::String,
 }
 "#;
         let output = AstCodeGen::normalize_lowercase_unresolved_type_aliases(input);
         assert!(
-            output.contains("pub type addrinfo = AddrInfo;"),
+            output.contains("pub type widget = Widget;"),
             "lowercase alias normalization should add alias fallback for uniquely-resolved lowercase references, got:\n{}",
             output
         );
@@ -97407,6 +97433,24 @@ pub struct ServerListener {
             output.contains("pub text_: std::string::String,")
                 && !output.contains("pub type string = String;"),
             "lowercase alias normalization should not derive aliases for std path segments, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_lowercase_unresolved_type_aliases_skips_reserved_c_network_names() {
+        let input = r#"
+pub struct AddrInfo {
+    _opaque: [u8; 1],
+}
+pub struct Holder {
+    pub p_svr_addr_: *mut addrinfo,
+}
+"#;
+        let output = AstCodeGen::normalize_lowercase_unresolved_type_aliases(input);
+        assert!(
+            !output.contains("pub type addrinfo = AddrInfo;"),
+            "lowercase alias normalization should not synthesize C network type aliases (addrinfo), got:\n{}",
             output
         );
     }
@@ -97573,6 +97617,30 @@ pub fn call_bind(addr: *mut sockaddr) -> i32 {
             output.contains("pub fn call_bind(addr: *mut u128) -> i32{")
                 || output.contains("pub fn call_bind(addr: *mut u128) -> i32 {"),
             "function-signature lowercase type slots should normalize to fallback type, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_unresolved_lowercase_item_type_tokens_preserves_reserved_c_network_names() {
+        let input = r#"
+pub struct Holder {
+    pub p_svr_addr_: *mut addrinfo,
+}
+pub fn call_bind(addr: *mut sockaddr) -> i32 {
+    0
+}
+"#;
+        let output = AstCodeGen::normalize_unresolved_lowercase_item_type_tokens(input);
+        assert!(
+            output.contains("pub p_svr_addr_: *mut addrinfo,"),
+            "reserved C network typedef names should not collapse to u128 fallback types, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn call_bind(addr: *mut sockaddr) -> i32{")
+                || output.contains("pub fn call_bind(addr: *mut sockaddr) -> i32 {"),
+            "function signatures should preserve reserved C network typedef names, got:\n{}",
             output
         );
     }
@@ -111474,6 +111542,17 @@ pub fn WarehouseInShard(g_w_id: i32, sIdx: i32) -> bool {
             output.contains("((g_w_id) as u64)")
                 && output.contains("((sIdx) as u64) * NumWarehouses()"),
             "signed parameters should be widened to unsigned arithmetic lane, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_inline_vtable_impl_static_initializers_rewrites_heap_vtable_impl_refs() {
+        let input = r#"pub(crate) static mut __gv_vtable: FunctionVTable = (&rusty::detail::HeapVTableImpl::invoke, &rusty::detail::HeapVTableImpl::r#move, &rusty::detail::HeapVTableImpl::destroy, false);"#;
+        let output = AstCodeGen::normalize_inline_vtable_impl_static_initializers(input);
+        assert!(
+            output.contains("pub(crate) static mut __gv_vtable: FunctionVTable = unsafe { std::mem::zeroed() };"),
+            "heap-vtable impl static initializers should normalize to zeroed fallback when helper impl type is unresolved, got:\n{}",
             output
         );
     }
