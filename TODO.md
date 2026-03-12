@@ -1,7 +1,7 @@
 # Fragile TODO (Deprecated Archive)
 
 Last updated: 2026-03-12
-Status: active TODO items are deprecated and have been removed from this document.
+Status: historical TODOs are archived; active RPC bring-up plan is tracked below.
 
 ## Current status snapshot
 - Configure with tests disabled: passes.
@@ -10,6 +10,30 @@ Status: active TODO items are deprecated and have been removed from this documen
 - Cutover (2026-02-28): strict `fragilec` default parser backend is now LibTooling-primary; explicit hardening-window escape hatch remains via `FRAGILEC_PARSER_BACKEND=libclang|hybrid`.
 - Backend-matrix parity evidence (run root `/tmp/fragile_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_484423_1772259242504942926`): `backend=libtooling` matches baseline on configure/build/class/E0425 deltas (`0`) and runtime parity markers (`runtime_parity_vs_baseline=true`, `condense_run_status_delta_vs_baseline=0`, `pretty_run_status_delta_vs_baseline=0`), with both backends currently at `condense_run_status=-1` / `pretty_run_status=-1`.
 - Latest strict capitalize sidecar fallback-surface inventory delta (run root `/tmp/fragile_real_world_rapidjson_strict_capitalize_backend_surface_delta_3476060_1772238977899700230`): LibTooling vs baseline deltas are `surface_line_count=-34053`, `surface_placeholder_count=-44`, `surface_rapidjson_placeholder_count=-2`, `surface_c_void_alias_count=0`, `surface_parse_unspecific_count=-1`.
+
+## RPC bring-up plan (active, 2026-03-12)
+Goal: compile `test_rpc` and `rpcbench` with `fragilec`, run them successfully, and compare `rpcbench` performance against clean `clang` builds with no regression.
+
+Hard constraints:
+- No `FRAGILEC_FORCE_NATIVE_SOURCES`.
+- No RPC-target-specific hacks (no `rpcbench*`/`test_rpc*` special-case codegen paths).
+- No semantic stubs/fake bodies to force compile success; fix parser/codegen/runtime generically.
+- Keep strict mode behavior and existing non-RPC coverage green.
+
+Acceptance gates:
+- Build gate: clean CMake configure/build with `CMAKE_CXX_COMPILER=fragilec` succeeds for `test_rpc` and `rpcbench`.
+- Runtime gate: `test_rpc` executes successfully (non-crash, passing status) and `rpcbench` client/server run without segfault/hang.
+- Performance gate: clean benchmark comparison run (`clang` vs `fragilec`) uses identical params/trials and reports `fragile_avg_qps >= clang_avg_qps` (no regression).
+- Regression gate: generic regression suite for touched subsystems remains passing.
+
+Execution plan:
+- [ ] 1) Establish deterministic clean benchmark harness for `clang` and `fragilec` (`configure`, `clean`, `build`, `run`, trial aggregation, artifact logs).
+- [ ] 2) Close fragile compile blockers for `test_rpc`/`rpcbench` using generic fixes in parser/codegen/type-lowering/call-shape passes (no target-name conditionals).
+- [ ] 3) Close runtime crash blockers (current PollThread/Sender drop path) via generic non-zeroable default/initialization correctness fixes.
+- [ ] 4) Add focused compiler regressions for each fixed blocker to prevent reintroduction (unit + real-world replay where possible).
+- [ ] 5) Rebuild from clean trees and verify `test_rpc` + `rpcbench` build and run under `fragilec` without force-native paths.
+- [ ] 6) Run side-by-side `rpcbench` performance comparison against clean `clang` baseline and capture trial logs + averages.
+- [ ] 7) If performance regresses, apply only generic optimization/correctness fixes until no-regression gate is met; re-run comparison after each fix set.
 
 ## Phase 0 [P4]: Guardrails (prevent misleading green builds)
 - [x] Remove/disable strict-link fallback shim `main` for RapidJSON example builds; fail link when no real `main` is defined. (Done 2026-02-24: strict link now errors for executable-style links that lack a real `main` in inspected objects.)
