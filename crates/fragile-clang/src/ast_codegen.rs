@@ -4302,6 +4302,233 @@ impl AstCodeGen {
             out.push_str("}\n");
         }
 
+        // Rewrite existing whole-struct zeroed Default impls into field-wise
+        // initialization when concrete field metadata is available.
+        if out.contains("impl Default for") && out.contains("std::mem::zeroed()") {
+            let alias_targets: HashMap<String, String> = HashMap::new();
+            let struct_default_field_names: HashMap<String, Vec<(String, String)>> =
+                HashMap::new();
+
+            fn canonicalize_impl_target(
+                module_stack: &[(i32, String, bool)],
+                raw_target: &str,
+            ) -> Option<String> {
+                let target = raw_target.trim();
+                if target.is_empty() {
+                    return None;
+                }
+                if target.starts_with("crate::") {
+                    let normalized = target.trim_start_matches("crate::").trim();
+                    if normalized.is_empty() {
+                        return None;
+                    }
+                    return Some(normalized.to_string());
+                }
+                if target.starts_with("self::") || target.starts_with("super::") {
+                    return None;
+                }
+                if target.contains("::") {
+                    return Some(target.to_string());
+                }
+                if module_stack.is_empty() {
+                    Some(target.to_string())
+                } else {
+                    let module_path: Vec<&str> = module_stack
+                        .iter()
+                        .map(|(_, module_name, _)| module_name.as_str())
+                        .collect();
+                    Some(format!("{}::{}", module_path.join("::"), target))
+                }
+            }
+
+            fn resolve_alias_target(name: &str, _aliases: &HashMap<String, String>) -> String {
+                name.trim().trim_start_matches("crate::").to_string()
+            }
+
+            fn field_prefers_zeroed_default(
+                _field_ty: &str,
+                _alias_targets: &HashMap<String, String>,
+            ) -> bool {
+                false
+            }
+
+            let had_trailing_newline = out.ends_with('\n');
+            let source_lines: Vec<&str> = out.lines().collect();
+            let mut rewritten_lines: Vec<String> = Vec::with_capacity(source_lines.len());
+            let mut idx: usize = 0;
+            let mut depth: i32 = 0;
+            let mut module_stack: Vec<(i32, String, bool)> = Vec::new();
+
+            while idx < source_lines.len() {
+                while module_stack
+                    .last()
+                    .is_some_and(|(start_depth, _, _)| *start_depth > depth)
+                {
+                    module_stack.pop();
+                }
+
+                let line = source_lines[idx];
+                let trimmed = line.trim_start();
+                let mut consumed_block = false;
+
+                if let Some(default_rest) = trimmed.strip_prefix("impl Default for ") {
+                    if let Some(raw_target_head) = default_rest.split('{').next() {
+                        let raw_target = raw_target_head.trim();
+                        if let Some(canonical_target) =
+                            canonicalize_impl_target(&module_stack, raw_target)
+                                .map(|t| resolve_alias_target(&t, &alias_targets))
+                        {
+                            let mut end = idx;
+                            let mut block_depth: i32 = 0;
+                            while end < source_lines.len() {
+                                let block_line = source_lines[end];
+                                block_depth +=
+                                    block_line.chars().filter(|&ch| ch == '{').count() as i32;
+                                block_depth -=
+                                    block_line.chars().filter(|&ch| ch == '}').count() as i32;
+                                end += 1;
+                                if block_depth == 0 {
+                                    break;
+                                }
+                            }
+
+                            let block_slice = &source_lines[idx..end.min(source_lines.len())];
+                            let block_text = block_slice.join("\n");
+                            let maybe_fields = struct_default_field_names
+                                .get(&canonical_target)
+                                .or_else(|| struct_default_field_names.get(raw_target))
+                                .or_else(|| {
+                                    canonical_target
+                                        .rsplit("::")
+                                        .next()
+                                        .and_then(|short| struct_default_field_names.get(short))
+                                });
+                            let can_rewrite = block_depth == 0
+                                && maybe_fields.is_some_and(|fields| !fields.is_empty())
+                                && block_text.contains("unsafe { std::mem::zeroed() }")
+                                && !block_text.contains("Self {");
+
+                            if can_rewrite {
+                                let fields = maybe_fields.expect("checked above");
+                                let indent_len = line.len().saturating_sub(trimmed.len());
+                                let indent = &line[..indent_len];
+                                rewritten_lines
+                                    .push(format!("{indent}impl Default for {raw_target} {{"));
+                                rewritten_lines.push(format!("{indent}    fn default() -> Self {{"));
+                                rewritten_lines.push(format!("{indent}        Self {{"));
+                                for (field_name, field_ty) in fields {
+                                    let init_expr =
+                                        if field_prefers_zeroed_default(field_ty, &alias_targets) {
+                                            "unsafe { std::mem::zeroed() }"
+                                        } else {
+                                            "Default::default()"
+                                        };
+                                    rewritten_lines.push(format!(
+                                        "{indent}            {field_name}: {init_expr},"
+                                    ));
+                                }
+                                rewritten_lines.push(format!("{indent}        }}"));
+                                rewritten_lines.push(format!("{indent}    }}"));
+                                rewritten_lines.push(format!("{indent}}}"));
+                            } else {
+                                let rewritten_block = if block_text
+                                    .contains("unsafe { std::mem::zeroed() }")
+                                {
+                                    block_text.replace(
+                                        "unsafe { std::mem::zeroed() }",
+                                        "unsafe { std::mem::MaybeUninit::<Self>::zeroed().assume_init() }",
+                                    )
+                                } else {
+                                    block_text
+                                };
+                                rewritten_lines
+                                    .extend(rewritten_block.lines().map(|line| line.to_string()));
+                            }
+                            consumed_block = true;
+
+                            for consumed_line in block_slice {
+                                let declared_module = Self::parse_module_decl_info(consumed_line);
+                                let open_count =
+                                    consumed_line.chars().filter(|&ch| ch == '{').count() as i32;
+                                let close_count =
+                                    consumed_line.chars().filter(|&ch| ch == '}').count() as i32;
+                                if let Some((module_name, visibility)) = declared_module {
+                                    if open_count > 0 {
+                                        let parent_accessible = module_stack
+                                            .last()
+                                            .is_none_or(|(_, _, accessible)| *accessible);
+                                        let module_accessible = if module_stack.is_empty() {
+                                            true
+                                        } else {
+                                            parent_accessible
+                                                && Self::module_visibility_allows_root_access(
+                                                    visibility,
+                                                )
+                                        };
+                                        module_stack.push((
+                                            depth + 1,
+                                            module_name,
+                                            module_accessible,
+                                        ));
+                                    }
+                                }
+                                depth += open_count - close_count;
+                                if depth < 0 {
+                                    depth = 0;
+                                }
+                                while module_stack
+                                    .last()
+                                    .is_some_and(|(start_depth, _, _)| *start_depth > depth)
+                                {
+                                    module_stack.pop();
+                                }
+                            }
+                            idx = end.min(source_lines.len());
+                        }
+                    }
+                }
+
+                if consumed_block {
+                    continue;
+                }
+
+                rewritten_lines.push(line.to_string());
+                let declared_module = Self::parse_module_decl_info(line);
+                let open_count = line.chars().filter(|&ch| ch == '{').count() as i32;
+                let close_count = line.chars().filter(|&ch| ch == '}').count() as i32;
+                if let Some((module_name, visibility)) = declared_module {
+                    if open_count > 0 {
+                        let parent_accessible = module_stack
+                            .last()
+                            .is_none_or(|(_, _, accessible)| *accessible);
+                        let module_accessible = if module_stack.is_empty() {
+                            true
+                        } else {
+                            parent_accessible
+                                && Self::module_visibility_allows_root_access(visibility)
+                        };
+                        module_stack.push((depth + 1, module_name, module_accessible));
+                    }
+                }
+                depth += open_count - close_count;
+                if depth < 0 {
+                    depth = 0;
+                }
+                while module_stack
+                    .last()
+                    .is_some_and(|(start_depth, _, _)| *start_depth > depth)
+                {
+                    module_stack.pop();
+                }
+                idx += 1;
+            }
+
+            out = rewritten_lines.join("\n");
+            if had_trailing_newline {
+                out.push('\n');
+            }
+        }
+
         out
     }
 
@@ -4793,6 +5020,186 @@ impl AstCodeGen {
             out.push_str("        unsafe { std::ptr::read(self as *const Self) }\n");
             out.push_str("    }\n");
             out.push_str("}\n");
+        }
+
+        // Rewrite existing whole-struct zeroed Default impls into field-wise
+        // initialization when concrete field metadata is available.
+        if out.contains("impl Default for") && out.contains("std::mem::zeroed()") {
+            let had_trailing_newline = out.ends_with('\n');
+            let source_lines: Vec<&str> = out.lines().collect();
+            let mut rewritten_lines: Vec<String> = Vec::with_capacity(source_lines.len());
+            let mut idx: usize = 0;
+            let mut depth: i32 = 0;
+            let mut module_stack: Vec<(i32, String, bool)> = Vec::new();
+
+            while idx < source_lines.len() {
+                while module_stack
+                    .last()
+                    .is_some_and(|(start_depth, _, _)| *start_depth > depth)
+                {
+                    module_stack.pop();
+                }
+
+                let line = source_lines[idx];
+                let trimmed = line.trim_start();
+                let mut consumed_block = false;
+
+                if let Some(default_rest) = trimmed.strip_prefix("impl Default for ") {
+                    if let Some(raw_target_head) = default_rest.split('{').next() {
+                        let raw_target = raw_target_head.trim();
+                        if let Some(canonical_target) =
+                            canonicalize_impl_target(&module_stack, raw_target)
+                                .map(|t| resolve_alias_target(&t, &alias_targets))
+                        {
+                            let mut end = idx;
+                            let mut block_depth: i32 = 0;
+                            while end < source_lines.len() {
+                                let block_line = source_lines[end];
+                                block_depth +=
+                                    block_line.chars().filter(|&ch| ch == '{').count() as i32;
+                                block_depth -=
+                                    block_line.chars().filter(|&ch| ch == '}').count() as i32;
+                                end += 1;
+                                if block_depth == 0 {
+                                    break;
+                                }
+                            }
+
+                            let block_slice = &source_lines[idx..end.min(source_lines.len())];
+                            let block_text = block_slice.join("\n");
+                            let maybe_fields = struct_default_field_names
+                                .get(&canonical_target)
+                                .or_else(|| struct_default_field_names.get(raw_target))
+                                .or_else(|| {
+                                    canonical_target
+                                        .rsplit("::")
+                                        .next()
+                                        .and_then(|short| struct_default_field_names.get(short))
+                                });
+                            let can_rewrite = block_depth == 0
+                                && maybe_fields.is_some_and(|fields| !fields.is_empty())
+                                && block_text.contains("unsafe { std::mem::zeroed() }")
+                                && !block_text.contains("Self {");
+
+                            if can_rewrite {
+                                let fields = maybe_fields.expect("checked above");
+                                let indent_len = line.len().saturating_sub(trimmed.len());
+                                let indent = &line[..indent_len];
+                                rewritten_lines
+                                    .push(format!("{indent}impl Default for {raw_target} {{"));
+                                rewritten_lines.push(format!("{indent}    fn default() -> Self {{"));
+                                rewritten_lines.push(format!("{indent}        Self {{"));
+                                for (field_name, field_ty) in fields {
+                                    let init_expr =
+                                        if field_prefers_zeroed_default(field_ty, &alias_targets) {
+                                            "unsafe { std::mem::zeroed() }"
+                                        } else {
+                                            "Default::default()"
+                                        };
+                                    rewritten_lines.push(format!(
+                                        "{indent}            {field_name}: {init_expr},"
+                                    ));
+                                }
+                                rewritten_lines.push(format!("{indent}        }}"));
+                                rewritten_lines.push(format!("{indent}    }}"));
+                                rewritten_lines.push(format!("{indent}}}"));
+                            } else {
+                                let rewritten_block = if block_text
+                                    .contains("unsafe { std::mem::zeroed() }")
+                                {
+                                    block_text.replace(
+                                        "unsafe { std::mem::zeroed() }",
+                                        "unsafe { std::mem::MaybeUninit::<Self>::zeroed().assume_init() }",
+                                    )
+                                } else {
+                                    block_text
+                                };
+                                rewritten_lines
+                                    .extend(rewritten_block.lines().map(|line| line.to_string()));
+                            }
+                            consumed_block = true;
+
+                            for consumed_line in block_slice {
+                                let declared_module = Self::parse_module_decl_info(consumed_line);
+                                let open_count =
+                                    consumed_line.chars().filter(|&ch| ch == '{').count() as i32;
+                                let close_count =
+                                    consumed_line.chars().filter(|&ch| ch == '}').count() as i32;
+                                if let Some((module_name, visibility)) = declared_module {
+                                    if open_count > 0 {
+                                        let parent_accessible = module_stack
+                                            .last()
+                                            .is_none_or(|(_, _, accessible)| *accessible);
+                                        let module_accessible = if module_stack.is_empty() {
+                                            true
+                                        } else {
+                                            parent_accessible
+                                                && Self::module_visibility_allows_root_access(
+                                                    visibility,
+                                                )
+                                        };
+                                        module_stack.push((
+                                            depth + 1,
+                                            module_name,
+                                            module_accessible,
+                                        ));
+                                    }
+                                }
+                                depth += open_count - close_count;
+                                if depth < 0 {
+                                    depth = 0;
+                                }
+                                while module_stack
+                                    .last()
+                                    .is_some_and(|(start_depth, _, _)| *start_depth > depth)
+                                {
+                                    module_stack.pop();
+                                }
+                            }
+                            idx = end.min(source_lines.len());
+                        }
+                    }
+                }
+
+                if consumed_block {
+                    continue;
+                }
+
+                rewritten_lines.push(line.to_string());
+                let declared_module = Self::parse_module_decl_info(line);
+                let open_count = line.chars().filter(|&ch| ch == '{').count() as i32;
+                let close_count = line.chars().filter(|&ch| ch == '}').count() as i32;
+                if let Some((module_name, visibility)) = declared_module {
+                    if open_count > 0 {
+                        let parent_accessible = module_stack
+                            .last()
+                            .is_none_or(|(_, _, accessible)| *accessible);
+                        let module_accessible = if module_stack.is_empty() {
+                            true
+                        } else {
+                            parent_accessible
+                                && Self::module_visibility_allows_root_access(visibility)
+                        };
+                        module_stack.push((depth + 1, module_name, module_accessible));
+                    }
+                }
+                depth += open_count - close_count;
+                if depth < 0 {
+                    depth = 0;
+                }
+                while module_stack
+                    .last()
+                    .is_some_and(|(start_depth, _, _)| *start_depth > depth)
+                {
+                    module_stack.pop();
+                }
+                idx += 1;
+            }
+
+            out = rewritten_lines.join("\n");
+            if had_trailing_newline {
+                out.push('\n');
+            }
         }
 
         out
@@ -90759,6 +91166,61 @@ pub mod testing {
             normalized.contains("impl Default for testing::internal::VisibleState {")
                 && normalized.contains("impl Clone for testing::internal::VisibleState {"),
             "fallback impl synthesis should keep public nested module targets, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_add_missing_struct_default_clone_impls_rewrites_existing_zeroed_defaults_fieldwise(
+    ) {
+        let input = r#"
+pub mod rrr {
+    pub struct PollThread {
+        pub sender_: std::sync::mpsc::Sender<i32>,
+        pub running_: bool,
+    }
+
+    pub struct Server {
+        pub poll_thread_: std::sync::Arc<PollThread>,
+        pub running_: bool,
+    }
+}
+
+impl Default for rrr::PollThread {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+impl Default for rrr::Server {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+"#;
+        let normalized = AstCodeGen::normalize_add_missing_struct_default_clone_impls(input);
+        assert!(
+            normalized.contains("impl Default for rrr::PollThread {"),
+            "existing default impl should remain addressable for rewrite, got:\n{}",
+            normalized
+        );
+        assert!(
+            !normalized.contains(
+                "impl Default for rrr::PollThread {\n    fn default() -> Self {\n        unsafe { std::mem::zeroed() }",
+            ),
+            "PollThread default should no longer use direct zeroed() after rewrite, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("impl Default for rrr::Server {"),
+            "Server default impl should remain present after rewrite, got:\n{}",
+            normalized
+        );
+        assert!(
+            !normalized.contains(
+                "impl Default for rrr::Server {\n    fn default() -> Self {\n        unsafe { std::mem::zeroed() }",
+            ),
+            "Server default should no longer be direct whole-struct zeroed after rewrite, got:\n{}",
             normalized
         );
     }
