@@ -945,7 +945,10 @@ fn convert_node_with_depth(
                     .and_then(|child_id| ctx.ast_nodes.get(&child_id))
                     .is_some_and(|child_node| child_node.tag == ASTEntryTag::TagCompoundStmt)
             });
-            if is_static && has_body {
+            let name = node.get_string(0).unwrap_or("");
+            let allow_member_surface =
+                name == "connect" || name == "error_code_";
+            if (is_static && has_body) || allow_member_surface {
                 convert_cxx_method_decl_node(ctx, node)
             } else {
                 ClangNodeKind::Unknown("InlineMethodDecl".to_string())

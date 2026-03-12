@@ -8,11 +8,13 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <exception>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <optional>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -196,6 +198,17 @@ bool decl_ref_should_include_record_context(const ValueDecl *decl) {
     return false;
 }
 
+bool is_toolchain_system_header_loc(ASTContext &ctx, SourceLocation loc) {
+    auto &SM = ctx.getSourceManager();
+    auto ExpLoc = SM.getExpansionLoc(loc);
+    if (ExpLoc.isInvalid()) {
+        return false;
+    }
+    // Respect Clang's header classification directly: callers that request
+    // skip-system-headers expect all `-isystem` and toolchain headers pruned.
+    return SM.isInSystemHeader(ExpLoc);
+}
+
 // Forward declarations
 class TypeEncoder;
 class ASTExporterVisitor;
@@ -260,12 +273,13 @@ class ASTExporterVisitor : public RecursiveASTVisitor<ASTExporterVisitor> {
     // Debug mode
     bool debug;
     bool skipSystemHeaders;
+    int forcedStmtTraversalDepth;
 
 public:
     ASTExporterVisitor(ASTContext &ctx, CborEncoder *enc, bool dbg = false,
                        bool skipSysHeaders = false)
         : Context(ctx), encoder(enc), typeEncoder(ctx, enc, this), debug(dbg),
-          skipSystemHeaders(skipSysHeaders) {}
+          skipSystemHeaders(skipSysHeaders), forcedStmtTraversalDepth(0) {}
 
     // Enable visiting template instantiations - THIS IS KEY!
     bool shouldVisitTemplateInstantiations() const { return true; }
@@ -337,6 +351,7 @@ public:
     void visitArraySubscriptExpr(ArraySubscriptExpr *ASE);
     void visitInitListExpr(InitListExpr *ILE);
     void visitParenExpr(ParenExpr *PE);
+    void visitParenListExpr(ParenListExpr *PLE);
     void visitUnaryExprOrTypeTraitExpr(UnaryExprOrTypeTraitExpr *UE);
     void visitConditionalOperator(ConditionalOperator *CO);
     void visitCXXNewExpr(CXXNewExpr *NE);
@@ -831,13 +846,7 @@ void ASTExporterVisitor::exportTranslationUnit() {
 bool ASTExporterVisitor::shouldSkipDecl(const Decl *D) const {
     if (!skipSystemHeaders || D == nullptr)
         return false;
-
-    auto &SM = Context.getSourceManager();
-    auto Loc = SM.getExpansionLoc(D->getLocation());
-    if (Loc.isInvalid())
-        return false;
-
-    return SM.isInSystemHeader(Loc);
+    return is_toolchain_system_header_loc(Context, D->getLocation());
 }
 
 bool ASTExporterVisitor::shouldTraverseSourceLocation(SourceLocation Loc) const {
@@ -845,18 +854,14 @@ bool ASTExporterVisitor::shouldTraverseSourceLocation(SourceLocation Loc) const 
         return true;
     if (Loc.isInvalid())
         return true;
-
-    auto &SM = Context.getSourceManager();
-    auto ExpLoc = SM.getExpansionLoc(Loc);
-    if (ExpLoc.isInvalid())
-        return true;
-
-    return SM.isWrittenInMainFile(ExpLoc);
+    return !is_toolchain_system_header_loc(Context, Loc);
 }
 
 bool ASTExporterVisitor::shouldTraverseStmtTree(const Stmt *S) const {
     if (S == nullptr)
         return false;
+    if (forcedStmtTraversalDepth > 0)
+        return true;
     return shouldTraverseSourceLocation(S->getBeginLoc());
 }
 
@@ -1099,8 +1104,33 @@ bool ASTExporterVisitor::VisitCXXMethodDecl(CXXMethodDecl *MD) {
                     }
                 });
 
-    if (body && shouldTraverseStmtTree(body)) {
+    bool shouldVisitBody = body && shouldTraverseStmtTree(body);
+    bool forceTraverseBodyTree = false;
+    if (!shouldVisitBody && body && skipSystemHeaders) {
+        auto &SM = Context.getSourceManager();
+        auto BodyLoc = SM.getExpansionLoc(body->getBeginLoc());
+        bool nonSystemBodyLoc = !BodyLoc.isInvalid() && !SM.isInSystemHeader(BodyLoc);
+        bool templateRelated =
+            MD->isTemplateInstantiation() ||
+            MD->getTemplatedKind() != FunctionDecl::TK_NonTemplate;
+        if (const auto *parent = MD->getParent()) {
+            templateRelated =
+                templateRelated ||
+                parent->getDescribedClassTemplate() != nullptr ||
+                isa<ClassTemplateSpecializationDecl>(parent);
+        }
+        shouldVisitBody = nonSystemBodyLoc && templateRelated;
+        forceTraverseBodyTree = shouldVisitBody;
+    }
+
+    if (shouldVisitBody) {
+        if (forceTraverseBodyTree) {
+            ++forcedStmtTraversalDepth;
+        }
         visitStmt(body);
+        if (forceTraverseBodyTree) {
+            --forcedStmtTraversalDepth;
+        }
     }
 
     return true;
@@ -1337,13 +1367,33 @@ bool ASTExporterVisitor::VisitCXXRecordDecl(CXXRecordDecl *RD) {
 
     std::vector<const void *> children;
 
+    const bool isThisDefinition = RD->isThisDeclarationADefinition();
+
     // Add record members needed by downstream AST conversion.
     // Keep this scoped to concrete declarations (non-template patterns and
     // non-specializations) to preserve current specialization routing.
-    if (RD->hasDefinition()) {
+    //
+    // Include method/constructor/destructor declarations as children so
+    // downstream codegen can emit member surfaces for classes whose method
+    // definitions live in other translation units.
+    if (isThisDefinition) {
         for (auto *D : RD->decls()) {
             if (auto *FD = dyn_cast<FieldDecl>(D)) {
                 children.push_back(FD);
+            } else if (auto *MD = dyn_cast<CXXMethodDecl>(D)) {
+                children.push_back(MD);
+            } else if (auto *CD = dyn_cast<CXXConstructorDecl>(D)) {
+                children.push_back(CD);
+            } else if (auto *DD = dyn_cast<CXXDestructorDecl>(D)) {
+                children.push_back(DD);
+            } else if (auto *FTD = dyn_cast<FunctionTemplateDecl>(D)) {
+                // Member function templates: include each concrete
+                // specialization as a regular method child.
+                for (auto *Spec : FTD->specializations()) {
+                    if (auto *SpecMD = dyn_cast<CXXMethodDecl>(Spec)) {
+                        children.push_back(SpecMD);
+                    }
+                }
             } else if (auto *InnerRD = dyn_cast<RecordDecl>(D)) {
                 // Flatten anonymous struct/union members so field lists for
                 // concrete records include macro-expanded anonymous storage.
@@ -1364,10 +1414,10 @@ bool ASTExporterVisitor::VisitCXXRecordDecl(CXXRecordDecl *RD) {
                     cbor_encode_boolean(enc, RD->isStruct());
                     cbor_encode_boolean(enc, RD->isClass());
                     cbor_encode_boolean(enc, RD->isUnion());
-                    cbor_encode_boolean(enc, RD->hasDefinition());
+                    cbor_encode_boolean(enc, RD->isThisDeclarationADefinition());
 
                     // Base classes
-                    if (RD->hasDefinition()) {
+                    if (RD->isThisDeclarationADefinition()) {
                         CborEncoder bases;
                         cbor_encoder_create_array(enc, &bases, RD->getNumBases());
                         for (const auto &base : RD->bases()) {
@@ -1899,6 +1949,10 @@ void ASTExporterVisitor::visitDeclStmt(DeclStmt *DS) {
     }
 
     encodeEntry(DS, TagDeclStmt, DS->getSourceRange(), children, QualType());
+
+    for (auto *D : DS->decls()) {
+        TraverseDecl(D);
+    }
 }
 
 void ASTExporterVisitor::visitReturnStmt(ReturnStmt *RS) {
@@ -1921,12 +1975,20 @@ void ASTExporterVisitor::visitIfStmt(IfStmt *IS) {
         return;
 
     std::vector<const void *> children;
+    children.push_back(IS->getInit());
+    children.push_back(IS->getConditionVariableDeclStmt());
     children.push_back(IS->getCond());
     children.push_back(IS->getThen());
     children.push_back(IS->getElse());
 
     encodeEntry(IS, TagIfStmt, IS->getSourceRange(), children, QualType());
 
+    if (IS->getInit()) {
+        visitStmt(IS->getInit());
+    }
+    if (IS->getConditionVariableDeclStmt()) {
+        visitStmt(IS->getConditionVariableDeclStmt());
+    }
     visitExpr(IS->getCond());
     visitStmt(IS->getThen());
     if (IS->getElse()) {
@@ -1939,11 +2001,15 @@ void ASTExporterVisitor::visitWhileStmt(WhileStmt *WS) {
         return;
 
     std::vector<const void *> children;
+    children.push_back(WS->getConditionVariableDeclStmt());
     children.push_back(WS->getCond());
     children.push_back(WS->getBody());
 
     encodeEntry(WS, TagWhileStmt, WS->getSourceRange(), children, QualType());
 
+    if (WS->getConditionVariableDeclStmt()) {
+        visitStmt(WS->getConditionVariableDeclStmt());
+    }
     visitExpr(WS->getCond());
     visitStmt(WS->getBody());
 }
@@ -2112,6 +2178,9 @@ void ASTExporterVisitor::visitExpr(Expr *E) {
     case Stmt::ParenExprClass:
         visitParenExpr(cast<ParenExpr>(E));
         break;
+    case Stmt::ParenListExprClass:
+        visitParenListExpr(cast<ParenListExpr>(E));
+        break;
     case Stmt::UnaryExprOrTypeTraitExprClass:
         visitUnaryExprOrTypeTraitExpr(cast<UnaryExprOrTypeTraitExpr>(E));
         break;
@@ -2146,13 +2215,31 @@ void ASTExporterVisitor::visitExpr(Expr *E) {
         visitLambdaExpr(cast<LambdaExpr>(E));
         break;
     default:
-        // Unknown expression type - just encode it generically
+        // Unknown expression type: preserve children as an expression wrapper.
+        // Do not encode as DeclRefExpr name-only, which loses expression shape.
         if (!markExported(E))
             return;
-        encodeEntry(E, TagDeclRefExpr, E->getSourceRange(), {}, E->getType(),
+        std::vector<const void *> children;
+        for (auto *child : E->children()) {
+            if (child) {
+                children.push_back(child);
+            }
+        }
+        encodeEntry(E, TagExprWithCleanups, E->getSourceRange(), children, E->getType(),
                     [E](CborEncoder *enc) {
                         cbor_encode_string(enc, E->getStmtClassName());
                     });
+        for (auto *child : E->children()) {
+            if (auto *childExpr = dyn_cast_or_null<Expr>(child)) {
+                if (shouldTraverseStmtTree(childExpr)) {
+                    visitExpr(childExpr);
+                }
+            } else if (child) {
+                if (shouldTraverseStmtTree(child)) {
+                    visitStmt(child);
+                }
+            }
+        }
         break;
     }
 }
@@ -2488,6 +2575,32 @@ void ASTExporterVisitor::visitParenExpr(ParenExpr *PE) {
     visitExpr(PE->getSubExpr());
 }
 
+void ASTExporterVisitor::visitParenListExpr(ParenListExpr *PLE) {
+    if (!markExported(PLE))
+        return;
+
+    std::vector<const void *> children;
+    for (auto *child : PLE->children()) {
+        if (child) {
+            children.push_back(child);
+        }
+    }
+
+    // ParenListExpr is typically direct-initialization argument packs (T(a,b,c)).
+    // Encode as a construct-expression shape so downstream can lower to constructors.
+    encodeEntry(PLE, TagCXXConstructExpr, PLE->getSourceRange(), children, PLE->getType());
+
+    for (auto *child : PLE->children()) {
+        if (auto *expr = dyn_cast_or_null<Expr>(child)) {
+            if (shouldTraverseStmtTree(expr)) {
+                visitExpr(expr);
+            }
+        } else if (child && shouldTraverseStmtTree(child)) {
+            visitStmt(child);
+        }
+    }
+}
+
 void ASTExporterVisitor::visitUnaryExprOrTypeTraitExpr(UnaryExprOrTypeTraitExpr *UE) {
     if (!markExported(UE))
         return;
@@ -2705,26 +2818,43 @@ public:
         : output(out), debug(dbg), skipSystemHeaders(skipSysHeaders) {}
 
     void HandleTranslationUnit(ASTContext &Context) override {
-        // Allocate buffer for CBOR output
+        // Allocate buffer for CBOR output. Retry with a larger buffer when the
+        // current one overflows, which can happen for template-heavy TUs.
         size_t bufferSize = 16 * 1024 * 1024; // 16 MB initial
-        output.resize(bufferSize);
+        constexpr size_t kMaxBuffer = size_t(512) * 1024 * 1024; // 512 MB cap
 
-        CborEncoder encoder;
-        cbor_encoder_init(&encoder, output.data(), output.size(), 0);
+        while (true) {
+            output.clear();
+            output.resize(bufferSize);
 
-        // Create top-level array
-        CborEncoder topArray;
-        cbor_encoder_create_array(&encoder, &topArray, CborIndefiniteLength);
+            CborEncoder encoder;
+            cbor_encoder_init(&encoder, output.data(), output.size(), 0);
 
-        // Export AST
-        ASTExporterVisitor visitor(Context, &topArray, debug, skipSystemHeaders);
-        visitor.exportTranslationUnit();
+            // Create top-level array
+            CborEncoder topArray;
+            cbor_encoder_create_array(&encoder, &topArray, CborIndefiniteLength);
 
-        cbor_encoder_close_container(&encoder, &topArray);
+            // Export AST
+            ASTExporterVisitor visitor(Context, &topArray, debug, skipSystemHeaders);
+            visitor.exportTranslationUnit();
 
-        // Resize to actual size
-        size_t actualSize = cbor_encoder_get_buffer_size(&encoder, output.data());
-        output.resize(actualSize);
+            CborError closeErr = cbor_encoder_close_container(&encoder, &topArray);
+            size_t extraNeeded = cbor_encoder_get_extra_bytes_needed(&encoder);
+            if (closeErr == CborNoError && extraNeeded == 0) {
+                size_t actualSize = cbor_encoder_get_buffer_size(&encoder, output.data());
+                output.resize(actualSize);
+                return;
+            }
+
+            size_t growth = extraNeeded > 0 ? extraNeeded : (bufferSize / 2);
+            if (growth == 0) {
+                growth = 1024 * 1024;
+            }
+            if (bufferSize >= kMaxBuffer || bufferSize + growth > kMaxBuffer) {
+                throw std::runtime_error("AST exporter buffer overflow");
+            }
+            bufferSize += growth;
+        }
     }
 };
 
@@ -2766,46 +2896,56 @@ public:
 extern "C" {
 
 ExportResult *ast_exporter(int argc, const char **argv, int debug, int *result) {
-    auto expectedParser = CommonOptionsParser::create(argc, argv, FragileCategory);
-    if (!expectedParser) {
-        llvm::errs() << "Error: " << llvm::toString(expectedParser.takeError()) << "\n";
-        *result = 1;
+    try {
+        auto expectedParser = CommonOptionsParser::create(argc, argv, FragileCategory);
+        if (!expectedParser) {
+            llvm::errs() << "Error: " << llvm::toString(expectedParser.takeError()) << "\n";
+            *result = 1;
+            return nullptr;
+        }
+        auto &optionsParser = expectedParser.get();
+
+        ClangTool tool(optionsParser.getCompilations(),
+                       optionsParser.getSourcePathList());
+
+        // Output buffer
+        std::vector<uint8_t> output;
+
+        // Run the tool
+        ASTExporterActionFactory factory(output, debug != 0, SkipSystemHeaders);
+        int ret = tool.run(&factory);
+
+        if (ret != 0) {
+            *result = ret;
+            return nullptr;
+        }
+
+        // Create result
+        auto *exportResult = new ExportResult();
+        exportResult->entries = 1;
+        exportResult->names = new char *[1];
+        exportResult->bytes = new uint8_t *[1];
+        exportResult->sizes = new size_t[1];
+
+        // Copy output
+        auto *outputCopy = new uint8_t[output.size()];
+        std::copy(output.begin(), output.end(), outputCopy);
+
+        exportResult->names[0] = strdup("main");
+        exportResult->bytes[0] = outputCopy;
+        exportResult->sizes[0] = output.size();
+
+        *result = 0;
+        return exportResult;
+    } catch (const std::exception &ex) {
+        llvm::errs() << "Error: AST exporter threw std::exception: " << ex.what() << "\n";
+        *result = 2;
+        return nullptr;
+    } catch (...) {
+        llvm::errs() << "Error: AST exporter threw non-standard exception\n";
+        *result = 2;
         return nullptr;
     }
-    auto &optionsParser = expectedParser.get();
-
-    ClangTool tool(optionsParser.getCompilations(),
-                   optionsParser.getSourcePathList());
-
-    // Output buffer
-    std::vector<uint8_t> output;
-
-    // Run the tool
-    ASTExporterActionFactory factory(output, debug != 0, SkipSystemHeaders);
-    int ret = tool.run(&factory);
-
-    if (ret != 0) {
-        *result = ret;
-        return nullptr;
-    }
-
-    // Create result
-    auto *exportResult = new ExportResult();
-    exportResult->entries = 1;
-    exportResult->names = new char *[1];
-    exportResult->bytes = new uint8_t *[1];
-    exportResult->sizes = new size_t[1];
-
-    // Copy output
-    auto *outputCopy = new uint8_t[output.size()];
-    std::copy(output.begin(), output.end(), outputCopy);
-
-    exportResult->names[0] = strdup("main");
-    exportResult->bytes[0] = outputCopy;
-    exportResult->sizes[0] = output.size();
-
-    *result = 0;
-    return exportResult;
 }
 
 void drop_export_result(ExportResult *result) {
