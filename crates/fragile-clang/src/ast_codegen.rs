@@ -38344,6 +38344,46 @@ impl FragileAtomicBoolCompat for atomic_bool {
         self.collect_template_usages_with_namespace(children, &[]);
     }
 
+    fn class_template_children_have_fields(children: &[ClangNode]) -> bool {
+        children
+            .iter()
+            .any(|c| matches!(c.kind, ClangNodeKind::FieldDecl { .. }))
+    }
+
+    fn should_replace_class_template_definition(
+        existing: Option<&(Vec<String>, Vec<ClangNode>)>,
+        candidate_has_fields: bool,
+    ) -> bool {
+        match existing {
+            None => true,
+            Some((_, existing_children)) => {
+                let existing_has_fields = Self::class_template_children_have_fields(existing_children);
+                candidate_has_fields && !existing_has_fields
+            }
+        }
+    }
+
+    fn store_class_template_definition_if_better(
+        &mut self,
+        key: &str,
+        template_params: &[String],
+        children: &[ClangNode],
+    ) {
+        if key.is_empty() || template_params.is_empty() {
+            return;
+        }
+        let candidate_has_fields = Self::class_template_children_have_fields(children);
+        if Self::should_replace_class_template_definition(
+            self.template_definitions.get(key),
+            candidate_has_fields,
+        ) {
+            self.template_definitions.insert(
+                key.to_string(),
+                (template_params.to_vec(), children.to_vec()),
+            );
+        }
+    }
+
     /// Collect template definitions with namespace tracking.
     fn collect_template_definitions_with_namespace(
         &mut self,
@@ -38358,48 +38398,22 @@ impl FragileAtomicBoolCompat for atomic_bool {
                     ..
                 } => {
                     // Skip templates with empty params (these are forward declarations or nested)
-                    // and skip templates without field declarations (these are partial specializations or friend decls)
                     if !template_params.is_empty() {
-                        // Count field declarations - only store if we have actual fields
-                        let has_fields = child
-                            .children
-                            .iter()
-                            .any(|c| matches!(c.kind, ClangNodeKind::FieldDecl { .. }));
-
-                        // Helper to conditionally insert template, preferring templates with fields
-                        let should_insert = |existing: Option<&(Vec<String>, Vec<ClangNode>)>,
-                                             has_fields: bool|
-                         -> bool {
-                            match existing {
-                                None => true,
-                                Some((_, existing_children)) => {
-                                    // If existing has no fields but we do, replace it
-                                    let existing_has_fields = existing_children
-                                        .iter()
-                                        .any(|c| matches!(c.kind, ClangNodeKind::FieldDecl { .. }));
-                                    has_fields && !existing_has_fields
-                                }
-                            }
-                        };
-
                         // Store template definition with short name
-                        if should_insert(self.template_definitions.get(name), has_fields) {
-                            self.template_definitions.insert(
-                                name.clone(),
-                                (template_params.clone(), child.children.clone()),
-                            );
-                        }
+                        self.store_class_template_definition_if_better(
+                            name,
+                            template_params,
+                            &child.children,
+                        );
 
                         // Also store with fully-qualified name if in a namespace
                         if !namespace_path.is_empty() {
                             let full_name = format!("{}::{}", namespace_path.join("::"), name);
-                            if should_insert(self.template_definitions.get(&full_name), has_fields)
-                            {
-                                self.template_definitions.insert(
-                                    full_name,
-                                    (template_params.clone(), child.children.clone()),
-                                );
-                            }
+                            self.store_class_template_definition_if_better(
+                                &full_name,
+                                template_params,
+                                &child.children,
+                            );
                             // Note: We no longer blindly filter __ namespaces here.
                             // Instead, inline namespace aliases are used during lookup.
                         }
@@ -55994,11 +56008,12 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 template_params,
                 ..
             } => {
-                // Store template definition for later instantiation
-                // Children include TemplateTypeParmDecl (template params) and FieldDecl/CXXMethodDecl (members)
-                self.template_definitions.insert(
-                    template_name.clone(),
-                    (template_params.clone(), node.children.clone()),
+                // Template definitions are already pre-collected before top-level generation.
+                // Keep this as a guarded fallback and avoid redundant child Vec clones.
+                self.store_class_template_definition_if_better(
+                    template_name,
+                    template_params,
+                    &node.children,
                 );
 
                 // Process children of class template to find implicit instantiations
@@ -111242,6 +111257,76 @@ stream.PutN(c, n);
             code.contains(&format!("pub struct {} {{", rust_name)),
             "type use before class template definition should still emit concrete struct instantiation, got:\n{}",
             code
+        );
+    }
+
+    #[test]
+    fn test_generate_top_level_class_template_decl_does_not_replace_precollected_definition() {
+        let templ_ty = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        let rich_template = make_node(
+            ClangNodeKind::ClassTemplateDecl {
+                name: "Widget".to_string(),
+                template_params: vec!["T".to_string()],
+                is_class: false,
+                parameter_pack_indices: vec![],
+                requires_clause: None,
+            },
+            vec![make_node(
+                ClangNodeKind::FieldDecl {
+                    name: "value".to_string(),
+                    ty: templ_ty,
+                    is_static: false,
+                    access: AccessSpecifier::Public,
+                    bit_field_width: None,
+                },
+                vec![],
+            )],
+        );
+        let sparse_template = make_node(
+            ClangNodeKind::ClassTemplateDecl {
+                name: "Widget".to_string(),
+                template_params: vec!["T".to_string()],
+                is_class: false,
+                parameter_pack_indices: vec![],
+                requires_clause: None,
+            },
+            vec![],
+        );
+
+        let mut codegen = AstCodeGen::new();
+        codegen.collect_template_definitions_with_namespace(&[rich_template.clone()], &[]);
+        let before = codegen
+            .template_definitions
+            .get("Widget")
+            .expect("pre-collected class template definition missing");
+        let before_field_count = before
+            .1
+            .iter()
+            .filter(|node| matches!(node.kind, ClangNodeKind::FieldDecl { .. }))
+            .count();
+        assert_eq!(
+            before_field_count, 1,
+            "expected pre-collected definition to keep one field declaration"
+        );
+
+        // Top-level generation sees template declarations again in pass 2.
+        codegen.generate_top_level(&sparse_template);
+        let after = codegen
+            .template_definitions
+            .get("Widget")
+            .expect("class template definition unexpectedly removed");
+        let after_field_count = after
+            .1
+            .iter()
+            .filter(|node| matches!(node.kind, ClangNodeKind::FieldDecl { .. }))
+            .count();
+        assert_eq!(
+            after_field_count, 1,
+            "top-level class-template handling should not replace richer pre-collected template definition"
         );
     }
 

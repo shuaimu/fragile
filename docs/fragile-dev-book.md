@@ -3917,3 +3917,83 @@ Leaf `2.6.c.iv.d.iv.c.i` is complete. The timeout remains anchored before
 `codegen_after_top_level_generation`, and the refreshed baseline confirms the
 next optimization leaf (`c.ii`) should continue targeting the same pre-top-level
 checkpoint window.
+
+## 64. RPC Compile Blocker Leaf 2.6.c.iv.d.iv.c.ii: Class-Template Definition Clone Reduction (2026-03-13)
+
+### Problem
+
+The next bounded optimization leaf (`2.6.c.iv.d.iv.c.ii`) still targets the
+same timeout checkpoint window captured in `c.i`
+(`codegen_after_template_instantiation_generation` -> before
+`codegen_after_top_level_generation`).
+
+Within that window, class-template metadata could still be needlessly cloned or
+replaced in pass 2 (`generate_top_level`) even when a richer definition was
+already pre-collected in pass 1.
+
+### Execution Plan
+
+1. Keep class-template replacement semantics unchanged: only prefer a candidate
+   when it has fields and the existing entry does not.
+2. Remove duplicated replacement logic and route both precollection and
+   pass-2 fallback storage through one helper path.
+3. Add a focused regression that proves pass-2 sparse template declarations do
+   not replace richer pre-collected definitions.
+4. Re-run full suites and require known-baseline parity.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no RPC-target name conditionals
+- no force-native bypass or escape hatch usage
+- no semantic fallback/stub synthesis to mask unresolved methods
+- optimization remains generic codegen data-flow cleanup only
+
+### Implementation
+
+Updated:
+
+- `crates/fragile-clang/src/ast_codegen.rs`
+
+Key changes:
+
+- added `class_template_children_have_fields` helper for field-presence checks.
+- added `should_replace_class_template_definition` helper to encode replacement
+  policy in one place.
+- added `store_class_template_definition_if_better` to centralize guarded
+  insertion and avoid repeated ad-hoc clone/insert paths.
+- switched `collect_template_definitions_with_namespace` to use the new helper
+  path for short and fully-qualified template keys.
+- switched top-level `ClassTemplateDecl` handling to the same guarded helper so
+  pass-2 processing no longer unconditionally clones/replaces stored template
+  child vectors.
+- added focused regression
+  `test_generate_top_level_class_template_decl_does_not_replace_precollected_definition`.
+
+Design note:
+
+- `docs/rpc_compile_blocker_leaf_2_6c_iv_d_iv_c_ii_design_2026_03_13.md`
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang test_generate_top_level_class_template_decl_does_not_replace_precollected_definition -- --nocapture`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- focused regression passes and confirms pass-2 sparse template decl handling
+  does not replace richer pre-collected definitions.
+- full-suite status remains baseline:
+  - workspace cargo run remains at known baseline
+    (`fragile-clang` lib: `727` passed / `46` failed, unchanged)
+  - Python suite passes (`29`, skipped `1`)
+
+### Outcome
+
+Leaf `2.6.c.iv.d.iv.c.ii` is complete. Class-template definition storage now
+avoids redundant pass-2 replacement/cloning while preserving existing
+field-preference semantics under focused regression coverage.
