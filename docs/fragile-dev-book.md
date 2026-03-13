@@ -5864,3 +5864,104 @@ Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.b` is complete.
 Strict build-only replay remains timeout-bound on `src/rrr/base/misc.cpp`, and
 inventory non-increase gates confirm no blocker class-rank or `E0425`
 regression versus the `2.6.c.iii` baseline.
+
+## 88. RPC Compile Blocker Leaf 2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.a: Defer Function-Template Mangled-Name Materialization Until Candidate Selection (2026-03-13)
+
+### Problem
+
+After closing gate leaf
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.b`, the next open bounded
+optimization leaf was `...c.a`.
+
+In `collect_fn_template_instantiation`, candidate scanning still built
+sanitized type-arg vectors and mangled instantiation names per candidate before
+compatibility checks, and also allocated a substituted-parameter vector for
+matching. This work repeats heavily in the
+`codegen_after_template_instantiation_generation` hot window.
+
+### Execution Plan
+
+1. Defer mangled-name construction until after candidate compatibility/fallback
+   selection.
+2. Share mangled-name construction between collection and call-site resolution
+   via one helper.
+3. Replace per-candidate substituted-parameter vector allocation with
+   streaming compatibility checks.
+4. Add focused regression for helper/output semantics.
+5. Capture strict replay profiling/timing artifacts and compare checkpoint
+   bytes versus prior leaf.
+6. Run full suites and require baseline parity.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no RPC-target-specific branching
+- no force-native fallback usage
+- no fake semantic stubs or placeholder behavior changes
+- generic function-template candidate-scan optimization only
+
+### Implementation
+
+Updated:
+
+- `crates/fragile-clang/src/ast_codegen.rs`
+
+Key changes:
+
+- `collect_fn_template_instantiation` now:
+  - tracks selected/fallback candidate as `(template_key, type_args)`
+  - defers `mangled_name` materialization until a winner is chosen
+  - streams parameter compatibility checks without allocating
+    `substituted_param_types`
+- Added helper:
+  - `build_fn_template_mangled_name(sanitized_fn_name, type_args)`
+- `resolve_fn_template_call_name_from_args` now uses the same helper for
+  mangled-name synthesis.
+
+Focused regression added:
+
+- `test_build_fn_template_mangled_name_sanitizes_type_args`
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang test_build_fn_template_mangled_name_sanitizes_type_args -- --nocapture`
+- `cargo test -p fragile-clang test_template_match_type_normalization_preserves_ref_prefix_compatibility -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_uses_leaf_index_candidate_after_mismatch -- --nocapture`
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_a_callshape_profile_120_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_a_stage_timing_120_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_a_callshape_profile_300_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_a_stage_timing_300_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- 120s profile:
+  - `status=codegen_after_template_collection`
+  - `status_history=codegen_started,codegen_after_template_collection`
+- 300s profile:
+  - `status=codegen_after_template_instantiation_generation`
+  - `status_history=codegen_started,codegen_after_template_collection,codegen_after_template_instantiation_generation`
+  - `input_bytes=573589`
+- comparison vs prior leaf `...c.iii.c.iii.c.iii.c.iii.c.iii.a`
+  (`input_bytes=574217`):
+  - checkpoint bytes reduced by `-628`
+- replay manifest (`/tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313/rpc_compile_blocker_replay_manifest.txt`):
+  - `replay_01_status=124`
+  - `replay_01_timed_out=true`
+  - `replay_01_first_failure_class=build_timeout`
+  - `replay_01_blocker_file=src/rrr/base/misc.cpp`
+- full-suite baseline parity:
+  - `cargo test --workspace --all-targets`: `fragile-clang` lib
+    `741` passed / `46` failed (failure count unchanged)
+  - Python suite: `OK`, `29` ran, `1` skipped
+
+### Outcome
+
+Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.a` is complete.
+Function-template candidate scans now avoid per-candidate mangled-name
+construction and temporary substituted-parameter vectors while preserving
+existing selection/fallback behavior. Strict replay remains timeout-bound on
+`src/rrr/base/misc.cpp`.

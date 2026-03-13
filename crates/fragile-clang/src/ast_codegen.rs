@@ -38746,8 +38746,8 @@ impl FragileAtomicBoolCompat for atomic_bool {
         let candidate_keys = self.collect_fn_template_candidate_keys(fn_name, namespace_path);
         let call_args: Vec<&ClangNode> = call_node.children.iter().skip(1).collect();
         let sanitized_fn_name = sanitize_identifier(fn_name);
-        let mut selected_instantiation: Option<(String, String, Vec<String>)> = None;
-        let mut fallback_instantiation: Option<(String, String, Vec<String>)> = None;
+        let mut selected_instantiation: Option<(String, Vec<String>)> = None;
+        let mut fallback_instantiation: Option<(String, Vec<String>)> = None;
         let instantiated_param_types_normalized: Vec<String> = params
             .iter()
             .map(CppType::to_rust_type_str)
@@ -38776,14 +38776,6 @@ impl FragileAtomicBoolCompat for atomic_bool {
             ) else {
                 continue;
             };
-            // Generate a mangled name for the instantiation (e.g., "add_i32").
-            let sanitized_args: Vec<String> = type_args
-                .iter()
-                .map(|a| sanitize_type_for_fn_name(a))
-                .collect();
-            // Sanitize function name (handles operator"" user-defined literals).
-            let mangled_name = format!("{}_{}", sanitized_fn_name, sanitized_args.join("_"));
-
             let has_param_dependent_template_arg =
                 template_info.params.iter().any(|(_, pattern)| {
                     template_info
@@ -38794,35 +38786,33 @@ impl FragileAtomicBoolCompat for atomic_bool {
             if fallback_instantiation.is_none()
                 && (has_param_dependent_template_arg || params.is_empty())
             {
-                fallback_instantiation =
-                    Some((mangled_name.clone(), template_key.clone(), type_args.clone()));
+                fallback_instantiation = Some((template_key.clone(), type_args.clone()));
             }
 
             let mut subst_map: HashMap<String, String> = HashMap::new();
             for (param, arg) in template_info.template_params.iter().zip(type_args.iter()) {
                 subst_map.insert(param.clone(), arg.clone());
             }
-            let substituted_param_types: Vec<String> = template_info
-                .params
-                .iter()
-                .map(|(_, ty)| self.substitute_template_type(ty, &subst_map))
-                .collect();
-            if substituted_param_types.len() != instantiated_param_types_normalized.len()
-                || substituted_param_types
+            if template_info.params.len() != instantiated_param_types_normalized.len() {
+                continue;
+            }
+            let mut param_types_match = true;
+            for ((_, ty), (rhs_norm, rhs_ref_stripped)) in template_info.params.iter().zip(
+                instantiated_param_types_normalized
                     .iter()
-                    .zip(
-                        instantiated_param_types_normalized
-                            .iter()
-                            .zip(instantiated_param_types_ref_stripped.iter()),
-                    )
-                    .any(|(lhs, (rhs_norm, rhs_ref_stripped))| {
-                        let lhs_norm = Self::normalize_template_match_type(lhs);
-                        lhs_norm != "_"
-                            && lhs_norm != *rhs_norm
-                            && Self::strip_template_match_ref_prefix(&lhs_norm)
-                                != *rhs_ref_stripped
-                    })
-            {
+                    .zip(instantiated_param_types_ref_stripped.iter()),
+            ) {
+                let lhs = self.substitute_template_type(ty, &subst_map);
+                let lhs_norm = Self::normalize_template_match_type(&lhs);
+                if lhs_norm != "_"
+                    && lhs_norm != *rhs_norm
+                    && Self::strip_template_match_ref_prefix(&lhs_norm) != *rhs_ref_stripped
+                {
+                    param_types_match = false;
+                    break;
+                }
+            }
+            if !param_types_match {
                 continue;
             }
             let substituted_return_type =
@@ -38835,12 +38825,13 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 continue;
             }
 
-            selected_instantiation = Some((mangled_name, template_key, type_args));
+            selected_instantiation = Some((template_key, type_args));
             break;
         }
-        if let Some((mangled_name, template_key, type_args)) =
-            selected_instantiation.or(fallback_instantiation)
+        if let Some((template_key, type_args)) = selected_instantiation.or(fallback_instantiation)
         {
+            let mangled_name =
+                Self::build_fn_template_mangled_name(&sanitized_fn_name, &type_args);
             let concrete_template_info = if let Some(template_info) =
                 self.fn_template_definitions.get(&template_key)
             {
@@ -38886,6 +38877,12 @@ impl FragileAtomicBoolCompat for atomic_bool {
     fn node_contains_string_literal(node: &ClangNode) -> bool {
         matches!(&node.kind, ClangNodeKind::StringLiteral(_))
             || node.children.iter().any(Self::node_contains_string_literal)
+    }
+
+    fn build_fn_template_mangled_name(sanitized_fn_name: &str, type_args: &[String]) -> String {
+        let sanitized_args: Vec<String> =
+            type_args.iter().map(|a| sanitize_type_for_fn_name(a)).collect();
+        format!("{}_{}", sanitized_fn_name, sanitized_args.join("_"))
     }
 
     fn normalize_template_match_type(ty: &str) -> String {
@@ -39002,11 +38999,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
             ) else {
                 continue;
             };
-            let sanitized_args: Vec<String> = type_args
-                .iter()
-                .map(|a| sanitize_type_for_fn_name(a))
-                .collect();
-            let mangled_name = format!("{}_{}", sanitized_fn_name, sanitized_args.join("_"));
+            let mangled_name = Self::build_fn_template_mangled_name(&sanitized_fn_name, &type_args);
             let sanitized_mangled = sanitize_identifier(&mangled_name);
             if self.pending_fn_instantiations.contains_key(&mangled_name)
                 || self.generated_functions.contains_key(&sanitized_mangled)
@@ -112048,6 +112041,23 @@ stream.PutN(c, n);
             pending.1,
             vec!["i32".to_string()],
             "selected candidate should preserve inferred concrete type arguments"
+        );
+    }
+
+    #[test]
+    fn test_build_fn_template_mangled_name_sanitizes_type_args() {
+        let mangled = AstCodeGen::build_fn_template_mangled_name(
+            "fallback_make",
+            &[
+                "i32".to_string(),
+                "*const i8".to_string(),
+                "&mut std::string::String".to_string(),
+            ],
+        );
+        assert_eq!(
+            mangled,
+            "fallback_make_i32_ptr_const_i8_ref_mut_std_string_String",
+            "deferred template-instantiation mangled-name builder should preserve existing sanitized-name semantics"
         );
     }
 
