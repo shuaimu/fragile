@@ -2691,3 +2691,64 @@ Aligned with Section 1.3 and `docs/dev/wrong.md`:
 - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests/python/test_mako_rpc_compile_blocker_inventory.py -v`
 - full workspace suite: `cargo test` (current workspace baseline remains `fragile-clang`
   `ast_codegen` lib-test failures: `711 passed / 49 failed`, matching known pre-existing cluster)
+
+## 45. RPC Compile Blocker Focused Replay Hook (2026-03-12)
+
+### Problem
+
+Leaf `2.1` inventory provides deterministic blocker summaries, but no deterministic
+mechanism existed to replay top blocker translation units and capture command-level
+first-failure artifacts for fix iteration.
+
+### Decision
+
+Implement leaf `2.2` as a focused replay hook:
+
+- consume leaf-`2.1` inventory manifest
+- deterministically rank/select blocker translation units
+- replay top candidates with bounded execution and deterministic artifact capture
+- prefer exact compile commands from compile database when available
+
+### Wrong-Approach Check
+
+Aligned with Section 1.3 and `docs/dev/wrong.md`:
+
+- no target-specific compiler/codegen hacks
+- no semantic fake method bodies
+- no force-native bypass path
+- replay artifacts reflect actual command execution outcomes only
+
+### Implementation
+
+- Added `scripts/mako_rpc_compile_blocker_replay.py`:
+  - inputs:
+    - `rpc_compile_blocker_inventory_manifest.txt` (required)
+    - `benchmark_harness_manifest.txt` (optional)
+    - `build_<lane>/compile_commands.json` (optional)
+  - deterministic ranking:
+    - blocker-class priority
+    - `E0425` count descending
+    - stable lane/file tie-breakers
+  - command resolution:
+    - compile-db replay if matching TU command exists
+    - fallback lane compiler replay (`clang_cxx`/`fragile_cxx`) otherwise
+  - outputs:
+    - `rpc_compile_blocker_replay_plan.txt`
+    - `rpc_compile_blocker_replay_manifest.txt`
+    - per replay: `replay_<NN>/{command,replay.status,replay.stdout,replay.stderr,first_failure_*}.txt`
+- Added regression tests:
+  - `tests/python/test_mako_rpc_compile_blocker_replay.py`
+  - covers deterministic ranking, compile-db replay path, fallback replay path,
+    no-candidate manifests, and missing-inventory failure behavior
+- Added docs:
+  - `docs/rpc_compile_blocker_replay_leaf_2_2_design_2026_03_12.md`
+  - `docs/rpc_compile_blocker_replay_user_manual.md`
+- Updated `TODO.md` leaf `2.2` with completion evidence.
+
+### Validation
+
+- `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests/python/test_mako_rpc_compile_blocker_replay.py -v`
+- `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests/python/test_mako_rpc_compile_blocker_inventory.py -v`
+- `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests/python/test_mako_rpcbench_harness.py -v`
+- full workspace suite: `cargo test` (current workspace baseline remains `fragile-clang`
+  `ast_codegen` lib-test failures: `711 passed / 49 failed`, matching known pre-existing cluster)
