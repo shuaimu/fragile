@@ -39013,11 +39013,10 @@ impl FragileAtomicBoolCompat for atomic_bool {
 
     /// Generate struct definitions for pending template instantiations.
     fn generate_template_instantiations(&mut self) {
-        let instantiations: Vec<String> = self
-            .pending_template_instantiations
-            .iter()
-            .cloned()
-            .collect();
+        // Consume the current pending set to avoid cloning every instantiation name.
+        // Any newly discovered instantiations during generation are accumulated
+        // into `pending_template_instantiations` for subsequent iterations.
+        let instantiations = std::mem::take(&mut self.pending_template_instantiations);
         for inst_name in instantiations {
             // Parse template arguments
             if let Some(open_idx) = inst_name.find('<') {
@@ -111366,6 +111365,53 @@ stream.PutN(c, n);
         assert!(
             std::ptr::eq(resolved, direct),
             "lookup should return the stored template definition reference without cloning"
+        );
+    }
+
+    #[test]
+    fn test_generate_template_instantiations_consumes_pending_set_and_generates_structs() {
+        let templ_ty = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        let mut codegen = AstCodeGen::new();
+        codegen.collect_template_definitions_with_namespace(
+            &[make_node(
+                ClangNodeKind::ClassTemplateDecl {
+                    name: "Widget".to_string(),
+                    template_params: vec!["T".to_string()],
+                    is_class: false,
+                    parameter_pack_indices: vec![],
+                    requires_clause: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::FieldDecl {
+                        name: "value".to_string(),
+                        ty: templ_ty,
+                        is_static: false,
+                        access: AccessSpecifier::Public,
+                        bit_field_width: None,
+                    },
+                    vec![],
+                )],
+            )],
+            &[],
+        );
+
+        let inst_name = "Widget<int>".to_string();
+        let rust_name = CppType::Named(inst_name.clone()).to_rust_type_str();
+        codegen.pending_template_instantiations.insert(inst_name);
+
+        codegen.generate_template_instantiations();
+
+        assert!(
+            codegen.generated_structs.contains(&rust_name),
+            "template instantiation should still emit concrete struct when pending set is consumed"
+        );
+        assert!(
+            codegen.pending_template_instantiations.is_empty(),
+            "current pending instantiations should be consumed without clone-backed staging"
         );
     }
 
