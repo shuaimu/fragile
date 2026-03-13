@@ -31,6 +31,24 @@ python3 scripts/mako_rpc_compile_blocker_inventory.py \
 
 The script prints the resolved `run_root` on success.
 
+## Baseline Non-Increase Gate (Leaf 2.5)
+
+To compare a current run against a baseline inventory manifest and fail on regression:
+
+```bash
+python3 scripts/mako_rpc_compile_blocker_inventory.py \
+  --run-root /tmp/fragile_mako_rpcbench_current \
+  --lanes clang,fragilec \
+  --baseline-manifest /tmp/fragile_mako_rpcbench_baseline/rpc_compile_blocker_inventory_manifest.txt \
+  --enforce-nonincreasing
+```
+
+Gate behavior per lane:
+
+- blocker-class severity must be equal-or-better than baseline
+- `E0425` count must be <= baseline
+- skipped builds (`build.status=-1`) are treated as non-comparable and fail the enforced gate
+
 ## Output Artifacts
 
 Per lane (`lane_<lane>/`):
@@ -42,6 +60,15 @@ Per lane (`lane_<lane>/`):
 Run root:
 
 - `rpc_compile_blocker_inventory_manifest.txt`
+
+With baseline comparison enabled, manifest additionally includes:
+
+- per-lane baseline snapshots (`lane_<lane>_baseline_*`)
+- class-rank delta and non-worsening flag
+- `E0425` delta and non-increase flag
+- lane/non-root non-increase gate pass booleans:
+  - `lane_<lane>_nonincrease_gate_pass`
+  - `nonincrease_gate_pass`
 
 ## Blocker Class Values
 

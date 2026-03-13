@@ -22,7 +22,14 @@ class MakoRpcCompileBlockerInventoryTests(unittest.TestCase):
         (lane_dir / "build.status").write_text(f"{build_status}\n", encoding="utf-8")
         (lane_dir / "build.stderr").write_text(build_stderr, encoding="utf-8")
 
-    def _run_inventory(self, run_root: Path, *, lanes: str | None = None) -> subprocess.CompletedProcess[str]:
+    def _run_inventory(
+        self,
+        run_root: Path,
+        *,
+        lanes: str | None = None,
+        baseline_manifest: Path | None = None,
+        enforce_nonincreasing: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
         cmd = [
             "python3",
             str(SCRIPT_PATH),
@@ -31,6 +38,10 @@ class MakoRpcCompileBlockerInventoryTests(unittest.TestCase):
         ]
         if lanes is not None:
             cmd.extend(["--lanes", lanes])
+        if baseline_manifest is not None:
+            cmd.extend(["--baseline-manifest", str(baseline_manifest)])
+        if enforce_nonincreasing:
+            cmd.append("--enforce-nonincreasing")
         return subprocess.run(cmd, check=False, text=True, capture_output=True)
 
     def _parse_key_values(self, path: Path) -> dict[str, str]:
@@ -218,6 +229,217 @@ class MakoRpcCompileBlockerInventoryTests(unittest.TestCase):
             result = self._run_inventory(run_root, lanes="clang")
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("missing build stderr artifact", result.stderr)
+
+    def test_inventory_nonincrease_gate_passes_for_better_or_equal_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            baseline_run_root = tmp_path / "baseline_run"
+            baseline_run_root.mkdir(parents=True, exist_ok=True)
+            self._write_lane_build_artifacts(
+                baseline_run_root,
+                "clang",
+                build_status=0,
+                build_stderr="",
+            )
+            self._write_lane_build_artifacts(
+                baseline_run_root,
+                "fragilec",
+                build_status=2,
+                build_stderr="\n".join(
+                    [
+                        "[fragilec] fragile rustc object compile failed for /tmp/mako/src/rpcbench.cpp",
+                        "error[E0425]: cannot find value `rpc` in this scope",
+                        "error[E0425]: cannot find value `bench` in this scope",
+                    ]
+                ),
+            )
+            baseline_result = self._run_inventory(baseline_run_root)
+            self.assertEqual(baseline_result.returncode, 0, msg=baseline_result.stderr)
+            baseline_manifest = (
+                baseline_run_root / "rpc_compile_blocker_inventory_manifest.txt"
+            )
+
+            current_run_root = tmp_path / "current_run"
+            current_run_root.mkdir(parents=True, exist_ok=True)
+            self._write_lane_build_artifacts(
+                current_run_root,
+                "clang",
+                build_status=0,
+                build_stderr="",
+            )
+            self._write_lane_build_artifacts(
+                current_run_root,
+                "fragilec",
+                build_status=1,
+                build_stderr="\n".join(
+                    [
+                        "[fragilec] failed to transpile /tmp/mako/src/rpcbench.cpp with parser backend libtooling",
+                        "error: parse failure",
+                    ]
+                ),
+            )
+            current_result = self._run_inventory(
+                current_run_root,
+                baseline_manifest=baseline_manifest,
+                enforce_nonincreasing=True,
+            )
+            self.assertEqual(current_result.returncode, 0, msg=current_result.stderr)
+            manifest = self._parse_key_values(
+                current_run_root / "rpc_compile_blocker_inventory_manifest.txt"
+            )
+            self.assertEqual(manifest["task_leaf"], "2.5")
+            self.assertEqual(manifest["nonincrease_gate_pass"], "true")
+            self.assertEqual(manifest["lane_fragilec_nonincrease_gate_pass"], "true")
+            self.assertEqual(
+                manifest["lane_fragilec_class_nonworsening_vs_baseline"],
+                "true",
+            )
+            self.assertEqual(
+                manifest["lane_fragilec_e0425_nonincrease_vs_baseline"],
+                "true",
+            )
+
+    def test_inventory_nonincrease_gate_fails_when_class_severity_worsens(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            baseline_run_root = tmp_path / "baseline_run"
+            baseline_run_root.mkdir(parents=True, exist_ok=True)
+            self._write_lane_build_artifacts(
+                baseline_run_root,
+                "fragilec",
+                build_status=0,
+                build_stderr="",
+            )
+            baseline_result = self._run_inventory(baseline_run_root, lanes="fragilec")
+            self.assertEqual(baseline_result.returncode, 0, msg=baseline_result.stderr)
+            baseline_manifest = (
+                baseline_run_root / "rpc_compile_blocker_inventory_manifest.txt"
+            )
+
+            current_run_root = tmp_path / "current_run"
+            current_run_root.mkdir(parents=True, exist_ok=True)
+            self._write_lane_build_artifacts(
+                current_run_root,
+                "fragilec",
+                build_status=2,
+                build_stderr="\n".join(
+                    [
+                        "[fragilec] fragile rustc object compile failed for /tmp/mako/src/rpcbench.cpp",
+                        "error[E0425]: cannot find value `rpc` in this scope",
+                    ]
+                ),
+            )
+            current_result = self._run_inventory(
+                current_run_root,
+                lanes="fragilec",
+                baseline_manifest=baseline_manifest,
+                enforce_nonincreasing=True,
+            )
+            self.assertNotEqual(current_result.returncode, 0)
+            self.assertIn("nonincrease gate failed", current_result.stderr)
+            manifest = self._parse_key_values(
+                current_run_root / "rpc_compile_blocker_inventory_manifest.txt"
+            )
+            self.assertEqual(manifest["nonincrease_gate_pass"], "false")
+            self.assertEqual(manifest["lane_fragilec_nonincrease_gate_pass"], "false")
+            self.assertEqual(
+                manifest["lane_fragilec_class_nonworsening_vs_baseline"],
+                "false",
+            )
+
+    def test_inventory_nonincrease_gate_fails_when_e0425_count_increases(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            baseline_run_root = tmp_path / "baseline_run"
+            baseline_run_root.mkdir(parents=True, exist_ok=True)
+            self._write_lane_build_artifacts(
+                baseline_run_root,
+                "fragilec",
+                build_status=2,
+                build_stderr="\n".join(
+                    [
+                        "[fragilec] fragile rustc object compile failed for /tmp/mako/src/rpcbench.cpp",
+                        "error[E0425]: cannot find value `rpc` in this scope",
+                    ]
+                ),
+            )
+            baseline_result = self._run_inventory(baseline_run_root, lanes="fragilec")
+            self.assertEqual(baseline_result.returncode, 0, msg=baseline_result.stderr)
+            baseline_manifest = (
+                baseline_run_root / "rpc_compile_blocker_inventory_manifest.txt"
+            )
+
+            current_run_root = tmp_path / "current_run"
+            current_run_root.mkdir(parents=True, exist_ok=True)
+            self._write_lane_build_artifacts(
+                current_run_root,
+                "fragilec",
+                build_status=2,
+                build_stderr="\n".join(
+                    [
+                        "[fragilec] fragile rustc object compile failed for /tmp/mako/src/rpcbench.cpp",
+                        "error[E0425]: cannot find value `rpc` in this scope",
+                        "error[E0425]: cannot find function `bench` in this scope",
+                    ]
+                ),
+            )
+            current_result = self._run_inventory(
+                current_run_root,
+                lanes="fragilec",
+                baseline_manifest=baseline_manifest,
+                enforce_nonincreasing=True,
+            )
+            self.assertNotEqual(current_result.returncode, 0)
+            manifest = self._parse_key_values(
+                current_run_root / "rpc_compile_blocker_inventory_manifest.txt"
+            )
+            self.assertEqual(manifest["nonincrease_gate_pass"], "false")
+            self.assertEqual(manifest["lane_fragilec_nonincrease_gate_pass"], "false")
+            self.assertEqual(
+                manifest["lane_fragilec_e0425_nonincrease_vs_baseline"],
+                "false",
+            )
+            self.assertEqual(manifest["lane_fragilec_e0425_delta_vs_baseline"], "1")
+
+    def test_inventory_nonincrease_gate_fails_for_missing_baseline_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            baseline_manifest = tmp_path / "baseline_manifest.txt"
+            baseline_manifest.write_text(
+                "\n".join(
+                    [
+                        "version=1",
+                        "task_leaf=2.1",
+                        "lanes=fragilec",
+                        "lane_fragilec_build_status=2",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            current_run_root = tmp_path / "current_run"
+            current_run_root.mkdir(parents=True, exist_ok=True)
+            self._write_lane_build_artifacts(
+                current_run_root,
+                "fragilec",
+                build_status=2,
+                build_stderr="\n".join(
+                    [
+                        "[fragilec] fragile rustc object compile failed for /tmp/mako/src/rpcbench.cpp",
+                        "error[E0425]: cannot find value `rpc` in this scope",
+                    ]
+                ),
+            )
+
+            current_result = self._run_inventory(
+                current_run_root,
+                lanes="fragilec",
+                baseline_manifest=baseline_manifest,
+                enforce_nonincreasing=True,
+            )
+            self.assertNotEqual(current_result.returncode, 0)
+            self.assertIn("missing baseline manifest key", current_result.stderr)
 
 
 if __name__ == "__main__":

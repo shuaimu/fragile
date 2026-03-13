@@ -2805,3 +2805,65 @@ Aligned with Section 1.3 and `docs/dev/wrong.md`:
   - `FRAGILE_ENABLE_DEGRADED_FALLBACK=1 cargo test --workspace` (`739 passed / 24 failed`, known pre-existing red cluster)
 - Python suite tooling note:
   - `python3 -m pytest tests/python` unavailable in this environment (`pytest` module not installed)
+
+## 47. RPC Compile Blocker Leaf 2.5: Baseline Non-Increase Inventory Gate (2026-03-13)
+
+### Problem
+
+Leaf `2.4` closed the next blocker family, but leaf `2.5` required a deterministic proof
+that blocker severity and blocker counts do not regress versus the leaf-`2.1` baseline.
+Before this change, inventory comparison was manual and not enforceable.
+
+### Decision
+
+Extend the inventory script with a baseline-aware non-increase gate:
+
+- accept a baseline inventory manifest
+- compute deterministic lane deltas for blocker class and `E0425` counts
+- fail with nonzero status when enforced and any lane regresses
+
+### Wrong-Approach Check
+
+Aligned with Section 1.3 and `docs/dev/wrong.md`:
+
+- no RPC target-specific compiler/codegen branching
+- no semantic fake-body shortcuts
+- no force-native bypass path
+- gate outcomes are derived from real artifacts only
+
+### Implementation
+
+- Updated `scripts/mako_rpc_compile_blocker_inventory.py`:
+  - added `--baseline-manifest` and `--enforce-nonincreasing`
+  - added deterministic blocker severity order and lane-level baseline deltas
+  - added lane/root gate outputs:
+    - `lane_<lane>_nonincrease_gate_pass`
+    - `nonincrease_gate_pass`
+  - enforced mode returns nonzero on regression
+- Updated tests in `tests/python/test_mako_rpc_compile_blocker_inventory.py`:
+  - non-increase pass case
+  - fail on class-severity regression
+  - fail on `E0425` count increase
+  - fail on missing baseline keys
+- Updated docs:
+  - `docs/rpc_compile_blocker_inventory_user_manual.md`
+  - `docs/rpc_compile_blocker_leaf_2_5_design_2026_03_13.md`
+- Updated `TODO.md` leaf `2.5` with completion evidence.
+
+### Validation
+
+- `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests/python/test_mako_rpc_compile_blocker_inventory.py -v`
+- `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/python -p 'test_*.py' -v`
+- deterministic baseline/current comparison evidence:
+  - baseline root: `/tmp/fragile_rpc_leaf_2_5_baseline_20260313`
+    - `lane_fragilec_first_failing_compile_class=unresolved_name_or_type_e0425`
+    - `lane_fragilec_first_failing_compile_e0425_count=168`
+  - current root: `/tmp/fragile_rpc_leaf_2_5_current_20260313`
+    - `lane_fragilec_first_failing_compile_class=unresolved_name_or_type_e0425`
+    - `lane_fragilec_first_failing_compile_e0425_count=28`
+    - `lane_fragilec_e0425_delta_vs_baseline=-140`
+    - `lane_fragilec_nonincrease_gate_pass=true`
+    - `nonincrease_gate_pass=true`
+- full workspace suite:
+  - `cargo test --workspace` (baseline red cluster remains: `717 passed / 46 failed`)
+  - `FRAGILE_ENABLE_DEGRADED_FALLBACK=1 cargo test --workspace` (baseline red cluster remains: `739 passed / 24 failed`)
