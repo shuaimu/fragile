@@ -3845,3 +3845,75 @@ Deterministic evidence highlights:
 Leaf `2.6.c.iv.d.iv.b` is complete. Post-`iv.a` strict replay remains
 timeout-bound on `src/rrr/base/misc.cpp`, and the non-increase gate confirms no
 class-rank or `E0425` regression versus `2.6.c.iii`.
+
+## 63. RPC Compile Blocker Leaf 2.6.c.iv.d.iv.c.i: Fresh Timeout Profile Baseline Lock (2026-03-13)
+
+### Problem
+
+The next iteration umbrella (`2.6.c.iv.d.iv.c`) is open-ended and too large for
+one bounded leaf. A deterministic baseline refresh was required first to choose
+the next generic optimization target window.
+
+### Decision
+
+Decompose `2.6.c.iv.d.iv.c` into bounded sub-leaves and execute
+`2.6.c.iv.d.iv.c.i` as replay-only profiling/timing capture to lock fresh
+checkpoint-byte baselines.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no target-name-specific code path
+- no force-native bypass
+- no fake semantic fallback body injection
+- deterministic replay evidence capture only
+
+### Implementation
+
+Updated:
+
+- `TODO.md`
+  - decomposed `2.6.c.iv.d.iv.c` into `c.i`..`c.iv`
+  - marked `2.6.c.iv.d.iv.c.i` complete with deterministic evidence
+- `docs/rpc_compile_blocker_leaf_2_6c_iv_d_iv_c_i_design_2026_03_13.md`
+
+No parser/codegen/runtime behavior changes were made in this leaf.
+
+### Validation
+
+Executed:
+
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_i_callshape_profile_120_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_i_stage_timing_120_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_i_callshape_profile_300_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_i_stage_timing_300_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- 120s profile:
+  - `status=codegen_started`
+  - `status_history=codegen_started`
+- 300s profile:
+  - `status=codegen_after_template_instantiation_generation`
+  - `status_history=codegen_started,codegen_after_template_collection,codegen_after_template_instantiation_generation`
+  - `input_bytes=574973`
+- replay manifest (`/tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313/rpc_compile_blocker_replay_manifest.txt`):
+  - `replay_01_status=124`
+  - `replay_01_timed_out=true`
+  - `replay_01_first_failure_class=build_timeout`
+  - `replay_01_blocker_file=src/rrr/base/misc.cpp`
+- comparison versus `2.6.c.iv.d.iv.a` 300s profile:
+  - `573974 -> 574973` (`+999` bytes), with unchanged checkpoint window
+- full-suite status remains baseline:
+  - workspace cargo run remains at known baseline (`46` existing
+    `fragile-clang` lib failures, unchanged; `726` passed)
+  - Python suite passes (`29`, skipped `1`)
+
+### Outcome
+
+Leaf `2.6.c.iv.d.iv.c.i` is complete. The timeout remains anchored before
+`codegen_after_top_level_generation`, and the refreshed baseline confirms the
+next optimization leaf (`c.ii`) should continue targeting the same pre-top-level
+checkpoint window.
