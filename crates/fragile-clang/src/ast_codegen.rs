@@ -38748,7 +38748,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
         };
 
         let candidate_keys = self.collect_fn_template_candidate_keys(fn_name, namespace_path);
-        let call_args: Vec<&ClangNode> = call_node.children.iter().skip(1).collect();
+        let call_args = &call_node.children[1..];
         let sanitized_fn_name = sanitize_identifier(fn_name);
         let mut selected_instantiation: Option<(String, Vec<String>)> = None;
         let mut fallback_instantiation: Option<(String, Vec<String>)> = None;
@@ -38771,7 +38771,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 template_info,
                 params,
                 return_type.as_ref(),
-                Some(call_args.as_slice()),
+                Some(call_args),
             ) else {
                 continue;
             };
@@ -38988,7 +38988,6 @@ impl FragileAtomicBoolCompat for atomic_bool {
         let candidate_keys = self.collect_fn_template_candidate_keys(fn_name, namespace_path);
         let sanitized_fn_name = sanitize_identifier(fn_name);
 
-        let call_args: Vec<&ClangNode> = call_arg_nodes.iter().collect();
         for template_key in candidate_keys {
             let Some(template_info) = self.fn_template_definitions.get(&template_key) else {
                 continue;
@@ -38997,7 +38996,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 template_info,
                 params,
                 return_type.as_ref(),
-                Some(call_args.as_slice()),
+                Some(call_arg_nodes),
             ) else {
                 continue;
             };
@@ -78073,7 +78072,7 @@ fn infer_fn_template_type_args(
     template_info: &FnTemplateInfo,
     instantiated_params: &[CppType],
     instantiated_return_type: &CppType,
-    instantiated_args: Option<&[&ClangNode]>,
+    instantiated_args: Option<&[ClangNode]>,
 ) -> Option<Vec<String>> {
     let has_parameter_pack = template_info
         .params
@@ -78118,7 +78117,7 @@ fn infer_fn_template_type_args(
                 .zip(instantiated_params.iter())
                 .enumerate()
                 .find_map(|(arg_idx, ((_, pattern_ty), instantiated_ty))| {
-                    let call_arg = instantiated_args.and_then(|args| args.get(arg_idx).copied());
+                    let call_arg = instantiated_args.and_then(|args| args.get(arg_idx));
                     infer_non_type_array_ref_template_arg(pattern_ty, instantiated_ty, call_arg)
                 });
         }
@@ -78653,13 +78652,11 @@ mod tests {
             ),
             make_node(ClangNodeKind::StringLiteral("~".to_string()), vec![]),
         ];
-        let call_arg_refs: Vec<&ClangNode> = call_args.iter().collect();
-
         let inferred = infer_fn_template_type_args(
             &template_info,
             &instantiated_params,
             &CppType::Bool,
-            Some(call_arg_refs.as_slice()),
+            Some(call_args.as_slice()),
         )
         .expect("inference should succeed for nttp array-ref template");
         assert_eq!(
@@ -78728,13 +78725,11 @@ mod tests {
                 vec![],
             ),
         ];
-        let call_arg_refs: Vec<&ClangNode> = call_args.iter().collect();
-
         let inferred = infer_fn_template_type_args(
             &template_info,
             &instantiated_params,
             &CppType::Bool,
-            Some(call_arg_refs.as_slice()),
+            Some(call_args.as_slice()),
         );
         assert!(
             inferred.is_none(),
@@ -112086,6 +112081,123 @@ stream.PutN(c, n);
             pending.1,
             vec!["i32".to_string()],
             "selected candidate should preserve inferred concrete type arguments"
+        );
+    }
+
+    #[test]
+    fn test_collect_fn_template_instantiation_infers_nttp_from_direct_call_arg_slice() {
+        let const_char_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        let size_ty = CppType::LongLong { signed: false };
+        let call_fn_ty = CppType::Function {
+            return_type: Box::new(CppType::Bool),
+            params: vec![const_char_ptr.clone(), size_ty.clone(), const_char_ptr.clone()],
+            is_variadic: false,
+        };
+        let template_literal_param = CppType::Reference {
+            referent: Box::new(CppType::Array {
+                element: Box::new(CppType::Char { signed: true }),
+                size: None,
+            }),
+            is_const: true,
+            is_rvalue: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::FunctionTemplateDecl {
+                        name: "same".to_string(),
+                        template_params: vec!["N".to_string()],
+                        return_type: CppType::Bool,
+                        params: vec![
+                            ("str".to_string(), const_char_ptr.clone()),
+                            ("size".to_string(), size_ty.clone()),
+                            ("literal".to_string(), template_literal_param),
+                        ],
+                        is_definition: true,
+                        parameter_pack_indices: vec![],
+                        requires_clause: None,
+                        is_noexcept: false,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "call_same".to_string(),
+                        mangled_name: "call_same".to_string(),
+                        is_static: false,
+                        return_type: CppType::Bool,
+                        params: vec![("str".to_string(), const_char_ptr.clone())],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: CppType::Bool,
+                                    template_instantiation: None,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "same".to_string(),
+                                            ty: call_fn_ty,
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "str".to_string(),
+                                            ty: const_char_ptr.clone(),
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::IntegerLiteral {
+                                            value: 1,
+                                            cpp_type: Some(size_ty),
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(ClangNodeKind::StringLiteral("~".to_string()), vec![]),
+                                ],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let mut codegen = AstCodeGen::new();
+        codegen.collect_template_info(&ast.children);
+
+        let pending = codegen
+            .pending_fn_instantiations
+            .get("same_2")
+            .cloned()
+            .expect(
+                "template-instantiation collection should infer non-type bound from direct call-arg slice",
+            );
+        assert_eq!(
+            pending.0, "same",
+            "instantiation key should keep original template symbol for direct call-arg slice inference"
+        );
+        assert_eq!(
+            pending.1,
+            vec!["2".to_string()],
+            "non-type template param should infer from string-literal bound including NUL"
         );
     }
 
