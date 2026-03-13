@@ -1189,7 +1189,7 @@ pub struct AstCodeGen {
     /// Used for two-pass namespace merging (C++ can reopen namespaces, Rust cannot)
     merged_namespace_children: HashMap<String, Vec<usize>>,
     /// Reference to the original AST nodes (stored as indices into a collected vec)
-    collected_nodes: Vec<ClangNode>,
+    collected_nodes: Vec<Option<ClangNode>>,
     /// Template definitions: template name -> (template params, children nodes)
     /// Used to generate structs for template instantiations
     template_definitions: HashMap<String, (Vec<String>, Vec<ClangNode>)>,
@@ -38314,7 +38314,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
                         // Store each child node's index for later retrieval
                         for grandchild in &child.children {
                             let idx = self.collected_nodes.len();
-                            self.collected_nodes.push(grandchild.clone());
+                            self.collected_nodes.push(Some(grandchild.clone()));
                             self.merged_namespace_children
                                 .entry(path_key.clone())
                                 .or_default()
@@ -55910,7 +55910,11 @@ impl FragileAtomicBoolCompat for atomic_bool {
                                 }
                             } else {
                                 for idx in merged_indices {
-                                    if let Some(child) = self.collected_nodes.get(idx).cloned() {
+                                    let merged_child = self
+                                        .collected_nodes
+                                        .get_mut(idx)
+                                        .and_then(|slot| slot.take());
+                                    if let Some(child) = merged_child {
                                         self.generate_top_level(&child);
                                     }
                                 }
@@ -79478,6 +79482,86 @@ mod tests {
         assert!(
             !code.contains("/// Placeholder for unresolved template `_Algorithm`"),
             "placeholder generation should skip module-colliding name, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_reopened_namespace_merges_all_children_without_dropping_entries() {
+        let make_returning_fn =
+            |name: &str, mangled_name: &str, value: i128| -> ClangNode {
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: name.to_string(),
+                        mangled_name: mangled_name.to_string(),
+                        is_static: false,
+                        return_type: CppType::Int { signed: true },
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value,
+                                    cpp_type: Some(CppType::Int { signed: true }),
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                )
+            };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::NamespaceDecl {
+                        name: Some("rpc".to_string()),
+                        is_inline: false,
+                    },
+                    vec![make_returning_fn(
+                        "lane_a",
+                        "_ZN3rpc6lane_aEv",
+                        1,
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::NamespaceDecl {
+                        name: Some("rpc".to_string()),
+                        is_inline: false,
+                    },
+                    vec![make_returning_fn(
+                        "lane_b",
+                        "_ZN3rpc6lane_bEv",
+                        2,
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert_eq!(
+            code.matches("pub mod rpc {").count(),
+            1,
+            "reopened namespaces should still emit a single merged Rust module, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("fn lane_a("),
+            "merged namespace should keep declarations from first occurrence, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("fn lane_b("),
+            "merged namespace should keep declarations from reopened occurrence, got:\n{}",
             code
         );
     }

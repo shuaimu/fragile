@@ -3544,3 +3544,93 @@ Full-suite status remains baseline:
 Leaf `2.6.c.iv.d.i` is complete. Checkpoint history now proves the 300s replay
 progresses through template collection/instantiation and times out later in
 codegen, narrowing the next optimization target for `2.6.c.iv.d.ii`.
+
+## 59. RPC Compile Blocker Leaf 2.6.c.iv.d.ii: Reopened-Namespace Clone Reduction in Top-Level Generation (2026-03-13)
+
+### Problem
+
+Checkpoint history from `2.6.c.iv.d.i` showed strict replay timing out between
+`codegen_after_template_instantiation_generation` and
+`codegen_after_top_level_generation`, so the next iteration needed a generic
+top-level generation hot-path reduction.
+
+### Decision
+
+Reduce avoidable cloning in reopened-namespace merged emission:
+
+- keep existing two-pass namespace merge structure
+- avoid cloning merged namespace children again at generation time
+- lock behavior with a focused reopened-namespace regression
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no target-name-specific logic
+- no force-native path
+- no fake semantic fallback body injection
+- generic codegen data-path optimization only
+
+### Implementation
+
+Updated:
+
+- `crates/fragile-clang/src/ast_codegen.rs`
+
+Key changes:
+
+- `collected_nodes` changed from `Vec<ClangNode>` to `Vec<Option<ClangNode>>`.
+- Namespace collection now stores `Some(grandchild.clone())`.
+- Namespace merged generation now consumes entries with `slot.take()` instead
+  of cloning retrieved children.
+- Added focused regression:
+  - `test_reopened_namespace_merges_all_children_without_dropping_entries`
+
+Design note:
+
+- `docs/rpc_compile_blocker_leaf_2_6c_iv_d_ii_design_2026_03_13.md`
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang reopened_namespace_merges_all_children_without_dropping_entries -- --nocapture`
+- `cargo test -p fragile-clang problematic_callshape -- --nocapture`
+- `cargo build --release -p fragile-cli --bin fragilec`
+- strict replay captures (120s/300s):
+  - `/tmp/fragile_rpc_leaf_2_6c_iv_d_ii_callshape_profile_120_v1.txt`
+  - `/tmp/fragile_rpc_leaf_2_6c_iv_d_ii_callshape_profile_300_v1.txt`
+  - `/tmp/fragile_rpc_leaf_2_6c_iv_d_ii_stage_timing_120_v1.txt`
+  - `/tmp/fragile_rpc_leaf_2_6c_iv_d_ii_stage_timing_300_v1.txt`
+- strict build-only replay + inventory non-increase precheck:
+  - run root: `/tmp/fragile_rpc_leaf_2_6c_iv_d_ii_build_only_20260313`
+  - baseline manifest:
+    `/tmp/fragile_rpc_leaf_2_6c_iii_build_only_20260313/rpc_compile_blocker_inventory_manifest.txt`
+- full suites:
+  - `cargo test --workspace --all-targets`
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- strict replay remains `build_timeout` on `src/rrr/base/misc.cpp`.
+- 300s profile checkpoint stays at
+  `codegen_after_template_instantiation_generation`, but pre-boundary profile
+  bytes decreased versus `d.i` capture:
+  - `d.i`: `input_bytes=572172`
+  - `d.ii`: `input_bytes=564725`
+- build-only non-increase precheck remains non-worsening:
+  - `lane_fragilec_class_rank_delta_vs_baseline=0`
+  - `lane_fragilec_e0425_delta_vs_baseline=0`
+  - `lane_fragilec_nonincrease_gate_pass=true`
+  - `nonincrease_gate_pass=true`
+- full-suite status remains baseline:
+  - workspace cargo run retains known baseline (`46` existing `fragile-clang`
+    lib failures, unchanged)
+  - Python suite passes (`29`, skipped `1`)
+
+### Outcome
+
+Leaf `2.6.c.iv.d.ii` is complete. Reopened-namespace top-level emission now
+avoids an avoidable second clone per merged child while preserving behavior.
+Strict replay is still timeout-bound on `misc.cpp`, so the next iteration
+continues from the same blocker class with non-worsening inventory deltas.
