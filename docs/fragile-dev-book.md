@@ -4163,3 +4163,73 @@ Leaf `2.6.c.iv.d.iv.c.iv.a` is complete. Template-definition lookup no longer
 clones heavy definition payloads during high-frequency existence checks, while
 instantiation behavior remains locked by focused regression coverage and full
 suite baseline parity.
+
+## 67. RPC Compile Blocker Leaf 2.6.c.iv.d.iv.c.iv.b: Strict Replay Non-Increase Gate After c.iv.a (2026-03-13)
+
+### Problem
+
+After completing optimization leaf `2.6.c.iv.d.iv.c.iv.a`, the required next
+leaf was deterministic replay/non-increase verification against the
+`2.6.c.iii` blocker baseline.
+
+### Execution Plan
+
+1. Rebuild release `fragilec` to run replay with current source state.
+2. Execute strict single-lane build-only replay for a fresh `c.iv.b` run root.
+3. Enforce blocker inventory non-increase versus
+   `/tmp/fragile_rpc_leaf_2_6c_iii_build_only_20260313/rpc_compile_blocker_inventory_manifest.txt`.
+4. Re-run full suites and require baseline parity.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no target-name conditionals
+- no force-native fallback path
+- no synthetic semantic stubs to produce artificial green status
+- deterministic replay/inventory gating only
+
+### Implementation
+
+No parser/codegen behavior changes were required in this leaf.
+
+Updated artifacts/docs:
+
+- `TODO.md` (`2.6.c.iv.d.iv.c.iv.b` completion evidence)
+- `docs/rpc_compile_blocker_leaf_2_6c_iv_d_iv_c_iv_b_design_2026_03_13.md`
+
+### Validation
+
+Executed:
+
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict python3 scripts/mako_rpcbench_harness.py --run-root /tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_b_build_only_20260313 --lanes fragilec --build-only --jobs 4 --build-timeout-seconds 180`
+- `python3 scripts/mako_rpc_compile_blocker_inventory.py --run-root /tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_b_build_only_20260313 --lanes fragilec --baseline-manifest /tmp/fragile_rpc_leaf_2_6c_iii_build_only_20260313/rpc_compile_blocker_inventory_manifest.txt --enforce-nonincreasing`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- replay status manifest (`/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_b_build_only_20260313/benchmark_harness_manifest.txt`):
+  - `lane_fragilec_configure_status=0`
+  - `lane_fragilec_clean_status=0`
+  - `lane_fragilec_build_status=124`
+  - `lane_fragilec_failure_class=build_timeout`
+  - `no_regression_verdict=not_executed`
+- inventory non-increase manifest (`/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_b_build_only_20260313/rpc_compile_blocker_inventory_manifest.txt`):
+  - `lane_fragilec_first_failing_compile_class=build_timeout`
+  - `lane_fragilec_first_failing_compile_file=src/rrr/base/misc.cpp`
+  - `lane_fragilec_class_rank_delta_vs_baseline=0`
+  - `lane_fragilec_e0425_delta_vs_baseline=0`
+  - `lane_fragilec_nonincrease_gate_pass=true`
+  - `nonincrease_gate_pass=true`
+- full-suite baseline parity:
+  - `cargo test --workspace --all-targets`: `fragile-clang` lib
+    `728` passed / `46` failed (failure count unchanged)
+  - Python suite passes (`29`, skipped `1`)
+
+### Outcome
+
+Leaf `2.6.c.iv.d.iv.c.iv.b` is complete. Post-`c.iv.a` strict replay remains
+`build_timeout` on `src/rrr/base/misc.cpp`, and non-increase gates confirm no
+class-rank or `E0425` regression versus the `2.6.c.iii` baseline.
