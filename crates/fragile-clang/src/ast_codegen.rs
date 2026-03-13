@@ -38358,7 +38358,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
         // call-sites/type uses that appear before template declarations.
         self.collect_template_definitions_with_namespace(children, &[]);
         self.rebuild_fn_template_leaf_index();
-        self.collect_template_usages_with_namespace(children, &[]);
+        self.collect_template_usages(children);
     }
 
     fn rebuild_fn_template_leaf_index(&mut self) {
@@ -38558,23 +38558,24 @@ impl FragileAtomicBoolCompat for atomic_bool {
         }
     }
 
-    /// Collect template instantiation usages with namespace tracking.
-    fn collect_template_usages_with_namespace(
-        &mut self,
-        children: &[ClangNode],
-        namespace_path: &[String],
-    ) {
+    /// Collect template instantiation usages.
+    ///
+    /// Namespace alias registration is already handled by
+    /// `collect_template_definitions_with_namespace` in the same prepass. Keep
+    /// this usage scan namespace-agnostic to avoid per-namespace path cloning
+    /// in the hot traversal.
+    fn collect_template_usages(&mut self, children: &[ClangNode]) {
         for child in children {
             match &child.kind {
                 ClangNodeKind::ClassTemplateDecl { .. }
                 | ClangNodeKind::FunctionTemplateDecl { .. }
                 | ClangNodeKind::RecordDecl { .. }
                 | ClangNodeKind::CompoundStmt => {
-                    self.collect_template_usages_with_namespace(&child.children, namespace_path);
+                    self.collect_template_usages(&child.children);
                 }
                 ClangNodeKind::VarDecl { ty, .. } | ClangNodeKind::FieldDecl { ty, .. } => {
                     self.collect_template_type(ty);
-                    self.collect_template_usages_with_namespace(&child.children, namespace_path);
+                    self.collect_template_usages(&child.children);
                 }
                 ClangNodeKind::FunctionDecl {
                     return_type,
@@ -38585,7 +38586,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
                     for (_, param_ty) in params {
                         self.collect_template_type(param_ty);
                     }
-                    self.collect_template_usages_with_namespace(&child.children, namespace_path);
+                    self.collect_template_usages(&child.children);
                 }
                 ClangNodeKind::CXXMethodDecl {
                     return_type,
@@ -38596,28 +38597,16 @@ impl FragileAtomicBoolCompat for atomic_bool {
                     for (_, param_ty) in params {
                         self.collect_template_type(param_ty);
                     }
-                    self.collect_template_usages_with_namespace(&child.children, namespace_path);
+                    self.collect_template_usages(&child.children);
                 }
                 ClangNodeKind::CallExpr { .. } => {
                     // Check if this is a call to a function template instantiation
                     // by looking at the callee (first child should be DeclRefExpr or ImplicitCastExpr)
                     self.collect_fn_template_instantiation(child);
-                    self.collect_template_usages_with_namespace(&child.children, namespace_path);
-                }
-                ClangNodeKind::NamespaceDecl { name, is_inline } => {
-                    let mut new_path = namespace_path.to_vec();
-                    if let Some(ns_name) = name {
-                        new_path.push(ns_name.clone());
-                        if *is_inline && !namespace_path.is_empty() {
-                            let parent_path = namespace_path.join("::");
-                            let full_path = new_path.join("::");
-                            self.inline_namespace_aliases.insert(parent_path, full_path);
-                        }
-                    }
-                    self.collect_template_usages_with_namespace(&child.children, &new_path);
+                    self.collect_template_usages(&child.children);
                 }
                 _ => {
-                    self.collect_template_usages_with_namespace(&child.children, namespace_path);
+                    self.collect_template_usages(&child.children);
                 }
             }
         }
@@ -111606,6 +111595,97 @@ stream.PutN(c, n);
             indexed.iter().any(|k| k == "rusty::make_shared"),
             "template info collection should index qualified function-template keys by leaf name, got: {:?}",
             indexed
+        );
+    }
+
+    #[test]
+    fn test_collect_template_info_keeps_inline_namespace_alias_for_usage_scan() {
+        let templ_ty = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        let int_ty = CppType::Int { signed: true };
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::NamespaceDecl {
+                        name: Some("std".to_string()),
+                        is_inline: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::NamespaceDecl {
+                            name: Some("__1".to_string()),
+                            is_inline: true,
+                        },
+                        vec![make_node(
+                            ClangNodeKind::ClassTemplateDecl {
+                                name: "Widget".to_string(),
+                                template_params: vec!["T".to_string()],
+                                is_class: false,
+                                parameter_pack_indices: vec![],
+                                requires_clause: None,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::FieldDecl {
+                                    name: "value".to_string(),
+                                    ty: templ_ty,
+                                    is_static: false,
+                                    access: AccessSpecifier::Public,
+                                    bit_field_width: None,
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "use_widget".to_string(),
+                        mangled_name: "use_widget".to_string(),
+                        is_static: false,
+                        return_type: int_ty.clone(),
+                        params: vec![(
+                            "w".to_string(),
+                            CppType::Named("std::Widget<int>".to_string()),
+                        )],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 0,
+                                    cpp_type: Some(int_ty),
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let mut codegen = AstCodeGen::new();
+        codegen.collect_template_info(&ast.children);
+
+        assert_eq!(
+            codegen.inline_namespace_aliases.get("std"),
+            Some(&"std::__1".to_string()),
+            "template-definition precollection should preserve inline namespace alias mapping"
+        );
+        assert!(
+            codegen
+                .pending_template_instantiations
+                .contains("std::Widget<int>"),
+            "template usage scan should resolve std::Widget via inline namespace alias from definition prepass"
         );
     }
 

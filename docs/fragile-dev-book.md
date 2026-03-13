@@ -4899,3 +4899,101 @@ Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.b` is complete. Post-`iii.c.iii.a` strict
 replay remains `build_timeout` on `src/rrr/base/misc.cpp`, and non-increase
 gates confirm no class-rank or `E0425` regression versus the `2.6.c.iii`
 baseline.
+
+## 76. RPC Compile Blocker Leaf 2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.i: Template-Usage Traversal Clone Reduction (2026-03-13)
+
+### Problem
+
+Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.i` required the next bounded generic
+optimization in the pre-`codegen_after_top_level_generation` window.
+
+Template-usage traversal still cloned namespace-path vectors on every namespace
+descent in `collect_template_usages_with_namespace`, even though usage
+collection itself does not consume namespace-path values.
+
+### Execution Plan
+
+1. Replace namespace-path usage traversal with a namespace-agnostic recursive
+   walk.
+2. Keep inline-namespace alias behavior by relying on the template-definition
+   prepass (`collect_template_definitions_with_namespace`) that already records
+   aliases before usage collection starts.
+3. Add focused regressions that lock alias behavior and candidate-lookup
+   coverage.
+4. Re-run strict replay profile captures and full suites for baseline parity.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no target-name-specific branch/hack
+- no force-native fallback path
+- no synthetic semantic fallback/stub behavior
+- generic traversal/data-flow optimization only
+
+### Implementation
+
+Updated:
+
+- `crates/fragile-clang/src/ast_codegen.rs`
+
+Key changes:
+
+- changed `collect_template_info` to use namespace-agnostic
+  `collect_template_usages`.
+- replaced `collect_template_usages_with_namespace` with
+  `collect_template_usages`, removing namespace-path cloning in the hot
+  traversal.
+- retained inline-namespace alias registration in
+  `collect_template_definitions_with_namespace` and added focused coverage to
+  prove usage scan still resolves aliases from definition prepass.
+- added focused regression:
+  - `test_collect_template_info_keeps_inline_namespace_alias_for_usage_scan`
+- preserved candidate-index focused regressions:
+  - `test_collect_template_info_builds_fn_template_leaf_index_for_namespaced_templates`
+  - `test_collect_fn_template_candidate_keys_uses_leaf_index_entries`
+
+Design note:
+
+- `docs/rpc_compile_blocker_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_i_design_2026_03_13.md`
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang test_collect_template_info_builds_fn_template_leaf_index_for_namespaced_templates -- --nocapture`
+- `cargo test -p fragile-clang test_collect_template_info_keeps_inline_namespace_alias_for_usage_scan -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_candidate_keys_uses_leaf_index_entries -- --nocapture`
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_i_callshape_profile_120_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_i_stage_timing_120_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_i_callshape_profile_300_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_i_stage_timing_300_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- 120s profile (`..._callshape_profile_120_v1.txt`):
+  - `status=codegen_after_template_collection`
+  - `status_history=codegen_started,codegen_after_template_collection`
+- 300s profile (`..._callshape_profile_300_v1.txt`):
+  - `status=codegen_after_template_instantiation_generation`
+  - `status_history=codegen_started,codegen_after_template_collection,codegen_after_template_instantiation_generation`
+  - `input_bytes=572773`
+- comparison against prior `iii.c.iii.a` 300s profile (`input_bytes=573159`):
+  - checkpoint bytes are lower by `-386`
+- replay manifest (`/tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313/rpc_compile_blocker_replay_manifest.txt`):
+  - `replay_01_status=124`
+  - `replay_01_timed_out=true`
+  - `replay_01_first_failure_class=build_timeout`
+  - `replay_01_blocker_file=src/rrr/base/misc.cpp`
+- full-suite baseline parity:
+  - `cargo test --workspace --all-targets`: `fragile-clang` lib
+    `735` passed / `46` failed (failure count unchanged)
+  - Python suite passes (`29`, skipped `1`)
+
+### Outcome
+
+Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.i` is complete. Template-usage
+collection now avoids namespace-path cloning while preserving inline-namespace
+alias behavior, with focused regressions and improved timeout checkpoint
+progress markers.
