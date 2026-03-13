@@ -38757,11 +38757,6 @@ impl FragileAtomicBoolCompat for atomic_bool {
             .map(CppType::to_rust_type_str)
             .map(|ty| Self::normalize_template_match_type(&ty))
             .collect();
-        let instantiated_param_types_ref_stripped: Vec<String> =
-            instantiated_param_types_normalized
-                .iter()
-                .map(|ty| Self::strip_template_match_ref_prefix(ty))
-                .collect();
         let instantiated_return_type_normalized =
             Self::normalize_template_match_type(&return_type.as_ref().to_rust_type_str());
 
@@ -38801,17 +38796,14 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 continue;
             }
             let mut param_types_match = true;
-            for ((_, ty), (rhs_norm, rhs_ref_stripped)) in template_info.params.iter().zip(
-                instantiated_param_types_normalized
-                    .iter()
-                    .zip(instantiated_param_types_ref_stripped.iter()),
-            ) {
+            for ((_, ty), rhs_norm) in template_info
+                .params
+                .iter()
+                .zip(instantiated_param_types_normalized.iter())
+            {
                 let lhs = self.substitute_template_type(ty, &subst_map);
                 let lhs_norm = Self::normalize_template_match_type(&lhs);
-                if lhs_norm != "_"
-                    && lhs_norm != *rhs_norm
-                    && Self::strip_template_match_ref_prefix(&lhs_norm) != *rhs_ref_stripped
-                {
+                if !Self::template_match_types_compatible(&lhs_norm, rhs_norm) {
                     param_types_match = false;
                     break;
                 }
@@ -38893,11 +38885,17 @@ impl FragileAtomicBoolCompat for atomic_bool {
         ty.split_whitespace().collect::<String>()
     }
 
-    fn strip_template_match_ref_prefix(ty: &str) -> String {
+    fn strip_template_match_ref_prefix(ty: &str) -> &str {
         ty.strip_prefix("&mut")
             .or_else(|| ty.strip_prefix('&'))
             .unwrap_or(ty)
-            .to_string()
+    }
+
+    fn template_match_types_compatible(lhs_norm: &str, rhs_norm: &str) -> bool {
+        lhs_norm == "_"
+            || lhs_norm == rhs_norm
+            || Self::strip_template_match_ref_prefix(lhs_norm)
+                == Self::strip_template_match_ref_prefix(rhs_norm)
     }
 
     fn build_concrete_fn_template_info(
@@ -111682,6 +111680,23 @@ stream.PutN(c, n);
             AstCodeGen::strip_template_match_ref_prefix(&normalized_ref),
             normalized_value,
             "reference-prefixed normalized types should stay compatible with value lanes after ref-prefix stripping"
+        );
+    }
+
+    #[test]
+    fn test_template_match_types_compatible_handles_ref_prefix_variants() {
+        let value = "std::string::String";
+        assert!(
+            AstCodeGen::template_match_types_compatible("&mutstd::string::String", value),
+            "compatibility check should treat '&mutT' as equivalent to 'T'"
+        );
+        assert!(
+            AstCodeGen::template_match_types_compatible("&std::string::String", value),
+            "compatibility check should treat '&T' as equivalent to 'T'"
+        );
+        assert!(
+            !AstCodeGen::template_match_types_compatible("i32", value),
+            "compatibility check should still reject non-equivalent lanes"
         );
     }
 
