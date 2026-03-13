@@ -3074,3 +3074,68 @@ Updated docs:
 ### Validation
 
 - `cargo test -p fragile-clang test_normalize_known_runtime_path_misresolutions_ -- --nocapture`
+
+## 52. RPC Compile Closure Leaf 2.6.c.i: Fresh Strict Build-Only Baseline Capture (2026-03-13)
+
+### Problem
+
+Task `2.6.c` requires strict `fragilec` build-only compile closure, but it is too broad for one
+bounded implementation because multiple blocker/fix loops may be required before `status=0`.
+
+### Decision
+
+Decompose `2.6.c` into small leaves and execute `2.6.c.i` first:
+
+- capture fresh strict build-only baseline
+- capture deterministic blocker inventory
+- capture top replay baseline for the current first blocker
+
+This produces deterministic artifacts for the next generic fix leaf (`2.6.c.ii`).
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no RPC target-specific conditionals
+- no force-native bypass
+- no semantic stubs/fake method bodies
+- no masked success states
+
+This leaf only captures deterministic artifacts; it does not hide failures.
+
+### Implementation
+
+Updated `TODO.md`:
+
+- decomposed `2.6.c` into `2.6.c.i`..`2.6.c.iv`
+- marked `2.6.c.i` done with evidence
+
+Added design doc:
+
+- `docs/rpc_compile_blocker_leaf_2_6c_i_design_2026_03_13.md`
+
+Executed fresh strict build-only baseline artifacts under:
+
+- `/tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313`
+
+Key captured fields:
+
+- harness manifest:
+  - `lane_fragilec_configure_status=0`
+  - `lane_fragilec_clean_status=0`
+  - `lane_fragilec_build_status=124`
+  - `lane_fragilec_failure_class=build_timeout`
+- inventory manifest:
+  - `lane_fragilec_first_failing_compile_class=build_timeout`
+  - `lane_fragilec_first_failing_compile_file=src/rrr/base/misc.cpp`
+- replay manifest:
+  - `replay_01_blocker_class=build_timeout`
+  - `replay_01_blocker_file=src/rrr/base/misc.cpp`
+  - `replay_01_status=124`
+  - `replay_01_timed_out=true`
+
+### Validation
+
+- `FRAGILEC_MODE=strict python3 scripts/mako_rpcbench_harness.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --build-only --jobs 4 --build-timeout-seconds 180`
+- `python3 scripts/mako_rpc_compile_blocker_inventory.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec`
+- `python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
