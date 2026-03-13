@@ -3997,3 +3997,75 @@ Deterministic evidence highlights:
 Leaf `2.6.c.iv.d.iv.c.ii` is complete. Class-template definition storage now
 avoids redundant pass-2 replacement/cloning while preserving existing
 field-preference semantics under focused regression coverage.
+
+## 65. RPC Compile Blocker Leaf 2.6.c.iv.d.iv.c.iii: Strict Replay Non-Increase Gate After c.ii (2026-03-13)
+
+### Problem
+
+After completing optimization leaf `2.6.c.iv.d.iv.c.ii`, the required next leaf
+was deterministic verification that blocker severity and unresolved-name counts
+did not regress versus the `2.6.c.iii` baseline.
+
+### Execution Plan
+
+1. Rebuild the strict `fragilec` release binary to ensure replay uses latest
+   codegen changes from `c.ii`.
+2. Run a fresh strict single-lane build-only replay and capture deterministic
+   lane status artifacts.
+3. Run blocker inventory with
+   `--baseline-manifest /tmp/fragile_rpc_leaf_2_6c_iii_build_only_20260313/rpc_compile_blocker_inventory_manifest.txt --enforce-nonincreasing`.
+4. Re-run full regression suites and require baseline parity.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no target-name-specific behavior
+- no force-native bypass
+- no fallback semantic stubs to fake pass status
+- deterministic replay/inventory gating only
+
+### Implementation
+
+No parser/codegen behavior changes were required in this leaf.
+
+Updated artifacts/docs:
+
+- `TODO.md` (`2.6.c.iv.d.iv.c.iii` completion evidence)
+- `docs/rpc_compile_blocker_leaf_2_6c_iv_d_iv_c_iii_design_2026_03_13.md`
+
+### Validation
+
+Executed:
+
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict python3 scripts/mako_rpcbench_harness.py --run-root /tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iii_build_only_20260313 --lanes fragilec --build-only --jobs 4 --build-timeout-seconds 180`
+- `python3 scripts/mako_rpc_compile_blocker_inventory.py --run-root /tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iii_build_only_20260313 --lanes fragilec --baseline-manifest /tmp/fragile_rpc_leaf_2_6c_iii_build_only_20260313/rpc_compile_blocker_inventory_manifest.txt --enforce-nonincreasing`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- replay status manifest (`/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iii_build_only_20260313/benchmark_harness_manifest.txt`):
+  - `lane_fragilec_configure_status=0`
+  - `lane_fragilec_clean_status=0`
+  - `lane_fragilec_build_status=124`
+  - `lane_fragilec_failure_class=build_timeout`
+  - `no_regression_verdict=not_executed`
+- inventory non-increase manifest (`/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iii_build_only_20260313/rpc_compile_blocker_inventory_manifest.txt`):
+  - `lane_fragilec_first_failing_compile_class=build_timeout`
+  - `lane_fragilec_first_failing_compile_file=src/rrr/base/misc.cpp`
+  - `lane_fragilec_class_rank_delta_vs_baseline=0`
+  - `lane_fragilec_e0425_delta_vs_baseline=0`
+  - `lane_fragilec_nonincrease_gate_pass=true`
+  - `nonincrease_gate_pass=true`
+- full-suite baseline parity:
+  - `cargo test --workspace --all-targets`: known baseline unchanged
+    (`fragile-clang` lib `727` passed / `46` failed)
+  - Python suite passes (`29`, skipped `1`)
+
+### Outcome
+
+Leaf `2.6.c.iv.d.iv.c.iii` is complete. Post-`c.ii` strict replay remains
+`build_timeout` on `src/rrr/base/misc.cpp`, and non-increase gates confirm no
+class-rank or `E0425` regression versus the `2.6.c.iii` baseline.
