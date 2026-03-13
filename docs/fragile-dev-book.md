@@ -7317,3 +7317,89 @@ is complete. Strict build-only replay remains timeout-bound on
 `src/rrr/base/misc.cpp`, and non-increase gating remains green versus
 `2.6.c.iii` baseline. Next leaf is the repeat node
 `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c`.
+
+## 106. RPC Compile Blocker Leaf 2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.a: First-Position Template Param Inference Hot-Path Optimization (2026-03-13)
+
+### Problem
+
+`infer_fn_template_type_args` still performed per-template-parameter small
+vector allocation/scanning (`Vec<Vec<usize>>`) to track parameter positions and
+materialized a fallback return-type string unconditionally. This path runs in a
+high-frequency checkpoint window before `codegen_after_top_level_generation`.
+
+### Execution Plan
+
+1. Replace per-template-parameter position vectors with first-position tracking.
+2. Preserve current first-match inference semantics explicitly.
+3. Materialize fallback return-type string lazily only when needed.
+4. Add focused regression coverage for repeated template-param position behavior.
+5. Re-run targeted tests, strict replay profiling captures, and full suites.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no RPC target-name conditionals
+- no force-native bypasses
+- no synthesized semantic stubs
+- no fallback-body fakery
+
+### Implementation
+
+Updated `crates/fragile-clang/src/ast_codegen.rs`:
+
+- `infer_fn_template_type_args` now precomputes
+  `template_param_first_param_positions: Vec<Option<usize>>` instead of
+  `Vec<Vec<usize>>`.
+- Switched per-template inference to direct first-position lookup.
+- Kept non-type candidate logic intact (`first_param_position.is_none()`).
+- Replaced eager `fallback_return_ty` with lazy `Option<String>` cached on
+  demand.
+- Added regression:
+  - `test_function_template_type_arg_inference_prefers_first_param_position_for_repeated_template_param`
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang test_function_template_type_arg_inference_prefers_first_param_position_for_repeated_template_param -- --nocapture`
+- `cargo test -p fragile-clang test_function_template_type_arg_inference_tracks_multiple_template_param_positions -- --nocapture`
+- `cargo test -p fragile-clang test_function_template_type_arg_inference_uses_template_dependent_param_not_first_param -- --nocapture`
+- `cargo test -p fragile-clang test_function_template_type_arg_inference_nttp_array_ref_uses_literal_bound -- --nocapture`
+- `cargo test -p fragile-clang test_function_template_type_arg_inference_nttp_array_ref_accepts_canonicalized_nested_pointer_element_spelling -- --nocapture`
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_c_c_a_callshape_profile_120_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_c_c_a_stage_timing_120_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_c_c_a_callshape_profile_300_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_c_c_a_stage_timing_300_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- 120s profile:
+  - `status=codegen_after_template_collection`
+  - `status_history=codegen_started,codegen_after_template_collection`
+- 300s profile:
+  - `status=codegen_after_template_instantiation_generation`
+  - `status_history=codegen_started,codegen_after_template_collection,codegen_after_template_instantiation_generation`
+  - `input_bytes=565340`
+- replay manifest (`/tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313/rpc_compile_blocker_replay_manifest.txt`):
+  - `replay_01_status=124`
+  - `replay_01_timed_out=true`
+  - `replay_01_first_failure_class=build_timeout`
+  - `replay_01_blocker_file=src/rrr/base/misc.cpp`
+- comparison vs prior leaf
+  (`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.a`,
+  `input_bytes=567404`):
+  - delta `-2064`
+- full-suite baseline parity:
+  - `cargo test --workspace --all-targets`: `fragile-clang` lib
+    `750` passed / `46` failed (failure count unchanged)
+  - Python suite: `OK`, `29` ran, `1` skipped
+
+### Outcome
+
+Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.a`
+is complete. Template inference now keeps first-match semantics with fewer
+allocations/scans and lazy fallback string generation. Strict replay remains
+timeout-bound on `src/rrr/base/misc.cpp`; next leaf is the paired gate
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.b`.

@@ -78118,7 +78118,7 @@ fn infer_fn_template_type_args(
         .params
         .iter()
         .any(|(_, pattern_ty)| has_unsized_array_ref_pattern(pattern_ty));
-    let template_param_param_positions: Vec<Vec<usize>> = template_info
+    let template_param_first_param_positions: Vec<Option<usize>> = template_info
         .template_params
         .iter()
         .map(|template_param_name| {
@@ -78126,11 +78126,10 @@ fn infer_fn_template_type_args(
                 .params
                 .iter()
                 .enumerate()
-                .filter_map(|(param_idx, (_, pattern_ty))| {
+                .find_map(|(param_idx, (_, pattern_ty))| {
                     cpp_type_contains_template_param(pattern_ty, template_param_name)
                         .then_some(param_idx)
                 })
-                .collect()
         })
         .collect();
     let template_param_appears_in_return: Vec<bool> = template_info
@@ -78142,11 +78141,11 @@ fn infer_fn_template_type_args(
         .collect();
     let has_non_type_param_candidate =
         has_unsized_array_ref_param
-            && template_param_param_positions
+            && template_param_first_param_positions
                 .iter()
                 .zip(template_param_appears_in_return.iter())
-                .any(|(param_positions, appears_in_return)| {
-                    param_positions.is_empty() && !*appears_in_return
+                .any(|(first_param_position, appears_in_return)| {
+                    first_param_position.is_none() && !*appears_in_return
                 });
     let inferred_non_type_array_ref_arg = if has_non_type_param_candidate {
         template_info
@@ -78161,28 +78160,24 @@ fn infer_fn_template_type_args(
     } else {
         None
     };
-    let fallback_return_ty = instantiated_return_type.to_rust_type_str();
+    let mut fallback_return_ty: Option<String> = None;
 
     let mut type_args = Vec::with_capacity(template_info.template_params.len());
     for (idx, template_param_name) in template_info.template_params.iter().enumerate() {
-        let param_positions = &template_param_param_positions[idx];
-        let appears_in_params = !param_positions.is_empty();
+        let first_param_position = template_param_first_param_positions[idx];
+        let appears_in_params = first_param_position.is_some();
         let appears_in_return = template_param_appears_in_return[idx];
         let appears_in_type_positions = appears_in_params || appears_in_return;
         let non_type_param_candidate = !appears_in_type_positions && has_unsized_array_ref_param;
-        let mut inferred = if appears_in_params {
-            param_positions.iter().find_map(|param_idx| {
-                let instantiated_ty = instantiated_params.get(*param_idx)?;
-                let (_, pattern_ty) = template_info.params.get(*param_idx)?;
-                Some(extract_template_arg(
-                    pattern_ty,
-                    instantiated_ty,
-                    template_param_name,
-                ))
-            })
-        } else {
-            None
-        };
+        let mut inferred = first_param_position.and_then(|param_idx| {
+            let instantiated_ty = instantiated_params.get(param_idx)?;
+            let (_, pattern_ty) = template_info.params.get(param_idx)?;
+            Some(extract_template_arg(
+                pattern_ty,
+                instantiated_ty,
+                template_param_name,
+            ))
+        });
 
         if inferred.is_none() && non_type_param_candidate {
             inferred = inferred_non_type_array_ref_arg.clone();
@@ -78215,7 +78210,11 @@ fn infer_fn_template_type_args(
             inferred = Some(fallback_ty.to_rust_type_str());
         }
 
-        type_args.push(inferred.unwrap_or_else(|| fallback_return_ty.clone()));
+        type_args.push(inferred.unwrap_or_else(|| {
+            fallback_return_ty
+                .get_or_insert_with(|| instantiated_return_type.to_rust_type_str())
+                .clone()
+        }));
     }
 
     Some(type_args)
@@ -78911,6 +78910,39 @@ mod tests {
             inferred,
             vec!["i64".to_string(), "f64".to_string()],
             "template args should infer from their matching parameter positions without fallback leakage"
+        );
+    }
+
+    #[test]
+    fn test_function_template_type_arg_inference_prefers_first_param_position_for_repeated_template_param(
+    ) {
+        let template_ty = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        let template_info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Bool,
+            params: vec![
+                ("lhs".to_string(), template_ty.clone()),
+                ("rhs".to_string(), template_ty),
+            ],
+            body: None,
+            is_noexcept: false,
+        };
+        let instantiated_params = vec![CppType::Int { signed: true }, CppType::Double];
+        let inferred = infer_fn_template_type_args(
+            &template_info,
+            &instantiated_params,
+            &CppType::Bool,
+            None,
+        )
+        .expect("inference should succeed when template param appears in multiple param positions");
+        assert_eq!(
+            inferred,
+            vec!["i32".to_string()],
+            "template arg inference should keep first-appearance matching semantics for repeated template params"
         );
     }
 
