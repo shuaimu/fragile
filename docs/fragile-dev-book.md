@@ -5694,3 +5694,103 @@ Checked against Section 1.3 and `docs/dev/wrong.md`:
 Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.ii` is complete. Strict
 replay remains timeout-bound on `src/rrr/base/misc.cpp`, and non-increase gates
 confirm no class-rank or `E0425` regression versus the `2.6.c.iii` baseline.
+
+## 86. RPC Compile Blocker Leaf 2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.a: Reuse CallExpr Arg Slice and Sanitized Callee Name in Function-Template Candidate Scan (2026-03-13)
+
+### Problem
+
+After completing gate leaf
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.ii`, the next open node was
+repeat leaf `...c.iii`, which is too broad for a single bounded iteration.
+
+It was decomposed into:
+
+- `...c.iii.a` optimization
+- `...c.iii.b` strict replay + non-increase gate
+- `...c.iii.c` repeat loop
+
+For `...c.iii.a`, `collect_fn_template_instantiation` still rebuilt
+`CallExpr` argument-node vectors and re-sanitized callee names for each
+candidate template key, which is avoidable per-candidate churn in the
+`codegen_after_template_instantiation_generation` hot window.
+
+### Execution Plan
+
+1. Precompute `call_args` once per call-site and reuse across candidate scans.
+2. Precompute sanitized callee name once and reuse for mangled instantiation
+   names.
+3. Mirror the same sanitized-name reuse in
+   `resolve_fn_template_call_name_from_args`.
+4. Add focused regression for candidate fallback semantics.
+5. Capture deterministic strict replay profile/timing evidence.
+6. Re-run full suites and require baseline parity.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no RPC-target-specific branching
+- no force-native fallback usage
+- no fake semantic stubs
+- generic codegen hot-path reduction only
+
+### Implementation
+
+Updated:
+
+- `crates/fragile-clang/src/ast_codegen.rs`
+
+Key changes:
+
+- `collect_fn_template_instantiation` now:
+  - computes `call_args` once before candidate iteration
+  - computes sanitized callee name once before candidate iteration
+  - reuses both values across candidate scans
+- `resolve_fn_template_call_name_from_args` now reuses one precomputed
+  sanitized callee name for candidate mangled-name probes.
+
+Focused regression added:
+
+- `test_collect_fn_template_instantiation_uses_leaf_index_candidate_after_mismatch`
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_uses_leaf_index_candidate_after_mismatch -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_candidate_keys_uses_leaf_index_entries -- --nocapture`
+- `cargo test -p fragile-clang test_template_match_type_normalization_preserves_ref_prefix_compatibility -- --nocapture`
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_a_callshape_profile_120_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_a_stage_timing_120_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_a_callshape_profile_300_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_a_stage_timing_300_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- 120s profile:
+  - `status=codegen_after_template_collection`
+  - `status_history=codegen_started,codegen_after_template_collection`
+- 300s profile:
+  - `status=codegen_after_template_instantiation_generation`
+  - `status_history=codegen_started,codegen_after_template_collection,codegen_after_template_instantiation_generation`
+  - `input_bytes=574217`
+- comparison vs prior leaf `...c.iii.c.iii.c.iii.c.iii.c.i`
+  (`input_bytes=573750`):
+  - checkpoint bytes increased by `+467`
+- replay manifest (`/tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313/rpc_compile_blocker_replay_manifest.txt`):
+  - `replay_01_status=124`
+  - `replay_01_timed_out=true`
+  - `replay_01_first_failure_class=build_timeout`
+  - `replay_01_blocker_file=src/rrr/base/misc.cpp`
+- full-suite baseline parity:
+  - `cargo test --workspace --all-targets`: `fragile-clang` lib
+    `740` passed / `46` failed (failure count unchanged)
+  - Python suite: `OK`, `29` ran, `1` skipped
+
+### Outcome
+
+Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.a` is complete.
+Function-template candidate scans now avoid per-candidate `call_args` rebuild
+and callee-name sanitization churn while preserving candidate fallback
+semantics. Strict replay remains timeout-bound on `src/rrr/base/misc.cpp`.

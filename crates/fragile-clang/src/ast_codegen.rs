@@ -38744,6 +38744,8 @@ impl FragileAtomicBoolCompat for atomic_bool {
         };
 
         let candidate_keys = self.collect_fn_template_candidate_keys(fn_name, namespace_path);
+        let call_args: Vec<&ClangNode> = call_node.children.iter().skip(1).collect();
+        let sanitized_fn_name = sanitize_identifier(fn_name);
         let mut selected_instantiation: Option<(String, String, Vec<String>)> = None;
         let mut fallback_instantiation: Option<(String, String, Vec<String>)> = None;
         let instantiated_param_types_normalized: Vec<String> = params
@@ -38766,7 +38768,6 @@ impl FragileAtomicBoolCompat for atomic_bool {
             // Build type substitution map by comparing template param patterns with instantiated types.
             // For example, if template has (T* a, T* b) and instantiated is (int*, int*),
             // we need to extract T = int, not T = int*.
-            let call_args: Vec<&ClangNode> = call_node.children.iter().skip(1).collect();
             let Some(type_args) = infer_fn_template_type_args(
                 template_info,
                 params,
@@ -38781,7 +38782,6 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 .map(|a| sanitize_type_for_fn_name(a))
                 .collect();
             // Sanitize function name (handles operator"" user-defined literals).
-            let sanitized_fn_name = sanitize_identifier(fn_name);
             let mangled_name = format!("{}_{}", sanitized_fn_name, sanitized_args.join("_"));
 
             let has_param_dependent_template_arg =
@@ -38987,6 +38987,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
         };
 
         let candidate_keys = self.collect_fn_template_candidate_keys(fn_name, namespace_path);
+        let sanitized_fn_name = sanitize_identifier(fn_name);
 
         let call_args: Vec<&ClangNode> = call_arg_nodes.iter().collect();
         for template_key in candidate_keys {
@@ -39005,11 +39006,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 .iter()
                 .map(|a| sanitize_type_for_fn_name(a))
                 .collect();
-            let mangled_name = format!(
-                "{}_{}",
-                sanitize_identifier(fn_name),
-                sanitized_args.join("_")
-            );
+            let mangled_name = format!("{}_{}", sanitized_fn_name, sanitized_args.join("_"));
             let sanitized_mangled = sanitize_identifier(&mangled_name);
             if self.pending_fn_instantiations.contains_key(&mangled_name)
                 || self.generated_functions.contains_key(&sanitized_mangled)
@@ -111935,6 +111932,122 @@ stream.PutN(c, n);
         assert!(
             candidate_set.contains("std::make_shared"),
             "candidate key collection should include all qualified keys sharing leaf name"
+        );
+    }
+
+    #[test]
+    fn test_collect_fn_template_instantiation_uses_leaf_index_candidate_after_mismatch() {
+        let templ_ty = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        let int_ty = CppType::Int { signed: true };
+        let call_fn_ty = CppType::Function {
+            return_type: Box::new(int_ty.clone()),
+            params: vec![int_ty.clone()],
+            is_variadic: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::FunctionTemplateDecl {
+                        name: "make".to_string(),
+                        template_params: vec!["T".to_string()],
+                        return_type: templ_ty.clone(),
+                        params: vec![
+                            ("lhs".to_string(), templ_ty.clone()),
+                            ("rhs".to_string(), templ_ty.clone()),
+                        ],
+                        is_definition: true,
+                        parameter_pack_indices: vec![],
+                        requires_clause: None,
+                        is_noexcept: false,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::NamespaceDecl {
+                        name: Some("rusty".to_string()),
+                        is_inline: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::FunctionTemplateDecl {
+                            name: "make".to_string(),
+                            template_params: vec!["T".to_string()],
+                            return_type: templ_ty.clone(),
+                            params: vec![("value".to_string(), templ_ty)],
+                            is_definition: true,
+                            parameter_pack_indices: vec![],
+                            requires_clause: None,
+                            is_noexcept: false,
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "call_make".to_string(),
+                        mangled_name: "call_make".to_string(),
+                        is_static: false,
+                        return_type: int_ty.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: int_ty.clone(),
+                                    template_instantiation: None,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "make".to_string(),
+                                            ty: call_fn_ty,
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::IntegerLiteral {
+                                            value: 7,
+                                            cpp_type: Some(int_ty),
+                                        },
+                                        vec![],
+                                    ),
+                                ],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let mut codegen = AstCodeGen::new();
+        codegen.collect_template_info(&ast.children);
+        let pending = codegen
+            .pending_fn_instantiations
+            .get("make_i32")
+            .cloned()
+            .expect("call-site template collection should record concrete make<i32> instantiation");
+        assert_eq!(
+            pending.0, "rusty::make",
+            "candidate matching should skip incompatible unqualified template and use qualified leaf-index candidate"
+        );
+        assert_eq!(
+            pending.1,
+            vec!["i32".to_string()],
+            "selected candidate should preserve inferred concrete type arguments"
         );
     }
 
