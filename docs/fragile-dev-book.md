@@ -3634,3 +3634,69 @@ Leaf `2.6.c.iv.d.ii` is complete. Reopened-namespace top-level emission now
 avoids an avoidable second clone per merged child while preserving behavior.
 Strict replay is still timeout-bound on `misc.cpp`, so the next iteration
 continues from the same blocker class with non-worsening inventory deltas.
+
+## 60. RPC Compile Blocker Leaf 2.6.c.iv.d.iii: Strict Replay Non-Increase Gate After iv.d.ii (2026-03-13)
+
+### Problem
+
+After completing `2.6.c.iv.d.ii`, the next required closure leaf was to verify
+that strict build-only replay stayed non-worsening versus the
+`2.6.c.iii` baseline before proceeding to another optimization iteration.
+
+### Decision
+
+Run a fresh strict build-only replay on current HEAD and enforce blocker
+inventory non-increase against the `2.6.c.iii` baseline manifest.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no target-name-specific workaround
+- no force-native escape hatch
+- no fake semantic body generation
+- deterministic replay/inventory validation only
+
+### Implementation
+
+No parser/codegen behavior changes were needed for this leaf.
+
+Updated artifacts/docs:
+
+- `TODO.md` (`2.6.c.iv.d.iii` completion evidence)
+- `docs/rpc_compile_blocker_leaf_2_6c_iv_d_iii_design_2026_03_13.md`
+
+### Validation
+
+Executed:
+
+- `FRAGILEC_MODE=strict python3 scripts/mako_rpcbench_harness.py --run-root /tmp/fragile_rpc_leaf_2_6c_iv_d_iii_build_only_20260313 --lanes fragilec --build-only --jobs 4 --build-timeout-seconds 180`
+- `python3 scripts/mako_rpc_compile_blocker_inventory.py --run-root /tmp/fragile_rpc_leaf_2_6c_iv_d_iii_build_only_20260313 --lanes fragilec --baseline-manifest /tmp/fragile_rpc_leaf_2_6c_iii_build_only_20260313/rpc_compile_blocker_inventory_manifest.txt --enforce-nonincreasing`
+- full suites:
+  - `cargo test --workspace --all-targets`
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- replay status manifest (`/tmp/fragile_rpc_leaf_2_6c_iv_d_iii_build_only_20260313/benchmark_harness_manifest.txt`):
+  - `lane_fragilec_configure_status=0`
+  - `lane_fragilec_clean_status=0`
+  - `lane_fragilec_build_status=124`
+  - `lane_fragilec_failure_class=build_timeout`
+- non-increase inventory manifest (`/tmp/fragile_rpc_leaf_2_6c_iv_d_iii_build_only_20260313/rpc_compile_blocker_inventory_manifest.txt`):
+  - `lane_fragilec_first_failing_compile_class=build_timeout`
+  - `lane_fragilec_first_failing_compile_file=src/rrr/base/misc.cpp`
+  - `lane_fragilec_class_rank_delta_vs_baseline=0`
+  - `lane_fragilec_e0425_delta_vs_baseline=0`
+  - `lane_fragilec_nonincrease_gate_pass=true`
+  - `nonincrease_gate_pass=true`
+- full-suite status remains baseline:
+  - workspace cargo run retains known baseline (`46` existing `fragile-clang`
+    lib failures, unchanged)
+  - Python suite passes (`29`, skipped `1`)
+
+### Outcome
+
+Leaf `2.6.c.iv.d.iii` is complete. Post-`d.ii` strict replay remains
+timeout-bound on `src/rrr/base/misc.cpp`, with blocker class and E0425 deltas
+non-worsening versus the `2.6.c.iii` baseline.
