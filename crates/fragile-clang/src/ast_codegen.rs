@@ -1197,6 +1197,9 @@ pub struct AstCodeGen {
     pending_template_instantiations: HashSet<String>,
     /// Function template definitions: template name -> (template params, return_type, params, body_node)
     fn_template_definitions: HashMap<String, FnTemplateInfo>,
+    /// Function-template keys indexed by unqualified leaf name to avoid scanning
+    /// the full definition map for every call-site candidate lookup.
+    fn_template_keys_by_leaf: HashMap<String, Vec<String>>,
     /// Pending function template instantiations: mangled name (e.g., "add_i32") -> (template_name, type_args)
     pending_fn_instantiations: HashMap<String, (String, Vec<String>, FnTemplateInfo)>,
     /// Class names for which we should skip vtable constant generation
@@ -1373,6 +1376,7 @@ impl AstCodeGen {
             template_definitions: HashMap::new(),
             pending_template_instantiations: HashSet::new(),
             fn_template_definitions: HashMap::new(),
+            fn_template_keys_by_leaf: HashMap::new(),
             pending_fn_instantiations: HashMap::new(),
             skip_vtable_generation: HashSet::new(),
             va_list_mapping: None,
@@ -38353,7 +38357,58 @@ impl FragileAtomicBoolCompat for atomic_bool {
         // Precollect definitions first so a single usage pass can resolve
         // call-sites/type uses that appear before template declarations.
         self.collect_template_definitions_with_namespace(children, &[]);
+        self.rebuild_fn_template_leaf_index();
         self.collect_template_usages_with_namespace(children, &[]);
+    }
+
+    fn rebuild_fn_template_leaf_index(&mut self) {
+        self.fn_template_keys_by_leaf.clear();
+        for key in self.fn_template_definitions.keys() {
+            let leaf = key.rsplit("::").next().unwrap_or(key).to_string();
+            self.fn_template_keys_by_leaf
+                .entry(leaf)
+                .or_default()
+                .push(key.clone());
+        }
+        for keys in self.fn_template_keys_by_leaf.values_mut() {
+            keys.sort();
+            keys.dedup();
+        }
+    }
+
+    fn collect_fn_template_candidate_keys(
+        &self,
+        fn_name: &str,
+        namespace_path: &[String],
+    ) -> Vec<String> {
+        let mut candidate_keys: Vec<String> = Vec::new();
+        let mut seen_keys: HashSet<String> = HashSet::new();
+        let mut push_candidate = |key: String| {
+            if !key.is_empty() && seen_keys.insert(key.clone()) {
+                candidate_keys.push(key);
+            }
+        };
+
+        if !namespace_path.is_empty() {
+            push_candidate(format!("{}::{}", namespace_path.join("::"), fn_name));
+        }
+        push_candidate(fn_name.to_string());
+
+        if let Some(qualified_keys) = self.fn_template_keys_by_leaf.get(fn_name) {
+            for key in qualified_keys {
+                push_candidate(key.clone());
+            }
+        } else {
+            // Fallback for call paths that bypass collect_template_info in tests.
+            let qualified_suffix = format!("::{}", fn_name);
+            for key in self.fn_template_definitions.keys() {
+                if key.ends_with(&qualified_suffix) {
+                    push_candidate(key.clone());
+                }
+            }
+        }
+
+        candidate_keys
     }
 
     fn class_template_children_have_fields(children: &[ClangNode]) -> bool {
@@ -38653,27 +38708,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
             return;
         };
 
-        let mut candidate_keys: Vec<String> = Vec::new();
-        let mut seen_keys: HashSet<String> = HashSet::new();
-        let mut push_candidate = |key: String| {
-            if !key.is_empty() && seen_keys.insert(key.clone()) {
-                candidate_keys.push(key);
-            }
-        };
-
-        // Prefer explicit namespace qualification first when available.
-        if !namespace_path.is_empty() {
-            push_candidate(format!("{}::{}", namespace_path.join("::"), fn_name));
-        }
-        // Then try the unqualified name.
-        push_candidate(fn_name.clone());
-        // Finally consider any qualified definitions with the same leaf name.
-        let qualified_suffix = format!("::{}", fn_name);
-        for key in self.fn_template_definitions.keys() {
-            if key.ends_with(&qualified_suffix) {
-                push_candidate(key.clone());
-            }
-        }
+        let candidate_keys = self.collect_fn_template_candidate_keys(fn_name, namespace_path);
         let mut selected_instantiation: Option<(String, (String, Vec<String>, FnTemplateInfo))> =
             None;
         let mut fallback_instantiation: Option<(String, (String, Vec<String>, FnTemplateInfo))> =
@@ -38889,23 +38924,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
             return None;
         };
 
-        let mut candidate_keys: Vec<String> = Vec::new();
-        let mut seen_keys: HashSet<String> = HashSet::new();
-        let mut push_candidate = |key: String| {
-            if !key.is_empty() && seen_keys.insert(key.clone()) {
-                candidate_keys.push(key);
-            }
-        };
-        if !namespace_path.is_empty() {
-            push_candidate(format!("{}::{}", namespace_path.join("::"), fn_name));
-        }
-        push_candidate(fn_name.clone());
-        let qualified_suffix = format!("::{}", fn_name);
-        for key in self.fn_template_definitions.keys() {
-            if key.ends_with(&qualified_suffix) {
-                push_candidate(key.clone());
-            }
-        }
+        let candidate_keys = self.collect_fn_template_candidate_keys(fn_name, namespace_path);
 
         let call_args: Vec<&ClangNode> = call_arg_nodes.iter().collect();
         for template_key in candidate_keys {
@@ -111548,6 +111567,82 @@ stream.PutN(c, n);
         assert!(
             codegen.pending_fn_instantiations.is_empty(),
             "current pending function instantiations should be consumed without clone-backed staging"
+        );
+    }
+
+    #[test]
+    fn test_collect_template_info_builds_fn_template_leaf_index_for_namespaced_templates() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::NamespaceDecl {
+                    name: Some("rusty".to_string()),
+                    is_inline: false,
+                },
+                vec![make_node(
+                    ClangNodeKind::FunctionTemplateDecl {
+                        name: "make_shared".to_string(),
+                        template_params: vec!["T".to_string()],
+                        return_type: CppType::Named("T".to_string()),
+                        params: vec![],
+                        is_definition: true,
+                        parameter_pack_indices: vec![],
+                        requires_clause: None,
+                        is_noexcept: false,
+                    },
+                    vec![],
+                )],
+            )],
+        );
+
+        let mut codegen = AstCodeGen::new();
+        codegen.collect_template_info(&ast.children);
+        let indexed = codegen
+            .fn_template_keys_by_leaf
+            .get("make_shared")
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            indexed.iter().any(|k| k == "rusty::make_shared"),
+            "template info collection should index qualified function-template keys by leaf name, got: {:?}",
+            indexed
+        );
+    }
+
+    #[test]
+    fn test_collect_fn_template_candidate_keys_uses_leaf_index_entries() {
+        let mut codegen = AstCodeGen::new();
+        let info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Named("T".to_string()),
+            params: vec![],
+            body: None,
+            is_noexcept: false,
+        };
+        codegen
+            .fn_template_definitions
+            .insert("make_shared".to_string(), info.clone());
+        codegen
+            .fn_template_definitions
+            .insert("rusty::make_shared".to_string(), info.clone());
+        codegen
+            .fn_template_definitions
+            .insert("std::make_shared".to_string(), info);
+        codegen.rebuild_fn_template_leaf_index();
+
+        let candidates = codegen.collect_fn_template_candidate_keys("make_shared", &[]);
+        let candidate_set: std::collections::HashSet<String> = candidates.into_iter().collect();
+        assert!(
+            candidate_set.contains("make_shared"),
+            "candidate key collection should include unqualified template key"
+        );
+        assert!(
+            candidate_set.contains("rusty::make_shared"),
+            "candidate key collection should include qualified keys from leaf index"
+        );
+        assert!(
+            candidate_set.contains("std::make_shared"),
+            "candidate key collection should include all qualified keys sharing leaf name"
         );
     }
 

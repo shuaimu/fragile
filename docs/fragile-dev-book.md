@@ -4726,3 +4726,104 @@ Deterministic evidence highlights:
 Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.ii` is complete. Post-`iii.c.i` strict replay
 remains `build_timeout` on `src/rrr/base/misc.cpp`, and non-increase gates
 confirm no class-rank or `E0425` regression versus the `2.6.c.iii` baseline.
+
+## 74. RPC Compile Blocker Leaf 2.6.c.iv.d.iv.c.iv.c.iii.c.iii.a: Function-Template Candidate Lookup Indexing (2026-03-13)
+
+### Problem
+
+Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.a` required the next bounded generic
+optimization in the pre-`codegen_after_top_level_generation` window.
+
+In this path, function-template call resolution repeatedly scanned all
+`fn_template_definitions` keys to find qualified candidates with the same leaf
+name (`::<fn_name>` suffix), and this scan occurred for each candidate lookup
+in:
+
+- `collect_fn_template_instantiation`
+- `resolve_fn_template_call_name_from_args`
+
+### Execution Plan
+
+1. Add a reusable index from unqualified function-template leaf name to known
+   definition keys.
+2. Rebuild the index once after template definition collection.
+3. Route both candidate-lookup call paths through a shared helper that uses
+   the index (with compatibility fallback when index data is unavailable).
+4. Add focused regressions for index construction and candidate coverage.
+5. Re-run strict replay profile captures and full suites for baseline parity.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no target-name-specific branch/hack
+- no force-native fallback path
+- no synthetic semantic fallback/stub behavior
+- generic lookup/index optimization only
+
+### Implementation
+
+Updated:
+
+- `crates/fragile-clang/src/ast_codegen.rs`
+
+Key changes:
+
+- added `fn_template_keys_by_leaf: HashMap<String, Vec<String>>` to `AstCodeGen`.
+- added `rebuild_fn_template_leaf_index` and invoked it in `collect_template_info`
+  immediately after template-definition precollection.
+- added shared `collect_fn_template_candidate_keys` helper for function-template
+  candidate resolution.
+- replaced duplicated candidate-key construction in
+  `collect_fn_template_instantiation` and
+  `resolve_fn_template_call_name_from_args` with the shared helper.
+- preserved compatibility for direct-test call paths by keeping fallback scan
+  behavior when no indexed leaf entry is present.
+- added focused regressions:
+  - `test_collect_template_info_builds_fn_template_leaf_index_for_namespaced_templates`
+  - `test_collect_fn_template_candidate_keys_uses_leaf_index_entries`
+
+Design note:
+
+- `docs/rpc_compile_blocker_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_a_design_2026_03_13.md`
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang test_collect_template_info_builds_fn_template_leaf_index_for_namespaced_templates -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_candidate_keys_uses_leaf_index_entries -- --nocapture`
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_a_callshape_profile_120_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_a_stage_timing_120_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_a_callshape_profile_300_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_a_stage_timing_300_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- 120s profile (`..._callshape_profile_120_v1.txt`):
+  - `status=codegen_started`
+  - `status_history=codegen_started`
+- 300s profile (`..._callshape_profile_300_v1.txt`):
+  - `status=codegen_after_template_instantiation_generation`
+  - `status_history=codegen_started,codegen_after_template_collection,codegen_after_template_instantiation_generation`
+  - `input_bytes=573159`
+- comparison against prior `iii.c.i` 300s profile (`input_bytes=568059`):
+  - checkpoint bytes are higher by `+5100` (no measured replay advancement)
+- replay manifest (`/tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313/rpc_compile_blocker_replay_manifest.txt`):
+  - `replay_01_status=124`
+  - `replay_01_timed_out=true`
+  - `replay_01_first_failure_class=build_timeout`
+  - `replay_01_blocker_file=src/rrr/base/misc.cpp`
+- full-suite baseline parity:
+  - `cargo test --workspace --all-targets`: `fragile-clang` lib
+    `734` passed / `46` failed (failure count unchanged)
+  - Python suite passes (`29`, skipped `1`)
+
+### Outcome
+
+Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.a` is complete. Function-template
+candidate lookup now uses precomputed leaf-name indexing rather than repeated
+full-map scans in the common path, with focused regressions. Strict replay
+remains timeout-bound on `src/rrr/base/misc.cpp` with no measured checkpoint
+advancement from this leaf alone.
