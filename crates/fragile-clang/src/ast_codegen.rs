@@ -24575,6 +24575,22 @@ impl AstCodeGen {
 
     /// Generate Rust source code from a Clang AST.
     pub fn generate(mut self, ast: &ClangNode) -> String {
+        let problematic_callshape_profile_path = Self::problematic_callshape_profile_output_path();
+        if let Some(path) = problematic_callshape_profile_path.as_deref() {
+            Self::write_problematic_callshape_profile(
+                path,
+                "codegen_started",
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            );
+        }
         // First pass: collect polymorphic class information
         if let ClangNodeKind::TranslationUnit = &ast.kind {
             self.collect_polymorphic_info(&ast.children);
@@ -24713,6 +24729,21 @@ impl AstCodeGen {
         self.generate_void_placeholder_stubs();
 
         let mut output = self.output;
+        if let Some(path) = problematic_callshape_profile_path.as_deref() {
+            Self::write_problematic_callshape_profile(
+                path,
+                "not_invoked",
+                output.len(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            );
+        }
         let degraded_fallback_enabled = std::env::var_os("FRAGILE_ENABLE_DEGRADED_FALLBACK")
             .is_some();
         // Byte string literals are immutable; `.as_mut_ptr()` on them is invalid in Rust.
@@ -25197,6 +25228,21 @@ impl AstCodeGen {
         output = Self::normalize_unit_placeholder_expression_artifacts(&output);
         output = Self::normalize_out_of_range_i8_literal_casts(&output);
         output = Self::normalize_placeholder_local_cast_returns(&output);
+        if let Some(path) = problematic_callshape_profile_path.as_deref() {
+            Self::write_problematic_callshape_profile(
+                path,
+                "invoking",
+                output.len(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            );
+        }
         output = Self::normalize_problematic_callshape_artifacts(&output);
         output = Self::normalize_degenerate_loop_guard_identifier_statements(&output);
         output = Self::normalize_bind_null_pointer_arguments(&output);
@@ -30381,6 +30427,56 @@ impl FragileAtomicBoolCompat for atomic_bool {
         .any(|needle| line.contains(needle))
     }
 
+    fn problematic_callshape_profile_output_path() -> Option<std::path::PathBuf> {
+        let raw = std::env::var_os("FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH")?;
+        let candidate = std::path::PathBuf::from(raw);
+        if candidate.as_os_str().is_empty() {
+            return None;
+        }
+        Some(candidate)
+    }
+
+    fn write_problematic_callshape_profile(
+        path: &std::path::Path,
+        status: &str,
+        input_bytes: usize,
+        output_bytes: usize,
+        total_lines: usize,
+        bulk_rewrite_candidate_lines: usize,
+        rewritten_lines: usize,
+        static_clone_rewrite_lines: usize,
+        vtable_ptr_rewrite_lines: usize,
+        vtable_null_cast_rewrite_lines: usize,
+        elapsed_ms: u128,
+    ) {
+        let mut payload = String::new();
+        payload.push_str("version=1\n");
+        payload.push_str("normalizer=normalize_problematic_callshape_artifacts\n");
+        payload.push_str(&format!("status={status}\n"));
+        payload.push_str(&format!("input_bytes={input_bytes}\n"));
+        payload.push_str(&format!("output_bytes={output_bytes}\n"));
+        payload.push_str(&format!("total_lines={total_lines}\n"));
+        payload.push_str(&format!(
+            "bulk_rewrite_candidate_lines={bulk_rewrite_candidate_lines}\n"
+        ));
+        payload.push_str(&format!("rewritten_lines={rewritten_lines}\n"));
+        payload.push_str(&format!(
+            "static_clone_rewrite_lines={static_clone_rewrite_lines}\n"
+        ));
+        payload.push_str(&format!("vtable_ptr_rewrite_lines={vtable_ptr_rewrite_lines}\n"));
+        payload.push_str(&format!(
+            "vtable_null_cast_rewrite_lines={vtable_null_cast_rewrite_lines}\n"
+        ));
+        payload.push_str(&format!("elapsed_ms={elapsed_ms}\n"));
+
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+        }
+        let _ = std::fs::write(path, payload);
+    }
+
     fn normalize_problematic_callshape_artifacts(code: &str) -> String {
         if !code.contains("create_run_impl(")
             && !code.contains("Default::default() =")
@@ -30460,6 +30556,30 @@ impl FragileAtomicBoolCompat for atomic_bool {
             && !code.contains("(*std::ptr::null()).poll_thread_id_")
         {
             return code.to_string();
+        }
+
+        let profile_path = Self::problematic_callshape_profile_output_path();
+        let profile_started_at = profile_path.as_ref().map(|_| std::time::Instant::now());
+        let mut total_lines = 0usize;
+        let mut bulk_rewrite_candidate_lines = 0usize;
+        let mut rewritten_lines = 0usize;
+        let mut static_clone_rewrite_lines = 0usize;
+        let mut vtable_ptr_rewrite_lines = 0usize;
+        let mut vtable_null_cast_rewrite_lines = 0usize;
+        if let Some(path) = profile_path.as_deref() {
+            Self::write_problematic_callshape_profile(
+                path,
+                "started",
+                code.len(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            );
         }
 
         fn replace_vtable_ptr_calls(line: &str) -> String {
@@ -30625,6 +30745,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
 
         let mut out = String::with_capacity(code.len());
         for line in code.lines() {
+            total_lines += 1;
             let mut rewritten = line.to_string();
             let indent_len = line.chars().take_while(|c| c.is_whitespace()).count();
             let indent = &line[..indent_len];
@@ -30660,6 +30781,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
             }
 
             if Self::line_might_need_problematic_callshape_bulk_rewrites(&rewritten) {
+                bulk_rewrite_candidate_lines += 1;
                 rewritten = rewritten.replace("Fiber::create_run_impl(", "Fiber::create_run(");
                 if rewritten.contains("std::cell::RefCell::<") && rewritten.contains("::new_0()") {
                     rewritten = rewritten.replace("::new_0()", "::new(Default::default())");
@@ -31101,21 +31223,75 @@ impl FragileAtomicBoolCompat for atomic_bool {
             }
             if rewritten.contains("= unsafe { __gv_") || rewritten.contains("= unsafe { __fsv_") {
                 if let Some(cloned) = rewrite_static_unsafe_binding_clone(&rewritten) {
+                    if cloned != rewritten {
+                        static_clone_rewrite_lines += 1;
+                    }
                     rewritten = cloned;
                 }
             }
             if rewritten.contains("rusty::detail::get_vtable_ptr_") {
-                rewritten = replace_vtable_ptr_calls(&rewritten);
+                let replaced = replace_vtable_ptr_calls(&rewritten);
+                if replaced != rewritten {
+                    vtable_ptr_rewrite_lines += 1;
+                }
+                rewritten = replaced;
             }
             if rewritten.contains("(std::ptr::null_mut() as *mut u8) as *const FunctionVTable_") {
-                rewritten = rewrite_vtable_null_cast(&rewritten);
+                let replaced = rewrite_vtable_null_cast(&rewritten);
+                if replaced != rewritten {
+                    vtable_null_cast_rewrite_lines += 1;
+                }
+                rewritten = replaced;
+            }
+            if rewritten != line {
+                rewritten_lines += 1;
             }
             out.push_str(&rewritten);
             out.push('\n');
+            if total_lines % 2048 == 0 {
+                if let Some(path) = profile_path.as_deref() {
+                    let elapsed_ms = profile_started_at
+                        .as_ref()
+                        .map(|started_at| started_at.elapsed().as_millis())
+                        .unwrap_or(0);
+                    Self::write_problematic_callshape_profile(
+                        path,
+                        "in_progress",
+                        code.len(),
+                        out.len(),
+                        total_lines,
+                        bulk_rewrite_candidate_lines,
+                        rewritten_lines,
+                        static_clone_rewrite_lines,
+                        vtable_ptr_rewrite_lines,
+                        vtable_null_cast_rewrite_lines,
+                        elapsed_ms,
+                    );
+                }
+            }
         }
 
         if !code.ends_with('\n') && !out.is_empty() {
             out.pop();
+        }
+        if let Some(path) = profile_path.as_deref() {
+            let elapsed_ms = profile_started_at
+                .as_ref()
+                .map(|started_at| started_at.elapsed().as_millis())
+                .unwrap_or(0);
+            Self::write_problematic_callshape_profile(
+                path,
+                "completed",
+                code.len(),
+                out.len(),
+                total_lines,
+                bulk_rewrite_candidate_lines,
+                rewritten_lines,
+                static_clone_rewrite_lines,
+                vtable_ptr_rewrite_lines,
+                vtable_null_cast_rewrite_lines,
+                elapsed_ms,
+            );
         }
         out
     }
@@ -78050,6 +78226,7 @@ fn correct_initializer_for_type(value: &str, ty: &CppType) -> String {
 mod tests {
     use super::*;
     use crate::ast::SourceLocation;
+    use std::sync::{Mutex, OnceLock};
 
     fn make_node(kind: ClangNodeKind, children: Vec<ClangNode>) -> ClangNode {
         ClangNode {
@@ -78079,6 +78256,11 @@ mod tests {
             ),
             field_types: HashMap::new(),
         }
+    }
+
+    fn problematic_callshape_profile_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
     }
 
     #[test]
@@ -112505,6 +112687,74 @@ pub fn call(argc: i32, argv: *const *mut i8) -> i32 {
             !output.contains("Fiber::create_run_impl("),
             "legacy create_run_impl callshape should not remain after normalization, got:\n{}",
             output
+        );
+    }
+
+    #[test]
+    fn test_normalize_problematic_callshape_artifacts_emits_profile_manifest_when_enabled() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let _guard = problematic_callshape_profile_env_lock()
+            .lock()
+            .expect("failed to lock problematic-callshape profile env guard");
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos();
+        let profile_path =
+            std::env::temp_dir().join(format!("fragile_problematic_callshape_profile_{unique}.txt"));
+        let _ = std::fs::remove_file(&profile_path);
+
+        std::env::set_var(
+            "FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH",
+            profile_path.as_os_str(),
+        );
+        let input = r#"pub fn demo() {
+    Fiber::create_run_impl(Default::default(), 1i32);
+    let keep: i32 = 7;
+}"#;
+        let output = AstCodeGen::normalize_problematic_callshape_artifacts(input);
+        std::env::remove_var("FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH");
+
+        let profile = std::fs::read_to_string(&profile_path)
+            .expect("expected problematic-callshape profile output file");
+        let _ = std::fs::remove_file(&profile_path);
+
+        let mut metrics: HashMap<&str, &str> = HashMap::new();
+        for line in profile.lines() {
+            if let Some((key, value)) = line.split_once('=') {
+                metrics.insert(key, value);
+            }
+        }
+
+        assert!(
+            output.contains("Fiber::create_run(&mut Default::default(), 1i32);"),
+            "normalization behavior should remain intact while profiling is enabled, got:\n{}",
+            output
+        );
+        assert_eq!(metrics.get("version"), Some(&"1"));
+        assert_eq!(
+            metrics.get("normalizer"),
+            Some(&"normalize_problematic_callshape_artifacts")
+        );
+        assert_eq!(metrics.get("status"), Some(&"completed"));
+        assert_eq!(metrics.get("total_lines"), Some(&"4"));
+        assert_eq!(metrics.get("bulk_rewrite_candidate_lines"), Some(&"1"));
+        assert_eq!(metrics.get("rewritten_lines"), Some(&"1"));
+        assert_eq!(metrics.get("static_clone_rewrite_lines"), Some(&"0"));
+        assert_eq!(metrics.get("vtable_ptr_rewrite_lines"), Some(&"0"));
+        assert_eq!(metrics.get("vtable_null_cast_rewrite_lines"), Some(&"0"));
+
+        let elapsed_ms = metrics
+            .get("elapsed_ms")
+            .expect("profile manifest should include elapsed_ms")
+            .parse::<u128>()
+            .expect("elapsed_ms should parse as u128");
+        assert!(
+            elapsed_ms < 60_000,
+            "normalization profile elapsed_ms should be finite and bounded, got {}",
+            elapsed_ms
         );
     }
 }

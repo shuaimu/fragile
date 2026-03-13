@@ -3253,3 +3253,67 @@ Added design note:
 
 `2.6.c.iii` passes deterministically with no blocker-severity or E0425 regression versus
 `2.6.c.i` baseline. Next leaf is `2.6.c.iv`.
+
+## 55. RPC Compile Blocker Leaf 2.6.c.iv.a: Deterministic Codegen Hotspot Profiling Artifacts (2026-03-13)
+
+### Problem
+
+Leaf `2.6.c.iv` remained too broad for a single implementation step, and strict
+replay still timed out on `src/rrr/base/misc.cpp` in `codegen` without enough
+pass-level observability to pick the next optimization target confidently.
+
+### Decision
+
+Implement deterministic optional profiling artifacts for the
+`normalize_problematic_callshape_artifacts` hotspot path, plus codegen-entry
+status seeding, so timeout runs always emit actionable state.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no target-specific `rpcbench`/`test_rpc` conditionals
+- no force-native bypass
+- no fake semantic stub method bodies
+- timeouts/failures remain explicit and measurable
+
+### Implementation
+
+Updated:
+
+- `crates/fragile-clang/src/ast_codegen.rs`
+
+Added:
+
+- optional profile env gate: `FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH`
+- deterministic profile snapshots with statuses:
+  - `codegen_started`
+  - `not_invoked`
+  - `invoking`
+  - `started`
+  - `in_progress`
+  - `completed`
+- line/counter metrics for callshape bulk-rewrite activity and elapsed timing
+- focused regression:
+  - `test_normalize_problematic_callshape_artifacts_emits_profile_manifest_when_enabled`
+
+Design note:
+
+- `docs/rpc_compile_blocker_leaf_2_6c_iv_a_design_2026_03_13.md`
+
+### Validation
+
+- `cargo test -p fragile-clang problematic_callshape -- --nocapture`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+- strict timeout replay with profile capture (`120s` and `300s`):
+  - `/tmp/fragile_rpc_leaf_2_6c_iv_a_callshape_profile_120_v4.txt`
+  - `/tmp/fragile_rpc_leaf_2_6c_iv_a_callshape_profile_300_v1.txt`
+  - `/tmp/fragile_rpc_leaf_2_6c_iv_a_stage_timing_120_v4.txt`
+  - `/tmp/fragile_rpc_leaf_2_6c_iv_a_stage_timing_300_v1.txt`
+
+### Outcome
+
+Both strict replay captures reported `status=codegen_started` with zero
+callshape counters before timeout, indicating the current timeout occurs before
+`normalize_problematic_callshape_artifacts` is reached. This narrows the next
+optimization leaf (`2.6.c.iv.b`) to earlier codegen passes.
