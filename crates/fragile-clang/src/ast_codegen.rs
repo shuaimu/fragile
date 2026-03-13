@@ -24576,21 +24576,11 @@ impl AstCodeGen {
     /// Generate Rust source code from a Clang AST.
     pub fn generate(mut self, ast: &ClangNode) -> String {
         let problematic_callshape_profile_path = Self::problematic_callshape_profile_output_path();
-        if let Some(path) = problematic_callshape_profile_path.as_deref() {
-            Self::write_problematic_callshape_profile(
-                path,
-                "codegen_started",
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-            );
-        }
+        Self::write_problematic_callshape_codegen_checkpoint(
+            problematic_callshape_profile_path.as_deref(),
+            "codegen_started",
+            0,
+        );
         // First pass: collect polymorphic class information
         if let ClangNodeKind::TranslationUnit = &ast.kind {
             self.collect_polymorphic_info(&ast.children);
@@ -24625,6 +24615,11 @@ impl AstCodeGen {
         if let ClangNodeKind::TranslationUnit = &ast.kind {
             self.collect_template_info(&ast.children);
         }
+        Self::write_problematic_callshape_codegen_checkpoint(
+            problematic_callshape_profile_path.as_deref(),
+            "codegen_after_template_collection",
+            self.output.len(),
+        );
 
         // Emit STL preamble from fragile-stl crate source files
         self.emit_stl_preamble();
@@ -24637,6 +24632,11 @@ impl AstCodeGen {
 
         // Generate function implementations for function template instantiations
         self.generate_fn_template_instantiations();
+        Self::write_problematic_callshape_codegen_checkpoint(
+            problematic_callshape_profile_path.as_deref(),
+            "codegen_after_template_instantiation_generation",
+            self.output.len(),
+        );
 
         // Generate vtable structs for polymorphic classes
         self.generate_all_vtable_structs();
@@ -24707,6 +24707,11 @@ impl AstCodeGen {
 
         // Generate variadic template instantiations collected during code generation
         self.generate_variadic_template_instantiations();
+        Self::write_problematic_callshape_codegen_checkpoint(
+            problematic_callshape_profile_path.as_deref(),
+            "codegen_after_top_level_generation",
+            self.output.len(),
+        );
 
         // Export uniquely-resolved namespaced types at top level so helper items
         // emitted outside namespace modules can refer to unqualified names.
@@ -24724,23 +24729,18 @@ impl AstCodeGen {
 
         // Generate placeholder structs for void placeholder types (unresolved template instantiations)
         self.generate_void_placeholder_stubs();
+        Self::write_problematic_callshape_codegen_checkpoint(
+            problematic_callshape_profile_path.as_deref(),
+            "codegen_after_stub_generation",
+            self.output.len(),
+        );
 
         let mut output = self.output;
-        if let Some(path) = problematic_callshape_profile_path.as_deref() {
-            Self::write_problematic_callshape_profile(
-                path,
-                "not_invoked",
-                output.len(),
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-            );
-        }
+        Self::write_problematic_callshape_codegen_checkpoint(
+            problematic_callshape_profile_path.as_deref(),
+            "not_invoked",
+            output.len(),
+        );
         let degraded_fallback_enabled = std::env::var_os("FRAGILE_ENABLE_DEGRADED_FALLBACK")
             .is_some();
         // Byte string literals are immutable; `.as_mut_ptr()` on them is invalid in Rust.
@@ -25225,21 +25225,11 @@ impl AstCodeGen {
         output = Self::normalize_unit_placeholder_expression_artifacts(&output);
         output = Self::normalize_out_of_range_i8_literal_casts(&output);
         output = Self::normalize_placeholder_local_cast_returns(&output);
-        if let Some(path) = problematic_callshape_profile_path.as_deref() {
-            Self::write_problematic_callshape_profile(
-                path,
-                "invoking",
-                output.len(),
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-            );
-        }
+        Self::write_problematic_callshape_codegen_checkpoint(
+            problematic_callshape_profile_path.as_deref(),
+            "invoking",
+            output.len(),
+        );
         output = Self::normalize_problematic_callshape_artifacts(&output);
         output = Self::normalize_degenerate_loop_guard_identifier_statements(&output);
         output = Self::normalize_bind_null_pointer_arguments(&output);
@@ -30426,6 +30416,14 @@ impl FragileAtomicBoolCompat for atomic_bool {
 
     fn problematic_callshape_profile_output_path() -> Option<std::path::PathBuf> {
         let raw = std::env::var_os("FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH")?;
+        if let Some(owner_thread) =
+            std::env::var_os("FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_OWNER_THREAD")
+        {
+            let current_thread = format!("{:?}", std::thread::current().id());
+            if owner_thread != std::ffi::OsString::from(current_thread) {
+                return None;
+            }
+        }
         let candidate = std::path::PathBuf::from(raw);
         if candidate.as_os_str().is_empty() {
             return None;
@@ -30446,10 +30444,21 @@ impl FragileAtomicBoolCompat for atomic_bool {
         vtable_null_cast_rewrite_lines: usize,
         elapsed_ms: u128,
     ) {
+        let status_history = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|existing| {
+                existing
+                    .lines()
+                    .find_map(|line| line.strip_prefix("status_history=").map(str::to_string))
+            })
+            .filter(|existing| !existing.is_empty())
+            .map_or_else(|| status.to_string(), |existing| format!("{existing},{status}"));
+
         let mut payload = String::new();
         payload.push_str("version=1\n");
         payload.push_str("normalizer=normalize_problematic_callshape_artifacts\n");
         payload.push_str(&format!("status={status}\n"));
+        payload.push_str(&format!("status_history={status_history}\n"));
         payload.push_str(&format!("input_bytes={input_bytes}\n"));
         payload.push_str(&format!("output_bytes={output_bytes}\n"));
         payload.push_str(&format!("total_lines={total_lines}\n"));
@@ -30472,6 +30481,28 @@ impl FragileAtomicBoolCompat for atomic_bool {
             }
         }
         let _ = std::fs::write(path, payload);
+    }
+
+    fn write_problematic_callshape_codegen_checkpoint(
+        path: Option<&std::path::Path>,
+        status: &str,
+        output_bytes: usize,
+    ) {
+        if let Some(path) = path {
+            Self::write_problematic_callshape_profile(
+                path,
+                status,
+                output_bytes,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            );
+        }
     }
 
     fn normalize_problematic_callshape_artifacts(code: &str) -> String {
@@ -112896,6 +112927,7 @@ pub fn call(argc: i32, argv: *const *mut i8) -> i32 {
         let _guard = problematic_callshape_profile_env_lock()
             .lock()
             .expect("failed to lock problematic-callshape profile env guard");
+        let owner_thread = format!("{:?}", std::thread::current().id());
 
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -112909,12 +112941,17 @@ pub fn call(argc: i32, argv: *const *mut i8) -> i32 {
             "FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH",
             profile_path.as_os_str(),
         );
+        std::env::set_var(
+            "FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_OWNER_THREAD",
+            owner_thread,
+        );
         let input = r#"pub fn demo() {
     Fiber::create_run_impl(Default::default(), 1i32);
     let keep: i32 = 7;
 }"#;
         let output = AstCodeGen::normalize_problematic_callshape_artifacts(input);
         std::env::remove_var("FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH");
+        std::env::remove_var("FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_OWNER_THREAD");
 
         let profile = std::fs::read_to_string(&profile_path)
             .expect("expected problematic-callshape profile output file");
@@ -112954,6 +112991,117 @@ pub fn call(argc: i32, argv: *const *mut i8) -> i32 {
             elapsed_ms < 60_000,
             "normalization profile elapsed_ms should be finite and bounded, got {}",
             elapsed_ms
+        );
+    }
+
+    #[test]
+    fn test_generate_problematic_callshape_profile_records_codegen_checkpoint_history() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let _guard = problematic_callshape_profile_env_lock()
+            .lock()
+            .expect("failed to lock problematic-callshape profile env guard");
+        let owner_thread = format!("{:?}", std::thread::current().id());
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos();
+        let profile_path = std::env::temp_dir()
+            .join(format!("fragile_problematic_callshape_codegen_profile_{unique}.txt"));
+        let _ = std::fs::remove_file(&profile_path);
+
+        std::env::set_var(
+            "FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH",
+            profile_path.as_os_str(),
+        );
+        std::env::set_var(
+            "FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_OWNER_THREAD",
+            owner_thread,
+        );
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "noop".to_string(),
+                    mangled_name: "noop".to_string(),
+                    is_static: false,
+                    return_type: CppType::Int { signed: true },
+                    params: vec![],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![make_node(
+                            ClangNodeKind::IntegerLiteral {
+                                value: 0,
+                                cpp_type: Some(CppType::Int { signed: true }),
+                            },
+                            vec![],
+                        )],
+                    )],
+                )],
+            )],
+        );
+        let _ = AstCodeGen::new().generate(&ast);
+        std::env::remove_var("FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH");
+        std::env::remove_var("FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_OWNER_THREAD");
+
+        let profile = std::fs::read_to_string(&profile_path)
+            .expect("expected problematic-callshape profile output file");
+        let _ = std::fs::remove_file(&profile_path);
+
+        let mut metrics: HashMap<&str, &str> = HashMap::new();
+        for line in profile.lines() {
+            if let Some((key, value)) = line.split_once('=') {
+                metrics.insert(key, value);
+            }
+        }
+
+        assert_eq!(metrics.get("version"), Some(&"1"));
+        assert_eq!(
+            metrics.get("normalizer"),
+            Some(&"normalize_problematic_callshape_artifacts")
+        );
+
+        let status = metrics
+            .get("status")
+            .copied()
+            .expect("profile should include final status");
+        let history = metrics
+            .get("status_history")
+            .copied()
+            .expect("profile should include status_history");
+        let phases: Vec<&str> = history.split(',').collect();
+        for checkpoint in [
+            "codegen_after_template_instantiation_generation",
+            "codegen_after_top_level_generation",
+            "codegen_after_stub_generation",
+            "not_invoked",
+            "invoking",
+        ] {
+            assert!(
+                phases.contains(&checkpoint),
+                "status history should include `{checkpoint}`, got {:?}",
+                phases
+            );
+        }
+        assert!(
+            phases.contains(&"codegen_started")
+                || phases.contains(&"codegen_after_template_collection"),
+            "status history should include an early codegen checkpoint, got {:?}",
+            phases
+        );
+        assert!(
+            phases.contains(&status),
+            "status history should include final status `{status}`, got {:?}",
+            phases
         );
     }
 }

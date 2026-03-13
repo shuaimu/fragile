@@ -3447,3 +3447,100 @@ Design note:
 `2.6.c.iv.c` passes: strict replay remains timeout-bound on `misc.cpp` but
 blocker class/E0425 deltas are non-worsening versus `2.6.c.iii` baseline.
 Next leaf is `2.6.c.iv.d`.
+
+## 58. RPC Compile Blocker Leaf 2.6.c.iv.d.i: Codegen Checkpoint History for Timeout Replays (2026-03-13)
+
+### Problem
+
+Task `2.6.c.iv.d` remained too broad for one change. After `2.6.c.iv.c`, strict
+replay still timed out on `src/rrr/base/misc.cpp`, and prior profiling only
+showed coarse `status=codegen_started` in shorter timeout windows.
+
+To choose the next optimization honestly, we needed deterministic checkpoint
+history that shows how far codegen progressed before timeout.
+
+### Decision
+
+Implement a small generic profiling extension in `ast_codegen`:
+
+- persist a `status_history` sequence in the existing problematic-callshape
+  profile artifact
+- emit additional pre-normalizer codegen checkpoints from `generate`
+- validate with focused unit coverage and strict 120s/300s replay captures
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no `rpcbench`/`test_rpc`-specific logic
+- no force-native fallback path
+- no fake semantic fallback method bodies
+- generic instrumentation-only change with deterministic evidence capture
+
+### Implementation
+
+Updated:
+
+- `crates/fragile-clang/src/ast_codegen.rs`
+
+Key changes:
+
+- `write_problematic_callshape_profile` now emits cumulative
+  `status_history=...`.
+- `problematic_callshape_profile_output_path` now honors optional
+  `FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_OWNER_THREAD` so profile writes can
+  be isolated to the owning thread during parallel test execution.
+- added helper `write_problematic_callshape_codegen_checkpoint(...)`.
+- `AstCodeGen::generate` now emits checkpoints at:
+  - `codegen_started`
+  - `codegen_after_template_collection`
+  - `codegen_after_template_instantiation_generation`
+  - `codegen_after_top_level_generation`
+  - `codegen_after_stub_generation`
+  - `not_invoked`
+  - `invoking`
+- added focused regression:
+  - `test_generate_problematic_callshape_profile_records_codegen_checkpoint_history`
+
+Design note:
+
+- `docs/rpc_compile_blocker_leaf_2_6c_iv_d_i_design_2026_03_13.md`
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang problematic_callshape -- --nocapture`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+- `cargo build --release -p fragile-cli --bin fragilec`
+- strict replay with checkpoint profile + stage timing:
+  - `/tmp/fragile_rpc_leaf_2_6c_iv_d_i_callshape_profile_120_v2.txt`
+  - `/tmp/fragile_rpc_leaf_2_6c_iv_d_i_stage_timing_120_v2.txt`
+  - `/tmp/fragile_rpc_leaf_2_6c_iv_d_i_callshape_profile_300_v1.txt`
+  - `/tmp/fragile_rpc_leaf_2_6c_iv_d_i_stage_timing_300_v1.txt`
+
+Deterministic profile highlights:
+
+- 120s replay: `status_history=codegen_started`
+- 300s replay:
+  `status_history=codegen_started,codegen_after_template_collection,codegen_after_template_instantiation_generation`
+
+Replay manifest remains timeout-bound with no blocker-class shift:
+
+- `replay_01_status=124`
+- `replay_01_timed_out=true`
+- `replay_01_blocker_class=build_timeout`
+- `replay_01_blocker_file=src/rrr/base/misc.cpp`
+
+Full-suite status remains baseline:
+
+- workspace cargo run retains known baseline (`46` existing `fragile-clang`
+  lib failures, unchanged)
+- Python suite passes (`29`, skipped `1`)
+
+### Outcome
+
+Leaf `2.6.c.iv.d.i` is complete. Checkpoint history now proves the 300s replay
+progresses through template collection/instantiation and times out later in
+codegen, narrowing the next optimization target for `2.6.c.iv.d.ii`.
