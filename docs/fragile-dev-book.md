@@ -4069,3 +4069,97 @@ Deterministic evidence highlights:
 Leaf `2.6.c.iv.d.iv.c.iii` is complete. Post-`c.ii` strict replay remains
 `build_timeout` on `src/rrr/base/misc.cpp`, and non-increase gates confirm no
 class-rank or `E0425` regression versus the `2.6.c.iii` baseline.
+
+## 66. RPC Compile Blocker Leaf 2.6.c.iv.d.iv.c.iv.a: Borrowed Template-Definition Lookup Hot-Path Optimization (2026-03-13)
+
+### Problem
+
+After closing `2.6.c.iv.d.iv.c.iii`, the next bounded execution leaf was
+`2.6.c.iv.d.iv.c.iv.a`: implement another generic optimization in the dominant
+pre-`codegen_after_top_level_generation` window.
+
+Inspection showed that `lookup_template_definition` returned owned
+`(Vec<String>, Vec<ClangNode>)` and cloned full template-definition payloads on
+all successful lookups. The highest-frequency caller in this stage is
+`collect_template_type(...).is_some()`, which only needs existence, not owned
+copies.
+
+### Execution Plan
+
+1. Convert template-definition lookup to borrowed return values to remove
+   clone-heavy existence checks from collection passes.
+2. Preserve behavior at instantiation emission sites by explicitly cloning only
+   where mutable codegen requires owned values.
+3. Add focused regression coverage for inline-namespace alias lookup behavior.
+4. Capture strict timeout replay profiling/timing artifacts (120s/300s) and run
+   full suites for regression parity.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no RPC target-name special casing
+- no force-native fallback
+- no synthetic semantic stubs to mask unresolved behavior
+- generic parser/codegen data-flow optimization only
+
+### Implementation
+
+Updated:
+
+- `crates/fragile-clang/src/ast_codegen.rs`
+
+Key changes:
+
+- changed `lookup_template_definition` to return borrowed entries:
+  `Option<&(Vec<String>, Vec<ClangNode>)>`.
+- removed clone-on-lookup behavior from direct and inline-namespace alias
+  lookup paths.
+- kept mutable instantiation emission behavior intact by cloning at the
+  `generate_template_instantiations` call site only.
+- added focused regression
+  `test_lookup_template_definition_uses_inline_namespace_alias_entry_reference`
+  to lock alias resolution and reference-backed lookup behavior.
+
+Design note:
+
+- `docs/rpc_compile_blocker_leaf_2_6c_iv_d_iv_c_iv_a_design_2026_03_13.md`
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang test_lookup_template_definition_uses_inline_namespace_alias_entry_reference -- --nocapture`
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_a_callshape_profile_120_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_a_stage_timing_120_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_a_callshape_profile_300_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_a_stage_timing_300_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- 120s profile (`..._callshape_profile_120_v1.txt`):
+  - `status=codegen_after_template_collection`
+  - `status_history=codegen_started,codegen_after_template_collection`
+- 300s profile (`..._callshape_profile_300_v1.txt`):
+  - `status=codegen_after_template_instantiation_generation`
+  - `status_history=codegen_started,codegen_after_template_collection,codegen_after_template_instantiation_generation`
+  - `input_bytes=567691`
+- checkpoint-byte comparison vs `2.6.c.iv.d.iv.c.i` 300s baseline:
+  - `574973 -> 567691` (`-7282` bytes)
+- replay manifest remains timeout-bound but stable:
+  - `replay_01_status=124`
+  - `replay_01_timed_out=true`
+  - `replay_01_first_failure_class=build_timeout`
+  - `replay_01_blocker_file=src/rrr/base/misc.cpp`
+- full-suite status remains baseline:
+  - `cargo test --workspace --all-targets`: `fragile-clang` lib
+    `728` passed / `46` failed (failure count unchanged)
+  - Python suite passes (`29`, skipped `1`)
+
+### Outcome
+
+Leaf `2.6.c.iv.d.iv.c.iv.a` is complete. Template-definition lookup no longer
+clones heavy definition payloads during high-frequency existence checks, while
+instantiation behavior remains locked by focused regression coverage and full
+suite baseline parity.

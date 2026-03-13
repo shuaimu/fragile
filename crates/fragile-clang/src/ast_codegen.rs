@@ -38933,10 +38933,10 @@ impl FragileAtomicBoolCompat for atomic_bool {
     fn lookup_template_definition(
         &self,
         template_name: &str,
-    ) -> Option<(Vec<String>, Vec<ClangNode>)> {
+    ) -> Option<&(Vec<String>, Vec<ClangNode>)> {
         // First try direct lookup
         if let Some(def) = self.template_definitions.get(template_name) {
-            return Some(def.clone());
+            return Some(def);
         }
 
         // Try resolving via inline namespace aliases
@@ -38949,7 +38949,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
             if let Some(aliased_namespace) = self.inline_namespace_aliases.get(namespace_part) {
                 let aliased_name = format!("{}::{}", aliased_namespace, name_part);
                 if let Some(def) = self.template_definitions.get(&aliased_name) {
-                    return Some(def.clone());
+                    return Some(def);
                 }
             }
         }
@@ -39040,7 +39040,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
 
                 // Use inline namespace-aware lookup
                 if let Some((template_params, template_children)) =
-                    self.lookup_template_definition(template_name)
+                    self.lookup_template_definition(template_name).cloned()
                 {
                     // Generate struct with substituted types
                     self.generate_template_struct(
@@ -111327,6 +111327,45 @@ stream.PutN(c, n);
         assert_eq!(
             after_field_count, 1,
             "top-level class-template handling should not replace richer pre-collected template definition"
+        );
+    }
+
+    #[test]
+    fn test_lookup_template_definition_uses_inline_namespace_alias_entry_reference() {
+        let mut codegen = AstCodeGen::new();
+        let int_ty = CppType::Int { signed: true };
+        let def_key = "std::__1::Widget".to_string();
+        codegen.template_definitions.insert(
+            def_key.clone(),
+            (
+                vec!["T".to_string()],
+                vec![make_node(
+                    ClangNodeKind::FieldDecl {
+                        name: "value".to_string(),
+                        ty: int_ty,
+                        is_static: false,
+                        access: AccessSpecifier::Public,
+                        bit_field_width: None,
+                    },
+                    vec![],
+                )],
+            ),
+        );
+        codegen
+            .inline_namespace_aliases
+            .insert("std".to_string(), "std::__1".to_string());
+
+        let resolved = codegen
+            .lookup_template_definition("std::Widget")
+            .expect("expected inline namespace alias lookup to resolve template definition");
+        let direct = codegen
+            .template_definitions
+            .get(&def_key)
+            .expect("expected direct template definition entry");
+
+        assert!(
+            std::ptr::eq(resolved, direct),
+            "lookup should return the stored template definition reference without cloning"
         );
     }
 
