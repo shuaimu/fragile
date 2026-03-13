@@ -1197,6 +1197,9 @@ pub struct AstCodeGen {
     pending_template_instantiations: HashSet<String>,
     /// Function template definitions: template name -> (template params, return_type, params, body_node)
     fn_template_definitions: HashMap<String, FnTemplateInfo>,
+    /// Cache of whether a function-template definition references template params
+    /// in parameter type positions. Used in hot call-site matching paths.
+    fn_template_param_dependency_cache: HashMap<String, bool>,
     /// Function-template keys indexed by unqualified leaf name to avoid scanning
     /// the full definition map for every call-site candidate lookup.
     fn_template_keys_by_leaf: HashMap<String, Vec<String>>,
@@ -1376,6 +1379,7 @@ impl AstCodeGen {
             template_definitions: HashMap::new(),
             pending_template_instantiations: HashSet::new(),
             fn_template_definitions: HashMap::new(),
+            fn_template_param_dependency_cache: HashMap::new(),
             fn_template_keys_by_leaf: HashMap::new(),
             pending_fn_instantiations: HashMap::new(),
             skip_vtable_generation: HashSet::new(),
@@ -38415,6 +38419,31 @@ impl FragileAtomicBoolCompat for atomic_bool {
         candidate_keys
     }
 
+    fn set_fn_template_definition(&mut self, key: String, info: FnTemplateInfo) {
+        self.fn_template_param_dependency_cache.remove(&key);
+        self.fn_template_definitions.insert(key, info);
+    }
+
+    fn fn_template_has_param_dependent_args(&mut self, template_key: &str) -> bool {
+        if let Some(cached) = self.fn_template_param_dependency_cache.get(template_key) {
+            return *cached;
+        }
+        let Some(template_info) = self.fn_template_definitions.get(template_key) else {
+            return false;
+        };
+        let has_param_dependent_template_arg = template_info.params.iter().any(|(_, pattern)| {
+            template_info
+                .template_params
+                .iter()
+                .any(|param| cpp_type_contains_template_param(pattern, param))
+        });
+        self.fn_template_param_dependency_cache.insert(
+            template_key.to_string(),
+            has_param_dependent_template_arg,
+        );
+        has_param_dependent_template_arg
+    }
+
     fn class_template_children_have_fields(children: &[ClangNode]) -> bool {
         children
             .iter()
@@ -38539,14 +38568,12 @@ impl FragileAtomicBoolCompat for atomic_bool {
                         }
                     };
                     if should_replace_short {
-                        self.fn_template_definitions
-                            .insert(name.clone(), template_info.clone());
+                        self.set_fn_template_definition(name.clone(), template_info.clone());
                     }
                     // Also store with fully-qualified name if in a namespace
                     if !namespace_path.is_empty() {
                         let full_name = format!("{}::{}", namespace_path.join("::"), name);
-                        self.fn_template_definitions
-                            .insert(full_name, template_info);
+                        self.set_fn_template_definition(full_name, template_info);
                     }
                     if has_children {
                         self.collect_template_definitions_with_namespace_stack(
@@ -38761,6 +38788,8 @@ impl FragileAtomicBoolCompat for atomic_bool {
             Self::normalize_template_match_type(&return_type.as_ref().to_rust_type_str());
 
         for template_key in candidate_keys {
+            let has_param_dependent_template_arg =
+                self.fn_template_has_param_dependent_args(&template_key);
             let Some(template_info) = self.fn_template_definitions.get(&template_key) else {
                 continue;
             };
@@ -38775,13 +38804,6 @@ impl FragileAtomicBoolCompat for atomic_bool {
             ) else {
                 continue;
             };
-            let has_param_dependent_template_arg =
-                template_info.params.iter().any(|(_, pattern)| {
-                    template_info
-                        .template_params
-                        .iter()
-                        .any(|param| cpp_type_contains_template_param(pattern, param))
-                });
             if fallback_instantiation.is_none()
                 && (has_param_dependent_template_arg || params.is_empty())
             {
@@ -112671,6 +112693,82 @@ stream.PutN(c, n);
         assert!(
             candidate_set.contains("std::make_shared"),
             "candidate key collection should include all qualified keys sharing leaf name"
+        );
+    }
+
+    #[test]
+    fn test_fn_template_has_param_dependent_args_reuses_cached_value() {
+        let mut codegen = AstCodeGen::new();
+        let info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Named("T".to_string()),
+            params: vec![("value".to_string(), CppType::Named("T".to_string()))],
+            body: None,
+            is_noexcept: false,
+        };
+        codegen.set_fn_template_definition("cache::probe".to_string(), info);
+        assert!(
+            codegen.fn_template_has_param_dependent_args("cache::probe"),
+            "first query should compute and cache template-param dependency"
+        );
+        assert_eq!(
+            codegen
+                .fn_template_param_dependency_cache
+                .get("cache::probe")
+                .copied(),
+            Some(true),
+            "cache should store computed dependency flag"
+        );
+        codegen
+            .fn_template_param_dependency_cache
+            .insert("cache::probe".to_string(), false);
+        assert!(
+            !codegen.fn_template_has_param_dependent_args("cache::probe"),
+            "subsequent query should use cached value without recomputing"
+        );
+    }
+
+    #[test]
+    fn test_set_fn_template_definition_invalidates_param_dependency_cache() {
+        let mut codegen = AstCodeGen::new();
+        let dependent_info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Named("T".to_string()),
+            params: vec![("value".to_string(), CppType::Named("T".to_string()))],
+            body: None,
+            is_noexcept: false,
+        };
+        let non_dependent_info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Named("T".to_string()),
+            params: vec![("value".to_string(), CppType::Int { signed: true })],
+            body: None,
+            is_noexcept: false,
+        };
+        codegen.set_fn_template_definition("cache::swap".to_string(), dependent_info);
+        assert!(
+            codegen.fn_template_has_param_dependent_args("cache::swap"),
+            "first cached dependency flag should reflect dependent definition"
+        );
+        assert_eq!(
+            codegen
+                .fn_template_param_dependency_cache
+                .get("cache::swap")
+                .copied(),
+            Some(true),
+            "dependency cache should contain computed value"
+        );
+
+        codegen.set_fn_template_definition("cache::swap".to_string(), non_dependent_info);
+        assert!(
+            !codegen
+                .fn_template_param_dependency_cache
+                .contains_key("cache::swap"),
+            "replacing template definition should invalidate cached dependency flag"
+        );
+        assert!(
+            !codegen.fn_template_has_param_dependent_args("cache::swap"),
+            "recomputed dependency flag should reflect replacement definition"
         );
     }
 
