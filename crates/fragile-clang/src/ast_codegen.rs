@@ -78125,6 +78125,51 @@ fn mark_template_param_presence_in_cpp_type(
     }
 }
 
+fn collect_template_param_first_param_positions(
+    template_param_names: &[String],
+    params: &[(String, CppType)],
+) -> Vec<Option<usize>> {
+    let mut first_positions = vec![None; template_param_names.len()];
+    if template_param_names.is_empty() || params.is_empty() {
+        return first_positions;
+    }
+
+    let candidate_names: Vec<&str> = template_param_names
+        .iter()
+        .map(|name| name.as_str())
+        .collect();
+    let mut candidate_name_to_index = HashMap::with_capacity(candidate_names.len());
+    for (idx, candidate_name) in candidate_names.iter().enumerate() {
+        candidate_name_to_index.entry(*candidate_name).or_insert(idx);
+    }
+    let mut candidate_presence = vec![false; candidate_names.len()];
+    let mut unresolved_candidate_count = candidate_names.len();
+    let mut unresolved_candidate_indices = (0..candidate_names.len()).collect::<Vec<_>>();
+    let mut unresolved_candidate_positions = (0..candidate_names.len()).collect::<Vec<_>>();
+
+    for (param_idx, (_, pattern_ty)) in params.iter().enumerate() {
+        if unresolved_candidate_count == 0 {
+            break;
+        }
+        mark_template_param_presence_in_cpp_type(
+            pattern_ty,
+            &candidate_names,
+            &candidate_name_to_index,
+            &mut candidate_presence,
+            &mut unresolved_candidate_count,
+            &mut unresolved_candidate_indices,
+            &mut unresolved_candidate_positions,
+        );
+        for (template_idx, seen) in candidate_presence.iter().enumerate() {
+            if *seen && first_positions[template_idx].is_none() {
+                first_positions[template_idx] = Some(param_idx);
+            }
+        }
+    }
+
+    first_positions
+}
+
 fn cpp_type_contains_parameter_pack(ty: &CppType) -> bool {
     match ty {
         CppType::ParameterPack { .. } => true,
@@ -78242,20 +78287,10 @@ fn infer_fn_template_type_args(
         .params
         .iter()
         .any(|(_, pattern_ty)| has_unsized_array_ref_pattern(pattern_ty));
-    let template_param_first_param_positions: Vec<Option<usize>> = template_info
-        .template_params
-        .iter()
-        .map(|template_param_name| {
-            template_info
-                .params
-                .iter()
-                .enumerate()
-                .find_map(|(param_idx, (_, pattern_ty))| {
-                    cpp_type_contains_template_param(pattern_ty, template_param_name)
-                        .then_some(param_idx)
-                })
-        })
-        .collect();
+    let template_param_first_param_positions = collect_template_param_first_param_positions(
+        &template_info.template_params,
+        &template_info.params,
+    );
     let mut template_param_appears_in_return = vec![false; template_info.template_params.len()];
     let return_only_template_param_indices: Vec<usize> = template_info
         .template_params
@@ -79233,6 +79268,41 @@ mod tests {
             unresolved_candidate_positions,
             vec![usize::MAX, 0, usize::MAX],
             "swap-remove path should keep O(1) unresolved position map consistent"
+        );
+    }
+
+    #[test]
+    fn test_collect_template_param_first_param_positions_uses_earliest_param_occurrence() {
+        let template_param_names = vec!["T".to_string(), "U".to_string(), "N".to_string()];
+        let params = vec![
+            ("first".to_string(), CppType::Named("Vec<U>".to_string())),
+            (
+                "second".to_string(),
+                CppType::TemplateParam {
+                    name: "T".to_string(),
+                    depth: 0,
+                    index: 0,
+                },
+            ),
+            (
+                "third".to_string(),
+                CppType::Pointer {
+                    pointee: Box::new(CppType::TemplateParam {
+                        name: "U".to_string(),
+                        depth: 0,
+                        index: 1,
+                    }),
+                    is_const: false,
+                },
+            ),
+        ];
+
+        let first_positions =
+            collect_template_param_first_param_positions(&template_param_names, &params);
+        assert_eq!(
+            first_positions,
+            vec![Some(1), Some(0), None],
+            "first-position collection should keep the earliest parameter index per template param"
         );
     }
 
