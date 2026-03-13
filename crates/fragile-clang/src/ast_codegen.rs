@@ -78032,6 +78032,28 @@ fn infer_nttp_array_bound_literal_len_with_nul(node: &ClangNode) -> Option<usize
     }
 }
 
+fn cpp_type_has_spelling_sensitive_components(ty: &CppType) -> bool {
+    match ty {
+        CppType::Named(_) | CppType::DependentType { .. } => true,
+        CppType::Pointer { pointee, .. } => cpp_type_has_spelling_sensitive_components(pointee),
+        CppType::Reference { referent, .. } => {
+            cpp_type_has_spelling_sensitive_components(referent)
+        }
+        CppType::Array { element, .. } => cpp_type_has_spelling_sensitive_components(element),
+        CppType::Function {
+            return_type,
+            params,
+            ..
+        } => {
+            cpp_type_has_spelling_sensitive_components(return_type)
+                || params
+                    .iter()
+                    .any(cpp_type_has_spelling_sensitive_components)
+        }
+        _ => false,
+    }
+}
+
 fn infer_non_type_array_ref_template_arg(
     pattern_ty: &CppType,
     instantiated_ty: &CppType,
@@ -78051,13 +78073,17 @@ fn infer_non_type_array_ref_template_arg(
         return None;
     };
 
-    // Fast path: most successful NTTP array-ref matches have structurally equal
-    // element/pointee types. Fall back to canonical Rust-surface comparison for
-    // equivalent spellings (`char` vs `signed char`, etc.).
-    if element.as_ref() != pointee.as_ref()
-        && element.to_rust_type_str() != pointee.to_rust_type_str()
-    {
-        return None;
+    if element.as_ref() != pointee.as_ref() {
+        // Fast path: non-spelling-sensitive shapes cannot be equivalent if they
+        // are structurally different.
+        let needs_canonicalized_spelling_match =
+            cpp_type_has_spelling_sensitive_components(element)
+                || cpp_type_has_spelling_sensitive_components(pointee);
+        if !needs_canonicalized_spelling_match
+            || element.to_rust_type_str() != pointee.to_rust_type_str()
+        {
+            return None;
+        }
     }
 
     call_arg
@@ -78726,6 +78752,37 @@ mod tests {
             inferred,
             Some("2".to_string()),
             "nttp array-ref inference should preserve canonicalized element/pointee matches"
+        );
+    }
+
+    #[test]
+    fn test_function_template_type_arg_inference_nttp_array_ref_accepts_canonicalized_nested_pointer_element_spelling(
+    ) {
+        let pattern_ty = CppType::Reference {
+            referent: Box::new(CppType::Array {
+                element: Box::new(CppType::Pointer {
+                    pointee: Box::new(CppType::Named("char".to_string())),
+                    is_const: true,
+                }),
+                size: None,
+            }),
+            is_const: true,
+            is_rvalue: false,
+        };
+        let instantiated_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Pointer {
+                pointee: Box::new(CppType::Char { signed: true }),
+                is_const: true,
+            }),
+            is_const: true,
+        };
+        let literal_arg = make_node(ClangNodeKind::StringLiteral("~".to_string()), vec![]);
+        let inferred =
+            infer_non_type_array_ref_template_arg(&pattern_ty, &instantiated_ty, Some(&literal_arg));
+        assert_eq!(
+            inferred,
+            Some("2".to_string()),
+            "nttp array-ref inference should preserve nested canonicalized element/pointee matches"
         );
     }
 
