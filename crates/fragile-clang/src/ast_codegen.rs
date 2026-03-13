@@ -1200,6 +1200,9 @@ pub struct AstCodeGen {
     /// Cache of whether a function-template definition references template params
     /// in parameter type positions. Used in hot call-site matching paths.
     fn_template_param_dependency_cache: HashMap<String, bool>,
+    /// Cache of function-template inference shape metadata used by
+    /// `infer_fn_template_type_args` in hot call-site matching paths.
+    fn_template_inference_shape_cache: HashMap<String, FnTemplateInferenceShape>,
     /// Function-template keys indexed by unqualified leaf name to avoid scanning
     /// the full definition map for every call-site candidate lookup.
     fn_template_keys_by_leaf: HashMap<String, Vec<String>>,
@@ -1292,6 +1295,18 @@ struct FnTemplateInfo {
 }
 
 #[derive(Clone)]
+struct FnTemplateInferenceShape {
+    /// Earliest parameter position where each template parameter appears.
+    template_param_first_param_positions: Vec<Option<usize>>,
+    /// Whether each template parameter appears in the return type but not in
+    /// parameter patterns.
+    template_param_appears_in_return: Vec<bool>,
+    has_parameter_pack: bool,
+    has_unsized_array_ref_param: bool,
+    has_non_type_param_candidate: bool,
+}
+
+#[derive(Clone)]
 struct SwitchArm<'a> {
     values: Vec<i128>,
     body: Vec<&'a ClangNode>,
@@ -1380,6 +1395,7 @@ impl AstCodeGen {
             pending_template_instantiations: HashSet::new(),
             fn_template_definitions: HashMap::new(),
             fn_template_param_dependency_cache: HashMap::new(),
+            fn_template_inference_shape_cache: HashMap::new(),
             fn_template_keys_by_leaf: HashMap::new(),
             pending_fn_instantiations: HashMap::new(),
             skip_vtable_generation: HashSet::new(),
@@ -38421,7 +38437,26 @@ impl FragileAtomicBoolCompat for atomic_bool {
 
     fn set_fn_template_definition(&mut self, key: String, info: FnTemplateInfo) {
         self.fn_template_param_dependency_cache.remove(&key);
+        self.fn_template_inference_shape_cache.remove(&key);
         self.fn_template_definitions.insert(key, info);
+    }
+
+    fn fn_template_inference_shape(
+        &mut self,
+        template_key: &str,
+    ) -> Option<&FnTemplateInferenceShape> {
+        if !self
+            .fn_template_inference_shape_cache
+            .contains_key(template_key)
+        {
+            let shape = {
+                let template_info = self.fn_template_definitions.get(template_key)?;
+                build_fn_template_inference_shape(template_info)
+            };
+            self.fn_template_inference_shape_cache
+                .insert(template_key.to_string(), shape);
+        }
+        self.fn_template_inference_shape_cache.get(template_key)
     }
 
     fn fn_template_has_param_dependent_args(&mut self, template_key: &str) -> bool {
@@ -38790,17 +38825,19 @@ impl FragileAtomicBoolCompat for atomic_bool {
         for template_key in candidate_keys {
             let has_param_dependent_template_arg =
                 self.fn_template_has_param_dependent_args(&template_key);
+            let inference_shape = self.fn_template_inference_shape(&template_key).cloned();
             let Some(template_info) = self.fn_template_definitions.get(&template_key) else {
                 continue;
             };
             // Build type substitution map by comparing template param patterns with instantiated types.
             // For example, if template has (T* a, T* b) and instantiated is (int*, int*),
             // we need to extract T = int, not T = int*.
-            let Some(type_args) = infer_fn_template_type_args(
+            let Some(type_args) = infer_fn_template_type_args_with_shape(
                 template_info,
                 params,
                 return_type.as_ref(),
                 Some(call_args),
+                inference_shape.as_ref(),
             ) else {
                 continue;
             };
@@ -78301,21 +78338,11 @@ fn has_unsized_array_ref_pattern(ty: &CppType) -> bool {
     )
 }
 
-fn infer_fn_template_type_args(
-    template_info: &FnTemplateInfo,
-    instantiated_params: &[CppType],
-    instantiated_return_type: &CppType,
-    instantiated_args: Option<&[ClangNode]>,
-) -> Option<Vec<String>> {
+fn build_fn_template_inference_shape(template_info: &FnTemplateInfo) -> FnTemplateInferenceShape {
     let has_parameter_pack = template_info
         .params
         .iter()
         .any(|(_, ty)| cpp_type_contains_parameter_pack(ty));
-    // Avoid rewriting calls to overloads that share the same base name but differ in arity.
-    if instantiated_params.len() != template_info.params.len() && !has_parameter_pack {
-        return None;
-    }
-
     let has_unsized_array_ref_param = template_info
         .params
         .iter()
@@ -78379,7 +78406,54 @@ fn infer_fn_template_type_args(
                 .any(|(first_param_position, appears_in_return)| {
                     first_param_position.is_none() && !*appears_in_return
                 });
-    let inferred_non_type_array_ref_arg = if has_non_type_param_candidate {
+
+    FnTemplateInferenceShape {
+        template_param_first_param_positions,
+        template_param_appears_in_return,
+        has_parameter_pack,
+        has_unsized_array_ref_param,
+        has_non_type_param_candidate,
+    }
+}
+
+fn infer_fn_template_type_args(
+    template_info: &FnTemplateInfo,
+    instantiated_params: &[CppType],
+    instantiated_return_type: &CppType,
+    instantiated_args: Option<&[ClangNode]>,
+) -> Option<Vec<String>> {
+    infer_fn_template_type_args_with_shape(
+        template_info,
+        instantiated_params,
+        instantiated_return_type,
+        instantiated_args,
+        None,
+    )
+}
+
+fn infer_fn_template_type_args_with_shape(
+    template_info: &FnTemplateInfo,
+    instantiated_params: &[CppType],
+    instantiated_return_type: &CppType,
+    instantiated_args: Option<&[ClangNode]>,
+    precomputed_shape: Option<&FnTemplateInferenceShape>,
+) -> Option<Vec<String>> {
+    let computed_shape;
+    let inference_shape = if let Some(shape) = precomputed_shape {
+        shape
+    } else {
+        computed_shape = build_fn_template_inference_shape(template_info);
+        &computed_shape
+    };
+
+    // Avoid rewriting calls to overloads that share the same base name but differ in arity.
+    if instantiated_params.len() != template_info.params.len()
+        && !inference_shape.has_parameter_pack
+    {
+        return None;
+    }
+
+    let inferred_non_type_array_ref_arg = if inference_shape.has_non_type_param_candidate {
         template_info
             .params
             .iter()
@@ -78396,11 +78470,12 @@ fn infer_fn_template_type_args(
 
     let mut type_args = Vec::with_capacity(template_info.template_params.len());
     for (idx, template_param_name) in template_info.template_params.iter().enumerate() {
-        let first_param_position = template_param_first_param_positions[idx];
+        let first_param_position = inference_shape.template_param_first_param_positions[idx];
         let appears_in_params = first_param_position.is_some();
-        let appears_in_return = template_param_appears_in_return[idx];
+        let appears_in_return = inference_shape.template_param_appears_in_return[idx];
         let appears_in_type_positions = appears_in_params || appears_in_return;
-        let non_type_param_candidate = !appears_in_type_positions && has_unsized_array_ref_param;
+        let non_type_param_candidate =
+            !appears_in_type_positions && inference_shape.has_unsized_array_ref_param;
         let mut inferred = first_param_position.and_then(|param_idx| {
             let instantiated_ty = instantiated_params.get(param_idx)?;
             let (_, pattern_ty) = template_info.params.get(param_idx)?;
@@ -112729,6 +112804,53 @@ stream.PutN(c, n);
     }
 
     #[test]
+    fn test_fn_template_inference_shape_reuses_cached_value() {
+        let mut codegen = AstCodeGen::new();
+        let info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Named("T".to_string()),
+            params: vec![("value".to_string(), CppType::Named("T".to_string()))],
+            body: None,
+            is_noexcept: false,
+        };
+        codegen.set_fn_template_definition("cache::shape".to_string(), info);
+        let initial_shape = codegen
+            .fn_template_inference_shape("cache::shape")
+            .cloned()
+            .expect("inference shape should be computed for known template key");
+        assert_eq!(
+            initial_shape.template_param_first_param_positions,
+            vec![Some(0)],
+            "computed inference shape should record first parameter position"
+        );
+        assert!(
+            codegen
+                .fn_template_inference_shape_cache
+                .contains_key("cache::shape"),
+            "shape lookup should populate inference-shape cache"
+        );
+
+        codegen.fn_template_inference_shape_cache.insert(
+            "cache::shape".to_string(),
+            FnTemplateInferenceShape {
+                template_param_first_param_positions: vec![Some(7)],
+                template_param_appears_in_return: vec![true],
+                has_parameter_pack: false,
+                has_unsized_array_ref_param: false,
+                has_non_type_param_candidate: false,
+            },
+        );
+        let reused_shape = codegen
+            .fn_template_inference_shape("cache::shape")
+            .expect("second lookup should reuse cached shape");
+        assert_eq!(
+            reused_shape.template_param_first_param_positions,
+            vec![Some(7)],
+            "second lookup should reuse cached shape entry without recomputing"
+        );
+    }
+
+    #[test]
     fn test_set_fn_template_definition_invalidates_param_dependency_cache() {
         let mut codegen = AstCodeGen::new();
         let dependent_info = FnTemplateInfo {
@@ -112750,6 +112872,10 @@ stream.PutN(c, n);
             codegen.fn_template_has_param_dependent_args("cache::swap"),
             "first cached dependency flag should reflect dependent definition"
         );
+        assert!(
+            codegen.fn_template_inference_shape("cache::swap").is_some(),
+            "inference shape cache should populate for known template key"
+        );
         assert_eq!(
             codegen
                 .fn_template_param_dependency_cache
@@ -112765,6 +112891,12 @@ stream.PutN(c, n);
                 .fn_template_param_dependency_cache
                 .contains_key("cache::swap"),
             "replacing template definition should invalidate cached dependency flag"
+        );
+        assert!(
+            !codegen
+                .fn_template_inference_shape_cache
+                .contains_key("cache::swap"),
+            "replacing template definition should invalidate cached inference shape"
         );
         assert!(
             !codegen.fn_template_has_param_dependent_args("cache::swap"),
