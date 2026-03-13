@@ -78004,6 +78004,7 @@ fn cpp_type_contains_template_param(ty: &CppType, param_name: &str) -> bool {
 fn mark_template_param_presence_in_cpp_type(
     ty: &CppType,
     candidate_names: &[&str],
+    candidate_name_to_index: &HashMap<&str, usize>,
     candidate_presence: &mut [bool],
     unresolved_candidate_count: &mut usize,
 ) {
@@ -78013,14 +78014,11 @@ fn mark_template_param_presence_in_cpp_type(
     }
     match ty {
         CppType::TemplateParam { name, .. } | CppType::ParameterPack { name, .. } => {
-            for (idx, candidate_name) in candidate_names.iter().enumerate() {
-                if !candidate_presence[idx] && name == candidate_name {
+            if let Some(&idx) = candidate_name_to_index.get(name.as_str()) {
+                if !candidate_presence[idx] {
                     candidate_presence[idx] = true;
                     *unresolved_candidate_count =
                         unresolved_candidate_count.saturating_sub(1);
-                    if *unresolved_candidate_count == 0 {
-                        break;
-                    }
                 }
             }
         }
@@ -78028,6 +78026,7 @@ fn mark_template_param_presence_in_cpp_type(
             mark_template_param_presence_in_cpp_type(
                 pointee,
                 candidate_names,
+                candidate_name_to_index,
                 candidate_presence,
                 unresolved_candidate_count,
             );
@@ -78036,6 +78035,7 @@ fn mark_template_param_presence_in_cpp_type(
             mark_template_param_presence_in_cpp_type(
                 referent,
                 candidate_names,
+                candidate_name_to_index,
                 candidate_presence,
                 unresolved_candidate_count,
             );
@@ -78044,6 +78044,7 @@ fn mark_template_param_presence_in_cpp_type(
             mark_template_param_presence_in_cpp_type(
                 element,
                 candidate_names,
+                candidate_name_to_index,
                 candidate_presence,
                 unresolved_candidate_count,
             );
@@ -78056,6 +78057,7 @@ fn mark_template_param_presence_in_cpp_type(
             mark_template_param_presence_in_cpp_type(
                 return_type,
                 candidate_names,
+                candidate_name_to_index,
                 candidate_presence,
                 unresolved_candidate_count,
             );
@@ -78066,6 +78068,7 @@ fn mark_template_param_presence_in_cpp_type(
                 mark_template_param_presence_in_cpp_type(
                     param,
                     candidate_names,
+                    candidate_name_to_index,
                     candidate_presence,
                     unresolved_candidate_count,
                 );
@@ -78233,6 +78236,13 @@ fn infer_fn_template_type_args(
             .iter()
             .map(|idx| template_info.template_params[*idx].as_str())
             .collect();
+        let mut return_only_template_param_name_to_index =
+            HashMap::with_capacity(return_only_template_param_names.len());
+        for (idx, candidate_name) in return_only_template_param_names.iter().enumerate() {
+            return_only_template_param_name_to_index
+                .entry(*candidate_name)
+                .or_insert(idx);
+        }
         let mut return_only_template_param_presence =
             vec![false; return_only_template_param_names.len()];
         let mut unresolved_return_only_template_param_count =
@@ -78240,6 +78250,7 @@ fn infer_fn_template_type_args(
         mark_template_param_presence_in_cpp_type(
             &template_info.return_type,
             &return_only_template_param_names,
+            &return_only_template_param_name_to_index,
             &mut return_only_template_param_presence,
             &mut unresolved_return_only_template_param_count,
         );
@@ -79066,11 +79077,16 @@ mod tests {
             is_variadic: false,
         };
         let candidate_names = vec!["U", "V", "N"];
+        let mut candidate_name_to_index = HashMap::with_capacity(candidate_names.len());
+        for (idx, candidate_name) in candidate_names.iter().enumerate() {
+            candidate_name_to_index.entry(*candidate_name).or_insert(idx);
+        }
         let mut candidate_presence = vec![false; candidate_names.len()];
         let mut unresolved_candidate_count = candidate_names.len();
         mark_template_param_presence_in_cpp_type(
             &ty,
             &candidate_names,
+            &candidate_name_to_index,
             &mut candidate_presence,
             &mut unresolved_candidate_count,
         );
@@ -79078,6 +79094,42 @@ mod tests {
         assert_eq!(
             unresolved_candidate_count, 1,
             "unresolved counter should track remaining candidate template params"
+        );
+    }
+
+    #[test]
+    fn test_mark_template_param_presence_in_cpp_type_uses_exact_lookup_for_template_param_nodes() {
+        let ty = CppType::Function {
+            return_type: Box::new(CppType::TemplateParam {
+                name: "U".to_string(),
+                depth: 0,
+                index: 0,
+            }),
+            params: vec![CppType::ParameterPack {
+                name: "Args".to_string(),
+                depth: 0,
+                index: 1,
+            }],
+            is_variadic: false,
+        };
+        let candidate_names = vec!["Args", "U", "Missing"];
+        let mut candidate_name_to_index = HashMap::with_capacity(candidate_names.len());
+        for (idx, candidate_name) in candidate_names.iter().enumerate() {
+            candidate_name_to_index.entry(*candidate_name).or_insert(idx);
+        }
+        let mut candidate_presence = vec![false; candidate_names.len()];
+        let mut unresolved_candidate_count = candidate_names.len();
+        mark_template_param_presence_in_cpp_type(
+            &ty,
+            &candidate_names,
+            &candidate_name_to_index,
+            &mut candidate_presence,
+            &mut unresolved_candidate_count,
+        );
+        assert_eq!(candidate_presence, vec![true, true, false]);
+        assert_eq!(
+            unresolved_candidate_count, 1,
+            "exact-name template nodes should be resolved through lookup without affecting unrelated candidates"
         );
     }
 
