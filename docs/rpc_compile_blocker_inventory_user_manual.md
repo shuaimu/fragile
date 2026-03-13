@@ -18,6 +18,7 @@ For each requested lane (`clang`, `fragilec` by default), the run root must cont
 
 - `lane_<lane>/build.status`
 - `lane_<lane>/build.stderr`
+- `lane_<lane>/build.stdout` (optional but used for timeout compile-unit extraction)
 
 These are produced by `scripts/mako_rpcbench_harness.py` execution mode.
 
@@ -81,6 +82,7 @@ With baseline comparison enabled, manifest additionally includes:
 - `type_mismatch_e0308`
 - `other_rustc_error`
 - `other_build_failure`
+- `build_timeout`
 
 Notes:
 
@@ -90,6 +92,7 @@ Notes:
 - first failing compile file is extracted from known fragilec markers:
   - rustc compile-failed marker
   - transpile-failed marker
+  - timeout fallback: last `Building CXX object ...` source unit from `build.stdout`
 
 ## Regression Gate
 

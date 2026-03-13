@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Deterministic compile-blocker inventory extraction for mako rpc harness runs.
 
-Leaf 2.1 scope:
+Leaf 2.1 + 2.6.b.i scope:
 - read per-lane build artifacts emitted by `mako_rpcbench_harness.py`
 - classify first failing compile blocker families deterministically
+- classify timeout-only captures and extract active compile unit fallback from build stdout
 - persist lane inventory artifacts + root manifest for follow-up blocker-fix leaves
 """
 
@@ -17,6 +18,7 @@ from typing import Sequence
 
 DEFAULT_LANES: tuple[str, str] = ("clang", "fragilec")
 SKIPPED_STATUS = -1
+COMMAND_TIMEOUT_STATUS = 124
 
 RUSTC_COMPILE_FAILURE_FILE_PATTERN = re.compile(
     r"\[fragilec\] fragile rustc object compile failed for (.+)"
@@ -25,6 +27,7 @@ TRANSPILE_FAILURE_FILE_PATTERN = re.compile(
     r"\[fragilec\] failed to transpile (.+?) with parser backend"
 )
 E0425_PATTERN = re.compile(r"error\[E0425\]")
+BUILDING_OBJECT_PATTERN = re.compile(r"Building (?:CXX|C) object (.+?\.o)\s*$")
 
 BLOCKER_SEVERITY_ORDER: dict[str, int] = {
     "unresolved_name_or_type_e0425": 0,
@@ -33,9 +36,10 @@ BLOCKER_SEVERITY_ORDER: dict[str, int] = {
     "type_mismatch_e0308": 3,
     "other_rustc_error": 4,
     "transpile_failure": 5,
-    "other_build_failure": 6,
-    "build_not_executed": 7,
-    "none": 8,
+    "build_timeout": 6,
+    "other_build_failure": 7,
+    "build_not_executed": 8,
+    "none": 9,
 }
 
 
@@ -85,13 +89,45 @@ def parse_key_value_file(path: Path) -> dict[str, str]:
     return result
 
 
-def first_failing_compile_file(build_stderr: str) -> str:
+def is_timeout_failure(build_status: int, build_stderr: str) -> bool:
+    if build_status == COMMAND_TIMEOUT_STATUS:
+        return True
+    return "command timed out" in build_stderr
+
+
+def source_from_cmake_object_path(object_path: str) -> str:
+    source_path = object_path.strip()
+    if ".dir/" in source_path:
+        source_path = source_path.split(".dir/", 1)[1]
+    if source_path.endswith(".o"):
+        source_path = source_path[: -len(".o")]
+    source_path = source_path.strip()
+    return source_path if source_path else "none"
+
+
+def timeout_active_compile_file(build_stdout: str) -> str:
+    latest_source = "none"
+    for line in build_stdout.splitlines():
+        match = BUILDING_OBJECT_PATTERN.search(line.strip())
+        if match is None:
+            continue
+        maybe_source = source_from_cmake_object_path(match.group(1))
+        if maybe_source != "none":
+            latest_source = maybe_source
+    return latest_source
+
+
+def first_failing_compile_file(
+    build_status: int, build_stderr: str, build_stdout: str
+) -> str:
     match = RUSTC_COMPILE_FAILURE_FILE_PATTERN.search(build_stderr)
     if match is not None:
         return match.group(1).strip()
     match = TRANSPILE_FAILURE_FILE_PATTERN.search(build_stderr)
     if match is not None:
         return match.group(1).strip()
+    if is_timeout_failure(build_status, build_stderr):
+        return timeout_active_compile_file(build_stdout)
     return "none"
 
 
@@ -100,6 +136,8 @@ def classify_blocker(build_status: int, build_stderr: str) -> str:
         return "none"
     if build_status == SKIPPED_STATUS:
         return "build_not_executed"
+    if is_timeout_failure(build_status, build_stderr):
+        return "build_timeout"
     if "[fragilec] failed to transpile " in build_stderr:
         return "transpile_failure"
     if "error[E0425]" in build_stderr:
@@ -172,6 +210,7 @@ def run_inventory(
         lane_dir = run_root / f"lane_{lane}"
         build_status_path = lane_dir / "build.status"
         build_stderr_path = lane_dir / "build.stderr"
+        build_stdout_path = lane_dir / "build.stdout"
         if not build_status_path.exists():
             raise FileNotFoundError(f"missing build status artifact: {build_status_path}")
         if not build_stderr_path.exists():
@@ -179,8 +218,9 @@ def run_inventory(
 
         build_status = read_int(build_status_path)
         build_stderr = read_text(build_stderr_path)
+        build_stdout = read_text(build_stdout_path) if build_stdout_path.exists() else ""
         blocker_class = classify_blocker(build_status, build_stderr)
-        blocker_file = first_failing_compile_file(build_stderr)
+        blocker_file = first_failing_compile_file(build_status, build_stderr, build_stdout)
         e0425_count = unresolved_name_count(build_stderr)
 
         if build_status in (0, SKIPPED_STATUS):

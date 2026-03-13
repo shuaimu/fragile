@@ -2918,3 +2918,50 @@ Checked against Section 1.3 and `docs/dev/wrong.md`:
   - `lane_fragilec_failure_class=build_timeout`
   - `lane_fragilec_test_rpc_status=-1`
   - `no_regression_verdict=not_executed`
+
+## 49. RPC Compile Blocker Leaf 2.6.b.i: Timeout Blocker Extraction (2026-03-13)
+
+### Problem
+
+Leaf `2.6.a` strict build-only replay produced a deterministic lane failure class (`build_timeout`),
+but blocker inventory did not expose a compile-unit identity for timeout-only captures.
+Without a compile unit, follow-up blocker replay/fixes could not be prioritized deterministically.
+
+### Decision
+
+Extend blocker inventory extraction with timeout-aware behavior:
+
+- classify timeout builds as `build_timeout`
+- when rustc/transpile markers are absent, extract the last active compile unit from
+  `build.stdout` `Building CXX object ...` lines
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no target-specific transpiler logic
+- no fake semantic method bodies or forced-success paths
+- no force-native bypass
+- extracted blocker fields are derived from real harness artifacts only
+
+### Implementation
+
+- Updated `scripts/mako_rpc_compile_blocker_inventory.py`:
+  - added timeout detection (`build.status=124` or timeout marker text)
+  - added `build_timeout` blocker class
+  - added timeout fallback compile-file extraction from `build.stdout`
+- Updated `tests/python/test_mako_rpc_compile_blocker_inventory.py`:
+  - added `test_inventory_classifies_build_timeout_and_extracts_active_compile_file`
+  - fixture now emits `build.stdout`
+- Updated docs:
+  - `TODO.md` (`2.6.b` decomposition + `2.6.b.i` completion evidence)
+  - `docs/rpc_compile_blocker_inventory_user_manual.md`
+  - `docs/rpc_compile_blocker_leaf_2_6b_i_design_2026_03_13.md`
+
+### Validation
+
+- `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests/python/test_mako_rpc_compile_blocker_inventory.py -v`
+- deterministic strict replay evidence from `/tmp/fragile_rpc_leaf_2_6a_build_only_20260313`:
+  - `lane_fragilec_first_failing_compile_class=build_timeout`
+  - `lane_fragilec_first_failing_compile_file=src/rrr/base/misc.cpp`
+  - `lane_fragilec_first_failing_compile_e0425_count=0`

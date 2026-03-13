@@ -16,11 +16,13 @@ class MakoRpcCompileBlockerInventoryTests(unittest.TestCase):
         *,
         build_status: int,
         build_stderr: str,
+        build_stdout: str = "",
     ) -> None:
         lane_dir = run_root / f"lane_{lane}"
         lane_dir.mkdir(parents=True, exist_ok=True)
         (lane_dir / "build.status").write_text(f"{build_status}\n", encoding="utf-8")
         (lane_dir / "build.stderr").write_text(build_stderr, encoding="utf-8")
+        (lane_dir / "build.stdout").write_text(build_stdout, encoding="utf-8")
 
     def _run_inventory(
         self,
@@ -217,6 +219,59 @@ class MakoRpcCompileBlockerInventoryTests(unittest.TestCase):
                 .read_text(encoding="utf-8")
                 .strip(),
                 "missing_method_e0599",
+            )
+
+    def test_inventory_classifies_build_timeout_and_extracts_active_compile_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root = Path(tmp) / "run"
+            run_root.mkdir(parents=True, exist_ok=True)
+            self._write_lane_build_artifacts(
+                run_root,
+                "fragilec",
+                build_status=124,
+                build_stderr=(
+                    "error: command timed out after 180 seconds: cmake --build /tmp/run/build_fragilec -j 4 --target test_rpc rpcbench\n"
+                ),
+                build_stdout="\n".join(
+                    [
+                        "[  0%] Building CXX object CMakeFiles/rrr.dir/src/rrr/base/basetypes.cpp.o",
+                        "[  0%] Building CXX object CMakeFiles/rrr.dir/src/rrr/base/misc.cpp.o",
+                    ]
+                ),
+            )
+
+            result = self._run_inventory(run_root, lanes="fragilec")
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            lane_dir = run_root / "lane_fragilec"
+            self.assertEqual(
+                (lane_dir / "first_failing_compile_class.txt")
+                .read_text(encoding="utf-8")
+                .strip(),
+                "build_timeout",
+            )
+            self.assertEqual(
+                (lane_dir / "first_failing_compile_file.txt")
+                .read_text(encoding="utf-8")
+                .strip(),
+                "src/rrr/base/misc.cpp",
+            )
+            self.assertEqual(
+                (lane_dir / "first_failing_compile_e0425_count.txt")
+                .read_text(encoding="utf-8")
+                .strip(),
+                "0",
+            )
+
+            manifest = self._parse_key_values(
+                run_root / "rpc_compile_blocker_inventory_manifest.txt"
+            )
+            self.assertEqual(
+                manifest["lane_fragilec_first_failing_compile_class"], "build_timeout"
+            )
+            self.assertEqual(
+                manifest["lane_fragilec_first_failing_compile_file"],
+                "src/rrr/base/misc.cpp",
             )
 
     def test_inventory_fails_when_required_lane_artifact_is_missing(self) -> None:
