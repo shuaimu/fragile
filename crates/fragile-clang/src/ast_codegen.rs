@@ -38744,10 +38744,8 @@ impl FragileAtomicBoolCompat for atomic_bool {
         };
 
         let candidate_keys = self.collect_fn_template_candidate_keys(fn_name, namespace_path);
-        let mut selected_instantiation: Option<(String, (String, Vec<String>, FnTemplateInfo))> =
-            None;
-        let mut fallback_instantiation: Option<(String, (String, Vec<String>, FnTemplateInfo))> =
-            None;
+        let mut selected_instantiation: Option<(String, String, Vec<String>)> = None;
+        let mut fallback_instantiation: Option<(String, String, Vec<String>)> = None;
 
         for template_key in candidate_keys {
             let Some(template_info) = self.fn_template_definitions.get(&template_key) else {
@@ -38774,19 +38772,6 @@ impl FragileAtomicBoolCompat for atomic_bool {
             let sanitized_fn_name = sanitize_identifier(fn_name);
             let mangled_name = format!("{}_{}", sanitized_fn_name, sanitized_args.join("_"));
 
-            let mut concrete_template_info = template_info.clone();
-            if concrete_template_info.params.len() == params.len() {
-                for (idx, (_, ty)) in concrete_template_info.params.iter_mut().enumerate() {
-                    let ty_str = ty.to_rust_type_str();
-                    if ty_str == "_" || Self::has_unresolved_template_placeholder(&ty_str) {
-                        *ty = params[idx].clone();
-                    }
-                }
-            }
-            let ret_str = concrete_template_info.return_type.to_rust_type_str();
-            if ret_str == "_" || Self::has_unresolved_template_placeholder(&ret_str) {
-                concrete_template_info.return_type = return_type.as_ref().clone();
-            }
             let has_param_dependent_template_arg =
                 template_info.params.iter().any(|(_, pattern)| {
                     template_info
@@ -38797,14 +38782,8 @@ impl FragileAtomicBoolCompat for atomic_bool {
             if fallback_instantiation.is_none()
                 && (has_param_dependent_template_arg || params.is_empty())
             {
-                fallback_instantiation = Some((
-                    mangled_name.clone(),
-                    (
-                        template_key.clone(),
-                        type_args.clone(),
-                        concrete_template_info.clone(),
-                    ),
-                ));
+                fallback_instantiation =
+                    Some((mangled_name.clone(), template_key.clone(), type_args.clone()));
             }
 
             let mut subst_map: HashMap<String, String> = HashMap::new();
@@ -38849,17 +38828,26 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 continue;
             }
 
-            selected_instantiation = Some((
-                mangled_name,
-                (template_key, type_args, concrete_template_info),
-            ));
+            selected_instantiation = Some((mangled_name, template_key, type_args));
             break;
         }
-        if let Some((mangled_name, payload)) = selected_instantiation.or(fallback_instantiation) {
+        if let Some((mangled_name, template_key, type_args)) =
+            selected_instantiation.or(fallback_instantiation)
+        {
+            let concrete_template_info = if let Some(template_info) =
+                self.fn_template_definitions.get(&template_key)
+            {
+                Self::build_concrete_fn_template_info(template_info, params, return_type.as_ref())
+            } else {
+                return;
+            };
             // Keep the most recent instantiation surface. User TU calls are
             // typically visited after header internals and provide better
             // concrete argument types than early degraded header call-sites.
-            self.pending_fn_instantiations.insert(mangled_name, payload);
+            self.pending_fn_instantiations.insert(
+                mangled_name,
+                (template_key, type_args, concrete_template_info),
+            );
         } else if Self::is_same_ptr_const_i8_synthesis_candidate(
             fn_name,
             params,
@@ -38891,6 +38879,27 @@ impl FragileAtomicBoolCompat for atomic_bool {
     fn node_contains_string_literal(node: &ClangNode) -> bool {
         matches!(&node.kind, ClangNodeKind::StringLiteral(_))
             || node.children.iter().any(Self::node_contains_string_literal)
+    }
+
+    fn build_concrete_fn_template_info(
+        template_info: &FnTemplateInfo,
+        instantiated_params: &[CppType],
+        instantiated_return_type: &CppType,
+    ) -> FnTemplateInfo {
+        let mut concrete_template_info = template_info.clone();
+        if concrete_template_info.params.len() == instantiated_params.len() {
+            for (idx, (_, ty)) in concrete_template_info.params.iter_mut().enumerate() {
+                let ty_str = ty.to_rust_type_str();
+                if ty_str == "_" || Self::has_unresolved_template_placeholder(&ty_str) {
+                    *ty = instantiated_params[idx].clone();
+                }
+            }
+        }
+        let ret_str = concrete_template_info.return_type.to_rust_type_str();
+        if ret_str == "_" || Self::has_unresolved_template_placeholder(&ret_str) {
+            concrete_template_info.return_type = instantiated_return_type.clone();
+        }
+        concrete_template_info
     }
 
     fn is_same_ptr_const_i8_synthesis_candidate(
@@ -111602,6 +111611,48 @@ stream.PutN(c, n);
         assert!(
             codegen.pending_fn_instantiations.is_empty(),
             "current pending function instantiations should be consumed without clone-backed staging"
+        );
+    }
+
+    #[test]
+    fn test_build_concrete_fn_template_info_rewrites_unresolved_param_and_return_slots() {
+        let info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Named("_".to_string()),
+            params: vec![
+                ("lhs".to_string(), CppType::Named("_".to_string())),
+                ("rhs".to_string(), CppType::Named("_".to_string())),
+            ],
+            body: None,
+            is_noexcept: false,
+        };
+        let instantiated_params = vec![
+            CppType::Int { signed: true },
+            CppType::Pointer {
+                pointee: Box::new(CppType::Char { signed: true }),
+                is_const: true,
+            },
+        ];
+        let concrete = AstCodeGen::build_concrete_fn_template_info(
+            &info,
+            &instantiated_params,
+            &CppType::Bool,
+        );
+
+        assert_eq!(
+            concrete.params[0].1.to_rust_type_str(),
+            "i32",
+            "unresolved function-template parameter slot should be rewritten to instantiated argument type"
+        );
+        assert_eq!(
+            concrete.params[1].1.to_rust_type_str(),
+            "*const i8",
+            "all unresolved function-template parameter slots should be rewritten from instantiated argument types"
+        );
+        assert_eq!(
+            concrete.return_type.to_rust_type_str(),
+            "bool",
+            "unresolved function-template return slot should be rewritten to instantiated return type"
         );
     }
 

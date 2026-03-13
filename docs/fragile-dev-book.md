@@ -5380,3 +5380,94 @@ Checked against Section 1.3 and `docs/dev/wrong.md`:
 Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.ii` is complete. The strict lane
 remains timeout-bound on `src/rrr/base/misc.cpp`, and non-increase gates confirm
 no class-rank or `E0425` regression versus the `2.6.c.iii` baseline.
+
+## 82. RPC Compile Blocker Leaf 2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.a: Deferred Function-Template Payload Concretization (2026-03-13)
+
+### Problem
+
+With leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.ii` complete, the next open
+optimization leaf was `...c.iii.c.iii.c.iii.c.iii.a`.
+
+In `collect_fn_template_instantiation`, candidate scanning cloned
+`FnTemplateInfo` eagerly for each viable candidate before final selection,
+including candidates later rejected by param/return compatibility checks. This
+clone-heavy path sits in the pre-top-level codegen window.
+
+### Execution Plan
+
+1. Keep candidate matching logic unchanged, but defer payload concretization.
+2. Track selected/fallback candidate metadata only (`mangled_name`, template key,
+   inferred type args).
+3. Materialize concrete `FnTemplateInfo` payload once after final
+   selected/fallback resolution.
+4. Add focused regression coverage for unresolved-slot concretization behavior.
+5. Capture deterministic strict replay profile/timing artifacts at 120s/300s.
+6. Re-run full suites and require baseline parity.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no RPC-target-specific branches
+- no force-native paths
+- no semantic-stub/fake-body fallback changes
+- generic codegen hot-path optimization only
+
+### Implementation
+
+Updated:
+
+- `crates/fragile-clang/src/ast_codegen.rs`
+
+Key changes:
+
+- `collect_fn_template_instantiation` now records selected/fallback candidate
+  metadata instead of cloning `FnTemplateInfo` per candidate.
+- Added helper `build_concrete_fn_template_info` to materialize unresolved
+  parameter/return slots once for the final selected/fallback candidate.
+- Preserved existing fallback behavior (`same_ptr_const_i8` synthesis path
+  unchanged).
+
+Focused regression added:
+
+- `test_build_concrete_fn_template_info_rewrites_unresolved_param_and_return_slots`
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang test_build_concrete_fn_template_info_rewrites_unresolved_param_and_return_slots -- --nocapture`
+- `cargo test -p fragile-clang test_generate_fn_template_instantiations_consumes_pending_map_and_generates_functions -- --nocapture`
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_a_callshape_profile_120_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_a_stage_timing_120_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_a_callshape_profile_300_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_a_stage_timing_300_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- 120s profile:
+  - `status=codegen_after_template_collection`
+  - `status_history=codegen_started,codegen_after_template_collection`
+- 300s profile:
+  - `status=codegen_after_template_instantiation_generation`
+  - `status_history=codegen_started,codegen_after_template_collection,codegen_after_template_instantiation_generation`
+  - `input_bytes=573413`
+- comparison vs prior leaf `...c.iii.c.iii.c.iii.c.i` (`input_bytes=575929`):
+  - checkpoint bytes reduced by `-2516`
+- replay manifest (`/tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313/rpc_compile_blocker_replay_manifest.txt`):
+  - `replay_01_status=124`
+  - `replay_01_timed_out=true`
+  - `replay_01_first_failure_class=build_timeout`
+  - `replay_01_blocker_file=src/rrr/base/misc.cpp`
+- full-suite baseline parity:
+  - `cargo test --workspace --all-targets`: `fragile-clang` lib
+    `738` passed / `46` failed (failure count unchanged)
+  - Python suite: `OK`, `29` ran, `1` skipped
+
+### Outcome
+
+Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.a` is complete. Deferred
+payload concretization removed per-candidate `FnTemplateInfo` clone churn while
+preserving behavior, and strict replay remains timeout-bound on
+`src/rrr/base/misc.cpp` with improved 300s checkpoint byte volume.
