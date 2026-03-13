@@ -78007,6 +78007,7 @@ fn mark_template_param_presence_in_cpp_type(
     candidate_name_to_index: &HashMap<&str, usize>,
     candidate_presence: &mut [bool],
     unresolved_candidate_count: &mut usize,
+    unresolved_candidate_indices: &mut Vec<usize>,
 ) {
     debug_assert_eq!(candidate_names.len(), candidate_presence.len());
     if *unresolved_candidate_count == 0 {
@@ -78017,6 +78018,12 @@ fn mark_template_param_presence_in_cpp_type(
             if let Some(&idx) = candidate_name_to_index.get(name.as_str()) {
                 if !candidate_presence[idx] {
                     candidate_presence[idx] = true;
+                    if let Some(position) = unresolved_candidate_indices
+                        .iter()
+                        .position(|candidate_idx| *candidate_idx == idx)
+                    {
+                        unresolved_candidate_indices.swap_remove(position);
+                    }
                     *unresolved_candidate_count =
                         unresolved_candidate_count.saturating_sub(1);
                 }
@@ -78029,6 +78036,7 @@ fn mark_template_param_presence_in_cpp_type(
                 candidate_name_to_index,
                 candidate_presence,
                 unresolved_candidate_count,
+                unresolved_candidate_indices,
             );
         }
         CppType::Reference { referent, .. } => {
@@ -78038,6 +78046,7 @@ fn mark_template_param_presence_in_cpp_type(
                 candidate_name_to_index,
                 candidate_presence,
                 unresolved_candidate_count,
+                unresolved_candidate_indices,
             );
         }
         CppType::Array { element, .. } => {
@@ -78047,6 +78056,7 @@ fn mark_template_param_presence_in_cpp_type(
                 candidate_name_to_index,
                 candidate_presence,
                 unresolved_candidate_count,
+                unresolved_candidate_indices,
             );
         }
         CppType::Function {
@@ -78060,6 +78070,7 @@ fn mark_template_param_presence_in_cpp_type(
                 candidate_name_to_index,
                 candidate_presence,
                 unresolved_candidate_count,
+                unresolved_candidate_indices,
             );
             for param in params {
                 if *unresolved_candidate_count == 0 {
@@ -78071,13 +78082,16 @@ fn mark_template_param_presence_in_cpp_type(
                     candidate_name_to_index,
                     candidate_presence,
                     unresolved_candidate_count,
+                    unresolved_candidate_indices,
                 );
             }
         }
         CppType::DependentType { spelling } | CppType::Named(spelling) => {
-            for (idx, candidate_name) in candidate_names.iter().enumerate() {
-                if !candidate_presence[idx] && spelling.contains(candidate_name) {
+            for unresolved_position in (0..unresolved_candidate_indices.len()).rev() {
+                let idx = unresolved_candidate_indices[unresolved_position];
+                if spelling.contains(candidate_names[idx]) {
                     candidate_presence[idx] = true;
+                    unresolved_candidate_indices.swap_remove(unresolved_position);
                     *unresolved_candidate_count =
                         unresolved_candidate_count.saturating_sub(1);
                     if *unresolved_candidate_count == 0 {
@@ -78247,12 +78261,15 @@ fn infer_fn_template_type_args(
             vec![false; return_only_template_param_names.len()];
         let mut unresolved_return_only_template_param_count =
             return_only_template_param_presence.len();
+        let mut unresolved_return_only_template_param_indices =
+            (0..return_only_template_param_presence.len()).collect::<Vec<_>>();
         mark_template_param_presence_in_cpp_type(
             &template_info.return_type,
             &return_only_template_param_names,
             &return_only_template_param_name_to_index,
             &mut return_only_template_param_presence,
             &mut unresolved_return_only_template_param_count,
+            &mut unresolved_return_only_template_param_indices,
         );
         for (presence_idx, template_param_idx) in
             return_only_template_param_indices.iter().enumerate()
@@ -79083,17 +79100,24 @@ mod tests {
         }
         let mut candidate_presence = vec![false; candidate_names.len()];
         let mut unresolved_candidate_count = candidate_names.len();
+        let mut unresolved_candidate_indices = (0..candidate_names.len()).collect::<Vec<_>>();
         mark_template_param_presence_in_cpp_type(
             &ty,
             &candidate_names,
             &candidate_name_to_index,
             &mut candidate_presence,
             &mut unresolved_candidate_count,
+            &mut unresolved_candidate_indices,
         );
         assert_eq!(candidate_presence, vec![true, true, false]);
         assert_eq!(
             unresolved_candidate_count, 1,
             "unresolved counter should track remaining candidate template params"
+        );
+        assert_eq!(
+            unresolved_candidate_indices,
+            vec![2],
+            "unresolved index list should keep only unmatched candidate slots"
         );
     }
 
@@ -79119,17 +79143,24 @@ mod tests {
         }
         let mut candidate_presence = vec![false; candidate_names.len()];
         let mut unresolved_candidate_count = candidate_names.len();
+        let mut unresolved_candidate_indices = (0..candidate_names.len()).collect::<Vec<_>>();
         mark_template_param_presence_in_cpp_type(
             &ty,
             &candidate_names,
             &candidate_name_to_index,
             &mut candidate_presence,
             &mut unresolved_candidate_count,
+            &mut unresolved_candidate_indices,
         );
         assert_eq!(candidate_presence, vec![true, true, false]);
         assert_eq!(
             unresolved_candidate_count, 1,
             "exact-name template nodes should be resolved through lookup without affecting unrelated candidates"
+        );
+        assert_eq!(
+            unresolved_candidate_indices,
+            vec![2],
+            "exact lookup should remove resolved template/pack candidates from unresolved index list"
         );
     }
 
