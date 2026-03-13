@@ -228,6 +228,9 @@ Generic normalizations added in this replay cycle:
   - treat `rusty::BorrowState`, `rusty::Group`, `rusty::ProbeSeq`, and `rusty::RcControlBlockBase` as runtime-internal alias targets.
   - rewrite bare item-type references to these names (for example `type X = RcControlBlockBase;`) to fully-qualified `rusty::...` paths.
   - suppress fallback/auto-export alias emission for these internals once references are rewritten, so generated TU sidecars avoid redundant top-level runtime-internal aliases.
+- generic namespaced unresolved type-use rewriting (`normalize_unresolved_namespaced_type_aliases`):
+  - when a bare unresolved type leaf has a unique root-accessible namespaced definition, rewrite item-type positions (fields, signatures, static types, and alias RHS) to the fully-qualified path (`crate::<ns>::Type` when needed).
+  - keep the existing alias-synthesis behavior for non-conflicted leaves, but still rewrite type positions even when alias emission is intentionally skipped due to module-name conflicts.
 - runtime-internal typedef pruning (`normalize_unused_runtime_internal_type_aliases`):
   - remove `pub type Alias = rusty::<runtime-internal>;` only when `Alias` is not referenced in generated item type positions in that TU.
   - drop paired alias-doc lines (`/// C++ typedef/using ...`) for removed aliases to keep output clean.

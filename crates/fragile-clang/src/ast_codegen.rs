@@ -7212,6 +7212,7 @@ impl AstCodeGen {
 
         let mut top_level_defined: HashSet<String> = HashSet::new();
         let mut top_level_modules: HashSet<String> = HashSet::new();
+        let mut top_level_referenced: HashSet<String> = HashSet::new();
         let mut namespaced_targets: HashMap<String, Option<String>> = HashMap::new();
         let mut module_visibility: HashMap<String, ModuleDeclVisibility> = HashMap::new();
         let mut depth: i32 = 0;
@@ -7223,6 +7224,15 @@ impl AstCodeGen {
                 .is_some_and(|(start_depth, _, _)| *start_depth > depth)
             {
                 module_stack.pop();
+            }
+
+            if module_stack.is_empty() {
+                for referenced_name in Self::collect_referenced_type_like_names(line) {
+                    let canonical_name = referenced_name.trim_start_matches("r#").to_string();
+                    if !canonical_name.is_empty() {
+                        top_level_referenced.insert(canonical_name);
+                    }
+                }
             }
 
             if let Some(type_name) = Self::parse_declared_type_like_name(line) {
@@ -7297,10 +7307,12 @@ impl AstCodeGen {
         let mut aliases: BTreeMap<String, String> = BTreeMap::new();
         let mut anon_namespace_rewrites: BTreeMap<String, String> = BTreeMap::new();
         let mut runtime_internal_rewrites: BTreeMap<String, String> = BTreeMap::new();
+        let mut namespaced_type_rewrites: BTreeMap<String, String> = BTreeMap::new();
         for referenced_name in referenced {
             let canonical_name = referenced_name.trim_start_matches("r#").to_string();
             if canonical_name.is_empty()
                 || top_level_defined.contains(&canonical_name)
+                || !top_level_referenced.contains(&canonical_name)
                 || Self::is_primitive_type_name(&canonical_name)
                 || RUST_KEYWORDS.contains(&canonical_name.as_str())
             {
@@ -7329,16 +7341,33 @@ impl AstCodeGen {
                     continue;
                 }
                 let normalized_target = Self::normalize_namespace_alias_target(target);
+                let rewrite_target = if normalized_target.starts_with("crate::")
+                    || normalized_target.starts_with("self::")
+                    || normalized_target.starts_with("super::")
+                    || normalized_target.starts_with("std::")
+                    || normalized_target.starts_with("core::")
+                    || normalized_target.starts_with("alloc::")
+                {
+                    normalized_target.clone()
+                } else {
+                    format!("crate::{}", normalized_target)
+                };
                 let target_is_std_core_alloc = normalized_target.starts_with("std::")
                     || normalized_target.starts_with("core::")
                     || normalized_target.starts_with("alloc::");
                 if reserved_module_like.contains(canonical_name.as_str())
                     && (top_level_modules.contains(&canonical_name) || target_is_std_core_alloc)
                 {
+                    namespaced_type_rewrites
+                        .entry(canonical_name.clone())
+                        .or_insert(rewrite_target);
                     continue;
                 }
                 if Self::is_rusty_marker_trait_namespace_alias(&canonical_name, &normalized_target)
                 {
+                    namespaced_type_rewrites
+                        .entry(canonical_name.clone())
+                        .or_insert(rewrite_target);
                     continue;
                 }
                 if Self::is_rusty_runtime_internal_namespace_alias_target(&normalized_target) {
@@ -7347,6 +7376,9 @@ impl AstCodeGen {
                         .or_insert(normalized_target);
                     continue;
                 }
+                namespaced_type_rewrites
+                    .entry(canonical_name.clone())
+                    .or_insert(rewrite_target);
                 aliases
                     .entry(canonical_name.clone())
                     .or_insert(normalized_target);
@@ -7354,7 +7386,10 @@ impl AstCodeGen {
         }
 
         let mut out = String::with_capacity(code.len() + 256);
-        if anon_namespace_rewrites.is_empty() && runtime_internal_rewrites.is_empty() {
+        if anon_namespace_rewrites.is_empty()
+            && runtime_internal_rewrites.is_empty()
+            && namespaced_type_rewrites.is_empty()
+        {
             out.push_str(code);
         } else {
             for line in code.lines() {
@@ -7365,6 +7400,11 @@ impl AstCodeGen {
                     );
                 }
                 for (alias, target) in &runtime_internal_rewrites {
+                    rewritten = Self::rewrite_shadowed_ident_in_item_type_positions(
+                        &rewritten, alias, target,
+                    );
+                }
+                for (alias, target) in &namespaced_type_rewrites {
                     rewritten = Self::rewrite_shadowed_ident_in_item_type_positions(
                         &rewritten, alias, target,
                     );
@@ -98343,6 +98383,29 @@ pub type vector_LogEntry = std_vector<LogEntry>;
     }
 
     #[test]
+    fn test_normalize_unresolved_namespaced_type_aliases_rewrites_bare_rhs_type_uses() {
+        let input = r#"
+pub mod rrr {
+    pub struct Fiber {
+        _opaque: [u8; 1],
+    }
+}
+pub type Rc_Fiber_ = std::rc::Rc<Fiber>;
+"#;
+        let output = AstCodeGen::normalize_unresolved_namespaced_type_aliases(input);
+        assert!(
+            output.contains("pub type Rc_Fiber_ = std::rc::Rc<crate::rrr::Fiber>;"),
+            "namespaced unresolved alias normalization should rewrite bare unresolved alias RHS type uses to crate-qualified targets, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub type Fiber = rrr::Fiber;"),
+            "namespaced unresolved alias normalization should still emit unique top-level aliases, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
     fn test_normalize_unresolved_namespaced_type_aliases_normalizes_rusty_mpsc_targets() {
         let input = r#"
 pub mod rusty {
@@ -98511,6 +98574,11 @@ pub struct Holder {
         assert!(
             !output.contains("pub type thread = asio::detail::thread;"),
             "namespaced unresolved alias normalization should not emit thread aliases that collide with top-level modules, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub thd_: crate::asio::detail::thread,"),
+            "namespaced unresolved alias normalization should still rewrite unresolved type positions when alias emission is skipped by module-name conflict, got:\n{}",
             output
         );
     }
