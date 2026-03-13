@@ -38746,6 +38746,18 @@ impl FragileAtomicBoolCompat for atomic_bool {
         let candidate_keys = self.collect_fn_template_candidate_keys(fn_name, namespace_path);
         let mut selected_instantiation: Option<(String, String, Vec<String>)> = None;
         let mut fallback_instantiation: Option<(String, String, Vec<String>)> = None;
+        let instantiated_param_types_normalized: Vec<String> = params
+            .iter()
+            .map(CppType::to_rust_type_str)
+            .map(|ty| Self::normalize_template_match_type(&ty))
+            .collect();
+        let instantiated_param_types_ref_stripped: Vec<String> =
+            instantiated_param_types_normalized
+                .iter()
+                .map(|ty| Self::strip_template_match_ref_prefix(ty))
+                .collect();
+        let instantiated_return_type_normalized =
+            Self::normalize_template_match_type(&return_type.as_ref().to_rust_type_str());
 
         for template_key in candidate_keys {
             let Some(template_info) = self.fn_template_definitions.get(&template_key) else {
@@ -38790,40 +38802,35 @@ impl FragileAtomicBoolCompat for atomic_bool {
             for (param, arg) in template_info.template_params.iter().zip(type_args.iter()) {
                 subst_map.insert(param.clone(), arg.clone());
             }
-            let normalize_ty = |ty: &str| ty.split_whitespace().collect::<String>();
-            let strip_ref_prefix = |ty: &str| {
-                ty.strip_prefix("&mut")
-                    .or_else(|| ty.strip_prefix('&'))
-                    .unwrap_or(ty)
-                    .to_string()
-            };
             let substituted_param_types: Vec<String> = template_info
                 .params
                 .iter()
                 .map(|(_, ty)| self.substitute_template_type(ty, &subst_map))
                 .collect();
-            let instantiated_param_types: Vec<String> =
-                params.iter().map(CppType::to_rust_type_str).collect();
-            if substituted_param_types.len() != instantiated_param_types.len()
+            if substituted_param_types.len() != instantiated_param_types_normalized.len()
                 || substituted_param_types
                     .iter()
-                    .zip(instantiated_param_types.iter())
-                    .any(|(lhs, rhs)| {
-                        let lhs_norm = normalize_ty(lhs);
-                        let rhs_norm = normalize_ty(rhs);
+                    .zip(
+                        instantiated_param_types_normalized
+                            .iter()
+                            .zip(instantiated_param_types_ref_stripped.iter()),
+                    )
+                    .any(|(lhs, (rhs_norm, rhs_ref_stripped))| {
+                        let lhs_norm = Self::normalize_template_match_type(lhs);
                         lhs_norm != "_"
-                            && lhs_norm != rhs_norm
-                            && strip_ref_prefix(&lhs_norm) != strip_ref_prefix(&rhs_norm)
+                            && lhs_norm != *rhs_norm
+                            && Self::strip_template_match_ref_prefix(&lhs_norm)
+                                != *rhs_ref_stripped
                     })
             {
                 continue;
             }
             let substituted_return_type =
                 self.substitute_template_type(&template_info.return_type, &subst_map);
-            let instantiated_return_type = return_type.as_ref().to_rust_type_str();
-            let substituted_return_norm = normalize_ty(&substituted_return_type);
+            let substituted_return_norm =
+                Self::normalize_template_match_type(&substituted_return_type);
             if substituted_return_norm != "_"
-                && substituted_return_norm != normalize_ty(&instantiated_return_type)
+                && substituted_return_norm != instantiated_return_type_normalized
             {
                 continue;
             }
@@ -38879,6 +38886,17 @@ impl FragileAtomicBoolCompat for atomic_bool {
     fn node_contains_string_literal(node: &ClangNode) -> bool {
         matches!(&node.kind, ClangNodeKind::StringLiteral(_))
             || node.children.iter().any(Self::node_contains_string_literal)
+    }
+
+    fn normalize_template_match_type(ty: &str) -> String {
+        ty.split_whitespace().collect::<String>()
+    }
+
+    fn strip_template_match_ref_prefix(ty: &str) -> String {
+        ty.strip_prefix("&mut")
+            .or_else(|| ty.strip_prefix('&'))
+            .unwrap_or(ty)
+            .to_string()
     }
 
     fn build_concrete_fn_template_info(
@@ -111653,6 +111671,23 @@ stream.PutN(c, n);
             concrete.return_type.to_rust_type_str(),
             "bool",
             "unresolved function-template return slot should be rewritten to instantiated return type"
+        );
+    }
+
+    #[test]
+    fn test_template_match_type_normalization_preserves_ref_prefix_compatibility() {
+        let normalized_ref =
+            AstCodeGen::normalize_template_match_type("   & mut   std::string::String   ");
+        let normalized_value = AstCodeGen::normalize_template_match_type("std::string::String");
+        assert_eq!(
+            normalized_ref,
+            "&mutstd::string::String",
+            "normalization should match candidate-scan whitespace stripping semantics"
+        );
+        assert_eq!(
+            AstCodeGen::strip_template_match_ref_prefix(&normalized_ref),
+            normalized_value,
+            "reference-prefixed normalized types should stay compatible with value lanes after ref-prefix stripping"
         );
     }
 

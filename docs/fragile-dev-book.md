@@ -5534,3 +5534,100 @@ Checked against Section 1.3 and `docs/dev/wrong.md`:
 Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.b` is complete. Strict replay
 remains timeout-bound on `src/rrr/base/misc.cpp`, and non-increase gates confirm
 no class-rank or `E0425` regression versus the `2.6.c.iii` baseline.
+
+## 84. RPC Compile Blocker Leaf 2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.i: Reuse Instantiated-Type Normalization in Template Candidate Matching (2026-03-13)
+
+### Problem
+
+After gate leaf `...c.iii.c.iii.c.iii.c.iii.b`, the next open optimization leaf
+was broad repeat node `...c.iii.c.iii.c.iii.c.iii.c`. This node exceeded the
+intended bounded leaf size, so it was decomposed into:
+
+- `...c.i` optimization
+- `...c.ii` strict replay + non-increase gate
+- `...c.iii` repeat loop
+
+For `...c.i`, `collect_fn_template_instantiation` still re-normalized the same
+instantiated call-signature parameter/return strings for each candidate template
+key, creating avoidable per-candidate allocations in the
+`codegen_after_template_instantiation_generation` window.
+
+### Execution Plan
+
+1. Precompute normalized instantiated call-signature lanes once per call site.
+2. Reuse those precomputed normalized lanes for each candidate compatibility
+   comparison.
+3. Keep reference-prefix compatibility behavior unchanged.
+4. Add focused regression coverage for normalization/compatibility semantics.
+5. Capture deterministic strict replay profile/timing evidence.
+6. Re-run full suites and require baseline parity.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no RPC-target-specific conditional logic
+- no force-native bypass
+- no fake semantic fallback bodies
+- generic codegen hot-path optimization only
+
+### Implementation
+
+Updated:
+
+- `crates/fragile-clang/src/ast_codegen.rs`
+
+Key changes:
+
+- Added helper methods:
+  - `normalize_template_match_type`
+  - `strip_template_match_ref_prefix`
+- In `collect_fn_template_instantiation`, precompute instantiated parameter and
+  return normalization once and reuse across all candidate comparisons.
+- Removed repeated per-candidate normalization/allocation of identical
+  instantiated call-signature lanes.
+
+Focused regression added:
+
+- `test_template_match_type_normalization_preserves_ref_prefix_compatibility`
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang test_template_match_type_normalization_preserves_ref_prefix_compatibility -- --nocapture`
+- `cargo test -p fragile-clang test_build_concrete_fn_template_info_rewrites_unresolved_param_and_return_slots -- --nocapture`
+- `cargo test -p fragile-clang test_generate_fn_template_instantiations_consumes_pending_map_and_generates_functions -- --nocapture`
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_i_callshape_profile_120_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_i_stage_timing_120_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_i_callshape_profile_300_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_i_stage_timing_300_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- 120s profile:
+  - `status=codegen_after_template_collection`
+  - `status_history=codegen_started,codegen_after_template_collection`
+- 300s profile:
+  - `status=codegen_after_template_instantiation_generation`
+  - `status_history=codegen_started,codegen_after_template_collection,codegen_after_template_instantiation_generation`
+  - `input_bytes=573750`
+- comparison vs prior leaf `...c.iii.c.iii.c.iii.c.iii.a` (`input_bytes=573413`):
+  - checkpoint bytes increased by `+337`
+- replay manifest (`/tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313/rpc_compile_blocker_replay_manifest.txt`):
+  - `replay_01_status=124`
+  - `replay_01_timed_out=true`
+  - `replay_01_first_failure_class=build_timeout`
+  - `replay_01_blocker_file=src/rrr/base/misc.cpp`
+- full-suite baseline parity:
+  - `cargo test --workspace --all-targets`: `fragile-clang` lib
+    `739` passed / `46` failed (failure count unchanged)
+  - Python suite: `OK`, `29` ran, `1` skipped
+
+### Outcome
+
+Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.i` is complete. Template
+candidate matching now reuses instantiated-type normalization across candidate
+comparisons, with behavior locked by focused regression coverage. Strict replay
+remains timeout-bound on `src/rrr/base/misc.cpp`.
