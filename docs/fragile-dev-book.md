@@ -3139,3 +3139,61 @@ Key captured fields:
 - `FRAGILEC_MODE=strict python3 scripts/mako_rpcbench_harness.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --build-only --jobs 4 --build-timeout-seconds 180`
 - `python3 scripts/mako_rpc_compile_blocker_inventory.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec`
 - `python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+
+## 53. RPC Compile Blocker Leaf 2.6.c.ii: Generic Codegen Timeout Hot-Path Reduction (2026-03-13)
+
+### Problem
+
+Leaf `2.6.c.i` baseline replay identified deterministic `build_timeout` on
+`src/rrr/base/misc.cpp`. Stage timing traces consistently reached `codegen` after
+export/parse/enrichment, then timed out.
+
+### Decision
+
+Implement a generic codegen fix set focused on reducing per-line normalization cost in
+`normalize_problematic_callshape_artifacts`:
+
+- add a per-line marker guard (`line_might_need_problematic_callshape_bulk_rewrites`)
+  before the large callshape replacement bundle
+- tighten several broad markers to reduce unnecessary heavy-path entry
+- run expensive per-line post-rewriters only when matching markers are present
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no target-specific (`rpcbench`/`test_rpc`) conditionals
+- no force-native bypass
+- no synthetic semantic method stubs
+- timeout status remains explicit and unmasked
+
+### Implementation
+
+Updated:
+
+- `crates/fragile-clang/src/ast_codegen.rs`
+
+Added focused regressions:
+
+- `test_line_might_need_problematic_callshape_bulk_rewrites_matches_known_needles`
+- `test_normalize_problematic_callshape_artifacts_rewrites_target_line_and_preserves_unrelated_line`
+
+Added design note:
+
+- `docs/rpc_compile_blocker_leaf_2_6c_ii_design_2026_03_13.md`
+
+### Validation
+
+- `cargo test -p fragile-clang problematic_callshape`
+- `python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+- `python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+
+Captured stage traces:
+
+- `/tmp/fragile_rpc_2_6c_ii_after_opt_replay120_timing.txt`
+- `/tmp/fragile_rpc_2_6c_ii_after_opt_replay300_timing.txt`
+
+Outcome for this leaf:
+
+- blocker class remains `build_timeout` on `src/rrr/base/misc.cpp`
+- replay still times out in `codegen`, to continue through `2.6.c.iii` / `2.6.c.iv`

@@ -30305,6 +30305,82 @@ impl FragileAtomicBoolCompat for atomic_bool {
         out
     }
 
+    fn line_might_need_problematic_callshape_bulk_rewrites(line: &str) -> bool {
+        [
+            "Fiber::create_run",
+            "std::cell::RefCell::<",
+            "std::cell::Cell::<id>::",
+            "std::rc::Weak",
+            "return &mut sp;",
+            "super::max(",
+            "if addr2line {",
+            "crate::fragile_runtime::fputc(",
+            "let mut cmd: UnknownTagAutoType",
+            "super::rusty::Rc::make_ref_mut_PollThreadWorker",
+            "super::rusty::sync::mpsc::channel_pair_",
+            "super::rusty::Arc::make_ref_mut_",
+            "Log::debug(",
+            "Log::warn(",
+            ".borrow;",
+            "storage_.as_mut_ptr() as *mut ()",
+            "get_exec_path() as *const i8",
+            "crate::fragile_runtime::pclose(((&",
+            "Default::default().first",
+            "Default::default().second",
+            "indicator.as_mut_ptr()",
+            "super::vsprintf(",
+            "super::pthread_",
+            "rand_r(",
+            "if ()<",
+            "while ()<",
+            "if ()>",
+            "let mut sum: f64 = 0;",
+            "let mut stage_sum: f64 = 0;",
+            "rand_double(0,",
+            "weight_vector.size()",
+            "stage_sum += 0.0",
+            "LoadBalancer::select_",
+            "clients.size()",
+            "clients[(i) as usize]",
+            "metrics.requests_",
+            "let metrics = &",
+            "sockaddr_in)).sin_port",
+            "poll_thread_id_",
+            "status_t::FREE",
+            "ConnectionState::",
+            "if (s.data_).is_null() == false {",
+            "s._data as *mut ()",
+            "s._size =",
+            "assume_init_mut()",
+            "__gv_min(",
+            "__gv_max(",
+            "__gv_from }(",
+            "SparseInt::",
+            "let mut seq: seed_seq = [",
+            "global_port_counter().fetch_add(",
+            "let mut v_len: v64 = ",
+            "v_len.get()",
+            "m.found_dep",
+            "m.valid_id",
+            "RRR_USEC_PER_SEC",
+            "wrapping_shr((57) as u32)",
+            "__self.value_ = (()) as i32",
+            "__normal_iterator_const_long__vector_long__std_allocator_long",
+            "bind(fd, (unsafe { Default::default() })",
+            "(*std::ptr::null()).",
+            "Default::default() =",
+            "Box::new((forward).clone())",
+            "Box::new((r#move).clone())",
+            "super::make_pair(",
+            "getline(",
+            "next_round_robin_index(",
+            "super::std_string::from(",
+            "make_ref_mut_std_sync_mpsc_Sender_std_variant_rrr_CmdAddPollable",
+        ]
+        .iter()
+        .any(|needle| line.contains(needle))
+    }
+
     fn normalize_problematic_callshape_artifacts(code: &str) -> String {
         if !code.contains("create_run_impl(")
             && !code.contains("Default::default() =")
@@ -30583,449 +30659,457 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 rewritten = default_local;
             }
 
-            rewritten = rewritten.replace("Fiber::create_run_impl(", "Fiber::create_run(");
-            if rewritten.contains("std::cell::RefCell::<") && rewritten.contains("::new_0()") {
-                rewritten = rewritten.replace("::new_0()", "::new(Default::default())");
-            }
-            if rewritten.contains("std::cell::Cell::<") && rewritten.contains("::new_0()") {
-                rewritten = rewritten.replace("::new_0()", "::new(Default::default())");
-            }
-            rewritten = rewritten.replace(
-                "std::cell::Cell::<id>::new(Default::default())",
-                "std::cell::Cell::<u128>::new(Default::default())",
-            );
-            rewritten = rewritten.replace(
-                "std::cell::Cell::<id>::new_0()",
-                "std::cell::Cell::<u128>::new(Default::default())",
-            );
-            rewritten = rewritten.replace(
-                "= std::rc::Weak<Fiber>::new_0();",
-                "= std::rc::Weak::<Fiber>::new();",
-            );
-            rewritten = rewritten.replace(
-                "std::rc::Weak::<Fiber>::new_0()",
-                "std::rc::Weak::<Fiber>::new()",
-            );
-            rewritten = rewritten.replace("return &mut sp;", "return Default::default();");
-            rewritten = rewritten.replace(
-                "Fiber::create_run(Default::default(),",
-                "Fiber::create_run(&mut Default::default(),",
-            );
-            rewritten = rewritten.replace(
-                "super::max(&max_func_length, &())",
-                "max_func_length",
-            );
-            rewritten = rewritten.replace(
-                "super::max(&max_func_length,",
-                "std::cmp::max(max_func_length,",
-            );
-            rewritten = rewritten.replace("if addr2line {", "if !addr2line.is_null() {");
-            rewritten = rewritten.replace(
-                "if !(i < fmt_output.size()) { break; }",
-                "if !(i < fmt_output.size() as u64) { break; }",
-            );
-            rewritten = rewritten.replace(
-                "crate::fragile_runtime::fputc(32i8,",
-                "crate::fragile_runtime::fputc(32i32,",
-            );
-            rewritten = rewritten.replace(
-                "crate::fragile_runtime::fputc(10i8,",
-                "crate::fragile_runtime::fputc(10i32,",
-            );
-            rewritten = rewritten.replace(
-                "let mut cmd: UnknownTagAutoType = unsafe { std::mem::zeroed() };",
-                "let mut cmd: basic_string_char = Default::default();",
-            );
-            rewritten = rewritten.replace(
-                "return super::rusty::Rc::make_ref_mut_PollThreadWorker(&mut Default::default());",
-                "return Default::default();",
-            );
-            rewritten = rewritten.replace("Log::debug(", "/*log*/(");
-            rewritten = rewritten.replace("Log::warn(", "/*log*/(");
-            rewritten = rewritten.replace(".borrow;", ".borrow();");
-            rewritten = rewritten.replace(
-                "return unsafe { *(self.storage_.as_mut_ptr() as *mut ()).add((i) as usize) };",
-                "return (unsafe { (self.storage_.as_mut_ptr() as *mut ()).add((i) as usize) }) as _;",
-            );
-            rewritten = rewritten.replace(
-                " = get_exec_path() as *const i8;",
-                " = std::ptr::null() as *const i8;",
-            );
-            rewritten = rewritten.replace(
-                "crate::fragile_runtime::pclose(((&",
-                "crate::fragile_runtime::pclose(",
-            );
-            rewritten = rewritten.replace(
-                " as *const UnknownTagAutoType) as *mut UnknownTagAutoType) as *mut std::ffi::c_void)",
-                " as *mut std::ffi::c_void)",
-            );
-            rewritten = rewritten.replace(
-                "Default::default().first.c_str()",
-                "(std::ptr::null() as *const i8)",
-            );
-            rewritten = rewritten.replace(
-                "Default::default().second.c_str()",
-                "(std::ptr::null() as *const i8)",
-            );
-            rewritten = rewritten.replace("Default::default().first.size()", "0");
-            rewritten = rewritten.replace("Default::default().second.size()", "0");
-            rewritten = rewritten.replace(
-                "indicator.as_mut_ptr()",
-                "__fsv___func_indicator_0.as_mut_ptr()",
-            );
-            rewritten = rewritten.replace("super::vsprintf(", "super::sprintf(");
-            rewritten = rewritten.replace(
-                "super::pthread_key_create((&mut seed_key_ as *mut u32) as *mut u32, super::free);",
-                "super::pthread_key_create((&mut seed_key_ as *mut u32) as *mut u32, None);",
-            );
-            rewritten = rewritten.replace(
-                "super::pthread_once((&mut seed_key_once_ as *mut i32) as *mut i32, RandomGenerator::create_key);",
-                "super::pthread_once((&mut seed_key_once_ as *mut i32) as *mut i32, None);",
-            );
-            rewritten = rewritten.replace(
-                "super::pthread_once((&mut delete_key_once_ as *mut i32) as *mut i32, RandomGenerator::delete_key);",
-                "super::pthread_once((&mut delete_key_once_ as *mut i32) as *mut i32, None);",
-            );
-            rewritten = rewritten.replace(
-                "super::pthread_setspecific(seed_key_, (seed as *mut ()) as *const ());",
-                "super::pthread_setspecific(seed_key_, (seed as *mut std::ffi::c_void) as *const std::ffi::c_void);",
-            );
-            rewritten = rewritten.replace("super::rand_r(", "crate::fragile_runtime::fragile_rand_r(");
-            rewritten = rewritten.replace("if ()<", "if 0<");
-            rewritten = rewritten.replace("while ()<", "while 0<");
-            rewritten = rewritten.replace("if ()>", "if 0>");
-            rewritten = rewritten.replace("let mut sum: f64 = 0;", "let mut sum: f64 = 0.0;");
-            rewritten =
-                rewritten.replace("let mut stage_sum: f64 = 0;", "let mut stage_sum: f64 = 0.0;");
-            rewritten = rewritten.replace("Self::rand_double(0,", "Self::rand_double(0.0,");
-            rewritten = rewritten.replace(
-                "while i < weight_vector.size() {",
-                "while i < weight_vector.size() as u32 {",
-            );
-            rewritten = rewritten.replace(
-                "if r <= (unsafe { stage_sum += 0.0 }) {",
-                "if { unsafe { stage_sum += 0.0 }; r <= stage_sum } {",
-            );
-            rewritten = rewritten.replace(
-                "super::pthread_key_delete(seed_key_);",
-                "unsafe { super::pthread_key_delete(seed_key_); }",
-            );
-            rewritten = rewritten.replace(
-                "LoadBalancer::select_random(pool_size, rand_value)",
-                "((rand_value) % (pool_size))",
-            );
-            rewritten = rewritten.replace(
-                "LoadBalancer::select_round_robin(pool_size, state)",
-                "({ let __cur = state.round_robin_index_.get(); state.round_robin_index_.set(((__cur + 1) % (pool_size))); __cur })",
-            );
-            rewritten = rewritten.replace(
-                "let client = unsafe { &*clients[(i) as usize] };",
-                "();",
-            );
-            rewritten = rewritten.replace(
-                "let mut ret: basic_string_char = super::to_string(i);",
-                "let mut ret: basic_string_char = Default::default();",
-            );
-            rewritten = rewritten.replace(
-                "let mut pool_size: u64 = clients.size();",
-                "let mut pool_size: u64 = clients.size() as u64;",
-            );
-            rewritten = rewritten.replace(
-                "if !(i < clients.size()) { break; }",
-                "if !(i < clients.size() as u64) { break; }",
-            );
-            rewritten = rewritten.replace(
-                "let metrics = &unsafe { (*std::ptr::null()).metrics };",
-                "let mut metrics: u64 = 0;",
-            );
-            rewritten = rewritten.replace(
-                "let mut pending: u64 = ((metrics.requests_sent() - metrics.requests_completed()) as u64);",
-                "let mut pending: u64 = 0;",
-            );
-            rewritten = rewritten.replace(
-                "let mut avg_latency: u64 = metrics.avg_latency_us();",
-                "let mut avg_latency: u64 = 0;",
-            );
-            rewritten = rewritten.replace(
-                "if (avg_latency == 0) && (metrics.requests_completed() == 0)",
-                "if avg_latency == 0",
-            );
-            rewritten = rewritten.replace(
-                "let mut pending: u64 = ((*metrics - *metrics) as u64);",
-                "let mut pending: u64 = 0;",
-            );
-            rewritten = rewritten.replace(
-                "let mut avg_latency: u64 = *metrics;",
-                "let mut avg_latency: u64 = 0;",
-            );
-            rewritten = rewritten.replace(
-                "if (avg_latency == 0) && ((*metrics as i32) == 0)",
-                "if avg_latency == 0",
-            );
-            rewritten = rewritten.replace(
-                "Fiber::create_run(unsafe { std::mem::zeroed::<Function_void__>() },",
-                "Fiber::create_run(unsafe { crate::fragile_runtime::fragile_unit_mut() },",
-            );
-            if rewritten.contains("sockaddr_in)).sin_port") {
-                rewritten = format!("{indent}();");
-            }
-            rewritten = rewritten.replace(
-                "let mut thread_id_ptr: *mut atomic_id = (unsafe { &mut (*std::ptr::null()).poll_thread_id_ as *mut atomic_id }) as *mut atomic_id;",
-                "let mut thread_id_ptr: *mut atomic_id = std::ptr::null_mut();",
-            );
-            rewritten = rewritten.replace(
-                "let mut arc = make_ref_mut_std_sync_mpsc_Sender_std_variant_rrr_CmdAddPollable__rrr_CmdRemovePollable__rrr_CmdClosePollable__rrr_CmdUpdateMode__rrr_CmdAddJob__rrr_CmdRemoveJob__rrr_CmdShutdown::default();",
-                "let mut arc: std::sync::Arc<PollThread> = Default::default();",
-            );
-            rewritten = rewritten.replace(
-                "return !(current_worker_).is_null();",
-                "return false;",
-            );
-            rewritten = rewritten.replace(
-                "__self.min_latency_us_ = unsafe { super::rusty::__gv_max };",
-                "__self.min_latency_us_ = std::cell::Cell::new(u64::MAX);",
-            );
-            rewritten = rewritten.replace(
-                "return (state.next_round_robin_index(pool_size)) as u64;",
-                "return ({ let __cur = state.round_robin_index_.get(); state.round_robin_index_.set((__cur.wrapping_add(1)) % (pool_size)); __cur }) as u64;",
-            );
-            rewritten = rewritten.replace(
-                "state.next_round_robin_index(pool_size)",
-                "({ let __cur = state.round_robin_index_.get(); state.round_robin_index_.set((__cur.wrapping_add(1)) % (pool_size)); __cur })",
-            );
-            rewritten = rewritten.replace(
-                "__self.status_ = status_t::FREE;",
-                "__self.status_ = (status_t::FREE as i32);",
-            );
-            rewritten = rewritten.replace(
-                "__self.overflow_strategy = OverflowStrategy::DROP_OLDEST;",
-                "__self.overflow_strategy = (OverflowStrategy::DROP_OLDEST as i32);",
-            );
-            rewritten = rewritten.replace(
-                "__self.behavior = DisconnectBehavior::QUEUE;",
-                "__self.behavior = (DisconnectBehavior::QUEUE as i32);",
-            );
-            rewritten = rewritten.replace(
-                "__self.overflow = OverflowStrategy::DROP_OLDEST;",
-                "__self.overflow = (OverflowStrategy::DROP_OLDEST as i32);",
-            );
-            rewritten = rewritten.replace(
-                "{ config.behavior = DisconnectBehavior::FAIL_FAST ;};",
-                "{ config.behavior = (DisconnectBehavior::FAIL_FAST as i32) ;};",
-            );
-            rewritten = rewritten.replace(
-                "__self.load_balancing = LoadBalancingStrategy::RANDOM;",
-                "__self.load_balancing = (LoadBalancingStrategy::RANDOM as i32);",
-            );
-            rewritten = rewritten.replace(
-                "return super::rusty::Arc::make(&mut xid, unsafe { &*attr });",
-                "return std::sync::Arc::new(Future::new_0());",
-            );
-            rewritten = rewritten.replace(
-                "return super::rusty::Arc::make_ref_mut_std_sync_Arc_rrr_PollThread(&mut poll_thread_worker);",
-                "return std::sync::Arc::new(Client::new_0());",
-            );
-            rewritten = rewritten.replace(
-                "return unsafe { __fsv___func_net_info_0.assume_init_mut() }.net_stat_();",
-                "return 0.0;",
-            );
-            rewritten = rewritten.replace(
-                "return unsafe { __fsv___func_cpu_info_0.assume_init_mut() }.cpu_stat_;",
-                "return Default::default();",
-            );
-            rewritten = rewritten.replace(
-                "return ((((((hash as u64))).wrapping_shr((57) as u32))) as u64) & ((127) as u64);",
-                "return (((((hash as u64)).wrapping_shr((57) as u32)) as u64) & ((127) as u64)) as u8;",
-            );
-            rewritten = rewritten.replace(
-                "return (spec.tv_sec * RRR_USEC_PER_SEC + spec.tv_nsec / 1000) as u64;",
-                "return (((spec.tv_sec as u64) * (RRR_USEC_PER_SEC as u64)) + ((spec.tv_nsec as u64) / 1000u64)) as u64;",
-            );
-            rewritten = rewritten.replace(
-                "spec.tv_sec * RRR_USEC_PER_SEC + spec.tv_nsec / 1000",
-                "((spec.tv_sec as u64) * (RRR_USEC_PER_SEC as u64) + ((spec.tv_nsec as u64) / 1000u64))",
-            );
-            rewritten = rewritten.replace(
-                "__self.value_ = (()) as i32;",
-                "__self.value_ = 0 as i32;",
-            );
-            rewritten = rewritten.replace("status_t::FREE", "0");
-            rewritten = rewritten.replace(
-                "let metrics = &Default::default();",
-                "let mut metrics: u64 = 0;",
-            );
-            if rewritten.contains("= &Default::default();")
-                && rewritten.trim_start().starts_with("let ")
-            {
-                rewritten = format!("{indent}();");
-            }
-            if rewritten.trim_start().starts_with("let ")
-                && (rewritten.contains("(*std::ptr::null()).")
-                    || rewritten.contains("(*std::ptr::null_mut())."))
-            {
-                rewritten = format!("{indent}();");
-            }
-            rewritten = rewritten.replace(
-                "super::bind(fd, (unsafe { Default::default() }) as *const sockaddr, unsafe { Default::default() })",
-                "super::bind(fd, std::ptr::null(), 0)",
-            );
-            rewritten = rewritten.replace(
-                "(*std::ptr::null()).poll_thread_id_",
-                "(*std::ptr::null::<PollThread>()).poll_thread_id_",
-            );
-            rewritten = rewritten.replace(
-                "let mut bsize: u64 = SparseInt::dump(v.get(), buf.as_mut_ptr() as *mut i8);",
-                "let mut bsize: u64 = 0;",
-            );
-            rewritten = rewritten.replace(
-                "let mut bsize: u64 = SparseInt::buf_size(byte0);",
-                "let mut bsize: u64 = 0;",
-            );
-            rewritten = rewritten.replace(
-                "let mut val: i32 = SparseInt::load_i32(buf.as_ptr() as *const i8);",
-                "let mut val: i32 = 0;",
-            );
-            rewritten = rewritten.replace(
-                "let mut val: i64 = SparseInt::load_i64(buf.as_ptr() as *const i8);",
-                "let mut val: i64 = 0;",
-            );
-            rewritten = rewritten.replace("let mut v_len: v64 = ();", "let mut v_len: v64 = Default::default();");
-            rewritten = rewritten.replace(
-                "let mut v_len: v64 = unsafe { (v).size() };",
-                "let mut v_len: v64 = Default::default();",
-            );
-            rewritten = rewritten.replace("if v_len.get() > 0 {", "if false {");
-            rewritten = rewritten.replace("if !(i < v_len.get()) { break; }", "if false { break; }");
-            rewritten = rewritten.replace("if m.found_dep {", "if false {");
-            rewritten = rewritten.replace(
-                "if *v.op_index_const((b\"dep\\x00\".as_ptr() as *const i8) as u64) {",
-                "if false {",
-            );
-            rewritten = rewritten.replace(
-                "} else         if *v.op_index_const((b\"hb\\x00\".as_ptr() as *const i8) as u64) {",
-                "} else if false {",
-            );
-            rewritten = rewritten.replace("{ m.found_dep = true ;};", "();");
-            rewritten = rewritten.replace("{ m.valid_id = true ;};", "();");
-            rewritten = rewritten.replace("{ m.found_dep = false ;};", "();");
-            rewritten = rewritten.replace(
-                "m.bypass_copying(&(*rhs).clone(), rhs.entity_size());",
-                "();",
-            );
-            rewritten = rewritten.replace(
-                "let mut now = 0.time_since_epoch.count();",
-                "let mut now: i64 = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);",
-            );
-            rewritten = rewritten.replace(
-                "let mut gen: mersenne_twister_engine = seq;",
-                "let mut gen: mersenne_twister_engine = Default::default();",
-            );
-            rewritten = rewritten.replace(
-                "return (global_port_counter().fetch_add(1, &super::memory_order_seq_cst)) as i32;",
-                "{ let __old = unsafe { *global_port_counter() }; unsafe { *global_port_counter() = __old.wrapping_add(1u128); } return (__old) as i32; }",
-            );
-            rewritten = rewritten.replace(
-                "return (global_port_counter().fetch_add(count, &super::memory_order_seq_cst)) as i32;",
-                "{ let __old = unsafe { *global_port_counter() }; unsafe { *global_port_counter() = __old.wrapping_add((count) as u128); } return (__old) as i32; }",
-            );
-            rewritten = rewritten.replace(
-                "let mut it: __normal_iterator_const_long__vector_long__std_allocator_long = unsafe { (v).begin() };",
-                "let mut it: __normal_iterator_const_long__vector_long__std_allocator_long = Default::default();",
-            );
-            rewritten = rewritten.replace(
-                "return unsafe { rusty::__gv_min(&unsafe { a }, &unsafe { b }) };",
-                "return unsafe { crate::__gv_min(a as *const u64, b as *const u64) };",
-            );
-            rewritten = rewritten.replace(
-                "return unsafe { __gv_min(&unsafe { a }, &unsafe { b }) };",
-                "return unsafe { crate::__gv_min(a as *const u64, b as *const u64) };",
-            );
-            rewritten = rewritten.replace(
-                "if (s.data_).is_null() == false {",
-                "if false {",
-            );
-            rewritten = rewritten.replace("rusty::__gv_min(", "crate::__gv_min(");
-            rewritten = rewritten.replace("rusty::__gv_max(", "crate::__gv_max(");
-            rewritten = rewritten.replace("super::rusty::__gv_min(", "crate::__gv_min(");
-            rewritten = rewritten.replace("super::rusty::__gv_max(", "crate::__gv_max(");
-            rewritten = rewritten.replace(
-                "ConnectionState::CONNECTING",
-                "(ConnectionState::CONNECTING as i32)",
-            );
-            rewritten = rewritten.replace(
-                "ConnectionState::CONNECTED",
-                "(ConnectionState::CONNECTED as i32)",
-            );
-            rewritten = rewritten.replace(
-                "ConnectionState::FAILED",
-                "(ConnectionState::FAILED as i32)",
-            );
-            rewritten = rewritten.replace(
-                "ConnectionState::DISCONNECTED",
-                "(ConnectionState::DISCONNECTED as i32)",
-            );
-            rewritten = rewritten.replace(
-                "ConnectionState::DISCONNECTING",
-                "(ConnectionState::DISCONNECTING as i32)",
-            );
-            rewritten = rewritten.replace(
-                "unsafe { { let __dst = s._data as *mut (); std::ptr::copy_nonoverlapping(cstr as *const () as *const u8, __dst as *mut u8, (len) as usize); __dst } };",
-                "();",
-            );
-            rewritten = rewritten.replace("{ s._size = ((len) as u64) ;};", "();");
-            rewritten = rewritten.replace(
-                "unsafe { { let __dst = s._data as *mut (); std::ptr::copy_nonoverlapping(sv.data() as *const () as *const u8, __dst as *mut u8, (sv.length()) as usize); __dst } };",
-                "();",
-            );
-            rewritten = rewritten.replace("{ s._size = ((sv.length()) as u64) ;};", "();");
-            rewritten = rewritten.replace(
-                "return super::std_string::from(s as *const i8);",
-                "return if s.is_null() { std::string::String::new() } else { unsafe { std::ffi::CStr::from_ptr(s).to_string_lossy().into_owned() } };",
-            );
-            rewritten = rewritten.replace(
-                "return super::std_string::from(unsafe { &*s });",
-                "return std::string::String::new();",
-            );
-            rewritten = rewritten.replace(
-                "return super::std_string::from(Default::default());",
-                "return std::string::String::new();",
-            );
-            rewritten = rewritten.replace(
-                "return unsafe { __gv_from }(s as *const i8);",
-                "return if s.is_null() { std::string::String::new() } else { unsafe { std::ffi::CStr::from_ptr(s).to_string_lossy().into_owned() } };",
-            );
-            rewritten = rewritten.replace(
-                "return unsafe { __gv_from }(unsafe { &*s });",
-                "return std::string::String::new();",
-            );
-            rewritten = rewritten.replace(
-                "return unsafe { __gv_from }(Default::default());",
-                "return std::string::String::new();",
-            );
-            if rewritten.contains("s._data as *mut ()") && rewritten.contains("copy_nonoverlapping(") {
-                rewritten = format!("{indent}();");
-            }
-            if rewritten.contains("s._size =") {
-                rewritten = format!("{indent}();");
-            }
-            if rewritten.contains("assume_init_mut()") && rewritten.contains(".cpu_stat_;") {
-                rewritten = format!("{indent}return Default::default();");
-            }
-            if rewritten.contains("let mut seq: seed_seq = [") {
-                rewritten = format!("{indent}let mut seq: seed_seq = Default::default();");
-            }
-            if rewritten.contains("global_port_counter().fetch_add(") {
-                if rewritten.contains("fetch_add(1,") {
-                    rewritten = format!("{indent}{{ let __old = unsafe {{ *global_port_counter() }}; unsafe {{ *global_port_counter() = __old.wrapping_add(1u128); }} return (__old) as i32; }}");
-                } else {
-                    rewritten = format!("{indent}{{ let __old = unsafe {{ *global_port_counter() }}; unsafe {{ *global_port_counter() = __old.wrapping_add((count) as u128); }} return (__old) as i32; }}");
+            if Self::line_might_need_problematic_callshape_bulk_rewrites(&rewritten) {
+                rewritten = rewritten.replace("Fiber::create_run_impl(", "Fiber::create_run(");
+                if rewritten.contains("std::cell::RefCell::<") && rewritten.contains("::new_0()") {
+                    rewritten = rewritten.replace("::new_0()", "::new(Default::default())");
+                }
+                if rewritten.contains("std::cell::Cell::<") && rewritten.contains("::new_0()") {
+                    rewritten = rewritten.replace("::new_0()", "::new(Default::default())");
+                }
+                rewritten = rewritten.replace(
+                    "std::cell::Cell::<id>::new(Default::default())",
+                    "std::cell::Cell::<u128>::new(Default::default())",
+                );
+                rewritten = rewritten.replace(
+                    "std::cell::Cell::<id>::new_0()",
+                    "std::cell::Cell::<u128>::new(Default::default())",
+                );
+                rewritten = rewritten.replace(
+                    "= std::rc::Weak<Fiber>::new_0();",
+                    "= std::rc::Weak::<Fiber>::new();",
+                );
+                rewritten = rewritten.replace(
+                    "std::rc::Weak::<Fiber>::new_0()",
+                    "std::rc::Weak::<Fiber>::new()",
+                );
+                rewritten = rewritten.replace("return &mut sp;", "return Default::default();");
+                rewritten = rewritten.replace(
+                    "Fiber::create_run(Default::default(),",
+                    "Fiber::create_run(&mut Default::default(),",
+                );
+                rewritten = rewritten.replace(
+                    "super::max(&max_func_length, &())",
+                    "max_func_length",
+                );
+                rewritten = rewritten.replace(
+                    "super::max(&max_func_length,",
+                    "std::cmp::max(max_func_length,",
+                );
+                rewritten = rewritten.replace("if addr2line {", "if !addr2line.is_null() {");
+                rewritten = rewritten.replace(
+                    "if !(i < fmt_output.size()) { break; }",
+                    "if !(i < fmt_output.size() as u64) { break; }",
+                );
+                rewritten = rewritten.replace(
+                    "crate::fragile_runtime::fputc(32i8,",
+                    "crate::fragile_runtime::fputc(32i32,",
+                );
+                rewritten = rewritten.replace(
+                    "crate::fragile_runtime::fputc(10i8,",
+                    "crate::fragile_runtime::fputc(10i32,",
+                );
+                rewritten = rewritten.replace(
+                    "let mut cmd: UnknownTagAutoType = unsafe { std::mem::zeroed() };",
+                    "let mut cmd: basic_string_char = Default::default();",
+                );
+                rewritten = rewritten.replace(
+                    "return super::rusty::Rc::make_ref_mut_PollThreadWorker(&mut Default::default());",
+                    "return Default::default();",
+                );
+                rewritten = rewritten.replace("Log::debug(", "/*log*/(");
+                rewritten = rewritten.replace("Log::warn(", "/*log*/(");
+                rewritten = rewritten.replace(".borrow;", ".borrow();");
+                rewritten = rewritten.replace(
+                    "return unsafe { *(self.storage_.as_mut_ptr() as *mut ()).add((i) as usize) };",
+                    "return (unsafe { (self.storage_.as_mut_ptr() as *mut ()).add((i) as usize) }) as _;",
+                );
+                rewritten = rewritten.replace(
+                    " = get_exec_path() as *const i8;",
+                    " = std::ptr::null() as *const i8;",
+                );
+                rewritten = rewritten.replace(
+                    "crate::fragile_runtime::pclose(((&",
+                    "crate::fragile_runtime::pclose(",
+                );
+                rewritten = rewritten.replace(
+                    " as *const UnknownTagAutoType) as *mut UnknownTagAutoType) as *mut std::ffi::c_void)",
+                    " as *mut std::ffi::c_void)",
+                );
+                rewritten = rewritten.replace(
+                    "Default::default().first.c_str()",
+                    "(std::ptr::null() as *const i8)",
+                );
+                rewritten = rewritten.replace(
+                    "Default::default().second.c_str()",
+                    "(std::ptr::null() as *const i8)",
+                );
+                rewritten = rewritten.replace("Default::default().first.size()", "0");
+                rewritten = rewritten.replace("Default::default().second.size()", "0");
+                rewritten = rewritten.replace(
+                    "indicator.as_mut_ptr()",
+                    "__fsv___func_indicator_0.as_mut_ptr()",
+                );
+                rewritten = rewritten.replace("super::vsprintf(", "super::sprintf(");
+                rewritten = rewritten.replace(
+                    "super::pthread_key_create((&mut seed_key_ as *mut u32) as *mut u32, super::free);",
+                    "super::pthread_key_create((&mut seed_key_ as *mut u32) as *mut u32, None);",
+                );
+                rewritten = rewritten.replace(
+                    "super::pthread_once((&mut seed_key_once_ as *mut i32) as *mut i32, RandomGenerator::create_key);",
+                    "super::pthread_once((&mut seed_key_once_ as *mut i32) as *mut i32, None);",
+                );
+                rewritten = rewritten.replace(
+                    "super::pthread_once((&mut delete_key_once_ as *mut i32) as *mut i32, RandomGenerator::delete_key);",
+                    "super::pthread_once((&mut delete_key_once_ as *mut i32) as *mut i32, None);",
+                );
+                rewritten = rewritten.replace(
+                    "super::pthread_setspecific(seed_key_, (seed as *mut ()) as *const ());",
+                    "super::pthread_setspecific(seed_key_, (seed as *mut std::ffi::c_void) as *const std::ffi::c_void);",
+                );
+                rewritten = rewritten.replace("super::rand_r(", "crate::fragile_runtime::fragile_rand_r(");
+                rewritten = rewritten.replace("if ()<", "if 0<");
+                rewritten = rewritten.replace("while ()<", "while 0<");
+                rewritten = rewritten.replace("if ()>", "if 0>");
+                rewritten = rewritten.replace("let mut sum: f64 = 0;", "let mut sum: f64 = 0.0;");
+                rewritten =
+                    rewritten.replace("let mut stage_sum: f64 = 0;", "let mut stage_sum: f64 = 0.0;");
+                rewritten = rewritten.replace("Self::rand_double(0,", "Self::rand_double(0.0,");
+                rewritten = rewritten.replace(
+                    "while i < weight_vector.size() {",
+                    "while i < weight_vector.size() as u32 {",
+                );
+                rewritten = rewritten.replace(
+                    "if r <= (unsafe { stage_sum += 0.0 }) {",
+                    "if { unsafe { stage_sum += 0.0 }; r <= stage_sum } {",
+                );
+                rewritten = rewritten.replace(
+                    "super::pthread_key_delete(seed_key_);",
+                    "unsafe { super::pthread_key_delete(seed_key_); }",
+                );
+                rewritten = rewritten.replace(
+                    "LoadBalancer::select_random(pool_size, rand_value)",
+                    "((rand_value) % (pool_size))",
+                );
+                rewritten = rewritten.replace(
+                    "LoadBalancer::select_round_robin(pool_size, state)",
+                    "({ let __cur = state.round_robin_index_.get(); state.round_robin_index_.set(((__cur + 1) % (pool_size))); __cur })",
+                );
+                rewritten = rewritten.replace(
+                    "let client = unsafe { &*clients[(i) as usize] };",
+                    "();",
+                );
+                rewritten = rewritten.replace(
+                    "let mut ret: basic_string_char = super::to_string(i);",
+                    "let mut ret: basic_string_char = Default::default();",
+                );
+                rewritten = rewritten.replace(
+                    "let mut pool_size: u64 = clients.size();",
+                    "let mut pool_size: u64 = clients.size() as u64;",
+                );
+                rewritten = rewritten.replace(
+                    "if !(i < clients.size()) { break; }",
+                    "if !(i < clients.size() as u64) { break; }",
+                );
+                rewritten = rewritten.replace(
+                    "let metrics = &unsafe { (*std::ptr::null()).metrics };",
+                    "let mut metrics: u64 = 0;",
+                );
+                rewritten = rewritten.replace(
+                    "let mut pending: u64 = ((metrics.requests_sent() - metrics.requests_completed()) as u64);",
+                    "let mut pending: u64 = 0;",
+                );
+                rewritten = rewritten.replace(
+                    "let mut avg_latency: u64 = metrics.avg_latency_us();",
+                    "let mut avg_latency: u64 = 0;",
+                );
+                rewritten = rewritten.replace(
+                    "if (avg_latency == 0) && (metrics.requests_completed() == 0)",
+                    "if avg_latency == 0",
+                );
+                rewritten = rewritten.replace(
+                    "let mut pending: u64 = ((*metrics - *metrics) as u64);",
+                    "let mut pending: u64 = 0;",
+                );
+                rewritten = rewritten.replace(
+                    "let mut avg_latency: u64 = *metrics;",
+                    "let mut avg_latency: u64 = 0;",
+                );
+                rewritten = rewritten.replace(
+                    "if (avg_latency == 0) && ((*metrics as i32) == 0)",
+                    "if avg_latency == 0",
+                );
+                rewritten = rewritten.replace(
+                    "Fiber::create_run(unsafe { std::mem::zeroed::<Function_void__>() },",
+                    "Fiber::create_run(unsafe { crate::fragile_runtime::fragile_unit_mut() },",
+                );
+                if rewritten.contains("sockaddr_in)).sin_port") {
+                    rewritten = format!("{indent}();");
+                }
+                rewritten = rewritten.replace(
+                    "let mut thread_id_ptr: *mut atomic_id = (unsafe { &mut (*std::ptr::null()).poll_thread_id_ as *mut atomic_id }) as *mut atomic_id;",
+                    "let mut thread_id_ptr: *mut atomic_id = std::ptr::null_mut();",
+                );
+                rewritten = rewritten.replace(
+                    "let mut arc = make_ref_mut_std_sync_mpsc_Sender_std_variant_rrr_CmdAddPollable__rrr_CmdRemovePollable__rrr_CmdClosePollable__rrr_CmdUpdateMode__rrr_CmdAddJob__rrr_CmdRemoveJob__rrr_CmdShutdown::default();",
+                    "let mut arc: std::sync::Arc<PollThread> = Default::default();",
+                );
+                rewritten = rewritten.replace(
+                    "return !(current_worker_).is_null();",
+                    "return false;",
+                );
+                rewritten = rewritten.replace(
+                    "__self.min_latency_us_ = unsafe { super::rusty::__gv_max };",
+                    "__self.min_latency_us_ = std::cell::Cell::new(u64::MAX);",
+                );
+                rewritten = rewritten.replace(
+                    "return (state.next_round_robin_index(pool_size)) as u64;",
+                    "return ({ let __cur = state.round_robin_index_.get(); state.round_robin_index_.set((__cur.wrapping_add(1)) % (pool_size)); __cur }) as u64;",
+                );
+                rewritten = rewritten.replace(
+                    "state.next_round_robin_index(pool_size)",
+                    "({ let __cur = state.round_robin_index_.get(); state.round_robin_index_.set((__cur.wrapping_add(1)) % (pool_size)); __cur })",
+                );
+                rewritten = rewritten.replace(
+                    "__self.status_ = status_t::FREE;",
+                    "__self.status_ = (status_t::FREE as i32);",
+                );
+                rewritten = rewritten.replace(
+                    "__self.overflow_strategy = OverflowStrategy::DROP_OLDEST;",
+                    "__self.overflow_strategy = (OverflowStrategy::DROP_OLDEST as i32);",
+                );
+                rewritten = rewritten.replace(
+                    "__self.behavior = DisconnectBehavior::QUEUE;",
+                    "__self.behavior = (DisconnectBehavior::QUEUE as i32);",
+                );
+                rewritten = rewritten.replace(
+                    "__self.overflow = OverflowStrategy::DROP_OLDEST;",
+                    "__self.overflow = (OverflowStrategy::DROP_OLDEST as i32);",
+                );
+                rewritten = rewritten.replace(
+                    "{ config.behavior = DisconnectBehavior::FAIL_FAST ;};",
+                    "{ config.behavior = (DisconnectBehavior::FAIL_FAST as i32) ;};",
+                );
+                rewritten = rewritten.replace(
+                    "__self.load_balancing = LoadBalancingStrategy::RANDOM;",
+                    "__self.load_balancing = (LoadBalancingStrategy::RANDOM as i32);",
+                );
+                rewritten = rewritten.replace(
+                    "return super::rusty::Arc::make(&mut xid, unsafe { &*attr });",
+                    "return std::sync::Arc::new(Future::new_0());",
+                );
+                rewritten = rewritten.replace(
+                    "return super::rusty::Arc::make_ref_mut_std_sync_Arc_rrr_PollThread(&mut poll_thread_worker);",
+                    "return std::sync::Arc::new(Client::new_0());",
+                );
+                rewritten = rewritten.replace(
+                    "return unsafe { __fsv___func_net_info_0.assume_init_mut() }.net_stat_();",
+                    "return 0.0;",
+                );
+                rewritten = rewritten.replace(
+                    "return unsafe { __fsv___func_cpu_info_0.assume_init_mut() }.cpu_stat_;",
+                    "return Default::default();",
+                );
+                rewritten = rewritten.replace(
+                    "return ((((((hash as u64))).wrapping_shr((57) as u32))) as u64) & ((127) as u64);",
+                    "return (((((hash as u64)).wrapping_shr((57) as u32)) as u64) & ((127) as u64)) as u8;",
+                );
+                rewritten = rewritten.replace(
+                    "return (spec.tv_sec * RRR_USEC_PER_SEC + spec.tv_nsec / 1000) as u64;",
+                    "return (((spec.tv_sec as u64) * (RRR_USEC_PER_SEC as u64)) + ((spec.tv_nsec as u64) / 1000u64)) as u64;",
+                );
+                rewritten = rewritten.replace(
+                    "spec.tv_sec * RRR_USEC_PER_SEC + spec.tv_nsec / 1000",
+                    "((spec.tv_sec as u64) * (RRR_USEC_PER_SEC as u64) + ((spec.tv_nsec as u64) / 1000u64))",
+                );
+                rewritten = rewritten.replace(
+                    "__self.value_ = (()) as i32;",
+                    "__self.value_ = 0 as i32;",
+                );
+                rewritten = rewritten.replace("status_t::FREE", "0");
+                rewritten = rewritten.replace(
+                    "let metrics = &Default::default();",
+                    "let mut metrics: u64 = 0;",
+                );
+                if rewritten.contains("= &Default::default();")
+                    && rewritten.trim_start().starts_with("let ")
+                {
+                    rewritten = format!("{indent}();");
+                }
+                if rewritten.trim_start().starts_with("let ")
+                    && (rewritten.contains("(*std::ptr::null()).")
+                        || rewritten.contains("(*std::ptr::null_mut())."))
+                {
+                    rewritten = format!("{indent}();");
+                }
+                rewritten = rewritten.replace(
+                    "super::bind(fd, (unsafe { Default::default() }) as *const sockaddr, unsafe { Default::default() })",
+                    "super::bind(fd, std::ptr::null(), 0)",
+                );
+                rewritten = rewritten.replace(
+                    "(*std::ptr::null()).poll_thread_id_",
+                    "(*std::ptr::null::<PollThread>()).poll_thread_id_",
+                );
+                rewritten = rewritten.replace(
+                    "let mut bsize: u64 = SparseInt::dump(v.get(), buf.as_mut_ptr() as *mut i8);",
+                    "let mut bsize: u64 = 0;",
+                );
+                rewritten = rewritten.replace(
+                    "let mut bsize: u64 = SparseInt::buf_size(byte0);",
+                    "let mut bsize: u64 = 0;",
+                );
+                rewritten = rewritten.replace(
+                    "let mut val: i32 = SparseInt::load_i32(buf.as_ptr() as *const i8);",
+                    "let mut val: i32 = 0;",
+                );
+                rewritten = rewritten.replace(
+                    "let mut val: i64 = SparseInt::load_i64(buf.as_ptr() as *const i8);",
+                    "let mut val: i64 = 0;",
+                );
+                rewritten = rewritten.replace("let mut v_len: v64 = ();", "let mut v_len: v64 = Default::default();");
+                rewritten = rewritten.replace(
+                    "let mut v_len: v64 = unsafe { (v).size() };",
+                    "let mut v_len: v64 = Default::default();",
+                );
+                rewritten = rewritten.replace("if v_len.get() > 0 {", "if false {");
+                rewritten = rewritten.replace("if !(i < v_len.get()) { break; }", "if false { break; }");
+                rewritten = rewritten.replace("if m.found_dep {", "if false {");
+                rewritten = rewritten.replace(
+                    "if *v.op_index_const((b\"dep\\x00\".as_ptr() as *const i8) as u64) {",
+                    "if false {",
+                );
+                rewritten = rewritten.replace(
+                    "} else         if *v.op_index_const((b\"hb\\x00\".as_ptr() as *const i8) as u64) {",
+                    "} else if false {",
+                );
+                rewritten = rewritten.replace("{ m.found_dep = true ;};", "();");
+                rewritten = rewritten.replace("{ m.valid_id = true ;};", "();");
+                rewritten = rewritten.replace("{ m.found_dep = false ;};", "();");
+                rewritten = rewritten.replace(
+                    "m.bypass_copying(&(*rhs).clone(), rhs.entity_size());",
+                    "();",
+                );
+                rewritten = rewritten.replace(
+                    "let mut now = 0.time_since_epoch.count();",
+                    "let mut now: i64 = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);",
+                );
+                rewritten = rewritten.replace(
+                    "let mut gen: mersenne_twister_engine = seq;",
+                    "let mut gen: mersenne_twister_engine = Default::default();",
+                );
+                rewritten = rewritten.replace(
+                    "return (global_port_counter().fetch_add(1, &super::memory_order_seq_cst)) as i32;",
+                    "{ let __old = unsafe { *global_port_counter() }; unsafe { *global_port_counter() = __old.wrapping_add(1u128); } return (__old) as i32; }",
+                );
+                rewritten = rewritten.replace(
+                    "return (global_port_counter().fetch_add(count, &super::memory_order_seq_cst)) as i32;",
+                    "{ let __old = unsafe { *global_port_counter() }; unsafe { *global_port_counter() = __old.wrapping_add((count) as u128); } return (__old) as i32; }",
+                );
+                rewritten = rewritten.replace(
+                    "let mut it: __normal_iterator_const_long__vector_long__std_allocator_long = unsafe { (v).begin() };",
+                    "let mut it: __normal_iterator_const_long__vector_long__std_allocator_long = Default::default();",
+                );
+                rewritten = rewritten.replace(
+                    "return unsafe { rusty::__gv_min(&unsafe { a }, &unsafe { b }) };",
+                    "return unsafe { crate::__gv_min(a as *const u64, b as *const u64) };",
+                );
+                rewritten = rewritten.replace(
+                    "return unsafe { __gv_min(&unsafe { a }, &unsafe { b }) };",
+                    "return unsafe { crate::__gv_min(a as *const u64, b as *const u64) };",
+                );
+                rewritten = rewritten.replace(
+                    "if (s.data_).is_null() == false {",
+                    "if false {",
+                );
+                rewritten = rewritten.replace("rusty::__gv_min(", "crate::__gv_min(");
+                rewritten = rewritten.replace("rusty::__gv_max(", "crate::__gv_max(");
+                rewritten = rewritten.replace("super::rusty::__gv_min(", "crate::__gv_min(");
+                rewritten = rewritten.replace("super::rusty::__gv_max(", "crate::__gv_max(");
+                rewritten = rewritten.replace(
+                    "ConnectionState::CONNECTING",
+                    "(ConnectionState::CONNECTING as i32)",
+                );
+                rewritten = rewritten.replace(
+                    "ConnectionState::CONNECTED",
+                    "(ConnectionState::CONNECTED as i32)",
+                );
+                rewritten = rewritten.replace(
+                    "ConnectionState::FAILED",
+                    "(ConnectionState::FAILED as i32)",
+                );
+                rewritten = rewritten.replace(
+                    "ConnectionState::DISCONNECTED",
+                    "(ConnectionState::DISCONNECTED as i32)",
+                );
+                rewritten = rewritten.replace(
+                    "ConnectionState::DISCONNECTING",
+                    "(ConnectionState::DISCONNECTING as i32)",
+                );
+                rewritten = rewritten.replace(
+                    "unsafe { { let __dst = s._data as *mut (); std::ptr::copy_nonoverlapping(cstr as *const () as *const u8, __dst as *mut u8, (len) as usize); __dst } };",
+                    "();",
+                );
+                rewritten = rewritten.replace("{ s._size = ((len) as u64) ;};", "();");
+                rewritten = rewritten.replace(
+                    "unsafe { { let __dst = s._data as *mut (); std::ptr::copy_nonoverlapping(sv.data() as *const () as *const u8, __dst as *mut u8, (sv.length()) as usize); __dst } };",
+                    "();",
+                );
+                rewritten = rewritten.replace("{ s._size = ((sv.length()) as u64) ;};", "();");
+                rewritten = rewritten.replace(
+                    "return super::std_string::from(s as *const i8);",
+                    "return if s.is_null() { std::string::String::new() } else { unsafe { std::ffi::CStr::from_ptr(s).to_string_lossy().into_owned() } };",
+                );
+                rewritten = rewritten.replace(
+                    "return super::std_string::from(unsafe { &*s });",
+                    "return std::string::String::new();",
+                );
+                rewritten = rewritten.replace(
+                    "return super::std_string::from(Default::default());",
+                    "return std::string::String::new();",
+                );
+                rewritten = rewritten.replace(
+                    "return unsafe { __gv_from }(s as *const i8);",
+                    "return if s.is_null() { std::string::String::new() } else { unsafe { std::ffi::CStr::from_ptr(s).to_string_lossy().into_owned() } };",
+                );
+                rewritten = rewritten.replace(
+                    "return unsafe { __gv_from }(unsafe { &*s });",
+                    "return std::string::String::new();",
+                );
+                rewritten = rewritten.replace(
+                    "return unsafe { __gv_from }(Default::default());",
+                    "return std::string::String::new();",
+                );
+                if rewritten.contains("s._data as *mut ()") && rewritten.contains("copy_nonoverlapping(") {
+                    rewritten = format!("{indent}();");
+                }
+                if rewritten.contains("s._size =") {
+                    rewritten = format!("{indent}();");
+                }
+                if rewritten.contains("assume_init_mut()") && rewritten.contains(".cpu_stat_;") {
+                    rewritten = format!("{indent}return Default::default();");
+                }
+                if rewritten.contains("let mut seq: seed_seq = [") {
+                    rewritten = format!("{indent}let mut seq: seed_seq = Default::default();");
+                }
+                if rewritten.contains("global_port_counter().fetch_add(") {
+                    if rewritten.contains("fetch_add(1,") {
+                        rewritten = format!("{indent}{{ let __old = unsafe {{ *global_port_counter() }}; unsafe {{ *global_port_counter() = __old.wrapping_add(1u128); }} return (__old) as i32; }}");
+                    } else {
+                        rewritten = format!("{indent}{{ let __old = unsafe {{ *global_port_counter() }}; unsafe {{ *global_port_counter() = __old.wrapping_add((count) as u128); }} return (__old) as i32; }}");
+                    }
                 }
             }
-            if let Some(cloned) = rewrite_static_unsafe_binding_clone(&rewritten) {
-                rewritten = cloned;
+            if rewritten.contains("= unsafe { __gv_") || rewritten.contains("= unsafe { __fsv_") {
+                if let Some(cloned) = rewrite_static_unsafe_binding_clone(&rewritten) {
+                    rewritten = cloned;
+                }
             }
-            rewritten = replace_vtable_ptr_calls(&rewritten);
-            rewritten = rewrite_vtable_null_cast(&rewritten);
+            if rewritten.contains("rusty::detail::get_vtable_ptr_") {
+                rewritten = replace_vtable_ptr_calls(&rewritten);
+            }
+            if rewritten.contains("(std::ptr::null_mut() as *mut u8) as *const FunctionVTable_") {
+                rewritten = rewrite_vtable_null_cast(&rewritten);
+            }
             out.push_str(&rewritten);
             out.push('\n');
         }
@@ -112373,6 +112457,53 @@ pub fn call(argc: i32, argv: *const *mut i8) -> i32 {
                 && output.contains("crate::getopt(argc, argv, b\"x:\\x00\".as_ptr() as *const i8);")
                 && output.contains("crate::atoi(unsafe { __fragile_optarg as *const i8 }) + ch"),
             "call sites should be path-qualified while helper definitions remain unchanged, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_line_might_need_problematic_callshape_bulk_rewrites_matches_known_needles() {
+        assert!(
+            AstCodeGen::line_might_need_problematic_callshape_bulk_rewrites(
+                "Fiber::create_run_impl(Default::default(), arg);"
+            ),
+            "Fiber callshape lines should be recognized by the bulk rewrite guard"
+        );
+        assert!(
+            AstCodeGen::line_might_need_problematic_callshape_bulk_rewrites(
+                "super::pthread_key_create((&mut seed_key_ as *mut u32) as *mut u32, super::free);"
+            ),
+            "pthread callshape lines should be recognized by the bulk rewrite guard"
+        );
+        assert!(
+            !AstCodeGen::line_might_need_problematic_callshape_bulk_rewrites(
+                "let keep_me = stable_value + 1;"
+            ),
+            "unrelated lines must not enter the expensive bulk rewrite path"
+        );
+    }
+
+    #[test]
+    fn test_normalize_problematic_callshape_artifacts_rewrites_target_line_and_preserves_unrelated_line(
+    ) {
+        let input = r#"pub fn demo() {
+    Fiber::create_run_impl(Default::default(), 1i32);
+    let keep: i32 = 7;
+}"#;
+        let output = AstCodeGen::normalize_problematic_callshape_artifacts(input);
+        assert!(
+            output.contains("Fiber::create_run(&mut Default::default(), 1i32);"),
+            "problematic Fiber callshape should still be normalized with guarded rewrites, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("let keep: i32 = 7;"),
+            "unrelated lines should remain untouched by guarded rewrites, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("Fiber::create_run_impl("),
+            "legacy create_run_impl callshape should not remain after normalization, got:\n{}",
             output
         );
     }
