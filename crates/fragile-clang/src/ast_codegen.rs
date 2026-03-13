@@ -24624,9 +24624,6 @@ impl AstCodeGen {
         // Collect template definitions and instantiations
         if let ClangNodeKind::TranslationUnit = &ast.kind {
             self.collect_template_info(&ast.children);
-            // A second pass catches call-sites that appear before their template
-            // definitions in the AST stream.
-            self.collect_template_info(&ast.children);
         }
 
         // Emit STL preamble from fragile-stl crate source files
@@ -38310,11 +38307,14 @@ impl FragileAtomicBoolCompat for atomic_bool {
     /// Collect template definitions and find all template instantiation usages.
     /// This enables generating structs for template types like MyVec<int>.
     fn collect_template_info(&mut self, children: &[ClangNode]) {
-        self.collect_template_info_with_namespace(children, &[]);
+        // Precollect definitions first so a single usage pass can resolve
+        // call-sites/type uses that appear before template declarations.
+        self.collect_template_definitions_with_namespace(children, &[]);
+        self.collect_template_usages_with_namespace(children, &[]);
     }
 
     /// Collect template definitions with namespace tracking.
-    fn collect_template_info_with_namespace(
+    fn collect_template_definitions_with_namespace(
         &mut self,
         children: &[ClangNode],
         namespace_path: &[String],
@@ -38373,8 +38373,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
                             // Instead, inline namespace aliases are used during lookup.
                         }
                     }
-                    // Recurse into template to find usages
-                    self.collect_template_info_with_namespace(&child.children, namespace_path);
+                    self.collect_template_definitions_with_namespace(&child.children, namespace_path);
                 }
                 ClangNodeKind::FunctionTemplateDecl {
                     name,
@@ -38418,40 +38417,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
                         self.fn_template_definitions
                             .insert(full_name, template_info);
                     }
-                    // Recurse into template to find usages
-                    self.collect_template_info_with_namespace(&child.children, namespace_path);
-                }
-                ClangNodeKind::VarDecl { ty, .. } | ClangNodeKind::FieldDecl { ty, .. } => {
-                    self.collect_template_type(ty);
-                    self.collect_template_info_with_namespace(&child.children, namespace_path);
-                }
-                ClangNodeKind::FunctionDecl {
-                    return_type,
-                    params,
-                    ..
-                } => {
-                    self.collect_template_type(return_type);
-                    for (_, param_ty) in params {
-                        self.collect_template_type(param_ty);
-                    }
-                    self.collect_template_info_with_namespace(&child.children, namespace_path);
-                }
-                ClangNodeKind::CXXMethodDecl {
-                    return_type,
-                    params,
-                    ..
-                } => {
-                    self.collect_template_type(return_type);
-                    for (_, param_ty) in params {
-                        self.collect_template_type(param_ty);
-                    }
-                    self.collect_template_info_with_namespace(&child.children, namespace_path);
-                }
-                ClangNodeKind::CallExpr { .. } => {
-                    // Check if this is a call to a function template instantiation
-                    // by looking at the callee (first child should be DeclRefExpr or ImplicitCastExpr)
-                    self.collect_fn_template_instantiation(child);
-                    self.collect_template_info_with_namespace(&child.children, namespace_path);
+                    self.collect_template_definitions_with_namespace(&child.children, namespace_path);
                 }
                 ClangNodeKind::NamespaceDecl { name, is_inline } => {
                     // Track namespace for template name qualification
@@ -38468,13 +38434,78 @@ impl FragileAtomicBoolCompat for atomic_bool {
                             self.inline_namespace_aliases.insert(parent_path, full_path);
                         }
                     }
-                    self.collect_template_info_with_namespace(&child.children, &new_path);
-                }
-                ClangNodeKind::RecordDecl { .. } | ClangNodeKind::CompoundStmt => {
-                    self.collect_template_info_with_namespace(&child.children, namespace_path);
+                    self.collect_template_definitions_with_namespace(&child.children, &new_path);
                 }
                 _ => {
-                    self.collect_template_info_with_namespace(&child.children, namespace_path);
+                    self.collect_template_definitions_with_namespace(
+                        &child.children,
+                        namespace_path,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Collect template instantiation usages with namespace tracking.
+    fn collect_template_usages_with_namespace(
+        &mut self,
+        children: &[ClangNode],
+        namespace_path: &[String],
+    ) {
+        for child in children {
+            match &child.kind {
+                ClangNodeKind::ClassTemplateDecl { .. }
+                | ClangNodeKind::FunctionTemplateDecl { .. }
+                | ClangNodeKind::RecordDecl { .. }
+                | ClangNodeKind::CompoundStmt => {
+                    self.collect_template_usages_with_namespace(&child.children, namespace_path);
+                }
+                ClangNodeKind::VarDecl { ty, .. } | ClangNodeKind::FieldDecl { ty, .. } => {
+                    self.collect_template_type(ty);
+                    self.collect_template_usages_with_namespace(&child.children, namespace_path);
+                }
+                ClangNodeKind::FunctionDecl {
+                    return_type,
+                    params,
+                    ..
+                } => {
+                    self.collect_template_type(return_type);
+                    for (_, param_ty) in params {
+                        self.collect_template_type(param_ty);
+                    }
+                    self.collect_template_usages_with_namespace(&child.children, namespace_path);
+                }
+                ClangNodeKind::CXXMethodDecl {
+                    return_type,
+                    params,
+                    ..
+                } => {
+                    self.collect_template_type(return_type);
+                    for (_, param_ty) in params {
+                        self.collect_template_type(param_ty);
+                    }
+                    self.collect_template_usages_with_namespace(&child.children, namespace_path);
+                }
+                ClangNodeKind::CallExpr { .. } => {
+                    // Check if this is a call to a function template instantiation
+                    // by looking at the callee (first child should be DeclRefExpr or ImplicitCastExpr)
+                    self.collect_fn_template_instantiation(child);
+                    self.collect_template_usages_with_namespace(&child.children, namespace_path);
+                }
+                ClangNodeKind::NamespaceDecl { name, is_inline } => {
+                    let mut new_path = namespace_path.to_vec();
+                    if let Some(ns_name) = name {
+                        new_path.push(ns_name.clone());
+                        if *is_inline && !namespace_path.is_empty() {
+                            let parent_path = namespace_path.join("::");
+                            let full_path = new_path.join("::");
+                            self.inline_namespace_aliases.insert(parent_path, full_path);
+                        }
+                    }
+                    self.collect_template_usages_with_namespace(&child.children, &new_path);
+                }
+                _ => {
+                    self.collect_template_usages_with_namespace(&child.children, namespace_path);
                 }
             }
         }
@@ -110913,6 +110944,174 @@ stream.PutN(c, n);
         assert!(
             !code.contains("__gv_pass"),
             "template local variable must not resolve through global __gv_ prefix mapping, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_function_template_call_before_template_definition_still_instantiates() {
+        let int_ty = CppType::Int { signed: true };
+        let templ_ty = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        let twice_fn_ty = CppType::Function {
+            return_type: Box::new(int_ty.clone()),
+            params: vec![int_ty.clone()],
+            is_variadic: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "call_twice".to_string(),
+                        mangled_name: "call_twice".to_string(),
+                        is_static: false,
+                        return_type: int_ty.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: int_ty.clone(),
+                                    template_instantiation: None,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "twice".to_string(),
+                                            ty: twice_fn_ty.clone(),
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::IntegerLiteral {
+                                            value: 7,
+                                            cpp_type: Some(int_ty.clone()),
+                                        },
+                                        vec![],
+                                    ),
+                                ],
+                            )],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionTemplateDecl {
+                        name: "twice".to_string(),
+                        template_params: vec!["T".to_string()],
+                        return_type: templ_ty.clone(),
+                        params: vec![("x".to_string(), templ_ty.clone())],
+                        is_definition: true,
+                        parameter_pack_indices: vec![],
+                        requires_clause: None,
+                        is_noexcept: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::DeclRefExpr {
+                                    name: "x".to_string(),
+                                    ty: templ_ty,
+                                    namespace_path: vec![],
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("pub fn twice_i32"),
+            "call-site before function template definition should still emit concrete instantiation, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_class_template_type_use_before_template_definition_still_instantiates() {
+        let int_ty = CppType::Int { signed: true };
+        let templ_ty = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        let inst_name = "Widget<int>";
+        let rust_name = CppType::Named(inst_name.to_string()).to_rust_type_str();
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "use_box".to_string(),
+                        mangled_name: "use_box".to_string(),
+                        is_static: false,
+                        return_type: int_ty.clone(),
+                        params: vec![("v".to_string(), CppType::Named(inst_name.to_string()))],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 0,
+                                    cpp_type: Some(int_ty.clone()),
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::ClassTemplateDecl {
+                        name: "Widget".to_string(),
+                        template_params: vec!["T".to_string()],
+                        is_class: false,
+                        parameter_pack_indices: vec![],
+                        requires_clause: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::FieldDecl {
+                            name: "value".to_string(),
+                            ty: templ_ty,
+                            is_static: false,
+                            access: AccessSpecifier::Public,
+                            bit_field_width: None,
+                        },
+                        vec![],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains(&format!("pub struct {} {{", rust_name)),
+            "type use before class template definition should still emit concrete struct instantiation, got:\n{}",
             code
         );
     }

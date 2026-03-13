@@ -3317,3 +3317,73 @@ Both strict replay captures reported `status=codegen_started` with zero
 callshape counters before timeout, indicating the current timeout occurs before
 `normalize_problematic_callshape_artifacts` is reached. This narrows the next
 optimization leaf (`2.6.c.iv.b`) to earlier codegen passes.
+
+## 56. RPC Compile Blocker Leaf 2.6.c.iv.b: Early Codegen Template-Collection Hot-Path Reduction (2026-03-13)
+
+### Problem
+
+Profiling from `2.6.c.iv.a` showed strict replay timeout occurred before
+`normalize_problematic_callshape_artifacts` was invoked (`status=codegen_started`
+only), so the next optimization target had to be earlier in codegen.
+
+### Decision
+
+Reduce duplicated early codegen work by changing template collection from two
+full heavy traversals to:
+
+1. definition prepass (template definitions + inline namespace aliases)
+2. single usage pass (template type/call instantiation discovery)
+
+This preserves call-site/type-use-before-definition semantics while removing
+the duplicated expensive usage traversal.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no `rpcbench`/`test_rpc` special-casing
+- no force-native bypass path
+- no fake semantic stub bodies
+- change is generic parser/codegen traversal behavior with focused regressions
+
+### Implementation
+
+Updated:
+
+- `crates/fragile-clang/src/ast_codegen.rs`
+
+Key changes:
+
+- `collect_template_info` now runs:
+  - `collect_template_definitions_with_namespace`
+  - `collect_template_usages_with_namespace`
+- removed duplicated second `collect_template_info` invocation in `generate`
+- added focused regression tests:
+  - `test_function_template_call_before_template_definition_still_instantiates`
+  - `test_class_template_type_use_before_template_definition_still_instantiates`
+
+Design note:
+
+- `docs/rpc_compile_blocker_leaf_2_6c_iv_b_design_2026_03_13.md`
+
+### Validation
+
+- `cargo test -p fragile-clang template_definition_still_instantiates -- --nocapture`
+- `cargo test -p fragile-clang problematic_callshape -- --nocapture`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+- `cargo test --workspace --all-targets`
+  - known pre-existing baseline still present in `fragile-clang` lib tests:
+    `46` failures (unchanged from prior baseline snapshot)
+- strict timeout replay with profiling/stage timing:
+  - `/tmp/fragile_rpc_leaf_2_6c_iv_b_callshape_profile_120_v1.txt`
+  - `/tmp/fragile_rpc_leaf_2_6c_iv_b_callshape_profile_300_v1.txt`
+  - `/tmp/fragile_rpc_leaf_2_6c_iv_b_stage_timing_120_v1.txt`
+  - `/tmp/fragile_rpc_leaf_2_6c_iv_b_stage_timing_300_v1.txt`
+
+### Outcome
+
+The optimization reduced duplicated early template-instantiation collection work
+without semantic regressions (before-definition template usages remain covered).
+Strict replay still times out in codegen before callshape normalizer entry, so
+the next step remains `2.6.c.iv.c` non-increase verification plus further
+iteration in `2.6.c.iv.d`.
