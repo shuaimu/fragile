@@ -42272,13 +42272,10 @@ impl FragileAtomicBoolCompat for atomic_bool {
 
     /// Generate function implementations for pending function template instantiations.
     fn generate_fn_template_instantiations(&mut self) {
-        // Clone the pending instantiations to avoid borrow issues
-        let instantiations: Vec<(String, (String, Vec<String>, FnTemplateInfo))> = self
-            .pending_fn_instantiations
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-
+        // Consume the current pending map to avoid clone-heavy staging.
+        // Newly discovered pending function instantiations (if any) are accumulated
+        // back into `pending_fn_instantiations` for subsequent iterations.
+        let instantiations = std::mem::take(&mut self.pending_fn_instantiations);
         for (mangled_name, (template_name, type_args, template_info)) in instantiations {
             self.generate_fn_template_instance(
                 &mangled_name,
@@ -111412,6 +111409,59 @@ stream.PutN(c, n);
         assert!(
             codegen.pending_template_instantiations.is_empty(),
             "current pending instantiations should be consumed without clone-backed staging"
+        );
+    }
+
+    #[test]
+    fn test_generate_fn_template_instantiations_consumes_pending_map_and_generates_functions() {
+        let templ_ty = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        let mut codegen = AstCodeGen::new();
+        codegen.pending_fn_instantiations.insert(
+            "twice_i32".to_string(),
+            (
+                "twice".to_string(),
+                vec!["i32".to_string()],
+                FnTemplateInfo {
+                    template_params: vec!["T".to_string()],
+                    return_type: templ_ty.clone(),
+                    params: vec![("x".to_string(), templ_ty.clone())],
+                    body: Some(make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::DeclRefExpr {
+                                    name: "x".to_string(),
+                                    ty: templ_ty,
+                                    namespace_path: vec![],
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )),
+                    is_noexcept: false,
+                },
+            ),
+        );
+
+        codegen.generate_fn_template_instantiations();
+
+        assert!(
+            codegen.output.contains("pub fn twice_i32(x: i32) -> i32 {"),
+            "function template instantiation should still emit concrete function when pending map is consumed, got:\n{}",
+            codegen.output
+        );
+        assert!(
+            codegen.generated_functions.contains_key("twice_i32"),
+            "generated function registry should track emitted function template instantiation"
+        );
+        assert!(
+            codegen.pending_fn_instantiations.is_empty(),
+            "current pending function instantiations should be consumed without clone-backed staging"
         );
     }
 

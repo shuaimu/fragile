@@ -4396,3 +4396,94 @@ Deterministic evidence highlights:
 Leaf `2.6.c.iv.d.iv.c.iv.c.ii` is complete. Post-`c.iv.c.i` strict replay
 remains `build_timeout` on `src/rrr/base/misc.cpp`, and non-increase gates
 confirm no class-rank or `E0425` regression versus the `2.6.c.iii` baseline.
+
+## 70. RPC Compile Blocker Leaf 2.6.c.iv.d.iv.c.iv.c.iii.a: Pending-Map Consumption Optimization for Function Template Instantiations (2026-03-13)
+
+### Problem
+
+The next bounded optimization leaf (`2.6.c.iv.d.iv.c.iv.c.iii.a`) still targets
+the dominant pre-`codegen_after_top_level_generation` codegen window. In this
+path, `generate_fn_template_instantiations` cloned the entire
+`pending_fn_instantiations` map into a temporary vector before generation.
+
+That clone-heavy staging is avoidable and scales with map size.
+
+### Execution Plan
+
+1. Replace clone-backed pending-map staging with ownership transfer of the
+   current map.
+2. Preserve behavior by keeping newly discovered pending function
+   instantiations in `pending_fn_instantiations`.
+3. Add focused regression coverage for function emission and pending-map
+   consumption semantics.
+4. Capture strict replay profile/timing artifacts (120s/300s) and rerun full
+   suites for baseline parity.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no target-name-specific branch/hack
+- no force-native fallback path
+- no synthetic semantic fallback/stub behavior
+- generic codegen data-flow optimization only
+
+### Implementation
+
+Updated:
+
+- `crates/fragile-clang/src/ast_codegen.rs`
+
+Key changes:
+
+- changed `generate_fn_template_instantiations` to consume pending entries via
+  `std::mem::take(&mut self.pending_fn_instantiations)` and iterate owned map
+  entries directly.
+- removed clone-backed temporary `Vec` staging.
+- retained expected behavior where newly discovered pending function
+  instantiations remain queued for subsequent iterations.
+- added focused regression
+  `test_generate_fn_template_instantiations_consumes_pending_map_and_generates_functions`.
+
+Design note:
+
+- `docs/rpc_compile_blocker_leaf_2_6c_iv_d_iv_c_iv_c_iii_a_design_2026_03_13.md`
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang test_generate_fn_template_instantiations_consumes_pending_map_and_generates_functions -- --nocapture`
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_a_callshape_profile_120_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_a_stage_timing_120_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_a_callshape_profile_300_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_a_stage_timing_300_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- 120s profile (`..._callshape_profile_120_v1.txt`):
+  - `status=codegen_after_template_collection`
+  - `status_history=codegen_started,codegen_after_template_collection`
+- 300s profile (`..._callshape_profile_300_v1.txt`):
+  - `status=codegen_after_template_instantiation_generation`
+  - `status_history=codegen_started,codegen_after_template_collection,codegen_after_template_instantiation_generation`
+  - `input_bytes=574875`
+- comparison against prior `c.iv.c.i` 300s profile (`input_bytes=573560`):
+  - checkpoint bytes are higher by `+1315` (no measured replay advancement from this leaf alone)
+- replay remains timeout-bound on the same blocker TU:
+  - `replay_01_status=124`
+  - `replay_01_timed_out=true`
+  - `replay_01_first_failure_class=build_timeout`
+  - `replay_01_blocker_file=src/rrr/base/misc.cpp`
+- full-suite baseline parity:
+  - `cargo test --workspace --all-targets`: `fragile-clang` lib
+    `730` passed / `46` failed (failure count unchanged)
+  - Python suite passes (`29`, skipped `1`)
+
+### Outcome
+
+Leaf `2.6.c.iv.d.iv.c.iv.c.iii.a` is complete. Function-template
+instantiation generation now avoids clone-backed pending-map staging with
+focused regression coverage; strict replay remains timeout-bound on
+`src/rrr/base/misc.cpp`, so continuation proceeds to `2.6.c.iv.d.iv.c.iv.c.iii.b`.
