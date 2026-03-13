@@ -4403,10 +4403,13 @@ impl AstCodeGen {
                                         .next()
                                         .and_then(|short| struct_default_field_names.get(short))
                                 });
+                            let has_self_literal = block_slice
+                                .iter()
+                                .any(|line| line.trim_start().starts_with("Self {"));
                             let can_rewrite = block_depth == 0
                                 && maybe_fields.is_some_and(|fields| !fields.is_empty())
                                 && block_text.contains("unsafe { std::mem::zeroed() }")
-                                && !block_text.contains("Self {");
+                                && !has_self_literal;
 
                             if can_rewrite {
                                 let fields = maybe_fields.expect("checked above");
@@ -4433,6 +4436,7 @@ impl AstCodeGen {
                             } else {
                                 let rewritten_block = if block_text
                                     .contains("unsafe { std::mem::zeroed() }")
+                                    && !has_self_literal
                                 {
                                     block_text.replace(
                                         "unsafe { std::mem::zeroed() }",
@@ -5076,10 +5080,13 @@ impl AstCodeGen {
                                         .next()
                                         .and_then(|short| struct_default_field_names.get(short))
                                 });
+                            let has_self_literal = block_slice
+                                .iter()
+                                .any(|line| line.trim_start().starts_with("Self {"));
                             let can_rewrite = block_depth == 0
                                 && maybe_fields.is_some_and(|fields| !fields.is_empty())
                                 && block_text.contains("unsafe { std::mem::zeroed() }")
-                                && !block_text.contains("Self {");
+                                && !has_self_literal;
 
                             if can_rewrite {
                                 let fields = maybe_fields.expect("checked above");
@@ -5106,6 +5113,7 @@ impl AstCodeGen {
                             } else {
                                 let rewritten_block = if block_text
                                     .contains("unsafe { std::mem::zeroed() }")
+                                    && !has_self_literal
                                 {
                                     block_text.replace(
                                         "unsafe { std::mem::zeroed() }",
@@ -91026,6 +91034,69 @@ pub struct PollThreadAlias {
         assert!(
             !normalized.contains("impl Clone for PollThreadAlias {"),
             "alias-backed receiver structs should not get fallback Clone synthesis, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_add_missing_struct_default_clone_impls_zeroes_join_handle_fields() {
+        let input = r#"
+pub struct ReactorWorker {
+    pub thread_: std::thread::JoinHandle<()>,
+    pub id_: i32,
+}
+"#;
+        let normalized = AstCodeGen::normalize_add_missing_struct_default_clone_impls(input);
+        assert!(
+            normalized.contains("impl Default for ReactorWorker {"),
+            "missing Default impl should be synthesized for join-handle-backed structs, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("thread_: unsafe { std::mem::zeroed() },"),
+            "join-handle fields should use zeroed fallback instead of Default::default(), got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("id_: Default::default(),"),
+            "ordinary scalar fields should continue using Default::default() in field-wise synthesis, got:\n{}",
+            normalized
+        );
+        assert!(
+            !normalized.contains("impl Clone for ReactorWorker {"),
+            "join-handle-backed structs should not get fallback Clone synthesis, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_add_missing_struct_default_clone_impls_zeroes_join_handle_alias_fields() {
+        let input = r#"
+pub type ThreadAlias = std::thread::JoinHandle<()>;
+pub struct ReactorWorkerAlias {
+    pub thread_: ThreadAlias,
+    pub id_: i32,
+}
+"#;
+        let normalized = AstCodeGen::normalize_add_missing_struct_default_clone_impls(input);
+        assert!(
+            normalized.contains("impl Default for ReactorWorkerAlias {"),
+            "missing Default impl should be synthesized for alias-backed join handle fields, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("thread_: unsafe { std::mem::zeroed() },"),
+            "alias-backed join-handle fields should use zeroed fallback instead of Default::default(), got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("id_: Default::default(),"),
+            "ordinary scalar fields should continue using Default::default() in field-wise synthesis, got:\n{}",
+            normalized
+        );
+        assert!(
+            !normalized.contains("impl Clone for ReactorWorkerAlias {"),
+            "alias-backed join-handle structs should not get fallback Clone synthesis, got:\n{}",
             normalized
         );
     }

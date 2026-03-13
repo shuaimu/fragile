@@ -2755,3 +2755,53 @@ Aligned with Section 1.3 and `docs/dev/wrong.md`:
 - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests/python/test_mako_rpcbench_harness.py -v`
 - full workspace suite: `cargo test` (current workspace baseline remains `fragile-clang`
   `ast_codegen` lib-test failures: `711 passed / 49 failed`, matching known pre-existing cluster)
+
+## 46. RPC Compile Blocker Leaf 2.4: Non-`Default` Wrapper Default-Synthesis Fix (2026-03-13)
+
+### Problem
+
+After leaf `2.3`, deterministic RPC blocker captures still showed a non-`E0425` type-lowering/default-synthesis blocker:
+
+- `error[E0277]: std::thread::JoinHandle<()>: Default is not satisfied`
+
+The issue surfaced when default-impl normalization rewrote fieldwise non-`Default` wrapper initializers too aggressively.
+
+### Decision
+
+Implement a generic `Default`-rewrite fix in `ast_codegen`:
+
+- preserve fieldwise `Self { ... }` defaults that intentionally use per-field zeroed init for non-`Default` wrappers
+- continue rewriting whole-struct zeroed defaults
+- detect real struct-literal lines (`Self {`) instead of matching function signatures (`fn default() -> Self {`)
+
+### Wrong-Approach Check
+
+Aligned with Section 1.3 and `docs/dev/wrong.md`:
+
+- no RPC target-name conditionals
+- no fake semantic method bodies
+- no force-native bypass path
+- generic codegen normalization only
+
+### Implementation
+
+- Updated `crates/fragile-clang/src/ast_codegen.rs`:
+  - in both existing-default rewrite passes, replaced broad `block_text.contains("Self {")` checks with line-level literal detection
+  - applied the refined guard to both `can_rewrite` and whole-block `zeroed() -> MaybeUninit::<Self>` replacement branches
+- Added focused regressions:
+  - `test_normalize_add_missing_struct_default_clone_impls_zeroes_join_handle_fields`
+  - `test_normalize_add_missing_struct_default_clone_impls_zeroes_join_handle_alias_fields`
+- Preserved existing rewrite regression behavior:
+  - `test_normalize_add_missing_struct_default_clone_impls_rewrites_existing_zeroed_defaults_fieldwise`
+- Added design note:
+  - `docs/rpc_compile_blocker_leaf_2_4_design_2026_03_13.md`
+
+### Validation
+
+- `cargo test -p fragile-clang --lib normalize_add_missing_struct_default_clone_impls_zeroes_ -- --nocapture`
+- `cargo test -p fragile-clang --lib test_normalize_add_missing_struct_default_clone_impls_rewrites_existing_zeroed_defaults_fieldwise -- --nocapture`
+- full workspace suite:
+  - `cargo test --workspace` (baseline red in `fragile-clang` `ast_codegen`)
+  - `FRAGILE_ENABLE_DEGRADED_FALLBACK=1 cargo test --workspace` (`739 passed / 24 failed`, known pre-existing red cluster)
+- Python suite tooling note:
+  - `python3 -m pytest tests/python` unavailable in this environment (`pytest` module not installed)
