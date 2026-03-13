@@ -3700,3 +3700,82 @@ Deterministic evidence highlights:
 Leaf `2.6.c.iv.d.iii` is complete. Post-`d.ii` strict replay remains
 timeout-bound on `src/rrr/base/misc.cpp`, with blocker class and E0425 deltas
 non-worsening versus the `2.6.c.iii` baseline.
+
+## 61. RPC Compile Blocker Leaf 2.6.c.iv.d.iv.a: Namespace-Merge Index Vector Clone Elimination (2026-03-13)
+
+### Problem
+
+The next optimization iteration (`2.6.c.iv.d.iv.a`) still targeted the
+`codegen_after_template_instantiation_generation` ->
+`codegen_after_top_level_generation` window. In this path, reopened namespace
+emission still cloned merged index vectors (`Vec<usize>`) before iterating.
+
+### Decision
+
+Replace cloned index-vector retrieval with ownership transfer for first module
+emission:
+
+- use `self.merged_namespace_children.remove(&module_key)` instead of
+  `.get(...).cloned()`
+- keep semantics locked by strengthening reopened-namespace regression checks
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no target-name-specific logic
+- no force-native bypass
+- no fake semantic stub injection
+- generic codegen-path performance cleanup only
+
+### Implementation
+
+Updated:
+
+- `crates/fragile-clang/src/ast_codegen.rs`
+
+Key changes:
+
+- in namespace top-level generation, consume merged index vectors via
+  `HashMap::remove` to avoid cloning `Vec<usize>` per module emission.
+- strengthened focused regression
+  `test_reopened_namespace_merges_all_children_without_dropping_entries`:
+  - now asserts `lane_a` and `lane_b` each emit exactly once.
+
+Design note:
+
+- `docs/rpc_compile_blocker_leaf_2_6c_iv_d_iv_a_design_2026_03_13.md`
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang reopened_namespace_merges_all_children_without_dropping_entries -- --nocapture`
+- `cargo test -p fragile-clang problematic_callshape -- --nocapture`
+- `cargo build --release -p fragile-cli --bin fragilec`
+- strict replay captures (120s/300s):
+  - `/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_a_callshape_profile_120_v1.txt`
+  - `/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_a_callshape_profile_300_v1.txt`
+  - `/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_a_stage_timing_120_v1.txt`
+  - `/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_a_stage_timing_300_v1.txt`
+- full suites:
+  - `cargo test --workspace --all-targets`
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- strict replay remains timeout-bound on `src/rrr/base/misc.cpp`.
+- checkpoint history remains:
+  - 120s: `status_history=codegen_started`
+  - 300s:
+    `status_history=codegen_started,codegen_after_template_collection,codegen_after_template_instantiation_generation`
+- full-suite status remains baseline:
+  - workspace cargo run retains known baseline (`46` existing `fragile-clang`
+    lib failures, unchanged)
+  - Python suite passes (`29`, skipped `1`)
+
+### Outcome
+
+Leaf `2.6.c.iv.d.iv.a` is complete. Reopened-namespace module generation now
+avoids cloning merged index vectors while preserving single-module merged output
+semantics under strengthened focused regression coverage.

@@ -55901,8 +55901,10 @@ impl FragileAtomicBoolCompat for atomic_bool {
 
                         // Use merged namespace contents from all occurrences
                         // This handles C++ namespace reopening (same namespace declared multiple times)
+                        // Consume merged child indices on first module emission.
+                        // This avoids cloning large vectors in reopened namespaces.
                         if let Some(merged_indices) =
-                            self.merged_namespace_children.get(&module_key).cloned()
+                            self.merged_namespace_children.remove(&module_key)
                         {
                             if merged_indices.is_empty() {
                                 for child in &node.children {
@@ -79559,9 +79561,21 @@ mod tests {
             "merged namespace should keep declarations from first occurrence, got:\n{}",
             code
         );
+        assert_eq!(
+            code.matches("fn lane_a(").count(),
+            1,
+            "merged namespace should emit first-occurrence declaration exactly once, got:\n{}",
+            code
+        );
         assert!(
             code.contains("fn lane_b("),
             "merged namespace should keep declarations from reopened occurrence, got:\n{}",
+            code
+        );
+        assert_eq!(
+            code.matches("fn lane_b(").count(),
+            1,
+            "merged namespace should emit reopened declaration exactly once, got:\n{}",
             code
         );
     }
