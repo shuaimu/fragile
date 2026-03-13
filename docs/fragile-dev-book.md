@@ -3015,3 +3015,62 @@ Checked against Section 1.3 and `docs/dev/wrong.md`:
   - `replay_01_command_source=compile_commands`
   - `replay_01_timed_out=false`
   - `replay_01_first_failure_class=unresolved_name_or_type_e0425`
+
+## 51. RPC Compile Blocker Leaf 2.6.b.iii: Runtime Helper Call Qualification (2026-03-13)
+
+### Problem
+
+Leaf `2.6.b.ii` established a non-timeout blocker class target (`unresolved_name_or_type_e0425`).
+Deterministic archived non-timeout capture (`/tmp/fragile_rpc_leaf_2_5_current_20260313/lane_fragilec/build.stderr`)
+showed unresolved runtime helper calls dominated by:
+
+- `signal`
+- `getopt`
+- `atoi`
+
+These helper surfaces already exist in runtime preamble support, so the remaining blocker is
+call-path/scope resolution for bare helper calls in generated code.
+
+### Decision
+
+Apply a generic call-path normalization in codegen:
+
+- rewrite bare runtime helper calls to crate-qualified paths
+  - `signal(...)` -> `crate::signal(...)`
+  - `getopt(...)` -> `crate::getopt(...)`
+  - `atoi(...)` -> `crate::atoi(...)`
+- preserve helper definitions and already-qualified call paths (`crate::`, `super::`, `self::`)
+
+This keeps existing runtime helper behavior while removing unresolved bare-call lookups from
+nested scopes.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no RPC target-name conditionals
+- no force-native bypass
+- no fake semantic method-body synthesis
+- no synthetic success masking; only generic emitted-Rust normalization
+
+### Implementation
+
+Updated `crates/fragile-clang/src/ast_codegen.rs`:
+
+- added `normalize_bare_runtime_helper_calls`
+- extended `normalize_known_runtime_path_misresolutions` to apply helper qualification for
+  `signal`, `getopt`, and `atoi`
+
+Added focused regressions:
+
+- `test_normalize_known_runtime_path_misresolutions_qualifies_bare_runtime_helpers`
+- `test_normalize_known_runtime_path_misresolutions_keeps_runtime_helper_definitions`
+
+Updated docs:
+
+- `TODO.md` (`2.6.b.iii` completion evidence)
+- `docs/rpc_compile_blocker_leaf_2_6b_iii_design_2026_03_13.md`
+
+### Validation
+
+- `cargo test -p fragile-clang test_normalize_known_runtime_path_misresolutions_ -- --nocapture`

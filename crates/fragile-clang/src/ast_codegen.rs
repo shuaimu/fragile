@@ -32416,8 +32416,79 @@ impl FragileAtomicBoolCompat for atomic_bool {
         out
     }
 
+    fn normalize_bare_runtime_helper_calls(code: &str, helper: &str) -> String {
+        let call_marker = format!("{helper}(");
+        if !code.contains(&call_marker) {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len() + 64);
+        for line in code.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with(&format!("pub fn {helper}("))
+                || trimmed.starts_with(&format!("fn {helper}("))
+                || trimmed.starts_with(&format!("pub extern \"C\" fn {helper}("))
+                || trimmed.starts_with(&format!("extern \"C\" fn {helper}("))
+                || trimmed.starts_with(&format!("pub unsafe extern \"C\" fn {helper}("))
+                || trimmed.starts_with(&format!("unsafe extern \"C\" fn {helper}("))
+            {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+
+            let bytes = line.as_bytes();
+            let helper_bytes = helper.as_bytes();
+            let mut rewritten = String::with_capacity(line.len() + 16);
+            let mut i = 0usize;
+            while i < bytes.len() {
+                let can_match = i + helper_bytes.len() <= bytes.len()
+                    && &bytes[i..i + helper_bytes.len()] == helper_bytes;
+                if can_match {
+                    let prev = if i == 0 { None } else { Some(bytes[i - 1]) };
+                    let next = if i + helper_bytes.len() < bytes.len() {
+                        Some(bytes[i + helper_bytes.len()])
+                    } else {
+                        None
+                    };
+                    let prefix = &line[..i];
+                    let already_qualified = prefix.ends_with("crate::")
+                        || prefix.ends_with("super::")
+                        || prefix.ends_with("self::");
+                    let looks_like_fn_decl = prefix.trim_end().ends_with("fn");
+                    let prev_is_ident =
+                        prev.is_some_and(|byte| Self::is_identifier_char(byte as char));
+                    let prev_is_path_sep = matches!(prev, Some(b':') | Some(b'.'));
+                    if next == Some(b'(')
+                        && !already_qualified
+                        && !looks_like_fn_decl
+                        && !prev_is_ident
+                        && !prev_is_path_sep
+                    {
+                        rewritten.push_str("crate::");
+                        rewritten.push_str(helper);
+                        i += helper_bytes.len();
+                        continue;
+                    }
+                }
+                rewritten.push(bytes[i] as char);
+                i += 1;
+            }
+            out.push_str(&rewritten);
+            out.push('\n');
+        }
+        if !code.ends_with('\n') && !out.is_empty() {
+            out.pop();
+        }
+        out
+    }
+
     fn normalize_known_runtime_path_misresolutions(code: &str) -> String {
-        code.replace("std::string::String::new_0()", "std::string::String::new()")
+        let mut out = code.replace("std::string::String::new_0()", "std::string::String::new()");
+        for helper in ["signal", "getopt", "atoi"] {
+            out = Self::normalize_bare_runtime_helper_calls(&out, helper);
+        }
+        out
     }
 
     fn normalize_std_string_lowering_artifacts(code: &str) -> String {
@@ -112232,6 +112303,76 @@ pub fn WarehouseInShard(g_w_id: i32, sIdx: i32) -> bool {
         assert!(
             output.contains("pub(crate) static mut __gv_vtable: FunctionVTable = unsafe { std::mem::zeroed() };"),
             "heap-vtable impl static initializers should normalize to zeroed fallback when helper impl type is unresolved, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_known_runtime_path_misresolutions_qualifies_bare_runtime_helpers() {
+        let input = r#"pub mod rpcbench {
+    pub fn parse_args(argc: i32, argv: *const *mut i8) -> i32 {
+        signal(13i32, Some(1i32));
+        let ch = getopt(argc, argv, b"b:\x00".as_ptr() as *const i8);
+        let v = atoi(unsafe { __fragile_optarg as *const i8 });
+        super::signal(2i32, Some(1i32));
+        crate::atoi(unsafe { __fragile_optarg as *const i8 });
+        v + ch
+    }
+}"#;
+        let output = AstCodeGen::normalize_known_runtime_path_misresolutions(input);
+        assert!(
+            output.contains("crate::signal(13i32, Some(1i32));"),
+            "bare `signal(...)` helper calls should be crate-qualified, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("crate::getopt(argc, argv, b\"b:\\x00\".as_ptr() as *const i8);"),
+            "bare `getopt(...)` helper calls should be crate-qualified, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("crate::atoi(unsafe { __fragile_optarg as *const i8 });"),
+            "bare `atoi(...)` helper calls should be crate-qualified, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("super::signal(2i32, Some(1i32));"),
+            "already-qualified `super::signal(...)` calls must remain unchanged, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_known_runtime_path_misresolutions_keeps_runtime_helper_definitions() {
+        let input = r#"pub fn signal<T>(_sig: i32, _handler: T) -> i32 { 0 }
+pub fn getopt(argc: i32, argv: *const *mut i8, optstring: *const i8) -> i32 { 0 }
+pub fn atoi(s: *const i8) -> i32 { 0 }
+pub fn call(argc: i32, argv: *const *mut i8) -> i32 {
+    signal(1i32, Some(1i32));
+    let ch = getopt(argc, argv, b"x:\x00".as_ptr() as *const i8);
+    atoi(unsafe { __fragile_optarg as *const i8 }) + ch
+}"#;
+        let output = AstCodeGen::normalize_known_runtime_path_misresolutions(input);
+        assert!(
+            output.contains("pub fn signal<T>(_sig: i32, _handler: T) -> i32 { 0 }"),
+            "runtime helper definition should not be path-qualified, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn getopt(argc: i32, argv: *const *mut i8, optstring: *const i8) -> i32 { 0 }"),
+            "runtime helper definition should not be path-qualified, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn atoi(s: *const i8) -> i32 { 0 }"),
+            "runtime helper definition should not be path-qualified, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("crate::signal(1i32, Some(1i32));")
+                && output.contains("crate::getopt(argc, argv, b\"x:\\x00\".as_ptr() as *const i8);")
+                && output.contains("crate::atoi(unsafe { __fragile_optarg as *const i8 }) + ch"),
+            "call sites should be path-qualified while helper definitions remain unchanged, got:\n{}",
             output
         );
     }
