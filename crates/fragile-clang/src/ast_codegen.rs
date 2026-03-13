@@ -38382,28 +38382,32 @@ impl FragileAtomicBoolCompat for atomic_bool {
         namespace_path: &[String],
     ) -> Vec<String> {
         let mut candidate_keys: Vec<String> = Vec::new();
-        let mut seen_keys: HashSet<String> = HashSet::new();
-        let mut push_candidate = |key: String| {
-            if !key.is_empty() && seen_keys.insert(key.clone()) {
-                candidate_keys.push(key);
+        let mut push_candidate = |key: &str| {
+            if key.is_empty() {
+                return;
             }
+            if candidate_keys.iter().any(|existing| existing == key) {
+                return;
+            }
+            candidate_keys.push(key.to_string());
         };
 
         if !namespace_path.is_empty() {
-            push_candidate(format!("{}::{}", namespace_path.join("::"), fn_name));
+            let namespaced = format!("{}::{}", namespace_path.join("::"), fn_name);
+            push_candidate(&namespaced);
         }
-        push_candidate(fn_name.to_string());
+        push_candidate(fn_name);
 
         if let Some(qualified_keys) = self.fn_template_keys_by_leaf.get(fn_name) {
             for key in qualified_keys {
-                push_candidate(key.clone());
+                push_candidate(key);
             }
         } else {
             // Fallback for call paths that bypass collect_template_info in tests.
             let qualified_suffix = format!("::{}", fn_name);
             for key in self.fn_template_definitions.keys() {
                 if key.ends_with(&qualified_suffix) {
-                    push_candidate(key.clone());
+                    push_candidate(key);
                 }
             }
         }
@@ -111925,6 +111929,32 @@ stream.PutN(c, n);
         assert!(
             candidate_set.contains("std::make_shared"),
             "candidate key collection should include all qualified keys sharing leaf name"
+        );
+    }
+
+    #[test]
+    fn test_collect_fn_template_candidate_keys_deduplicates_and_keeps_priority_order() {
+        let mut codegen = AstCodeGen::new();
+        codegen.fn_template_keys_by_leaf.insert(
+            "make_shared".to_string(),
+            vec![
+                "rusty::make_shared".to_string(),
+                "make_shared".to_string(),
+                "std::make_shared".to_string(),
+                "rusty::make_shared".to_string(),
+            ],
+        );
+
+        let namespace_path = vec!["rusty".to_string()];
+        let candidates = codegen.collect_fn_template_candidate_keys("make_shared", &namespace_path);
+        assert_eq!(
+            candidates,
+            vec![
+                "rusty::make_shared".to_string(),
+                "make_shared".to_string(),
+                "std::make_shared".to_string(),
+            ],
+            "candidate-key collection should deduplicate while preserving deterministic priority order"
         );
     }
 

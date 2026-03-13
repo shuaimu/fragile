@@ -6036,3 +6036,95 @@ Strict build-only replay remains timeout-bound on `src/rrr/base/misc.cpp`, and
 inventory non-increase gates confirm no blocker class-rank or `E0425`
 regression versus the `2.6.c.iii` baseline. Proceed to repeat leaf
 `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c`.
+
+## 90. RPC Compile Blocker Leaf 2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.a: Reduce Function-Template Candidate-Key Collection Allocation Churn (2026-03-13)
+
+### Problem
+
+After decomposing repeat node
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c` into bounded leaves,
+the first execution leaf was `...c.c.a`.
+
+`collect_fn_template_candidate_keys` still allocated a transient `HashSet` and
+performed extra `String` clones for every call-site candidate scan.
+This path is exercised repeatedly in the pre-`codegen_after_top_level_generation`
+window while collecting function-template instantiations.
+
+### Execution Plan
+
+1. Remove per-call `HashSet` allocation/clone churn from candidate-key
+   collection while preserving deterministic key priority.
+2. Add a focused regression that locks dedupe and ordering behavior.
+3. Re-run targeted template-instantiation regressions.
+4. Rebuild release `fragilec` and capture strict replay profiling evidence at
+   120s/300s.
+5. Re-run full regression suites and require baseline parity.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no RPC-target-specific branches
+- no force-native bypass
+- no fake semantic stubs
+- generic codegen hot-path optimization only
+
+### Implementation
+
+Updated:
+
+- `crates/fragile-clang/src/ast_codegen.rs`
+
+Key changes:
+
+- `collect_fn_template_candidate_keys` now uses deterministic in-place `Vec`
+  dedupe (`iter().any`) instead of allocating a per-call `HashSet<String>`.
+- Candidate priority is preserved:
+  - namespaced call-path key first
+  - unqualified leaf key second
+  - leaf-index/fallback qualified keys afterward
+- Added focused regression:
+  - `test_collect_fn_template_candidate_keys_deduplicates_and_keeps_priority_order`
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang test_collect_fn_template_candidate_keys_deduplicates_and_keeps_priority_order -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_uses_leaf_index_candidate_after_mismatch -- --nocapture`
+- `cargo test -p fragile-clang test_template_match_type_normalization_preserves_ref_prefix_compatibility -- --nocapture`
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_a_callshape_profile_120_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_a_stage_timing_120_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_a_callshape_profile_300_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_a_stage_timing_300_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- 120s profile:
+  - `status=codegen_after_template_collection`
+  - `status_history=codegen_started,codegen_after_template_collection`
+- 300s profile:
+  - `status=codegen_after_template_instantiation_generation`
+  - `status_history=codegen_started,codegen_after_template_collection,codegen_after_template_instantiation_generation`
+  - `input_bytes=574915`
+- comparison vs prior leaf `...c.iii.c.iii.c.iii.c.iii.c.iii.c.a`
+  (`input_bytes=573589`):
+  - checkpoint bytes increased by `+1326`
+- replay manifest (`/tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313/rpc_compile_blocker_replay_manifest.txt`):
+  - `replay_01_status=124`
+  - `replay_01_timed_out=true`
+  - `replay_01_first_failure_class=build_timeout`
+  - `replay_01_blocker_file=src/rrr/base/misc.cpp`
+- full-suite baseline parity:
+  - `cargo test --workspace --all-targets`: `fragile-clang` lib
+    `742` passed / `46` failed (failure count unchanged)
+  - Python suite: `OK`, `29` ran, `1` skipped
+
+### Outcome
+
+Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.a` is complete.
+Candidate-key collection now avoids per-call `HashSet` allocation while keeping
+deterministic priority and dedupe behavior locked by regression tests. Strict
+replay remains timeout-bound on `src/rrr/base/misc.cpp`; proceed to paired gate
+leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.b`.
