@@ -38467,6 +38467,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
         namespace_path: &mut Vec<String>,
     ) {
         for child in children {
+            let has_children = !child.children.is_empty();
             match &child.kind {
                 ClangNodeKind::ClassTemplateDecl {
                     name,
@@ -38494,10 +38495,12 @@ impl FragileAtomicBoolCompat for atomic_bool {
                             // Instead, inline namespace aliases are used during lookup.
                         }
                     }
-                    self.collect_template_definitions_with_namespace_stack(
-                        &child.children,
-                        namespace_path,
-                    );
+                    if has_children {
+                        self.collect_template_definitions_with_namespace_stack(
+                            &child.children,
+                            namespace_path,
+                        );
+                    }
                 }
                 ClangNodeKind::FunctionTemplateDecl {
                     name,
@@ -38541,10 +38544,12 @@ impl FragileAtomicBoolCompat for atomic_bool {
                         self.fn_template_definitions
                             .insert(full_name, template_info);
                     }
-                    self.collect_template_definitions_with_namespace_stack(
-                        &child.children,
-                        namespace_path,
-                    );
+                    if has_children {
+                        self.collect_template_definitions_with_namespace_stack(
+                            &child.children,
+                            namespace_path,
+                        );
+                    }
                 }
                 ClangNodeKind::NamespaceDecl { name, is_inline } => {
                     if let Some(ns_name) = name {
@@ -38562,24 +38567,27 @@ impl FragileAtomicBoolCompat for atomic_bool {
                             let full_path = namespace_path.join("::");
                             self.inline_namespace_aliases.insert(parent_path, full_path);
                         }
-                        self.collect_template_definitions_with_namespace_stack(
-                            &child.children,
-                            namespace_path,
-                        );
+                        if has_children {
+                            self.collect_template_definitions_with_namespace_stack(
+                                &child.children,
+                                namespace_path,
+                            );
+                        }
                         namespace_path.pop();
-                    } else {
+                    } else if has_children {
                         self.collect_template_definitions_with_namespace_stack(
                             &child.children,
                             namespace_path,
                         );
                     }
                 }
-                _ => {
+                _ if has_children => {
                     self.collect_template_definitions_with_namespace_stack(
                         &child.children,
                         namespace_path,
                     );
                 }
+                _ => {}
             }
         }
     }
@@ -38592,16 +38600,21 @@ impl FragileAtomicBoolCompat for atomic_bool {
     /// in the hot traversal.
     fn collect_template_usages(&mut self, children: &[ClangNode]) {
         for child in children {
+            let has_children = !child.children.is_empty();
             match &child.kind {
                 ClangNodeKind::ClassTemplateDecl { .. }
                 | ClangNodeKind::FunctionTemplateDecl { .. }
                 | ClangNodeKind::RecordDecl { .. }
                 | ClangNodeKind::CompoundStmt => {
-                    self.collect_template_usages(&child.children);
+                    if has_children {
+                        self.collect_template_usages(&child.children);
+                    }
                 }
                 ClangNodeKind::VarDecl { ty, .. } | ClangNodeKind::FieldDecl { ty, .. } => {
                     self.collect_template_type(ty);
-                    self.collect_template_usages(&child.children);
+                    if has_children {
+                        self.collect_template_usages(&child.children);
+                    }
                 }
                 ClangNodeKind::FunctionDecl {
                     return_type,
@@ -38612,7 +38625,9 @@ impl FragileAtomicBoolCompat for atomic_bool {
                     for (_, param_ty) in params {
                         self.collect_template_type(param_ty);
                     }
-                    self.collect_template_usages(&child.children);
+                    if has_children {
+                        self.collect_template_usages(&child.children);
+                    }
                 }
                 ClangNodeKind::CXXMethodDecl {
                     return_type,
@@ -38623,17 +38638,22 @@ impl FragileAtomicBoolCompat for atomic_bool {
                     for (_, param_ty) in params {
                         self.collect_template_type(param_ty);
                     }
-                    self.collect_template_usages(&child.children);
+                    if has_children {
+                        self.collect_template_usages(&child.children);
+                    }
                 }
                 ClangNodeKind::CallExpr { .. } => {
                     // Check if this is a call to a function template instantiation
                     // by looking at the callee (first child should be DeclRefExpr or ImplicitCastExpr)
                     self.collect_fn_template_instantiation(child);
+                    if has_children {
+                        self.collect_template_usages(&child.children);
+                    }
+                }
+                _ if has_children => {
                     self.collect_template_usages(&child.children);
                 }
-                _ => {
-                    self.collect_template_usages(&child.children);
-                }
+                _ => {}
             }
         }
     }
@@ -111829,6 +111849,59 @@ stream.PutN(c, n);
         assert!(
             candidate_set.contains("std::make_shared"),
             "candidate key collection should include all qualified keys sharing leaf name"
+        );
+    }
+
+    #[test]
+    fn test_collect_template_usages_descends_default_branch_with_children() {
+        let templ_ty = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::ClassTemplateDecl {
+                        name: "Widget".to_string(),
+                        template_params: vec!["T".to_string()],
+                        is_class: false,
+                        parameter_pack_indices: vec![],
+                        requires_clause: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::FieldDecl {
+                            name: "value".to_string(),
+                            ty: templ_ty,
+                            is_static: false,
+                            access: AccessSpecifier::Public,
+                            bit_field_width: None,
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::Unknown("wrapper".to_string()),
+                    vec![make_node(
+                        ClangNodeKind::VarDecl {
+                            name: "w".to_string(),
+                            ty: CppType::Named("Widget<int>".to_string()),
+                            has_init: false,
+                            is_static: false,
+                            is_extern: false,
+                        },
+                        vec![],
+                    )],
+                ),
+            ],
+        );
+
+        let mut codegen = AstCodeGen::new();
+        codegen.collect_template_info(&ast.children);
+        assert!(
+            codegen.pending_template_instantiations.contains("Widget<int>"),
+            "default recursion branch should still descend non-empty children and collect template usage"
         );
     }
 
