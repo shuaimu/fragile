@@ -78051,7 +78051,12 @@ fn infer_non_type_array_ref_template_arg(
         return None;
     };
 
-    if element.to_rust_type_str() != pointee.to_rust_type_str() {
+    // Fast path: most successful NTTP array-ref matches have structurally equal
+    // element/pointee types. Fall back to canonical Rust-surface comparison for
+    // equivalent spellings (`char` vs `signed char`, etc.).
+    if element.as_ref() != pointee.as_ref()
+        && element.to_rust_type_str() != pointee.to_rust_type_str()
+    {
         return None;
     }
 
@@ -78696,6 +78701,31 @@ mod tests {
             inferred,
             vec!["2".to_string()],
             "non-type template param bound should infer from string-literal array extent (including NUL)"
+        );
+    }
+
+    #[test]
+    fn test_function_template_type_arg_inference_nttp_array_ref_accepts_canonicalized_element_spelling(
+    ) {
+        let pattern_ty = CppType::Reference {
+            referent: Box::new(CppType::Array {
+                element: Box::new(CppType::Named("char".to_string())),
+                size: None,
+            }),
+            is_const: true,
+            is_rvalue: false,
+        };
+        let instantiated_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        let literal_arg = make_node(ClangNodeKind::StringLiteral("~".to_string()), vec![]);
+        let inferred =
+            infer_non_type_array_ref_template_arg(&pattern_ty, &instantiated_ty, Some(&literal_arg));
+        assert_eq!(
+            inferred,
+            Some("2".to_string()),
+            "nttp array-ref inference should preserve canonicalized element/pointee matches"
         );
     }
 

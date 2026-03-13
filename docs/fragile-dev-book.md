@@ -7009,3 +7009,87 @@ complete. Strict build-only replay remains timeout-bound on
 `src/rrr/base/misc.cpp`, and inventory non-increase gate remains green versus
 `2.6.c.iii` baseline. Proceed to repeat leaf
 `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c`.
+
+## 102. RPC Compile Blocker Leaf 2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.a: Fast-Path NTTP Array-Ref Element Matching (2026-03-13)
+
+### Problem
+
+`infer_non_type_array_ref_template_arg` compared array element/pointee types by
+converting both sides to Rust-surface strings, even when the types were already
+structurally equal. This adds repeated allocation work in a hot template
+inference path.
+
+### Execution Plan
+
+1. Add a structural-equality fast path before Rust-surface string comparison in
+   `infer_non_type_array_ref_template_arg`.
+2. Keep canonicalized Rust-surface comparison as fallback for equivalent
+   spellings (`char` vs `signed char`).
+3. Add a focused regression proving canonicalized spelling compatibility
+   remains accepted.
+4. Re-run targeted tests, strict replay capture, and full regression suites.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no RPC-target-specific branching
+- no force-native bypass
+- no fallback-body synthesis
+- no fake semantic stubs
+
+### Implementation
+
+Updated `crates/fragile-clang/src/ast_codegen.rs`:
+
+- In `infer_non_type_array_ref_template_arg`:
+  - added structural fast-path check:
+    - only perform Rust-surface string comparison when
+      `element != pointee`
+  - retained canonicalized string fallback for equivalent spellings
+- Added regression test:
+  - `test_function_template_type_arg_inference_nttp_array_ref_accepts_canonicalized_element_spelling`
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang test_function_template_type_arg_inference_nttp_array_ref_accepts_canonicalized_element_spelling -- --nocapture`
+- `cargo test -p fragile-clang test_function_template_type_arg_inference_nttp_array_ref_uses_literal_bound -- --nocapture`
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_a_callshape_profile_120_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_a_stage_timing_120_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_a_callshape_profile_300_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_a_stage_timing_300_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- 120s profile:
+  - `status=codegen_after_template_collection`
+  - `status_history=codegen_started,codegen_after_template_collection`
+- 300s profile:
+  - `status=codegen_after_template_instantiation_generation`
+  - `status_history=codegen_started,codegen_after_template_collection,codegen_after_template_instantiation_generation`
+  - `input_bytes=567527`
+- comparison vs prior optimization leaf
+  (`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.a`,
+  `input_bytes=574747`):
+  - delta `-7220`
+- replay manifest (`/tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313/rpc_compile_blocker_replay_manifest.txt`):
+  - `replay_01_status=124`
+  - `replay_01_timed_out=true`
+  - `replay_01_first_failure_class=build_timeout`
+  - `replay_01_blocker_file=src/rrr/base/misc.cpp`
+- full-suite baseline parity:
+  - `cargo test --workspace --all-targets`: `fragile-clang` lib
+    `748` passed / `46` failed (failure count unchanged)
+  - Python suite: `OK`, `29` ran, `1` skipped
+
+### Outcome
+
+Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.a` is
+complete. NTTP array-ref element matching now avoids unnecessary string
+materialization on structural matches while keeping canonicalized-type
+compatibility. Strict replay remains timeout-bound on
+`src/rrr/base/misc.cpp`. Proceed to paired gate leaf
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.b`.
