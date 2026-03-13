@@ -38457,6 +38457,15 @@ impl FragileAtomicBoolCompat for atomic_bool {
         children: &[ClangNode],
         namespace_path: &[String],
     ) {
+        let mut namespace_path_stack = namespace_path.to_vec();
+        self.collect_template_definitions_with_namespace_stack(children, &mut namespace_path_stack);
+    }
+
+    fn collect_template_definitions_with_namespace_stack(
+        &mut self,
+        children: &[ClangNode],
+        namespace_path: &mut Vec<String>,
+    ) {
         for child in children {
             match &child.kind {
                 ClangNodeKind::ClassTemplateDecl {
@@ -38485,7 +38494,10 @@ impl FragileAtomicBoolCompat for atomic_bool {
                             // Instead, inline namespace aliases are used during lookup.
                         }
                     }
-                    self.collect_template_definitions_with_namespace(&child.children, namespace_path);
+                    self.collect_template_definitions_with_namespace_stack(
+                        &child.children,
+                        namespace_path,
+                    );
                 }
                 ClangNodeKind::FunctionTemplateDecl {
                     name,
@@ -38529,27 +38541,41 @@ impl FragileAtomicBoolCompat for atomic_bool {
                         self.fn_template_definitions
                             .insert(full_name, template_info);
                     }
-                    self.collect_template_definitions_with_namespace(&child.children, namespace_path);
+                    self.collect_template_definitions_with_namespace_stack(
+                        &child.children,
+                        namespace_path,
+                    );
                 }
                 ClangNodeKind::NamespaceDecl { name, is_inline } => {
-                    // Track namespace for template name qualification
-                    // For inline namespaces (like std::__1), also register alias from parent::name to parent::inline::name
-                    let mut new_path = namespace_path.to_vec();
                     if let Some(ns_name) = name {
-                        new_path.push(ns_name.clone());
+                        // Track namespace for template name qualification.
+                        // For inline namespaces (like std::__1), register alias
+                        // from parent::name to parent::inline::name.
+                        let parent_path = if *is_inline && !namespace_path.is_empty() {
+                            Some(namespace_path.join("::"))
+                        } else {
+                            None
+                        };
+                        namespace_path.push(ns_name.clone());
 
-                        // If this is an inline namespace, record the alias
-                        // e.g., std::__1 is inline, so std::map should resolve to std::__1::map
-                        if *is_inline && !namespace_path.is_empty() {
-                            let parent_path = namespace_path.join("::");
-                            let full_path = new_path.join("::");
+                        if let Some(parent_path) = parent_path {
+                            let full_path = namespace_path.join("::");
                             self.inline_namespace_aliases.insert(parent_path, full_path);
                         }
+                        self.collect_template_definitions_with_namespace_stack(
+                            &child.children,
+                            namespace_path,
+                        );
+                        namespace_path.pop();
+                    } else {
+                        self.collect_template_definitions_with_namespace_stack(
+                            &child.children,
+                            namespace_path,
+                        );
                     }
-                    self.collect_template_definitions_with_namespace(&child.children, &new_path);
                 }
                 _ => {
-                    self.collect_template_definitions_with_namespace(
+                    self.collect_template_definitions_with_namespace_stack(
                         &child.children,
                         namespace_path,
                     );
@@ -111686,6 +111712,86 @@ stream.PutN(c, n);
                 .pending_template_instantiations
                 .contains("std::Widget<int>"),
             "template usage scan should resolve std::Widget via inline namespace alias from definition prepass"
+        );
+    }
+
+    #[test]
+    fn test_collect_template_definitions_with_namespace_restores_sibling_paths() {
+        let templ_ty = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::NamespaceDecl {
+                        name: Some("alpha".to_string()),
+                        is_inline: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::ClassTemplateDecl {
+                            name: "Widget".to_string(),
+                            template_params: vec!["T".to_string()],
+                            is_class: false,
+                            parameter_pack_indices: vec![],
+                            requires_clause: None,
+                        },
+                        vec![make_node(
+                            ClangNodeKind::FieldDecl {
+                                name: "value".to_string(),
+                                ty: templ_ty.clone(),
+                                is_static: false,
+                                access: AccessSpecifier::Public,
+                                bit_field_width: None,
+                            },
+                            vec![],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::NamespaceDecl {
+                        name: Some("beta".to_string()),
+                        is_inline: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::ClassTemplateDecl {
+                            name: "Widget".to_string(),
+                            template_params: vec!["T".to_string()],
+                            is_class: false,
+                            parameter_pack_indices: vec![],
+                            requires_clause: None,
+                        },
+                        vec![make_node(
+                            ClangNodeKind::FieldDecl {
+                                name: "value".to_string(),
+                                ty: templ_ty,
+                                is_static: false,
+                                access: AccessSpecifier::Public,
+                                bit_field_width: None,
+                            },
+                            vec![],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let mut codegen = AstCodeGen::new();
+        codegen.collect_template_info(&ast.children);
+
+        assert!(
+            codegen.template_definitions.contains_key("alpha::Widget"),
+            "template-definition prepass should keep first sibling namespace path"
+        );
+        assert!(
+            codegen.template_definitions.contains_key("beta::Widget"),
+            "template-definition prepass should keep second sibling namespace path without leakage"
+        );
+        assert!(
+            !codegen.template_definitions.contains_key("alpha::beta::Widget"),
+            "namespace path stack should be restored between sibling traversals"
         );
     }
 
