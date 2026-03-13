@@ -78087,42 +78087,47 @@ fn infer_fn_template_type_args(
         .params
         .iter()
         .any(|(_, pattern_ty)| has_unsized_array_ref_pattern(pattern_ty));
-    let template_param_usage: Vec<(bool, bool)> = template_info
+    let template_param_param_positions: Vec<Vec<usize>> = template_info
         .template_params
         .iter()
         .map(|template_param_name| {
-            let appears_in_params = template_info
+            template_info
                 .params
                 .iter()
-                .any(|(_, pattern_ty)| cpp_type_contains_template_param(pattern_ty, template_param_name));
-            let appears_in_return =
-                cpp_type_contains_template_param(&template_info.return_type, template_param_name);
-            (appears_in_params, appears_in_return)
+                .enumerate()
+                .filter_map(|(param_idx, (_, pattern_ty))| {
+                    cpp_type_contains_template_param(pattern_ty, template_param_name)
+                        .then_some(param_idx)
+                })
+                .collect()
+        })
+        .collect();
+    let template_param_appears_in_return: Vec<bool> = template_info
+        .template_params
+        .iter()
+        .map(|template_param_name| {
+            cpp_type_contains_template_param(&template_info.return_type, template_param_name)
         })
         .collect();
     let fallback_return_ty = instantiated_return_type.to_rust_type_str();
 
     let mut type_args = Vec::with_capacity(template_info.template_params.len());
     for (idx, template_param_name) in template_info.template_params.iter().enumerate() {
-        let (appears_in_params, appears_in_return) = template_param_usage[idx];
+        let param_positions = &template_param_param_positions[idx];
+        let appears_in_params = !param_positions.is_empty();
+        let appears_in_return = template_param_appears_in_return[idx];
         let appears_in_type_positions = appears_in_params || appears_in_return;
         let non_type_param_candidate = !appears_in_type_positions && has_unsized_array_ref_param;
         let mut inferred = if appears_in_params {
-            template_info
-                .params
-                .iter()
-                .zip(instantiated_params.iter())
-                .find_map(|((_, pattern_ty), instantiated_ty)| {
-                    if cpp_type_contains_template_param(pattern_ty, template_param_name) {
-                        Some(extract_template_arg(
-                            pattern_ty,
-                            instantiated_ty,
-                            template_param_name,
-                        ))
-                    } else {
-                        None
-                    }
-                })
+            param_positions.iter().find_map(|param_idx| {
+                let instantiated_ty = instantiated_params.get(*param_idx)?;
+                let (_, pattern_ty) = template_info.params.get(*param_idx)?;
+                Some(extract_template_arg(
+                    pattern_ty,
+                    instantiated_ty,
+                    template_param_name,
+                ))
+            })
         } else {
             None
         };
@@ -78774,6 +78779,38 @@ mod tests {
             inferred,
             vec!["f64".to_string()],
             "template arg should infer from instantiated return type when param positions do not reference it"
+        );
+    }
+
+    #[test]
+    fn test_function_template_type_arg_inference_tracks_multiple_template_param_positions() {
+        let template_info = FnTemplateInfo {
+            template_params: vec!["K".to_string(), "V".to_string()],
+            return_type: CppType::Bool,
+            params: vec![
+                ("slot".to_string(), CppType::Int { signed: true }),
+                ("key".to_string(), CppType::Named("K".to_string())),
+                ("value".to_string(), CppType::Named("V".to_string())),
+            ],
+            body: None,
+            is_noexcept: false,
+        };
+        let instantiated_params = vec![
+            CppType::Int { signed: true },
+            CppType::LongLong { signed: true },
+            CppType::Double,
+        ];
+        let inferred = infer_fn_template_type_args(
+            &template_info,
+            &instantiated_params,
+            &CppType::Bool,
+            None,
+        )
+        .expect("inference should succeed with multiple template params at distinct positions");
+        assert_eq!(
+            inferred,
+            vec!["i64".to_string(), "f64".to_string()],
+            "template args should infer from their matching parameter positions without fallback leakage"
         );
     }
 
