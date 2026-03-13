@@ -78009,6 +78009,7 @@ fn mark_template_param_presence_in_cpp_type(
     unresolved_candidate_count: &mut usize,
     unresolved_candidate_indices: &mut Vec<usize>,
     unresolved_candidate_positions: &mut [usize],
+    newly_resolved_candidate_indices: &mut Vec<usize>,
 ) {
     debug_assert_eq!(candidate_names.len(), candidate_presence.len());
     debug_assert_eq!(candidate_names.len(), unresolved_candidate_positions.len());
@@ -78037,6 +78038,7 @@ fn mark_template_param_presence_in_cpp_type(
                     }
                     *unresolved_candidate_count =
                         unresolved_candidate_count.saturating_sub(1);
+                    newly_resolved_candidate_indices.push(idx);
                 }
             }
         }
@@ -78049,6 +78051,7 @@ fn mark_template_param_presence_in_cpp_type(
                 unresolved_candidate_count,
                 unresolved_candidate_indices,
                 unresolved_candidate_positions,
+                newly_resolved_candidate_indices,
             );
         }
         CppType::Reference { referent, .. } => {
@@ -78060,6 +78063,7 @@ fn mark_template_param_presence_in_cpp_type(
                 unresolved_candidate_count,
                 unresolved_candidate_indices,
                 unresolved_candidate_positions,
+                newly_resolved_candidate_indices,
             );
         }
         CppType::Array { element, .. } => {
@@ -78071,6 +78075,7 @@ fn mark_template_param_presence_in_cpp_type(
                 unresolved_candidate_count,
                 unresolved_candidate_indices,
                 unresolved_candidate_positions,
+                newly_resolved_candidate_indices,
             );
         }
         CppType::Function {
@@ -78086,6 +78091,7 @@ fn mark_template_param_presence_in_cpp_type(
                 unresolved_candidate_count,
                 unresolved_candidate_indices,
                 unresolved_candidate_positions,
+                newly_resolved_candidate_indices,
             );
             for param in params {
                 if *unresolved_candidate_count == 0 {
@@ -78099,6 +78105,7 @@ fn mark_template_param_presence_in_cpp_type(
                     unresolved_candidate_count,
                     unresolved_candidate_indices,
                     unresolved_candidate_positions,
+                    newly_resolved_candidate_indices,
                 );
             }
         }
@@ -78115,6 +78122,7 @@ fn mark_template_param_presence_in_cpp_type(
                     }
                     *unresolved_candidate_count =
                         unresolved_candidate_count.saturating_sub(1);
+                    newly_resolved_candidate_indices.push(idx);
                     if *unresolved_candidate_count == 0 {
                         break;
                     }
@@ -78146,11 +78154,13 @@ fn collect_template_param_first_param_positions(
     let mut unresolved_candidate_count = candidate_names.len();
     let mut unresolved_candidate_indices = (0..candidate_names.len()).collect::<Vec<_>>();
     let mut unresolved_candidate_positions = (0..candidate_names.len()).collect::<Vec<_>>();
+    let mut newly_resolved_candidate_indices = Vec::with_capacity(candidate_names.len());
 
     for (param_idx, (_, pattern_ty)) in params.iter().enumerate() {
         if unresolved_candidate_count == 0 {
             break;
         }
+        newly_resolved_candidate_indices.clear();
         mark_template_param_presence_in_cpp_type(
             pattern_ty,
             &candidate_names,
@@ -78159,9 +78169,10 @@ fn collect_template_param_first_param_positions(
             &mut unresolved_candidate_count,
             &mut unresolved_candidate_indices,
             &mut unresolved_candidate_positions,
+            &mut newly_resolved_candidate_indices,
         );
-        for (template_idx, seen) in candidate_presence.iter().enumerate() {
-            if *seen && first_positions[template_idx].is_none() {
+        for template_idx in newly_resolved_candidate_indices.iter().copied() {
+            if first_positions[template_idx].is_none() {
                 first_positions[template_idx] = Some(param_idx);
             }
         }
@@ -78321,6 +78332,8 @@ fn infer_fn_template_type_args(
             (0..return_only_template_param_presence.len()).collect::<Vec<_>>();
         let mut unresolved_return_only_template_param_positions =
             (0..return_only_template_param_presence.len()).collect::<Vec<_>>();
+        let mut newly_resolved_return_only_template_param_indices =
+            Vec::with_capacity(return_only_template_param_presence.len());
         mark_template_param_presence_in_cpp_type(
             &template_info.return_type,
             &return_only_template_param_names,
@@ -78329,12 +78342,11 @@ fn infer_fn_template_type_args(
             &mut unresolved_return_only_template_param_count,
             &mut unresolved_return_only_template_param_indices,
             &mut unresolved_return_only_template_param_positions,
+            &mut newly_resolved_return_only_template_param_indices,
         );
-        for (presence_idx, template_param_idx) in
-            return_only_template_param_indices.iter().enumerate()
-        {
-            template_param_appears_in_return[*template_param_idx] =
-                return_only_template_param_presence[presence_idx];
+        for presence_idx in newly_resolved_return_only_template_param_indices {
+            let template_param_idx = return_only_template_param_indices[presence_idx];
+            template_param_appears_in_return[template_param_idx] = true;
         }
     }
     let has_non_type_param_candidate =
@@ -79161,6 +79173,7 @@ mod tests {
         let mut unresolved_candidate_count = candidate_names.len();
         let mut unresolved_candidate_indices = (0..candidate_names.len()).collect::<Vec<_>>();
         let mut unresolved_candidate_positions = (0..candidate_names.len()).collect::<Vec<_>>();
+        let mut newly_resolved_candidate_indices = Vec::new();
         mark_template_param_presence_in_cpp_type(
             &ty,
             &candidate_names,
@@ -79169,6 +79182,7 @@ mod tests {
             &mut unresolved_candidate_count,
             &mut unresolved_candidate_indices,
             &mut unresolved_candidate_positions,
+            &mut newly_resolved_candidate_indices,
         );
         assert_eq!(candidate_presence, vec![true, true, false]);
         assert_eq!(
@@ -79211,6 +79225,7 @@ mod tests {
         let mut unresolved_candidate_count = candidate_names.len();
         let mut unresolved_candidate_indices = (0..candidate_names.len()).collect::<Vec<_>>();
         let mut unresolved_candidate_positions = (0..candidate_names.len()).collect::<Vec<_>>();
+        let mut newly_resolved_candidate_indices = Vec::new();
         mark_template_param_presence_in_cpp_type(
             &ty,
             &candidate_names,
@@ -79219,6 +79234,7 @@ mod tests {
             &mut unresolved_candidate_count,
             &mut unresolved_candidate_indices,
             &mut unresolved_candidate_positions,
+            &mut newly_resolved_candidate_indices,
         );
         assert_eq!(candidate_presence, vec![true, true, false]);
         assert_eq!(
@@ -79249,6 +79265,7 @@ mod tests {
         let mut unresolved_candidate_count = candidate_names.len();
         let mut unresolved_candidate_indices = (0..candidate_names.len()).collect::<Vec<_>>();
         let mut unresolved_candidate_positions = (0..candidate_names.len()).collect::<Vec<_>>();
+        let mut newly_resolved_candidate_indices = Vec::new();
         mark_template_param_presence_in_cpp_type(
             &ty,
             &candidate_names,
@@ -79257,6 +79274,7 @@ mod tests {
             &mut unresolved_candidate_count,
             &mut unresolved_candidate_indices,
             &mut unresolved_candidate_positions,
+            &mut newly_resolved_candidate_indices,
         );
         assert_eq!(candidate_presence, vec![true, false, true]);
         assert_eq!(
@@ -79268,6 +79286,46 @@ mod tests {
             unresolved_candidate_positions,
             vec![usize::MAX, 0, usize::MAX],
             "swap-remove path should keep O(1) unresolved position map consistent"
+        );
+    }
+
+    #[test]
+    fn test_mark_template_param_presence_in_cpp_type_records_newly_resolved_candidates_once() {
+        let ty = CppType::Function {
+            return_type: Box::new(CppType::Named("Pair<T, U>".to_string())),
+            params: vec![CppType::Named("T".to_string())],
+            is_variadic: false,
+        };
+        let candidate_names = vec!["T", "U", "Missing"];
+        let mut candidate_name_to_index = HashMap::with_capacity(candidate_names.len());
+        for (idx, candidate_name) in candidate_names.iter().enumerate() {
+            candidate_name_to_index.entry(*candidate_name).or_insert(idx);
+        }
+        let mut candidate_presence = vec![false; candidate_names.len()];
+        let mut unresolved_candidate_count = candidate_names.len();
+        let mut unresolved_candidate_indices = (0..candidate_names.len()).collect::<Vec<_>>();
+        let mut unresolved_candidate_positions = (0..candidate_names.len()).collect::<Vec<_>>();
+        let mut newly_resolved_candidate_indices = Vec::new();
+        mark_template_param_presence_in_cpp_type(
+            &ty,
+            &candidate_names,
+            &candidate_name_to_index,
+            &mut candidate_presence,
+            &mut unresolved_candidate_count,
+            &mut unresolved_candidate_indices,
+            &mut unresolved_candidate_positions,
+            &mut newly_resolved_candidate_indices,
+        );
+        newly_resolved_candidate_indices.sort_unstable();
+        assert_eq!(
+            newly_resolved_candidate_indices,
+            vec![0, 1],
+            "newly resolved candidate list should record each resolved candidate exactly once"
+        );
+        assert_eq!(
+            candidate_presence,
+            vec![true, true, false],
+            "presence flags should remain aligned with resolved candidate list"
         );
     }
 
