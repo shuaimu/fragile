@@ -2867,3 +2867,54 @@ Aligned with Section 1.3 and `docs/dev/wrong.md`:
 - full workspace suite:
   - `cargo test --workspace` (baseline red cluster remains: `717 passed / 46 failed`)
   - `FRAGILE_ENABLE_DEGRADED_FALLBACK=1 cargo test --workspace` (baseline red cluster remains: `739 passed / 24 failed`)
+
+## 48. RPC Compile Blocker Leaf 2.6.a: Strict Build-Only Lane Control (2026-03-13)
+
+### Problem
+
+Leaf `2.6` requires strict targeted `fragilec` evidence for `test_rpc`/`rpcbench` compile closure,
+but direct dual-lane/full-runtime reruns were too heavy for fast blocker iteration and produced
+non-diagnostic resource-kill outcomes under high parallelism.
+
+### Decision
+
+Implement a generic harness control surface that isolates compile triage from runtime/perf gating:
+
+- `--lanes`: deterministic lane subset selection (`clang`, `fragilec`)
+- `--build-only`: run configure/clean/build only and emit explicit skipped runtime artifacts
+
+This keeps compile capture deterministic and bounded without introducing semantic shortcuts.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no target-specific codegen/transpile bypasses
+- no fake semantic method bodies or forced-success stubs
+- no force-native path
+- skipped runtime/perf stages are explicit (`status=-1`), not hidden
+
+### Implementation
+
+- Updated `scripts/mako_rpcbench_harness.py`:
+  - added `--lanes` parsing/validation + deterministic dedup
+  - switched plan/manifest/artifact emission from fixed lanes to selected lanes
+  - added `--build-only` execution path and failure classification behavior
+  - forced comparison verdict to `not_executed` in build-only mode
+  - persisted `lanes` + `build_only` in manifest
+- Added tests in `tests/python/test_mako_rpcbench_harness.py`:
+  - `test_invalid_lane_name_is_rejected`
+  - `test_execution_mode_build_only_fragilec_lane_skips_runtime_and_qps_gate`
+- Added design note:
+  - `docs/rpc_compile_blocker_leaf_2_6a_design_2026_03_13.md`
+- Updated operator manual:
+  - `docs/rpc_benchmark_harness_user_manual.md`
+
+### Validation
+
+- `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests/python/test_mako_rpcbench_harness.py -v`
+- strict bounded replay evidence: `/tmp/fragile_rpc_leaf_2_6a_build_only_20260313`
+  - `lane_fragilec_build_status=124`
+  - `lane_fragilec_failure_class=build_timeout`
+  - `lane_fragilec_test_rpc_status=-1`
+  - `no_regression_verdict=not_executed`

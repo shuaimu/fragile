@@ -11,6 +11,7 @@ Current scope:
 - leaf `1.3`: runtime replay for `test_rpc` and per-trial rpcbench server/client execution
 - leaf `1.4`: QPS aggregation/comparison manifests with no-regression verdict
 - leaf `1.5`: regression gates (fast local fixture + ignored real-world replay assertions)
+- leaf `2.6.a`: strict compile-triage support via lane selection and build-only replay mode
 
 ## Script
 
@@ -47,6 +48,22 @@ python3 scripts/mako_rpcbench_harness.py \
   --rpc-server-shutdown-timeout-seconds 10
 ```
 
+Build-only strict fragilec lane replay (`2.6.a`):
+
+```bash
+FRAGILEC_MODE=strict \
+python3 scripts/mako_rpcbench_harness.py \
+  --workspace-root /home/shuai/workspace/fragile \
+  --mako-root /home/shuai/workspace/fragile/vendor/mako \
+  --run-root /tmp/fragile_rpc_leaf_2_6a_build_only_20260313 \
+  --lanes fragilec \
+  --build-only \
+  --jobs 4 \
+  --build-timeout-seconds 180 \
+  --trials 3 \
+  --base-port 18900
+```
+
 ## Generated artifacts
 
 Under `run_root`:
@@ -56,8 +73,7 @@ Under `run_root`:
 - `benchmark_expected_artifacts.txt`
 - `benchmark_qps_comparison_manifest.txt`
 - lane/trial directories:
-  - `lane_clang/trial_01`...
-  - `lane_fragilec/trial_01`...
+  - `lane_<selected_lane>/trial_01`...
 
 When running in execution mode (`1.4`), each lane also gets:
 
@@ -81,7 +97,8 @@ Comparison fields (manifest + comparison manifest):
 
 ## Determinism contract
 
-- Stable lane names: `clang`, `fragilec`
+- Stable supported lane names: `clang`, `fragilec`
+- `--lanes` selects a deterministic ordered subset (duplicate names are deduplicated while preserving first occurrence)
 - Stable trial naming: `trial_01`, `trial_02`, ...
 - Stable port map:
   - `clang`: `base_port + (trial-1)`
@@ -92,6 +109,8 @@ Comparison fields (manifest + comparison manifest):
 
 - plan-only mode (`--plan-only`) keeps leaf `1.1` behavior and emits deterministic plan/manifest/artifact-contract files only.
 - execution mode (default) runs configure/clean/build and runtime replay; lane-level failures are summarized in `failure_class.txt` and mirrored in `benchmark_harness_manifest.txt`.
+- lane selection (`--lanes`) allows deterministic single-lane or dual-lane execution; unknown lane names are rejected.
+- build-only mode (`--build-only`) executes only configure/clean/build; runtime artifacts are emitted with skipped status (`-1`) and comparison verdict is forced to `not_executed`.
 - no-regression gate is enforced in execution mode: if verdict is `fail` or `insufficient_data`, the script exits nonzero.
 - QPS parsing looks for `qps=<number>`/`<number> qps` markers in rpcbench client output and uses successful trials only.
 

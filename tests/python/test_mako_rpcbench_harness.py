@@ -253,6 +253,75 @@ class MakoRpcBenchHarnessPlanTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("base-port", result.stderr)
 
+    def test_invalid_lane_name_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            workspace, mako_root = self._create_workspace_fixture(tmp_path)
+            run_root = tmp_path / "run"
+
+            result = self._run_harness(
+                workspace,
+                mako_root,
+                run_root,
+                extra_args=["--lanes", "fragilec,unknown_lane"],
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unsupported lane(s)", result.stderr)
+
+    def test_execution_mode_build_only_fragilec_lane_skips_runtime_and_qps_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            workspace, mako_root = self._create_workspace_fixture(tmp_path)
+            run_root = tmp_path / "run"
+            fake_cmake = self._create_fake_cmake(tmp_path)
+
+            result = self._run_harness(
+                workspace,
+                mako_root,
+                run_root,
+                plan_only=False,
+                cmake_bin=fake_cmake,
+                extra_args=["--build-only", "--lanes", "fragilec"],
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            manifest_pairs = self._parse_key_value_file(
+                run_root / "benchmark_harness_manifest.txt"
+            )
+            comparison_pairs = self._parse_key_value_file(
+                run_root / "benchmark_qps_comparison_manifest.txt"
+            )
+            expected_artifacts = (
+                run_root / "benchmark_expected_artifacts.txt"
+            ).read_text(encoding="utf-8")
+            command_plan = (
+                run_root / "benchmark_harness_command_plan.txt"
+            ).read_text(encoding="utf-8")
+
+            self.assertEqual(manifest_pairs["lanes"], "fragilec")
+            self.assertEqual(manifest_pairs["build_only"], "true")
+            self.assertEqual(manifest_pairs["lane_fragilec_build_status"], "0")
+            self.assertEqual(manifest_pairs["lane_fragilec_test_rpc_status"], "-1")
+            self.assertEqual(manifest_pairs["lane_fragilec_failure_class"], "none")
+            self.assertEqual(manifest_pairs["no_regression_verdict"], "not_executed")
+            self.assertEqual(comparison_pairs["no_regression_verdict"], "not_executed")
+            self.assertEqual(
+                (run_root / "lane_fragilec" / "test_rpc.status")
+                .read_text(encoding="utf-8")
+                .strip(),
+                "-1",
+            )
+            self.assertEqual(
+                (run_root / "lane_fragilec" / "trial_01" / "rpc_client.status")
+                .read_text(encoding="utf-8")
+                .strip(),
+                "-1",
+            )
+            self.assertIn("lane_fragilec/configure.status", expected_artifacts)
+            self.assertNotIn("lane_clang/configure.status", expected_artifacts)
+            self.assertIn("[lane:fragilec]", command_plan)
+            self.assertNotIn("[lane:clang]", command_plan)
+
     def test_execution_mode_captures_configure_clean_build_for_both_lanes(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

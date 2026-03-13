@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence, TextIO
 
-LANES: tuple[str, str] = ("clang", "fragilec")
+SUPPORTED_LANES: tuple[str, str] = ("clang", "fragilec")
 COMMAND_TIMEOUT_STATUS = 124
 COMMAND_NOT_FOUND_STATUS = 127
 SKIPPED_STATUS = -1
@@ -84,6 +84,8 @@ class HarnessConfig:
     rpc_server_shutdown_timeout_seconds: int
     trials: int
     base_port: int
+    lanes: tuple[str, ...]
+    build_only: bool
     rpcbench: RpcBenchConfig
 
 
@@ -134,6 +136,16 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--rpc-epoll-instances", type=int, default=2)
     parser.add_argument("--rpc-payload-bytes", type=int, default=10)
     parser.add_argument(
+        "--lanes",
+        default=",".join(SUPPORTED_LANES),
+        help="comma-separated lane list; default: clang,fragilec",
+    )
+    parser.add_argument(
+        "--build-only",
+        action="store_true",
+        help="run configure/clean/build only and skip test_rpc/rpcbench runtime steps",
+    )
+    parser.add_argument(
         "--plan-only",
         action="store_true",
         help="Only emit deterministic command-plan/manifest artifacts (leaf 1.1 behavior)",
@@ -149,6 +161,26 @@ def ensure_positive(name: str, value: int) -> None:
 def ensure_non_negative(name: str, value: float) -> None:
     if value < 0:
         raise ValueError(f"{name} must be >= 0, got {value}")
+
+
+def parse_lanes(raw: str) -> tuple[str, ...]:
+    lanes = tuple(lane.strip() for lane in raw.split(",") if lane.strip())
+    if not lanes:
+        raise ValueError("lanes must include at least one lane name")
+    unknown = [lane for lane in lanes if lane not in SUPPORTED_LANES]
+    if unknown:
+        raise ValueError(
+            f"unsupported lane(s): {','.join(unknown)}; supported: {','.join(SUPPORTED_LANES)}"
+        )
+    # Preserve the first occurrence ordering while deduplicating.
+    ordered_unique: list[str] = []
+    seen: set[str] = set()
+    for lane in lanes:
+        if lane in seen:
+            continue
+        seen.add(lane)
+        ordered_unique.append(lane)
+    return tuple(ordered_unique)
 
 
 def format_qps(value: float | None) -> str:
@@ -218,6 +250,7 @@ def to_harness_config(ns: argparse.Namespace) -> HarnessConfig:
 
     if ns.base_port < 1024 or ns.base_port > 65535:
         raise ValueError(f"base-port must be within [1024, 65535], got {ns.base_port}")
+    lanes = parse_lanes(ns.lanes)
 
     return HarnessConfig(
         workspace_root=ns.workspace_root.resolve(),
@@ -238,6 +271,8 @@ def to_harness_config(ns: argparse.Namespace) -> HarnessConfig:
         rpc_server_shutdown_timeout_seconds=ns.rpc_server_shutdown_timeout_seconds,
         trials=ns.trials,
         base_port=ns.base_port,
+        lanes=lanes,
+        build_only=bool(ns.build_only),
         rpcbench=RpcBenchConfig(
             duration_seconds=ns.rpc_duration_seconds,
             client_threads=ns.rpc_client_threads,
@@ -352,7 +387,7 @@ def expected_artifacts(cfg: HarnessConfig) -> list[str]:
         "benchmark_qps_comparison_manifest.txt",
     ]
 
-    for lane in LANES:
+    for lane in cfg.lanes:
         lane_prefix = f"lane_{lane}"
         entries.extend(
             [
@@ -395,7 +430,7 @@ def command_plan_lines(cfg: HarnessConfig) -> list[str]:
     lines.append(f"trials={cfg.trials}")
     lines.append(f"jobs={cfg.jobs}")
 
-    for lane in LANES:
+    for lane in cfg.lanes:
         lines.append("")
         lines.append(f"[lane:{lane}]")
         lines.append(f"configure={shell_join(configure_command(cfg, lane))}")
@@ -430,7 +465,17 @@ def lane_trial_qps_values(
 
 def compute_comparison_summary(
     lane_summaries: dict[str, LaneExecutionSummary] | None,
+    *,
+    build_only: bool = False,
 ) -> ComparisonSummary:
+    if build_only:
+        return ComparisonSummary(
+            clang_avg_qps=None,
+            fragile_avg_qps=None,
+            fragile_minus_clang_qps=None,
+            fragile_over_clang_ratio=None,
+            no_regression_verdict="not_executed",
+        )
     if lane_summaries is None:
         return ComparisonSummary(
             clang_avg_qps=None,
@@ -485,7 +530,7 @@ def comparison_manifest_lines(
         f"fragile_over_clang_ratio={format_qps(comparison_summary.fragile_over_clang_ratio)}",
         f"no_regression_verdict={comparison_summary.no_regression_verdict}",
     ]
-    for lane in LANES:
+    for lane in cfg.lanes:
         trial_values = lane_trial_qps_values(cfg, lane, lane_summaries)
         for trial in range(1, cfg.trials + 1):
             lines.append(
@@ -501,7 +546,9 @@ def manifest_lines(
 ) -> list[str]:
     rpc = cfg.rpcbench
     task_leaf = "1.1" if plan_only else "1.4"
-    comparison_summary = compute_comparison_summary(lane_summaries)
+    comparison_summary = compute_comparison_summary(
+        lane_summaries, build_only=cfg.build_only
+    )
     lines = [
         "version=1",
         f"task_leaf={task_leaf}",
@@ -509,7 +556,8 @@ def manifest_lines(
         f"mako_root={cfg.mako_root}",
         f"run_root={cfg.run_root}",
         f"plan_only={str(plan_only).lower()}",
-        f"lanes={','.join(LANES)}",
+        f"lanes={','.join(cfg.lanes)}",
+        f"build_only={str(cfg.build_only).lower()}",
         f"trials={cfg.trials}",
         f"jobs={cfg.jobs}",
         f"build_type={cfg.build_type}",
@@ -540,7 +588,7 @@ def manifest_lines(
         f"no_regression_verdict={comparison_summary.no_regression_verdict}",
     ]
 
-    for lane in LANES:
+    for lane in cfg.lanes:
         lines.append(f"lane_{lane}_build_dir={lane_build_dir(cfg.run_root, lane)}")
         trial_qps_values = lane_trial_qps_values(cfg, lane, lane_summaries)
         for trial in range(1, cfg.trials + 1):
@@ -568,7 +616,7 @@ def write_text_file(path: Path, lines: list[str]) -> None:
 
 def ensure_run_root_layout(cfg: HarnessConfig) -> None:
     cfg.run_root.mkdir(parents=True, exist_ok=True)
-    for lane in LANES:
+    for lane in cfg.lanes:
         lane_dir = cfg.run_root / f"lane_{lane}"
         lane_dir.mkdir(parents=True, exist_ok=True)
         for trial in range(1, cfg.trials + 1):
@@ -836,6 +884,8 @@ def classify_lane_failure(
     build_result: StepResult,
     test_rpc_result: StepResult,
     runtime_failure_class: str,
+    *,
+    build_only: bool,
 ) -> str:
     if configure_result.timed_out:
         return "configure_timeout"
@@ -849,6 +899,8 @@ def classify_lane_failure(
         return "build_timeout"
     if build_result.status != 0:
         return "build_failed"
+    if build_only:
+        return "none"
     if test_rpc_result.timed_out:
         return "test_rpc_timeout"
     if test_rpc_result.status != 0:
@@ -863,7 +915,7 @@ def execute_harness_capture(
 ) -> dict[str, LaneExecutionSummary]:
     summaries: dict[str, LaneExecutionSummary] = {}
 
-    for lane in LANES:
+    for lane in cfg.lanes:
         lane_dir = cfg.run_root / f"lane_{lane}"
         lane_dir.mkdir(parents=True, exist_ok=True)
 
@@ -892,7 +944,15 @@ def execute_harness_capture(
         trial_qps_values: list[float | None] = [None] * cfg.trials
         runtime_failure_class = "none"
 
-        if build_result.status == 0:
+        if cfg.build_only:
+            skip_reason = (
+                "build-only mode" if build_result.status == 0 else "build step failed"
+            )
+            test_rpc_result = skipped_step_result(skip_reason)
+            write_runtime_skipped_results(
+                cfg, lane, skip_reason, include_test_rpc=True
+            )
+        elif build_result.status == 0:
             test_rpc_result = run_command_capture(
                 test_rpc_command(cfg, lane), cfg.test_rpc_timeout_seconds
             )
@@ -922,7 +982,9 @@ def execute_harness_capture(
                 cfg, lane, "build step failed", include_test_rpc=True
             )
 
-        if build_result.status != 0:
+        if cfg.build_only and build_result.status == 0:
+            test_rpc_result = skipped_step_result("build-only mode")
+        elif build_result.status != 0:
             # `write_runtime_skipped_results` already wrote this artifact.
             test_rpc_result = skipped_step_result("build step failed")
         elif test_rpc_result.status != 0:
@@ -943,6 +1005,7 @@ def execute_harness_capture(
             build_result,
             test_rpc_result,
             runtime_failure_class,
+            build_only=cfg.build_only,
         )
         write_text_file(lane_dir / "failure_class.txt", [failure_class])
         avg_qps = compute_average_qps(trial_qps_values)
@@ -974,11 +1037,15 @@ def main(argv: Sequence[str]) -> int:
         cfg = to_harness_config(ns)
         validate_layout(cfg)
         lane_summaries: dict[str, LaneExecutionSummary] | None = None
-        comparison_summary = compute_comparison_summary(None)
+        comparison_summary = compute_comparison_summary(
+            None, build_only=cfg.build_only
+        )
         ensure_run_root_layout(cfg)
         if not ns.plan_only:
             lane_summaries = execute_harness_capture(cfg)
-            comparison_summary = compute_comparison_summary(lane_summaries)
+            comparison_summary = compute_comparison_summary(
+                lane_summaries, build_only=cfg.build_only
+            )
         emit_plan_artifacts(
             cfg,
             plan_only=bool(ns.plan_only),
