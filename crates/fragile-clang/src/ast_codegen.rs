@@ -78109,6 +78109,27 @@ fn infer_fn_template_type_args(
             cpp_type_contains_template_param(&template_info.return_type, template_param_name)
         })
         .collect();
+    let has_non_type_param_candidate =
+        has_unsized_array_ref_param
+            && template_param_param_positions
+                .iter()
+                .zip(template_param_appears_in_return.iter())
+                .any(|(param_positions, appears_in_return)| {
+                    param_positions.is_empty() && !*appears_in_return
+                });
+    let inferred_non_type_array_ref_arg = if has_non_type_param_candidate {
+        template_info
+            .params
+            .iter()
+            .zip(instantiated_params.iter())
+            .enumerate()
+            .find_map(|(arg_idx, ((_, pattern_ty), instantiated_ty))| {
+                let call_arg = instantiated_args.and_then(|args| args.get(arg_idx));
+                infer_non_type_array_ref_template_arg(pattern_ty, instantiated_ty, call_arg)
+            })
+    } else {
+        None
+    };
     let fallback_return_ty = instantiated_return_type.to_rust_type_str();
 
     let mut type_args = Vec::with_capacity(template_info.template_params.len());
@@ -78133,15 +78154,7 @@ fn infer_fn_template_type_args(
         };
 
         if inferred.is_none() && non_type_param_candidate {
-            inferred = template_info
-                .params
-                .iter()
-                .zip(instantiated_params.iter())
-                .enumerate()
-                .find_map(|(arg_idx, ((_, pattern_ty), instantiated_ty))| {
-                    let call_arg = instantiated_args.and_then(|args| args.get(arg_idx));
-                    infer_non_type_array_ref_template_arg(pattern_ty, instantiated_ty, call_arg)
-                });
+            inferred = inferred_non_type_array_ref_arg.clone();
         }
 
         if inferred.is_none() && appears_in_return {
@@ -78811,6 +78824,46 @@ mod tests {
             inferred,
             vec!["i64".to_string(), "f64".to_string()],
             "template args should infer from their matching parameter positions without fallback leakage"
+        );
+    }
+
+    #[test]
+    fn test_function_template_type_arg_inference_reuses_nttp_array_ref_bound_for_multiple_non_type_params(
+    ) {
+        let const_char_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        let template_info = FnTemplateInfo {
+            template_params: vec!["N".to_string(), "M".to_string()],
+            return_type: CppType::Bool,
+            params: vec![(
+                "literal".to_string(),
+                CppType::Reference {
+                    referent: Box::new(CppType::Array {
+                        element: Box::new(CppType::Char { signed: true }),
+                        size: None,
+                    }),
+                    is_const: true,
+                    is_rvalue: false,
+                },
+            )],
+            body: None,
+            is_noexcept: false,
+        };
+        let instantiated_params = vec![const_char_ptr_ty.clone()];
+        let call_args = vec![make_node(ClangNodeKind::StringLiteral("~".to_string()), vec![])];
+        let inferred = infer_fn_template_type_args(
+            &template_info,
+            &instantiated_params,
+            &CppType::Bool,
+            Some(call_args.as_slice()),
+        )
+        .expect("inference should succeed for repeated non-type template params");
+        assert_eq!(
+            inferred,
+            vec!["2".to_string(), "2".to_string()],
+            "repeated non-type template params should reuse the inferred literal bound"
         );
     }
 
