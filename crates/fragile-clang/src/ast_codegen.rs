@@ -37647,27 +37647,39 @@ impl FragileAtomicBoolCompat for atomic_bool {
 
     /// Generate vtable structs for all polymorphic classes.
     fn generate_all_vtable_structs(&mut self) {
-        // Only generate vtable for ROOT polymorphic classes (those without polymorphic bases)
-        // Derived classes use the base class's vtable type
-        let vtable_infos: Vec<_> = self.vtables.values().cloned().collect();
-        for vtable_info in vtable_infos {
-            // Only generate if this is a root polymorphic class (no polymorphic base)
-            if vtable_info.base_class.is_none() {
-                self.generate_vtable_struct(&vtable_info.class_name, &vtable_info);
+        // Only generate vtable for ROOT polymorphic classes (those without
+        // polymorphic bases). Collect class names first to avoid cloning
+        // every vtable entry payload before filtering.
+        for class_name in self.collect_root_vtable_class_names() {
+            if let Some(vtable_info) = self.vtables.get(&class_name).cloned() {
+                self.generate_vtable_struct(&class_name, &vtable_info);
             }
         }
     }
 
     /// Generate static vtable instances for all concrete (non-abstract) polymorphic classes.
     fn generate_all_static_vtables(&mut self) {
-        let vtable_infos: Vec<_> = self.vtables.values().cloned().collect();
-        for vtable_info in vtable_infos {
-            // Skip abstract classes (have pure virtual methods)
-            if vtable_info.is_abstract {
-                continue;
+        // Collect concrete class names first to avoid cloning abstract
+        // vtable payloads that will be skipped.
+        for class_name in self.collect_concrete_vtable_class_names() {
+            if let Some(vtable_info) = self.vtables.get(&class_name).cloned() {
+                self.generate_static_vtable(&vtable_info);
             }
-            self.generate_static_vtable(&vtable_info);
         }
+    }
+
+    fn collect_root_vtable_class_names(&self) -> Vec<String> {
+        self.vtables
+            .iter()
+            .filter_map(|(class_name, info)| info.base_class.is_none().then_some(class_name.clone()))
+            .collect()
+    }
+
+    fn collect_concrete_vtable_class_names(&self) -> Vec<String> {
+        self.vtables
+            .iter()
+            .filter_map(|(class_name, info)| (!info.is_abstract).then_some(class_name.clone()))
+            .collect()
     }
 
     /// Generate a static vtable instance for a concrete class.
@@ -103718,6 +103730,80 @@ stream.PutN(c, n);
             !code.contains("Bar: Derived_vtable_Bar"),
             "derived-only virtual fields should not be emitted into root-typed static vtable initializer, got:\n{}",
             code
+        );
+    }
+
+    #[test]
+    fn test_collect_root_vtable_class_names_skips_derived_entries() {
+        let mut codegen = AstCodeGen::new();
+        codegen.vtables.insert(
+            "Base".to_string(),
+            ClassVTableInfo {
+                class_name: "Base".to_string(),
+                entries: Vec::new(),
+                base_class: None,
+                is_abstract: false,
+                secondary_vtables: vec![],
+            },
+        );
+        codegen.vtables.insert(
+            "Derived".to_string(),
+            ClassVTableInfo {
+                class_name: "Derived".to_string(),
+                entries: Vec::new(),
+                base_class: Some("Base".to_string()),
+                is_abstract: false,
+                secondary_vtables: vec![],
+            },
+        );
+
+        let roots: std::collections::HashSet<String> =
+            codegen.collect_root_vtable_class_names().into_iter().collect();
+        assert!(
+            roots.contains("Base"),
+            "root vtable class collection should keep base classes"
+        );
+        assert!(
+            !roots.contains("Derived"),
+            "root vtable class collection should skip derived classes with base vtables"
+        );
+    }
+
+    #[test]
+    fn test_collect_concrete_vtable_class_names_skips_abstract_entries() {
+        let mut codegen = AstCodeGen::new();
+        codegen.vtables.insert(
+            "AbstractBase".to_string(),
+            ClassVTableInfo {
+                class_name: "AbstractBase".to_string(),
+                entries: Vec::new(),
+                base_class: None,
+                is_abstract: true,
+                secondary_vtables: vec![],
+            },
+        );
+        codegen.vtables.insert(
+            "ConcreteDerived".to_string(),
+            ClassVTableInfo {
+                class_name: "ConcreteDerived".to_string(),
+                entries: Vec::new(),
+                base_class: Some("AbstractBase".to_string()),
+                is_abstract: false,
+                secondary_vtables: vec![],
+            },
+        );
+
+        let concrete: std::collections::HashSet<String> = codegen
+            .collect_concrete_vtable_class_names()
+            .into_iter()
+            .collect();
+        assert!(
+            !concrete.contains("AbstractBase"),
+            "concrete vtable class collection should skip abstract classes"
+        );
+        assert!(
+            concrete.contains("ConcreteDerived"),
+            "concrete vtable class collection should include non-abstract classes"
         );
     }
 

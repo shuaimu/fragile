@@ -4559,3 +4559,100 @@ Leaf `2.6.c.iv.d.iv.c.iv.c.iii.b` is complete. Post-`c.iv.c.iii.a` strict
 replay remains `build_timeout` on `src/rrr/base/misc.cpp`, and non-increase
 gates confirm no class-rank or `E0425` regression versus the `2.6.c.iii`
 baseline.
+
+## 72. RPC Compile Blocker Leaf 2.6.c.iv.d.iv.c.iv.c.iii.c.i: VTable Selection Clone-Churn Reduction (2026-03-13)
+
+### Problem
+
+Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.i` required the next bounded generic
+optimization in the dominant pre-`codegen_after_top_level_generation` window.
+
+In this path, vtable generation used clone-all-then-filter flows:
+
+- `generate_all_vtable_structs` cloned all vtable payload entries and then
+  skipped derived records.
+- `generate_all_static_vtables` cloned all entries and then skipped abstract
+  records.
+
+That produces avoidable clone churn before top-level codegen completion.
+
+### Execution Plan
+
+1. Replace clone-all-then-filter with class-name preselection for root and
+   concrete vtable entries.
+2. Preserve existing behavior by keeping generation functions unchanged and
+   cloning only selected entries at emission time.
+3. Add focused regressions for root/concrete selector semantics.
+4. Re-run strict replay profile captures and full suites for baseline parity.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no target-name-specific branch/hack
+- no force-native fallback path
+- no synthesized semantic fallback body
+- generic data-flow optimization only (no behavior masking)
+
+### Implementation
+
+Updated:
+
+- `crates/fragile-clang/src/ast_codegen.rs`
+
+Key changes:
+
+- changed `generate_all_vtable_structs` to iterate
+  `collect_root_vtable_class_names()` and clone only selected entries.
+- changed `generate_all_static_vtables` to iterate
+  `collect_concrete_vtable_class_names()` and clone only selected entries.
+- added helper selectors:
+  - `collect_root_vtable_class_names`
+  - `collect_concrete_vtable_class_names`
+- added focused regressions:
+  - `test_collect_root_vtable_class_names_skips_derived_entries`
+  - `test_collect_concrete_vtable_class_names_skips_abstract_entries`
+
+Design note:
+
+- `docs/rpc_compile_blocker_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_i_design_2026_03_13.md`
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang test_collect_root_vtable_class_names_skips_derived_entries -- --nocapture`
+- `cargo test -p fragile-clang test_collect_concrete_vtable_class_names_skips_abstract_entries -- --nocapture`
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_i_callshape_profile_120_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_i_stage_timing_120_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_i_callshape_profile_300_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_i_stage_timing_300_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- 120s profile (`..._callshape_profile_120_v1.txt`):
+  - `status=codegen_after_template_collection`
+  - `status_history=codegen_started,codegen_after_template_collection`
+- 300s profile (`..._callshape_profile_300_v1.txt`):
+  - `status=codegen_after_template_instantiation_generation`
+  - `status_history=codegen_started,codegen_after_template_collection,codegen_after_template_instantiation_generation`
+  - `input_bytes=568059`
+- comparison against prior `iii.a` 300s profile (`input_bytes=574875`):
+  - checkpoint bytes are lower by `-6816`
+- replay manifest (`/tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313/rpc_compile_blocker_replay_manifest.txt`):
+  - `replay_01_status=124`
+  - `replay_01_timed_out=true`
+  - `replay_01_first_failure_class=build_timeout`
+  - `replay_01_blocker_file=src/rrr/base/misc.cpp`
+- full-suite baseline parity:
+  - `cargo test --workspace --all-targets`: `fragile-clang` lib
+    `732` passed / `46` failed (failure count unchanged)
+  - Python suite passes (`29`, skipped `1`)
+
+### Outcome
+
+Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.i` is complete. Vtable generation now avoids
+clone-all staging and preserves behavior through focused selector tests; strict
+replay remains timeout-bound on `src/rrr/base/misc.cpp`, with a lower 300s
+checkpoint-byte marker versus `iii.a`.
