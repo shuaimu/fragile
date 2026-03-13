@@ -3197,3 +3197,59 @@ Outcome for this leaf:
 
 - blocker class remains `build_timeout` on `src/rrr/base/misc.cpp`
 - replay still times out in `codegen`, to continue through `2.6.c.iii` / `2.6.c.iv`
+
+## 54. RPC Compile Blocker Leaf 2.6.c.iii: Non-Increase Gate Replay Verification (2026-03-13)
+
+### Problem
+
+After completing `2.6.c.ii`, the next requirement was to re-run strict build-only replay
+and prove blocker severity/E0425 do not regress versus `2.6.c.i` baseline.
+
+### Decision
+
+Use the existing deterministic harness + inventory non-increase gate flow without adding
+new transpiler logic.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no target-specific conditions
+- no force-native bypass
+- no fake semantic method-body synthesis
+- timeout/failure states remain explicit and measured
+
+### Implementation
+
+Executed strict replay run root:
+
+- `/tmp/fragile_rpc_leaf_2_6c_iii_build_only_20260313`
+
+Commands:
+
+- `FRAGILEC_MODE=strict python3 scripts/mako_rpcbench_harness.py --run-root /tmp/fragile_rpc_leaf_2_6c_iii_build_only_20260313 --lanes fragilec --build-only --jobs 4 --build-timeout-seconds 180`
+- `python3 scripts/mako_rpc_compile_blocker_inventory.py --run-root /tmp/fragile_rpc_leaf_2_6c_iii_build_only_20260313 --lanes fragilec --baseline-manifest /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313/rpc_compile_blocker_inventory_manifest.txt --enforce-nonincreasing`
+
+Captured key fields:
+
+- harness manifest:
+  - `lane_fragilec_configure_status=0`
+  - `lane_fragilec_clean_status=0`
+  - `lane_fragilec_build_status=124`
+  - `lane_fragilec_failure_class=build_timeout`
+- inventory non-increase manifest:
+  - `lane_fragilec_first_failing_compile_class=build_timeout`
+  - `lane_fragilec_first_failing_compile_file=src/rrr/base/misc.cpp`
+  - `lane_fragilec_class_rank_delta_vs_baseline=0`
+  - `lane_fragilec_e0425_delta_vs_baseline=0`
+  - `lane_fragilec_nonincrease_gate_pass=true`
+  - `nonincrease_gate_pass=true`
+
+Added design note:
+
+- `docs/rpc_compile_blocker_leaf_2_6c_iii_design_2026_03_13.md`
+
+### Outcome
+
+`2.6.c.iii` passes deterministically with no blocker-severity or E0425 regression versus
+`2.6.c.i` baseline. Next leaf is `2.6.c.iv`.
