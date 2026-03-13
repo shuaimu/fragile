@@ -78135,8 +78135,10 @@ fn infer_fn_template_type_args(
     let template_param_appears_in_return: Vec<bool> = template_info
         .template_params
         .iter()
-        .map(|template_param_name| {
-            cpp_type_contains_template_param(&template_info.return_type, template_param_name)
+        .zip(template_param_first_param_positions.iter())
+        .map(|(template_param_name, first_param_position)| {
+            first_param_position.is_none()
+                && cpp_type_contains_template_param(&template_info.return_type, template_param_name)
         })
         .collect();
     let has_non_type_param_candidate =
@@ -78878,6 +78880,36 @@ mod tests {
             inferred,
             vec!["f64".to_string()],
             "template arg should infer from instantiated return type when param positions do not reference it"
+        );
+    }
+
+    #[test]
+    fn test_function_template_type_arg_inference_prefers_param_when_template_also_appears_in_return(
+    ) {
+        let template_ty = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        let template_info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: template_ty.clone(),
+            params: vec![("value".to_string(), template_ty)],
+            body: None,
+            is_noexcept: false,
+        };
+        let instantiated_params = vec![CppType::LongLong { signed: true }];
+        let inferred = infer_fn_template_type_args(
+            &template_info,
+            &instantiated_params,
+            &CppType::Double,
+            None,
+        )
+        .expect("inference should succeed when template appears in both parameter and return positions");
+        assert_eq!(
+            inferred,
+            vec!["i64".to_string()],
+            "parameter position inference should take precedence over return-position inference for the same template param"
         );
     }
 
