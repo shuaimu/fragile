@@ -78001,6 +78001,68 @@ fn cpp_type_contains_template_param(ty: &CppType, param_name: &str) -> bool {
     }
 }
 
+fn mark_template_param_presence_in_cpp_type(
+    ty: &CppType,
+    candidate_names: &[&str],
+    candidate_presence: &mut [bool],
+) {
+    debug_assert_eq!(candidate_names.len(), candidate_presence.len());
+    if candidate_presence.iter().all(|present| *present) {
+        return;
+    }
+    match ty {
+        CppType::TemplateParam { name, .. } | CppType::ParameterPack { name, .. } => {
+            for (idx, candidate_name) in candidate_names.iter().enumerate() {
+                if !candidate_presence[idx] && name == candidate_name {
+                    candidate_presence[idx] = true;
+                }
+            }
+        }
+        CppType::Pointer { pointee, .. } => {
+            mark_template_param_presence_in_cpp_type(pointee, candidate_names, candidate_presence);
+        }
+        CppType::Reference { referent, .. } => {
+            mark_template_param_presence_in_cpp_type(
+                referent,
+                candidate_names,
+                candidate_presence,
+            );
+        }
+        CppType::Array { element, .. } => {
+            mark_template_param_presence_in_cpp_type(element, candidate_names, candidate_presence);
+        }
+        CppType::Function {
+            return_type,
+            params,
+            ..
+        } => {
+            mark_template_param_presence_in_cpp_type(
+                return_type,
+                candidate_names,
+                candidate_presence,
+            );
+            for param in params {
+                if candidate_presence.iter().all(|present| *present) {
+                    break;
+                }
+                mark_template_param_presence_in_cpp_type(
+                    param,
+                    candidate_names,
+                    candidate_presence,
+                );
+            }
+        }
+        CppType::DependentType { spelling } | CppType::Named(spelling) => {
+            for (idx, candidate_name) in candidate_names.iter().enumerate() {
+                if !candidate_presence[idx] && spelling.contains(candidate_name) {
+                    candidate_presence[idx] = true;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 fn cpp_type_contains_parameter_pack(ty: &CppType) -> bool {
     match ty {
         CppType::ParameterPack { .. } => true,
@@ -78132,15 +78194,35 @@ fn infer_fn_template_type_args(
                 })
         })
         .collect();
-    let template_param_appears_in_return: Vec<bool> = template_info
+    let mut template_param_appears_in_return = vec![false; template_info.template_params.len()];
+    let return_only_template_param_indices: Vec<usize> = template_info
         .template_params
         .iter()
         .zip(template_param_first_param_positions.iter())
-        .map(|(template_param_name, first_param_position)| {
-            first_param_position.is_none()
-                && cpp_type_contains_template_param(&template_info.return_type, template_param_name)
+        .enumerate()
+        .filter_map(|(idx, (_, first_param_position))| {
+            first_param_position.is_none().then_some(idx)
         })
         .collect();
+    if !return_only_template_param_indices.is_empty() {
+        let return_only_template_param_names: Vec<&str> = return_only_template_param_indices
+            .iter()
+            .map(|idx| template_info.template_params[*idx].as_str())
+            .collect();
+        let mut return_only_template_param_presence =
+            vec![false; return_only_template_param_names.len()];
+        mark_template_param_presence_in_cpp_type(
+            &template_info.return_type,
+            &return_only_template_param_names,
+            &mut return_only_template_param_presence,
+        );
+        for (presence_idx, template_param_idx) in
+            return_only_template_param_indices.iter().enumerate()
+        {
+            template_param_appears_in_return[*template_param_idx] =
+                return_only_template_param_presence[presence_idx];
+        }
+    }
     let has_non_type_param_candidate =
         has_unsized_array_ref_param
             && template_param_first_param_positions
@@ -78910,6 +78992,39 @@ mod tests {
             inferred,
             vec!["i64".to_string()],
             "parameter position inference should take precedence over return-position inference for the same template param"
+        );
+    }
+
+    #[test]
+    fn test_function_template_type_arg_inference_scans_return_for_only_unbound_template_params() {
+        let template_ty_t = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        let template_ty_u = CppType::TemplateParam {
+            name: "U".to_string(),
+            depth: 0,
+            index: 1,
+        };
+        let template_info = FnTemplateInfo {
+            template_params: vec!["T".to_string(), "U".to_string()],
+            return_type: template_ty_u,
+            params: vec![("value".to_string(), template_ty_t)],
+            body: None,
+            is_noexcept: false,
+        };
+        let inferred = infer_fn_template_type_args(
+            &template_info,
+            &[CppType::LongLong { signed: true }],
+            &CppType::Double,
+            None,
+        )
+        .expect("inference should use parameter position for T and return position for U");
+        assert_eq!(
+            inferred,
+            vec!["i64".to_string(), "f64".to_string()],
+            "unbound template params should continue to infer from return type after return-scan optimization"
         );
     }
 
