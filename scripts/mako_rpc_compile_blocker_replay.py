@@ -31,9 +31,10 @@ BLOCKER_PRIORITY: dict[str, int] = {
     "type_mismatch_e0308": 3,
     "other_rustc_error": 4,
     "transpile_failure": 5,
-    "other_build_failure": 6,
-    "build_not_executed": 7,
-    "none": 8,
+    "build_timeout": 6,
+    "other_build_failure": 7,
+    "build_not_executed": 8,
+    "none": 9,
 }
 
 
@@ -151,6 +152,8 @@ def rank_key(entry: InventoryEntry) -> tuple[int, int, str, str]:
 def first_failure_class(status: int, stderr: str) -> str:
     if status == 0:
         return "none"
+    if status == COMMAND_TIMEOUT_STATUS or "command timed out" in stderr:
+        return "build_timeout"
     if "[fragilec] failed to transpile " in stderr:
         return "transpile_failure"
     if "error[E0425]" in stderr:
@@ -203,8 +206,74 @@ def rewrite_output_path(argv: list[str], output_path: Path) -> list[str]:
     return rewritten
 
 
+def candidate_blocker_source_paths(
+    blocker_file: str,
+    run_root: Path,
+    harness_manifest: dict[str, str],
+) -> list[Path]:
+    file_path = Path(blocker_file)
+    if file_path.is_absolute():
+        return [file_path.resolve()]
+
+    candidates: list[Path] = []
+    seen: set[Path] = set()
+
+    def add_candidate(path: Path) -> None:
+        resolved = path.resolve()
+        if resolved in seen:
+            return
+        seen.add(resolved)
+        candidates.append(resolved)
+
+    workspace_root = harness_manifest.get("workspace_root")
+    mako_root = harness_manifest.get("mako_root")
+    if workspace_root:
+        add_candidate(Path(workspace_root) / file_path)
+    if mako_root:
+        add_candidate(Path(mako_root) / file_path)
+    add_candidate(run_root / file_path)
+    return candidates
+
+
+def resolve_replay_source_path(
+    blocker_file: str,
+    run_root: Path,
+    harness_manifest: dict[str, str],
+) -> Path:
+    candidates = candidate_blocker_source_paths(blocker_file, run_root, harness_manifest)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    if candidates:
+        return candidates[0]
+    return Path(blocker_file)
+
+
+def blocker_suffix_token(blocker_file: str) -> str:
+    return Path(blocker_file).as_posix().lstrip("./")
+
+
+def compile_command_match_rank(
+    resolved_file: Path,
+    blocker_file: str,
+    source_candidates: list[Path],
+) -> int | None:
+    if resolved_file in source_candidates:
+        return 0
+    if Path(blocker_file).is_absolute():
+        return None
+    suffix = blocker_suffix_token(blocker_file)
+    if not suffix:
+        return None
+    resolved_text = resolved_file.as_posix()
+    if resolved_text == suffix or resolved_text.endswith("/" + suffix):
+        return 1
+    return None
+
+
 def resolve_compile_commands_plan(
     run_root: Path,
+    harness_manifest: dict[str, str],
     entry: InventoryEntry,
     replay_object: Path,
 ) -> CommandPlan | None:
@@ -219,7 +288,11 @@ def resolve_compile_commands_plan(
     if not isinstance(raw_entries, list):
         return None
 
-    expected_file = Path(entry.blocker_file).resolve()
+    source_candidates = candidate_blocker_source_paths(
+        entry.blocker_file, run_root, harness_manifest
+    )
+    matches: list[tuple[int, str, str, list[str], Path]] = []
+
     for raw in raw_entries:
         if not isinstance(raw, dict):
             continue
@@ -236,7 +309,10 @@ def resolve_compile_commands_plan(
         resolved_file = (
             file_path.resolve() if file_path.is_absolute() else (directory / file_path).resolve()
         )
-        if resolved_file != expected_file:
+        rank = compile_command_match_rank(
+            resolved_file, entry.blocker_file, source_candidates
+        )
+        if rank is None:
             continue
 
         arguments = raw.get("arguments")
@@ -249,11 +325,25 @@ def resolve_compile_commands_plan(
         else:
             continue
 
-        return CommandPlan(
-            argv=rewrite_output_path(argv, replay_object),
-            command_dir=directory,
-            command_source="compile_commands",
+        matches.append(
+            (
+                rank,
+                str(resolved_file),
+                str(directory),
+                rewrite_output_path(argv, replay_object),
+                directory,
+            )
         )
+
+    if not matches:
+        return None
+    matches.sort(key=lambda item: (item[0], item[1], item[2]))
+    best = matches[0]
+    return CommandPlan(
+        argv=best[3],
+        command_dir=best[4],
+        command_source="compile_commands",
+    )
     return None
 
 
@@ -270,12 +360,15 @@ def resolve_fallback_plan(
     replay_object: Path,
 ) -> CommandPlan:
     workspace_root = harness_manifest.get("workspace_root", str(run_root))
+    replay_source_file = resolve_replay_source_path(
+        entry.blocker_file, run_root, harness_manifest
+    )
     return CommandPlan(
         argv=[
             lane_compiler(harness_manifest, entry.lane),
             "-std=gnu++17",
             "-c",
-            entry.blocker_file,
+            str(replay_source_file),
             "-o",
             str(replay_object),
         ],
@@ -355,7 +448,9 @@ def run_replay(run_root: Path, entries: list[InventoryEntry], max_replays: int, 
         replay_dir.mkdir(parents=True, exist_ok=True)
         replay_object = replay_dir / "focused_replay.o"
 
-        plan = resolve_compile_commands_plan(run_root, entry, replay_object)
+        plan = resolve_compile_commands_plan(
+            run_root, benchmark_manifest, entry, replay_object
+        )
         if plan is None:
             plan = resolve_fallback_plan(run_root, benchmark_manifest, entry, replay_object)
 

@@ -2965,3 +2965,53 @@ Checked against Section 1.3 and `docs/dev/wrong.md`:
   - `lane_fragilec_first_failing_compile_class=build_timeout`
   - `lane_fragilec_first_failing_compile_file=src/rrr/base/misc.cpp`
   - `lane_fragilec_first_failing_compile_e0425_count=0`
+
+## 50. RPC Compile Blocker Leaf 2.6.b.ii: Timeout-Derived Replay Flow (2026-03-13)
+
+### Problem
+
+Leaf `2.6.b.i` made timeout blocker file extraction deterministic, but replay helper matching still
+assumed direct path equality and workspace-relative fallback compilation.
+For timeout-derived relative files (for example `src/rrr/base/misc.cpp`), this could miss real
+compile-db commands and fail to produce deterministic non-timeout first-blocker diagnostics.
+
+### Decision
+
+Extend replay helper flow to support timeout-derived blocker files generically:
+
+- add timeout family priority/classification (`build_timeout`)
+- match compile-db entries by deterministic absolute-candidate or suffix fallback
+- resolve fallback compile source path against harness roots (`workspace_root`, `mako_root`)
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no target-specific transpiler logic
+- no fake semantic method bodies or forced-success behavior
+- no force-native bypass
+- replay outcomes come from real command execution only
+
+### Implementation
+
+- Updated `scripts/mako_rpc_compile_blocker_replay.py`:
+  - `build_timeout` added to blocker priority
+  - timeout-aware `first_failure_class`
+  - deterministic compile-db suffix matching for relative timeout blocker files
+  - harness-root-aware fallback source path resolution
+- Updated tests `tests/python/test_mako_rpc_compile_blocker_replay.py`:
+  - `test_replay_timeout_derived_relative_blocker_uses_compile_db_suffix_match`
+  - `test_replay_timeout_derived_relative_blocker_fallback_prefers_mako_source`
+- Updated docs:
+  - `TODO.md` (`2.6.b.ii` completion evidence)
+  - `docs/rpc_compile_blocker_replay_user_manual.md`
+  - `docs/rpc_compile_blocker_leaf_2_6b_ii_design_2026_03_13.md`
+
+### Validation
+
+- `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests/python/test_mako_rpc_compile_blocker_replay.py -v`
+- deterministic fixture evidence run root `/tmp/fragile_rpc_leaf_2_6b_ii_fixture_20260313/run`:
+  - `replay_01_blocker_class=build_timeout`
+  - `replay_01_command_source=compile_commands`
+  - `replay_01_timed_out=false`
+  - `replay_01_first_failure_class=unresolved_name_or_type_e0425`

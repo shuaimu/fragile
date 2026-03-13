@@ -61,11 +61,18 @@ Top `N` are selected by `--max-replays`.
 For each selected candidate:
 
 - first try matching `build_<lane>/compile_commands.json` by translation-unit file
+- for timeout-derived relative blocker files (for example `src/rrr/base/misc.cpp`), compile-db
+  matching also supports deterministic suffix matching against absolute compile-db file paths
 - if unavailable, use fallback:
   - lane compiler from `benchmark_harness_manifest.txt` (`clang_cxx` / `fragile_cxx`)
-  - command shape: `<compiler> -std=gnu++17 -c <file> -o <replay object>`
+  - timeout-derived relative files are resolved against harness roots (`workspace_root`, `mako_root`)
+    before compile
+  - command shape: `<compiler> -std=gnu++17 -c <resolved file> -o <replay object>`
 
 `command_source` is recorded in replay artifacts/manifest.
+
+`first_failure_class` values include `build_timeout` when replay status is timeout (`124`)
+or timeout markers are present in stderr.
 
 ## Output Artifacts
 

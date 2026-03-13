@@ -43,6 +43,7 @@ class MakoRpcCompileBlockerReplayTests(unittest.TestCase):
         run_root: Path,
         *,
         workspace_root: Path,
+        mako_root: Path | None = None,
         clang_cxx: str,
         fragile_cxx: str,
     ) -> None:
@@ -51,6 +52,7 @@ class MakoRpcCompileBlockerReplayTests(unittest.TestCase):
             "task_leaf=1.4",
             f"run_root={run_root}",
             f"workspace_root={workspace_root}",
+            f"mako_root={mako_root if mako_root is not None else workspace_root}",
             f"clang_cxx={clang_cxx}",
             f"fragile_cxx={fragile_cxx}",
         ]
@@ -309,6 +311,140 @@ class MakoRpcCompileBlockerReplayTests(unittest.TestCase):
             )
             self.assertEqual(manifest["selected_count"], "0")
             self.assertFalse((run_root / "replay_01").exists())
+
+    def test_replay_timeout_derived_relative_blocker_uses_compile_db_suffix_match(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            workspace_root = tmp_path / "workspace"
+            mako_root = tmp_path / "mako"
+            run_root = tmp_path / "run"
+            run_root.mkdir(parents=True, exist_ok=True)
+            workspace_root.mkdir(parents=True, exist_ok=True)
+            fake_compiler = self._create_fake_compiler(tmp_path)
+
+            blocker_file = "src/rrr/base/misc.cpp"
+            compile_source = mako_root / blocker_file
+            compile_source.parent.mkdir(parents=True, exist_ok=True)
+            compile_source.write_text("int misc = 0;\n", encoding="utf-8")
+
+            self._write_inventory_manifest(
+                run_root,
+                lanes="fragilec",
+                lane_entries={
+                    "fragilec": {
+                        "build_status": 124,
+                        "blocker_class": "build_timeout",
+                        "blocker_file": blocker_file,
+                        "e0425_count": 0,
+                    }
+                },
+            )
+            self._write_harness_manifest(
+                run_root,
+                workspace_root=workspace_root,
+                mako_root=mako_root,
+                clang_cxx=str(fake_compiler),
+                fragile_cxx=str(fake_compiler),
+            )
+
+            build_fragile = run_root / "build_fragilec"
+            build_fragile.mkdir(parents=True, exist_ok=True)
+            (build_fragile / "compile_commands.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "directory": str(mako_root),
+                            "arguments": [
+                                str(fake_compiler),
+                                "-c",
+                                str(compile_source),
+                                "-o",
+                                str(tmp_path / "obj" / "misc.o"),
+                            ],
+                            "file": str(compile_source),
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = self._run_script(
+                run_root,
+                lanes="fragilec",
+                env={
+                    "FAKE_REPLAY_RC": "1",
+                    "FAKE_REPLAY_STDERR": "error[E0425]: cannot find value `rpc` in this scope",
+                },
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            manifest = self._parse_key_values(
+                run_root / "rpc_compile_blocker_replay_manifest.txt"
+            )
+            self.assertEqual(manifest["replay_01_command_source"], "compile_commands")
+            self.assertEqual(
+                manifest["replay_01_first_failure_class"],
+                "unresolved_name_or_type_e0425",
+            )
+            command_text = (run_root / "replay_01" / "command.txt").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn(str(compile_source), command_text)
+
+    def test_replay_timeout_derived_relative_blocker_fallback_prefers_mako_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            workspace_root = tmp_path / "workspace"
+            mako_root = tmp_path / "mako"
+            run_root = tmp_path / "run"
+            run_root.mkdir(parents=True, exist_ok=True)
+            workspace_root.mkdir(parents=True, exist_ok=True)
+            fake_compiler = self._create_fake_compiler(tmp_path)
+
+            blocker_file = "src/rrr/base/misc.cpp"
+            compile_source = mako_root / blocker_file
+            compile_source.parent.mkdir(parents=True, exist_ok=True)
+            compile_source.write_text("int misc = 0;\n", encoding="utf-8")
+
+            self._write_inventory_manifest(
+                run_root,
+                lanes="fragilec",
+                lane_entries={
+                    "fragilec": {
+                        "build_status": 124,
+                        "blocker_class": "build_timeout",
+                        "blocker_file": blocker_file,
+                        "e0425_count": 0,
+                    }
+                },
+            )
+            self._write_harness_manifest(
+                run_root,
+                workspace_root=workspace_root,
+                mako_root=mako_root,
+                clang_cxx=str(fake_compiler),
+                fragile_cxx=str(fake_compiler),
+            )
+
+            result = self._run_script(
+                run_root,
+                lanes="fragilec",
+                env={
+                    "FAKE_REPLAY_RC": "1",
+                    "FAKE_REPLAY_STDERR": "error[E0308]: mismatched types",
+                },
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            manifest = self._parse_key_values(
+                run_root / "rpc_compile_blocker_replay_manifest.txt"
+            )
+            self.assertEqual(manifest["replay_01_command_source"], "fallback_compiler")
+            self.assertEqual(manifest["replay_01_first_failure_class"], "type_mismatch_e0308")
+            command_text = (run_root / "replay_01" / "command.txt").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn(str(compile_source), command_text)
 
     def test_replay_fails_when_inventory_manifest_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
