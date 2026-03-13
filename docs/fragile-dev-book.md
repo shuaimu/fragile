@@ -8885,3 +8885,82 @@ is complete. Strict build-only replay remains timeout-bound at
 `src/rrr/base/misc.cpp`, and blocker inventory non-increase enforcement remains
 passing versus `2.6.c.iii`. Next leaf is
 `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`.
+
+## 128. RPC Compile Blocker Leaf 2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a: Arc-Backed Function-Template Inference-Shape Cache Entries (2026-03-13)
+
+### Problem
+
+`collect_fn_template_instantiation` read cached function-template inference-shape
+metadata per candidate key, but each lookup cloned the full
+`FnTemplateInferenceShape` payload (vectors included). In high-candidate call
+sites this introduced repeated per-candidate deep clone overhead.
+
+### Execution Plan
+
+1. Store inference-shape cache entries as `Arc<FnTemplateInferenceShape>`.
+2. Return cloned `Arc` handles from cache lookup and borrow with `as_deref()` at call-site matching.
+3. Preserve existing cache invalidation on template-definition replacement.
+4. Update focused cache-reuse regression to validate `Arc`-backed behavior.
+5. Re-run strict replay profiling and full-suite gates.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no target-specific hacks
+- no force-native bypasses
+- no semantic stubs/fallback bodies
+- no suppression of failing replay/test outcomes
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang test_fn_template_inference_shape_reuses_cached_value -- --nocapture`
+- `cargo test -p fragile-clang test_set_fn_template_definition_invalidates_param_dependency_cache -- --nocapture`
+- `cargo test -p fragile-clang function_template_type_arg_inference_ -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_uses_leaf_index_candidate_after_mismatch -- --nocapture`
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_a_callshape_profile_120_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_a_stage_timing_120_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_a_callshape_profile_300_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_a_stage_timing_300_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+- `cargo test --workspace --all-targets > /tmp/full_test_20260313_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_a.log 2>&1`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- focused suites:
+  - `test_fn_template_inference_shape_reuses_cached_value`: pass
+  - `test_set_fn_template_definition_invalidates_param_dependency_cache`: pass
+  - `function_template_type_arg_inference_`: `11` passed / `0` failed
+  - `test_collect_fn_template_instantiation_uses_leaf_index_candidate_after_mismatch`: pass
+- 120s profile:
+  - `status=codegen_after_template_collection`
+  - `status_history=codegen_started,codegen_after_template_collection`
+- 300s profile:
+  - `status=codegen_after_template_instantiation_generation`
+  - `status_history=codegen_started,codegen_after_template_collection,codegen_after_template_instantiation_generation`
+  - `input_bytes=573054`
+- 120s/300s stage timing traces:
+  - both reached `event=stage_start stage=codegen` after completed export/parse/enrichment stages
+- replay manifest (`/tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313/rpc_compile_blocker_replay_manifest.txt`):
+  - `replay_01_status=124`
+  - `replay_01_timed_out=true`
+  - `replay_01_first_failure_class=build_timeout`
+  - `replay_01_blocker_file=src/rrr/base/misc.cpp`
+- comparison vs prior leaf
+  (`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`,
+  `input_bytes=572676`):
+  - delta `+378`
+- full-suite baseline parity:
+  - `cargo test --workspace --all-targets`: `fragile-clang` lib
+    `760` passed / `46` failed (failure count unchanged)
+  - Python suite: `OK`, `29` ran, `1` skipped
+
+### Outcome
+
+Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+is complete. Function-template inference-shape cache entries now use
+`Arc`-backed handles, removing deep value clones on each candidate-lookup in
+hot call-site matching paths while preserving invalidation semantics. Strict
+replay remains timeout-bound on `src/rrr/base/misc.cpp`; next leaf is
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.b`.

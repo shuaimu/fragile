@@ -11,6 +11,7 @@ use crate::ast::{
 use crate::types::{normalize_rusty_type_alias_to_std, parse_template_args, CppType};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
 /// Convert C++ access specifier to Rust visibility prefix.
 /// - Public → "pub "
@@ -1202,7 +1203,7 @@ pub struct AstCodeGen {
     fn_template_param_dependency_cache: HashMap<String, bool>,
     /// Cache of function-template inference shape metadata used by
     /// `infer_fn_template_type_args` in hot call-site matching paths.
-    fn_template_inference_shape_cache: HashMap<String, FnTemplateInferenceShape>,
+    fn_template_inference_shape_cache: HashMap<String, Arc<FnTemplateInferenceShape>>,
     /// Function-template keys indexed by unqualified leaf name to avoid scanning
     /// the full definition map for every call-site candidate lookup.
     fn_template_keys_by_leaf: HashMap<String, Vec<String>>,
@@ -38444,19 +38445,21 @@ impl FragileAtomicBoolCompat for atomic_bool {
     fn fn_template_inference_shape(
         &mut self,
         template_key: &str,
-    ) -> Option<&FnTemplateInferenceShape> {
+    ) -> Option<Arc<FnTemplateInferenceShape>> {
         if !self
             .fn_template_inference_shape_cache
             .contains_key(template_key)
         {
-            let shape = {
+            let shape = Arc::new({
                 let template_info = self.fn_template_definitions.get(template_key)?;
                 build_fn_template_inference_shape(template_info)
-            };
+            });
             self.fn_template_inference_shape_cache
                 .insert(template_key.to_string(), shape);
         }
-        self.fn_template_inference_shape_cache.get(template_key)
+        self.fn_template_inference_shape_cache
+            .get(template_key)
+            .cloned()
     }
 
     fn fn_template_has_param_dependent_args(&mut self, template_key: &str) -> bool {
@@ -38825,7 +38828,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
         for template_key in candidate_keys {
             let has_param_dependent_template_arg =
                 self.fn_template_has_param_dependent_args(&template_key);
-            let inference_shape = self.fn_template_inference_shape(&template_key).cloned();
+            let inference_shape = self.fn_template_inference_shape(&template_key);
             let Some(template_info) = self.fn_template_definitions.get(&template_key) else {
                 continue;
             };
@@ -38837,7 +38840,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 params,
                 return_type.as_ref(),
                 Some(call_args),
-                inference_shape.as_ref(),
+                inference_shape.as_deref(),
             ) else {
                 continue;
             };
@@ -112816,7 +112819,6 @@ stream.PutN(c, n);
         codegen.set_fn_template_definition("cache::shape".to_string(), info);
         let initial_shape = codegen
             .fn_template_inference_shape("cache::shape")
-            .cloned()
             .expect("inference shape should be computed for known template key");
         assert_eq!(
             initial_shape.template_param_first_param_positions,
@@ -112824,21 +112826,21 @@ stream.PutN(c, n);
             "computed inference shape should record first parameter position"
         );
         assert!(
-            codegen
-                .fn_template_inference_shape_cache
-                .contains_key("cache::shape"),
+        codegen
+            .fn_template_inference_shape_cache
+            .contains_key("cache::shape"),
             "shape lookup should populate inference-shape cache"
         );
 
         codegen.fn_template_inference_shape_cache.insert(
             "cache::shape".to_string(),
-            FnTemplateInferenceShape {
+            std::sync::Arc::new(FnTemplateInferenceShape {
                 template_param_first_param_positions: vec![Some(7)],
                 template_param_appears_in_return: vec![true],
                 has_parameter_pack: false,
                 has_unsized_array_ref_param: false,
                 has_non_type_param_candidate: false,
-            },
+            }),
         );
         let reused_shape = codegen
             .fn_template_inference_shape("cache::shape")
