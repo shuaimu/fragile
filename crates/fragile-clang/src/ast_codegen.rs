@@ -78005,9 +78005,10 @@ fn mark_template_param_presence_in_cpp_type(
     ty: &CppType,
     candidate_names: &[&str],
     candidate_presence: &mut [bool],
+    unresolved_candidate_count: &mut usize,
 ) {
     debug_assert_eq!(candidate_names.len(), candidate_presence.len());
-    if candidate_presence.iter().all(|present| *present) {
+    if *unresolved_candidate_count == 0 {
         return;
     }
     match ty {
@@ -78015,21 +78016,37 @@ fn mark_template_param_presence_in_cpp_type(
             for (idx, candidate_name) in candidate_names.iter().enumerate() {
                 if !candidate_presence[idx] && name == candidate_name {
                     candidate_presence[idx] = true;
+                    *unresolved_candidate_count =
+                        unresolved_candidate_count.saturating_sub(1);
+                    if *unresolved_candidate_count == 0 {
+                        break;
+                    }
                 }
             }
         }
         CppType::Pointer { pointee, .. } => {
-            mark_template_param_presence_in_cpp_type(pointee, candidate_names, candidate_presence);
+            mark_template_param_presence_in_cpp_type(
+                pointee,
+                candidate_names,
+                candidate_presence,
+                unresolved_candidate_count,
+            );
         }
         CppType::Reference { referent, .. } => {
             mark_template_param_presence_in_cpp_type(
                 referent,
                 candidate_names,
                 candidate_presence,
+                unresolved_candidate_count,
             );
         }
         CppType::Array { element, .. } => {
-            mark_template_param_presence_in_cpp_type(element, candidate_names, candidate_presence);
+            mark_template_param_presence_in_cpp_type(
+                element,
+                candidate_names,
+                candidate_presence,
+                unresolved_candidate_count,
+            );
         }
         CppType::Function {
             return_type,
@@ -78040,15 +78057,17 @@ fn mark_template_param_presence_in_cpp_type(
                 return_type,
                 candidate_names,
                 candidate_presence,
+                unresolved_candidate_count,
             );
             for param in params {
-                if candidate_presence.iter().all(|present| *present) {
+                if *unresolved_candidate_count == 0 {
                     break;
                 }
                 mark_template_param_presence_in_cpp_type(
                     param,
                     candidate_names,
                     candidate_presence,
+                    unresolved_candidate_count,
                 );
             }
         }
@@ -78056,6 +78075,11 @@ fn mark_template_param_presence_in_cpp_type(
             for (idx, candidate_name) in candidate_names.iter().enumerate() {
                 if !candidate_presence[idx] && spelling.contains(candidate_name) {
                     candidate_presence[idx] = true;
+                    *unresolved_candidate_count =
+                        unresolved_candidate_count.saturating_sub(1);
+                    if *unresolved_candidate_count == 0 {
+                        break;
+                    }
                 }
             }
         }
@@ -78211,10 +78235,13 @@ fn infer_fn_template_type_args(
             .collect();
         let mut return_only_template_param_presence =
             vec![false; return_only_template_param_names.len()];
+        let mut unresolved_return_only_template_param_count =
+            return_only_template_param_presence.len();
         mark_template_param_presence_in_cpp_type(
             &template_info.return_type,
             &return_only_template_param_names,
             &mut return_only_template_param_presence,
+            &mut unresolved_return_only_template_param_count,
         );
         for (presence_idx, template_param_idx) in
             return_only_template_param_indices.iter().enumerate()
@@ -79025,6 +79052,32 @@ mod tests {
             inferred,
             vec!["i64".to_string(), "f64".to_string()],
             "unbound template params should continue to infer from return type after return-scan optimization"
+        );
+    }
+
+    #[test]
+    fn test_mark_template_param_presence_in_cpp_type_tracks_unresolved_count() {
+        let ty = CppType::Function {
+            return_type: Box::new(CppType::Named("Result<U>".to_string())),
+            params: vec![CppType::Pointer {
+                pointee: Box::new(CppType::Named("V".to_string())),
+                is_const: true,
+            }],
+            is_variadic: false,
+        };
+        let candidate_names = vec!["U", "V", "N"];
+        let mut candidate_presence = vec![false; candidate_names.len()];
+        let mut unresolved_candidate_count = candidate_names.len();
+        mark_template_param_presence_in_cpp_type(
+            &ty,
+            &candidate_names,
+            &mut candidate_presence,
+            &mut unresolved_candidate_count,
+        );
+        assert_eq!(candidate_presence, vec![true, true, false]);
+        assert_eq!(
+            unresolved_candidate_count, 1,
+            "unresolved counter should track remaining candidate template params"
         );
     }
 

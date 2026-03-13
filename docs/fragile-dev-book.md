@@ -7762,3 +7762,88 @@ is complete. Strict build-only replay remains timeout-bound on
 `src/rrr/base/misc.cpp`, and non-increase gating remains green versus
 `2.6.c.iii` baseline. Next leaf is repeat node
 `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c`.
+
+## 112. RPC Compile Blocker Leaf 2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.a: Return-Presence Scan Early-Exit Optimization (2026-03-13)
+
+### Problem
+
+`mark_template_param_presence_in_cpp_type` still evaluated
+`candidate_presence.iter().all(...)` across the full candidate slice on each
+recursive step/branch while scanning return-only template params, even after
+most candidates were already resolved.
+
+### Execution Plan
+
+1. Thread unresolved-candidate count through return-type presence scan.
+2. Short-circuit recursive descent as soon as unresolved count reaches zero.
+3. Add focused regression to lock unresolved-count behavior.
+4. Re-run targeted tests, strict replay captures, and full regression suites.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no target-specific hacks
+- no force-native bypasses
+- no semantic stubs/fake method bodies
+- no suppression of replay/test failures
+
+### Implementation
+
+Updated `crates/fragile-clang/src/ast_codegen.rs`:
+
+- extended `mark_template_param_presence_in_cpp_type` signature with
+  `unresolved_candidate_count: &mut usize`.
+- replaced repeated full-slice `all()` checks with unresolved-count checks and
+  `saturating_sub(1)` updates when candidates are marked present.
+- updated recursive calls and caller wiring in `infer_fn_template_type_args`
+  (`unresolved_return_only_template_param_count`).
+- added focused regression:
+  - `test_mark_template_param_presence_in_cpp_type_tracks_unresolved_count`
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang function_template_type_arg_inference_ -- --nocapture`
+- `cargo test -p fragile-clang test_mark_template_param_presence_in_cpp_type_tracks_unresolved_count -- --nocapture`
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_c_c_c_c_c_a_callshape_profile_120_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_c_c_c_c_c_a_stage_timing_120_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_c_c_c_c_c_a_callshape_profile_300_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_c_c_c_c_c_a_stage_timing_300_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- focused targeted suites:
+  - `function_template_type_arg_inference_`: `11` passed / `0` failed
+  - unresolved-count regression: `1` passed / `0` failed
+- 120s profile:
+  - `status=codegen_after_template_collection`
+  - `status_history=codegen_started,codegen_after_template_collection`
+- 300s profile:
+  - `status=codegen_after_template_instantiation_generation`
+  - `status_history=codegen_started,codegen_after_template_collection,codegen_after_template_instantiation_generation`
+  - `input_bytes=574441`
+- replay manifest (`/tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313/rpc_compile_blocker_replay_manifest.txt`):
+  - `replay_01_status=124`
+  - `replay_01_timed_out=true`
+  - `replay_01_first_failure_class=build_timeout`
+  - `replay_01_blocker_file=src/rrr/base/misc.cpp`
+- comparison vs prior leaf
+  (`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.a`,
+  `input_bytes=568277`):
+  - delta `+6164`
+- full-suite baseline parity:
+  - `cargo test --workspace --all-targets`: `fragile-clang` lib
+    `753` passed / `46` failed (failure count unchanged)
+  - Python suite: `OK`, `29` ran, `1` skipped
+
+### Outcome
+
+Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+is complete. Return-template presence scanning now short-circuits via unresolved
+count tracking while preserving inference behavior and regression coverage.
+Strict replay remains timeout-bound on `src/rrr/base/misc.cpp`; next leaf is
+the paired gate
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.b`.
