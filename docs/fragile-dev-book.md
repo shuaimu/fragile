@@ -12345,3 +12345,47 @@ Deterministic evidence highlights:
 Leaf
 `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.b`
 is complete. Strict build-only replay remains timeout-bound on `src/rrr/base/misc.cpp`, and blocker inventory non-increase gating remains passing versus the `2.6.c.iii` baseline.
+
+## 2026-03-14: Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+
+### Decision and rationale
+
+- Selected the first pending high-priority implementation leaf under the active strict `2.6.c` repeat branch.
+- Scope stayed small (<500 LOC): micro-optimize function-template instantiation candidate scanning by avoiding repeated param-dependency probes once fallback is established.
+- Preserved behavior semantics: candidate selection/fallback outcomes remain unchanged.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- No target-specific logic was introduced.
+- No fake semantic fallback method bodies were added.
+- No force-native bypasses were introduced.
+
+### Implementation summary
+
+Updated `crates/fragile-clang/src/ast_codegen.rs`:
+
+- In `collect_fn_template_instantiation`, introduced `should_consider_fallback` and reused it to gate param-dependency probing.
+- Skipped `fn_template_has_param_dependent_args` checks for later candidates after fallback was already seeded.
+- Added focused regression `test_collect_fn_template_instantiation_skips_extra_param_dependency_probe_after_fallback_seeded` to lock the optimization behavior.
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_skips_extra_param_dependency_probe_after_fallback_seeded -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_ -- --nocapture`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Full-suite baseline parity:
+
+- `cargo test --workspace --all-targets`: `fragile-clang` lib `794` passed / `46` failed (`EXIT:101`)
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`: `OK`, `29` ran, `1` skipped
+
+### Outcome
+
+Leaf
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+is complete. Function-template candidate scanning now skips extra param-dependency probes after fallback is seeded while preserving matching/fallback behavior and baseline suite outcomes.

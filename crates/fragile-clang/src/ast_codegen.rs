@@ -39261,8 +39261,9 @@ impl FragileAtomicBoolCompat for atomic_bool {
             cached_resolution.clone()
         } else {
             for template_key in candidate_keys_with_defs.iter() {
-                let has_param_dependent_template_arg =
-                    self.fn_template_has_param_dependent_args(template_key);
+                let should_consider_fallback = fallback_instantiation.is_none();
+                let has_param_dependent_template_arg = should_consider_fallback
+                    && self.fn_template_has_param_dependent_args(template_key);
                 let inference_shape = self.fn_template_inference_shape(template_key);
                 let type_args = if let Some(template_info) = self.fn_template_definitions.get(template_key)
                 {
@@ -39279,7 +39280,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 let Some(type_args) = type_args else {
                     continue;
                 };
-                let should_seed_fallback = fallback_instantiation.is_none()
+                let should_seed_fallback = should_consider_fallback
                     && (has_param_dependent_template_arg || params.is_empty());
 
                 let Some(concrete_shape) =
@@ -114996,6 +114997,125 @@ stream.PutN(c, n);
             pending.1,
             vec!["i32".to_string()],
             "selected candidate should preserve inferred concrete type arguments"
+        );
+    }
+
+    #[test]
+    fn test_collect_fn_template_instantiation_skips_extra_param_dependency_probe_after_fallback_seeded() {
+        let templ_ty = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        let int_ty = CppType::Int { signed: true };
+        let bool_ty = CppType::Bool;
+        let call_fn_ty = CppType::Function {
+            return_type: Box::new(int_ty.clone()),
+            params: vec![int_ty.clone()],
+            is_variadic: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::FunctionTemplateDecl {
+                        name: "make".to_string(),
+                        template_params: vec!["T".to_string()],
+                        return_type: bool_ty,
+                        params: vec![("value".to_string(), templ_ty.clone())],
+                        is_definition: true,
+                        parameter_pack_indices: vec![],
+                        requires_clause: None,
+                        is_noexcept: false,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::NamespaceDecl {
+                        name: Some("rusty".to_string()),
+                        is_inline: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::FunctionTemplateDecl {
+                            name: "make".to_string(),
+                            template_params: vec!["T".to_string()],
+                            return_type: templ_ty.clone(),
+                            params: vec![("value".to_string(), templ_ty)],
+                            is_definition: true,
+                            parameter_pack_indices: vec![],
+                            requires_clause: None,
+                            is_noexcept: false,
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "call_make".to_string(),
+                        mangled_name: "call_make".to_string(),
+                        is_static: false,
+                        return_type: int_ty.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: int_ty.clone(),
+                                    template_instantiation: None,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "make".to_string(),
+                                            ty: call_fn_ty,
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::IntegerLiteral {
+                                            value: 7,
+                                            cpp_type: Some(int_ty),
+                                        },
+                                        vec![],
+                                    ),
+                                ],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let mut codegen = AstCodeGen::new();
+        codegen.collect_template_info(&ast.children);
+        let pending = codegen
+            .pending_fn_instantiations
+            .get("make_i32")
+            .cloned()
+            .expect("mismatch handling should still select compatible namespaced candidate");
+        assert_eq!(
+            pending.0, "rusty::make",
+            "candidate matching should remain correct when fallback was seeded by an earlier mismatch"
+        );
+        assert!(
+            codegen.fn_template_param_dependency_cache.contains_key("make"),
+            "first mismatching candidate should seed fallback through dependency probe"
+        );
+        assert!(
+            !codegen
+                .fn_template_param_dependency_cache
+                .contains_key("rusty::make"),
+            "after fallback is seeded, later candidates should skip extra dependency probes"
         );
     }
 
