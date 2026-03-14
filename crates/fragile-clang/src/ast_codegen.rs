@@ -39477,38 +39477,87 @@ impl FragileAtomicBoolCompat for atomic_bool {
             .collect();
         let instantiated_return_type_normalized =
             Self::normalize_template_match_type(&return_type.as_ref().to_rust_type_str());
-        let candidate_cache_key = Self::fn_template_candidate_keys_cache_key(fn_name, namespace_path);
-        let include_call_arg_bounds = self
-            .fn_template_candidate_requires_call_arg_bounds_cache
-            .borrow()
-            .get(&candidate_cache_key)
-            .copied()
-            .unwrap_or(false);
-        let resolution_cache_key = Self::fn_template_call_resolution_key(
+        let candidate_cache_key =
+            Self::fn_template_candidate_keys_cache_key(fn_name, namespace_path);
+        let resolution_cache_key_without_bounds = Self::fn_template_call_resolution_key(
             fn_name,
             namespace_path,
             &instantiated_param_types_normalized,
             &instantiated_return_type_normalized,
             call_arg_nodes,
-            include_call_arg_bounds,
+            false,
         );
-        // Avoid unconditional dual-key construction/lookups on this hot call
-        // path; prefer the candidate-set cache shape when available and only
-        // try the alternate shape when the primary lookup misses.
+        let resolution_cache_key_with_bounds = Self::fn_template_call_resolution_key(
+            fn_name,
+            namespace_path,
+            &instantiated_param_types_normalized,
+            &instantiated_return_type_normalized,
+            call_arg_nodes,
+            true,
+        );
+        let mut candidate_keys_with_defs: Option<Arc<Vec<String>>> = None;
+        let cached_include_call_arg_bounds = self
+            .fn_template_candidate_requires_call_arg_bounds_cache
+            .borrow()
+            .get(&candidate_cache_key)
+            .copied();
+        let include_call_arg_bounds = if let Some(cached) = cached_include_call_arg_bounds {
+            cached
+        } else {
+            let has_no_bounds_key = self
+                .fn_template_call_resolution_cache
+                .contains_key(&resolution_cache_key_without_bounds);
+            let has_with_bounds_key = self
+                .fn_template_call_resolution_cache
+                .contains_key(&resolution_cache_key_with_bounds);
+            match (has_no_bounds_key, has_with_bounds_key) {
+                (true, false) => false,
+                (false, true) => true,
+                // Cold/ambiguous cache states: compute once from candidate
+                // metadata, cache the decision, and reuse the prewarmed
+                // candidate subset for fallback matching below.
+                _ => {
+                    let prewarmed_candidates =
+                        self.collect_fn_template_candidate_keys_with_defs(fn_name, namespace_path);
+                    // If template-level bounds requirements were already
+                    // inferred on the instantiation path, warm the
+                    // candidate-set cache here so resolver key-shape selection
+                    // avoids ambiguous dual-key preference.
+                    let requires = prewarmed_candidates.iter().any(|template_key| {
+                        self.fn_template_requires_call_arg_bounds_cache
+                            .get(template_key)
+                            .copied()
+                            .unwrap_or(false)
+                    });
+                    self.fn_template_candidate_requires_call_arg_bounds_cache
+                        .borrow_mut()
+                        .insert(candidate_cache_key.clone(), requires);
+                    candidate_keys_with_defs = Some(prewarmed_candidates);
+                    requires
+                }
+            }
+        };
+
+        let (resolution_cache_key, fallback_resolution_cache_key) = if include_call_arg_bounds {
+            (
+                &resolution_cache_key_with_bounds,
+                &resolution_cache_key_without_bounds,
+            )
+        } else {
+            (
+                &resolution_cache_key_without_bounds,
+                &resolution_cache_key_with_bounds,
+            )
+        };
+
+        // Prefer the candidate-set-selected cache-key shape and only probe the
+        // opposite shape on primary miss for desynchronized cache states.
         let cached_resolution = self
             .fn_template_call_resolution_cache
-            .get(&resolution_cache_key)
+            .get(resolution_cache_key)
             .or_else(|| {
-                let fallback_resolution_cache_key = Self::fn_template_call_resolution_key(
-                    fn_name,
-                    namespace_path,
-                    &instantiated_param_types_normalized,
-                    &instantiated_return_type_normalized,
-                    call_arg_nodes,
-                    !include_call_arg_bounds,
-                );
                 self.fn_template_call_resolution_cache
-                    .get(&fallback_resolution_cache_key)
+                    .get(fallback_resolution_cache_key)
             })
             .cloned();
         if let Some(cached_resolution) = cached_resolution.as_ref() {
@@ -39532,8 +39581,9 @@ impl FragileAtomicBoolCompat for atomic_bool {
             }
         }
 
-        let candidate_keys_with_defs =
-            self.collect_fn_template_candidate_keys_with_defs(fn_name, namespace_path);
+        let candidate_keys_with_defs = candidate_keys_with_defs.unwrap_or_else(|| {
+            self.collect_fn_template_candidate_keys_with_defs(fn_name, namespace_path)
+        });
         if candidate_keys_with_defs.is_empty() {
             return None;
         }
@@ -115339,6 +115389,119 @@ stream.PutN(c, n);
             resolved.as_deref(),
             Some("swap_i32"),
             "template-call resolution should prioritize bounds-aware cache keys when candidate-set cache marks call-arg bounds as required"
+        );
+    }
+
+    #[test]
+    fn test_resolve_fn_template_call_name_from_args_warms_bounds_cache_when_missing_and_cache_keys_conflict(
+    ) {
+        let int_ty = CppType::Int { signed: true };
+        let fn_ty = CppType::Function {
+            return_type: Box::new(int_ty.clone()),
+            params: vec![int_ty.clone()],
+            is_variadic: false,
+        };
+        let call_callee = make_node(
+            ClangNodeKind::DeclRefExpr {
+                name: "swap".to_string(),
+                ty: fn_ty,
+                namespace_path: vec![],
+            },
+            vec![],
+        );
+        let call_args = vec![make_node(
+            ClangNodeKind::IntegerLiteral {
+                value: 7,
+                cpp_type: Some(int_ty),
+            },
+            vec![],
+        )];
+
+        let mut codegen = AstCodeGen::new();
+        codegen
+            .fn_template_keys_by_leaf
+            .insert("swap".to_string(), vec!["swap".to_string()]);
+        let template_info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Named("T".to_string()),
+            params: vec![("value".to_string(), CppType::Named("T".to_string()))],
+            body: None,
+            is_noexcept: false,
+        };
+        codegen
+            .fn_template_definitions
+            .insert("swap".to_string(), template_info.clone());
+        codegen.pending_fn_instantiations.insert(
+            "swap_i64".to_string(),
+            (
+                "swap".to_string(),
+                vec!["i64".to_string()],
+                template_info.clone(),
+            ),
+        );
+        codegen.pending_fn_instantiations.insert(
+            "swap_i32".to_string(),
+            (
+                "swap".to_string(),
+                vec!["i32".to_string()],
+                template_info,
+            ),
+        );
+
+        let no_bounds_key = AstCodeGen::fn_template_call_resolution_key(
+            "swap",
+            &[],
+            &["i32".to_string()],
+            "i32",
+            &call_args,
+            false,
+        );
+        let with_bounds_key = AstCodeGen::fn_template_call_resolution_key(
+            "swap",
+            &[],
+            &["i32".to_string()],
+            "i32",
+            &call_args,
+            true,
+        );
+        codegen.fn_template_call_resolution_cache.insert(
+            no_bounds_key,
+            Some(("swap".to_string(), vec!["i64".to_string()])),
+        );
+        codegen.fn_template_call_resolution_cache.insert(
+            with_bounds_key,
+            Some(("swap".to_string(), vec!["i32".to_string()])),
+        );
+
+        let candidate_cache_key = AstCodeGen::fn_template_candidate_keys_cache_key("swap", &[]);
+        assert!(
+            !codegen
+                .fn_template_candidate_requires_call_arg_bounds_cache
+                .borrow()
+                .contains_key(&candidate_cache_key),
+            "candidate-set bounds cache should start cold for this resolver path"
+        );
+
+        // Seed template-level requirement cache so candidate-set warming can
+        // derive the correct bounds-key choice without rebuilding inference.
+        codegen
+            .fn_template_requires_call_arg_bounds_cache
+            .insert("swap".to_string(), true);
+
+        let resolved = codegen.resolve_fn_template_call_name_from_args(&call_callee, &call_args);
+        assert_eq!(
+            resolved.as_deref(),
+            Some("swap_i32"),
+            "resolver should warm candidate-set bounds cache and prefer bounds-aware cache shape when conflicting cached key shapes exist"
+        );
+        assert_eq!(
+            codegen
+                .fn_template_candidate_requires_call_arg_bounds_cache
+                .borrow()
+                .get(&candidate_cache_key)
+                .copied(),
+            Some(true),
+            "candidate-set bounds cache should be warmed from definition-backed candidates when initially missing"
         );
     }
 
