@@ -12719,3 +12719,50 @@ Deterministic manifest highlights:
 Leaf
 `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.b`
 is complete. Strict build-only replay remains timeout-bound on `src/rrr/base/misc.cpp`, and blocker inventory non-increase remains passing versus the `2.6.c.iii` baseline.
+
+## 2026-03-14: Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+
+### Decision and rationale
+
+- Picked the first unfinished leaf under the active highest-priority `2.6.c...c.c.c.c.c.c` branch.
+- Kept the change set small and localized (<500 LOC) by optimizing one resolver helper hot path and strengthening focused coverage.
+
+### Wrong-Approach Check
+
+Checked against `docs/dev/wrong.md` and project anti-pattern rules:
+
+- No target-specific hacks or environment-specific branches.
+- No synthetic/fake fallback method bodies were introduced.
+- No semantic shortcuts (force-native bypasses or fake stubs) were used.
+
+### Implementation
+
+- Updated `resolve_existing_fn_template_path` in `crates/fragile-clang/src/ast_codegen.rs`:
+  - direct-hit short-circuit for `generated_functions.contains_key(mangled_name)` before sanitization;
+  - sanitize/probe fallback only when sanitized spelling differs.
+- Extended regression `test_resolve_existing_fn_template_path_prefers_pending_and_falls_back_to_generated` with a namespaced input case (`swap::i32`) to lock sanitized generated-function fallback behavior (`swap_i32`).
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang test_resolve_existing_fn_template_path_prefers_pending_and_falls_back_to_generated -- --nocapture`
+- `cargo test -p fragile-clang test_resolve_fn_template_call_name_from_args_ -- --nocapture`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Results:
+
+- Focused resolver tests passed.
+- Python suite passed (`Ran 29 tests`, `OK`, `skipped=1`).
+- Full Rust workspace remained at known baseline red state (`fragile-clang` lib `797` passed / `46` failed, `EXIT:101`).
+- Verified baseline nature with a controlled revert check:
+  - temporarily reverted only this leaf patch,
+  - reran `cargo test -p fragile-clang ast_codegen::tests::test_simple_function -- --nocapture`,
+  - observed the same failure before reapplying the patch.
+
+### Outcome
+
+Leaf
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+is complete with focused regression coverage and full-suite baseline parity preserved.

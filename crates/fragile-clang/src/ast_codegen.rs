@@ -39481,8 +39481,13 @@ impl FragileAtomicBoolCompat for atomic_bool {
         if self.pending_fn_instantiations.contains_key(mangled_name) {
             return Some(self.compute_relative_path(namespace_path, mangled_name));
         }
+        if self.generated_functions.contains_key(mangled_name) {
+            return Some(self.compute_relative_path(namespace_path, mangled_name));
+        }
         let sanitized_mangled = sanitize_identifier(mangled_name);
-        if self.generated_functions.contains_key(&sanitized_mangled) {
+        if sanitized_mangled != mangled_name
+            && self.generated_functions.contains_key(&sanitized_mangled)
+        {
             return Some(self.compute_relative_path(namespace_path, mangled_name));
         }
         None
@@ -115871,6 +115876,13 @@ stream.PutN(c, n);
                 .as_deref(),
             Some("swap_i32"),
             "generated-function lookup should remain a fallback when no pending instantiation exists"
+        );
+        assert_eq!(
+            codegen
+                .resolve_existing_fn_template_path(&[], "swap::i32")
+                .as_deref(),
+            Some("swap::i32"),
+            "resolver helper should preserve sanitized generated-function fallback lookups for namespaced identifier shapes"
         );
         assert_eq!(
             codegen.resolve_existing_fn_template_path(&[], "swap_i64"),
