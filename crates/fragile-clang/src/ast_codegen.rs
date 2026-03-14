@@ -39482,26 +39482,39 @@ impl FragileAtomicBoolCompat for atomic_bool {
             .collect();
         let instantiated_return_type_normalized =
             Self::normalize_template_match_type(&return_type.as_ref().to_rust_type_str());
-        let resolution_cache_key_without_bounds = Self::fn_template_call_resolution_key(
+        let candidate_cache_key = Self::fn_template_candidate_keys_cache_key(fn_name, namespace_path);
+        let include_call_arg_bounds = self
+            .fn_template_candidate_requires_call_arg_bounds_cache
+            .borrow()
+            .get(&candidate_cache_key)
+            .copied()
+            .unwrap_or(false);
+        let resolution_cache_key = Self::fn_template_call_resolution_key(
             fn_name,
             namespace_path,
             &instantiated_param_types_normalized,
             &instantiated_return_type_normalized,
             call_arg_nodes,
-            false,
+            include_call_arg_bounds,
         );
-        let resolution_cache_key_with_bounds = Self::fn_template_call_resolution_key(
-            fn_name,
-            namespace_path,
-            &instantiated_param_types_normalized,
-            &instantiated_return_type_normalized,
-            call_arg_nodes,
-            true,
-        );
+        // Avoid unconditional dual-key construction/lookups on this hot call
+        // path; prefer the candidate-set cache shape when available and only
+        // try the alternate shape when the primary lookup misses.
         let cached_resolution = self
             .fn_template_call_resolution_cache
-            .get(&resolution_cache_key_without_bounds)
-            .or_else(|| self.fn_template_call_resolution_cache.get(&resolution_cache_key_with_bounds))
+            .get(&resolution_cache_key)
+            .or_else(|| {
+                let fallback_resolution_cache_key = Self::fn_template_call_resolution_key(
+                    fn_name,
+                    namespace_path,
+                    &instantiated_param_types_normalized,
+                    &instantiated_return_type_normalized,
+                    call_arg_nodes,
+                    !include_call_arg_bounds,
+                );
+                self.fn_template_call_resolution_cache
+                    .get(&fallback_resolution_cache_key)
+            })
             .cloned();
         if let Some(cached_resolution) = cached_resolution {
             if let Some((_, type_args)) = cached_resolution {
@@ -115092,6 +115105,89 @@ stream.PutN(c, n);
             resolved.as_deref(),
             Some("swap_i64"),
             "template-call resolution should honor cached call-resolution shape when matching pending instantiations"
+        );
+    }
+
+    #[test]
+    fn test_resolve_fn_template_call_name_from_args_prefers_bounds_key_when_candidate_set_cache_requires_bounds(
+    ) {
+        let int_ty = CppType::Int { signed: true };
+        let fn_ty = CppType::Function {
+            return_type: Box::new(int_ty.clone()),
+            params: vec![int_ty.clone()],
+            is_variadic: false,
+        };
+        let call_callee = make_node(
+            ClangNodeKind::DeclRefExpr {
+                name: "swap".to_string(),
+                ty: fn_ty,
+                namespace_path: vec![],
+            },
+            vec![],
+        );
+        let call_args = vec![make_node(
+            ClangNodeKind::IntegerLiteral {
+                value: 7,
+                cpp_type: Some(int_ty),
+            },
+            vec![],
+        )];
+
+        let mut codegen = AstCodeGen::new();
+        codegen
+            .fn_template_keys_by_leaf
+            .insert("swap".to_string(), vec!["swap".to_string()]);
+        let template_info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Named("T".to_string()),
+            params: vec![("value".to_string(), CppType::Named("T".to_string()))],
+            body: None,
+            is_noexcept: false,
+        };
+        codegen
+            .fn_template_definitions
+            .insert("swap".to_string(), template_info.clone());
+        codegen.pending_fn_instantiations.insert(
+            "swap_i64".to_string(),
+            (
+                "swap".to_string(),
+                vec!["i64".to_string()],
+                template_info.clone(),
+            ),
+        );
+        codegen.pending_fn_instantiations.insert(
+            "swap_i32".to_string(),
+            (
+                "swap".to_string(),
+                vec!["i32".to_string()],
+                template_info.clone(),
+            ),
+        );
+
+        let no_bounds_key =
+            AstCodeGen::fn_template_call_resolution_key("swap", &[], &["i32".to_string()], "i32", &call_args, false);
+        let with_bounds_key =
+            AstCodeGen::fn_template_call_resolution_key("swap", &[], &["i32".to_string()], "i32", &call_args, true);
+        codegen.fn_template_call_resolution_cache.insert(
+            no_bounds_key,
+            Some(("swap".to_string(), vec!["i64".to_string()])),
+        );
+        codegen.fn_template_call_resolution_cache.insert(
+            with_bounds_key,
+            Some(("swap".to_string(), vec!["i32".to_string()])),
+        );
+
+        let candidate_cache_key = AstCodeGen::fn_template_candidate_keys_cache_key("swap", &[]);
+        codegen
+            .fn_template_candidate_requires_call_arg_bounds_cache
+            .borrow_mut()
+            .insert(candidate_cache_key, true);
+
+        let resolved = codegen.resolve_fn_template_call_name_from_args(&call_callee, &call_args);
+        assert_eq!(
+            resolved.as_deref(),
+            Some("swap_i32"),
+            "template-call resolution should prioritize bounds-aware cache keys when candidate-set cache marks call-arg bounds as required"
         );
     }
 
