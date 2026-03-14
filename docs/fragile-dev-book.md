@@ -12626,3 +12626,46 @@ Deterministic manifest highlights:
 Leaf
 `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.b`
 is complete. Strict build-only replay remains timeout-bound on `src/rrr/base/misc.cpp`, and blocker inventory non-increase remains passing versus the `2.6.c.iii` baseline.
+
+## 2026-03-14: Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+
+### Decision and rationale
+
+- Picked the first pending leaf under the active top-priority `2.6.c...c.c.c` repeat branch.
+- Kept scope under 500 LOC by optimizing one hot resolver path in `ast_codegen` without changing semantics.
+
+### Wrong-Approach Check
+
+Checked against `docs/dev/wrong.md` and project anti-pattern rules before finalizing:
+
+- No target-specific conditionals were added.
+- No synthetic/stub method bodies were added.
+- No semantic type mapping or force-native bypasses were introduced.
+
+### Implementation
+
+- Added `resolve_existing_fn_template_path` in `crates/fragile-clang/src/ast_codegen.rs`.
+- Reused that helper in `resolve_fn_template_call_name_from_args` cached and fallback paths.
+- This removes duplicated pending/generated symbol lookup logic and avoids `sanitize_identifier(...)` on warm pending-instantiation hits, while preserving stale-cache recovery and candidate fallback behavior.
+- Added focused regression `test_resolve_existing_fn_template_path_prefers_pending_and_falls_back_to_generated`.
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang test_resolve_existing_fn_template_path_prefers_pending_and_falls_back_to_generated -- --nocapture`
+- `cargo test -p fragile-clang test_resolve_fn_template_call_name_from_args_ -- --nocapture`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Results:
+
+- Focused resolver tests passed.
+- Full Rust suite remained at baseline failure count: `fragile-clang` lib `797` passed / `46` failed (`EXIT:101`).
+- Python suite passed: `Ran 29 tests`, `OK (skipped=1)`.
+
+### Outcome
+
+Leaf
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+is complete with behavior-locked regression coverage and baseline full-suite parity.

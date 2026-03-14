@@ -39473,6 +39473,21 @@ impl FragileAtomicBoolCompat for atomic_bool {
         call_args.iter().any(Self::node_contains_string_literal)
     }
 
+    fn resolve_existing_fn_template_path(
+        &self,
+        namespace_path: &[String],
+        mangled_name: &str,
+    ) -> Option<String> {
+        if self.pending_fn_instantiations.contains_key(mangled_name) {
+            return Some(self.compute_relative_path(namespace_path, mangled_name));
+        }
+        let sanitized_mangled = sanitize_identifier(mangled_name);
+        if self.generated_functions.contains_key(&sanitized_mangled) {
+            return Some(self.compute_relative_path(namespace_path, mangled_name));
+        }
+        None
+    }
+
     fn resolve_fn_template_call_name_from_args(
         &self,
         callee: &ClangNode,
@@ -39620,11 +39635,10 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 } else {
                     let mangled_name =
                         Self::build_fn_template_mangled_name(&sanitized_fn_name, type_args);
-                    let sanitized_mangled = sanitize_identifier(&mangled_name);
-                    if self.pending_fn_instantiations.contains_key(&mangled_name)
-                        || self.generated_functions.contains_key(&sanitized_mangled)
+                    if let Some(path) =
+                        self.resolve_existing_fn_template_path(namespace_path, &mangled_name)
                     {
-                        return Some(Some(self.compute_relative_path(namespace_path, &mangled_name)));
+                        return Some(Some(path));
                     }
                 }
             } else {
@@ -39694,11 +39708,10 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 continue;
             };
             let mangled_name = Self::build_fn_template_mangled_name(&sanitized_fn_name, &type_args);
-            let sanitized_mangled = sanitize_identifier(&mangled_name);
-            if self.pending_fn_instantiations.contains_key(&mangled_name)
-                || self.generated_functions.contains_key(&sanitized_mangled)
+            if let Some(path) =
+                self.resolve_existing_fn_template_path(namespace_path, &mangled_name)
             {
-                return Some(self.compute_relative_path(namespace_path, &mangled_name));
+                return Some(path);
             }
         }
         None
@@ -115820,6 +115833,49 @@ stream.PutN(c, n);
             resolved.as_deref(),
             Some("swap_i64"),
             "resolver should fast-path cached call resolution when definition-backed template metadata exists even if leaf index was not prewarmed"
+        );
+    }
+
+    #[test]
+    fn test_resolve_existing_fn_template_path_prefers_pending_and_falls_back_to_generated() {
+        let template_info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Named("T".to_string()),
+            params: vec![("value".to_string(), CppType::Named("T".to_string()))],
+            body: None,
+            is_noexcept: false,
+        };
+        let mut codegen = AstCodeGen::new();
+        codegen.generated_functions.insert("swap_i32".to_string(), 1);
+        codegen.pending_fn_instantiations.insert(
+            "swap_i32".to_string(),
+            (
+                "swap".to_string(),
+                vec!["i32".to_string()],
+                template_info,
+            ),
+        );
+
+        assert_eq!(
+            codegen
+                .resolve_existing_fn_template_path(&[], "swap_i32")
+                .as_deref(),
+            Some("swap_i32"),
+            "pending instantiations should satisfy template path resolution without requiring generated-function lookup"
+        );
+
+        codegen.pending_fn_instantiations.clear();
+        assert_eq!(
+            codegen
+                .resolve_existing_fn_template_path(&[], "swap_i32")
+                .as_deref(),
+            Some("swap_i32"),
+            "generated-function lookup should remain a fallback when no pending instantiation exists"
+        );
+        assert_eq!(
+            codegen.resolve_existing_fn_template_path(&[], "swap_i64"),
+            None,
+            "resolver helper should report None when no pending/generated symbol exists"
         );
     }
 
