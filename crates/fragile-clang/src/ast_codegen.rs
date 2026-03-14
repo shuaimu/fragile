@@ -38468,6 +38468,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
         }
 
         let mut candidate_keys: Vec<String> = Vec::new();
+        let mut candidate_keys_with_defs: Vec<String> = Vec::new();
         let mut seen_candidate_keys: HashSet<String> = HashSet::new();
         let mut push_candidate = |key: &str| {
             if key.is_empty() {
@@ -38476,6 +38477,9 @@ impl FragileAtomicBoolCompat for atomic_bool {
             let owned_key = key.to_string();
             if !seen_candidate_keys.insert(owned_key.clone()) {
                 return;
+            }
+            if self.fn_template_definitions.contains_key(&owned_key) {
+                candidate_keys_with_defs.push(owned_key.clone());
             }
             candidate_keys.push(owned_key);
         };
@@ -38501,9 +38505,14 @@ impl FragileAtomicBoolCompat for atomic_bool {
         }
 
         let candidate_keys = Arc::new(candidate_keys);
+        let candidate_keys_with_defs = Arc::new(candidate_keys_with_defs);
         self.fn_template_candidate_keys_cache
             .borrow_mut()
-            .insert(cache_key, candidate_keys.clone());
+            .insert(cache_key.clone(), candidate_keys.clone());
+        self.fn_template_candidate_keys_with_defs_cache
+            .borrow_mut()
+            .entry(cache_key)
+            .or_insert_with(|| candidate_keys_with_defs.clone());
         candidate_keys
     }
 
@@ -38513,6 +38522,16 @@ impl FragileAtomicBoolCompat for atomic_bool {
         namespace_path: &[String],
     ) -> Arc<Vec<String>> {
         let cache_key = Self::fn_template_candidate_keys_cache_key(fn_name, namespace_path);
+        {
+            let cache_ref = self.fn_template_candidate_keys_with_defs_cache.borrow();
+            if let Some(cached) = cache_ref.get(&cache_key) {
+                return cached.clone();
+            }
+        }
+
+        // Candidate-key collection now prewarms the definition-backed cache to
+        // avoid an extra first-pass filter on hot lookup shapes.
+        let _ = self.collect_fn_template_candidate_keys(fn_name, namespace_path);
         {
             let cache_ref = self.fn_template_candidate_keys_with_defs_cache.borrow();
             if let Some(cached) = cache_ref.get(&cache_key) {
@@ -113853,6 +113872,51 @@ stream.PutN(c, n);
             cached_with_defs.as_ref(),
             with_defs.as_ref(),
             "second lookup should reuse cached definition-backed subset without recomputing from mutated maps"
+        );
+    }
+
+    #[test]
+    fn test_collect_fn_template_candidate_keys_prewarms_definition_backed_subset_cache() {
+        let mut codegen = AstCodeGen::new();
+        codegen.fn_template_keys_by_leaf.insert(
+            "swap".to_string(),
+            vec!["swap".to_string(), "std::swap".to_string()],
+        );
+        codegen.fn_template_definitions.insert(
+            "swap".to_string(),
+            FnTemplateInfo {
+                template_params: vec!["T".to_string()],
+                return_type: CppType::Named("T".to_string()),
+                params: vec![("value".to_string(), CppType::Named("T".to_string()))],
+                body: None,
+                is_noexcept: false,
+            },
+        );
+
+        let cache_key = AstCodeGen::fn_template_candidate_keys_cache_key("swap", &[]);
+        let candidates = codegen.collect_fn_template_candidate_keys("swap", &[]);
+        assert_eq!(
+            candidates.as_ref(),
+            &vec!["swap".to_string(), "std::swap".to_string()],
+            "candidate-key collection should preserve deterministic lookup ordering"
+        );
+
+        let prewarmed_with_defs = {
+            let cache_ref = codegen.fn_template_candidate_keys_with_defs_cache.borrow();
+            cache_ref.get(&cache_key).cloned().expect(
+                "candidate-key collection should prewarm definition-backed subset cache for matching lookup shape",
+            )
+        };
+        assert_eq!(
+            prewarmed_with_defs.as_ref(),
+            &vec!["swap".to_string()],
+            "prewarmed definition-backed subset should include only keys with known template definitions"
+        );
+
+        let with_defs = codegen.collect_fn_template_candidate_keys_with_defs("swap", &[]);
+        assert!(
+            Arc::ptr_eq(&with_defs, &prewarmed_with_defs),
+            "definition-backed lookup should reuse prewarmed subset cache allocation"
         );
     }
 
