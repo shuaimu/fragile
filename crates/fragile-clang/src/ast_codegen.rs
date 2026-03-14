@@ -1207,6 +1207,9 @@ pub struct AstCodeGen {
     /// Cache of normalized concrete signature shapes for function-template
     /// matching keyed by `(template_key, concrete_type_args)`.
     fn_template_concrete_match_shape_cache: HashMap<String, Arc<FnTemplateConcreteMatchShape>>,
+    /// Cache of resolved function-template call candidates keyed by
+    /// call-site signature shape.
+    fn_template_call_resolution_cache: HashMap<String, Option<(String, Vec<String>)>>,
     /// Function-template keys indexed by unqualified leaf name to avoid scanning
     /// the full definition map for every call-site candidate lookup.
     fn_template_keys_by_leaf: HashMap<String, Vec<String>>,
@@ -1407,6 +1410,7 @@ impl AstCodeGen {
             fn_template_param_dependency_cache: HashMap::new(),
             fn_template_inference_shape_cache: HashMap::new(),
             fn_template_concrete_match_shape_cache: HashMap::new(),
+            fn_template_call_resolution_cache: HashMap::new(),
             fn_template_keys_by_leaf: HashMap::new(),
             pending_fn_instantiations: HashMap::new(),
             skip_vtable_generation: HashSet::new(),
@@ -38385,6 +38389,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
     /// Collect template definitions and find all template instantiation usages.
     /// This enables generating structs for template types like MyVec<int>.
     fn collect_template_info(&mut self, children: &[ClangNode]) {
+        self.fn_template_call_resolution_cache.clear();
         // Precollect definitions first so a single usage pass can resolve
         // call-sites/type uses that appear before template declarations.
         self.collect_template_definitions_with_namespace(children, &[]);
@@ -38449,10 +38454,43 @@ impl FragileAtomicBoolCompat for atomic_bool {
     fn set_fn_template_definition(&mut self, key: String, info: FnTemplateInfo) {
         self.fn_template_param_dependency_cache.remove(&key);
         self.fn_template_inference_shape_cache.remove(&key);
+        self.fn_template_call_resolution_cache.clear();
         let cache_prefix = format!("{key}\u{1f}");
         self.fn_template_concrete_match_shape_cache
             .retain(|cache_key, _| !cache_key.starts_with(&cache_prefix));
         self.fn_template_definitions.insert(key, info);
+    }
+
+    fn fn_template_call_resolution_key(
+        fn_name: &str,
+        namespace_path: &[String],
+        instantiated_param_types_normalized: &[String],
+        instantiated_return_type_normalized: &str,
+        call_args: &[ClangNode],
+    ) -> String {
+        let mut key = String::new();
+        key.push_str(fn_name);
+        key.push('\u{1f}');
+        key.push_str(&namespace_path.join("::"));
+        key.push('\u{1f}');
+        key.push_str(instantiated_return_type_normalized);
+        key.push('\u{1f}');
+        for param in instantiated_param_types_normalized {
+            key.push_str(param);
+            key.push('\u{1e}');
+        }
+        key.push('\u{1f}');
+        key.push_str(&call_args.len().to_string());
+        key.push('\u{1f}');
+        for arg in call_args {
+            if let Some(bound) = infer_nttp_array_bound_literal_len_with_nul(arg) {
+                key.push_str(&bound.to_string());
+            } else {
+                key.push('_');
+            }
+            key.push('\u{1e}');
+        }
+        key
     }
 
     fn fn_template_concrete_match_shape_key(template_key: &str, type_args: &[String]) -> String {
@@ -38890,69 +38928,86 @@ impl FragileAtomicBoolCompat for atomic_bool {
             .collect();
         let instantiated_return_type_normalized =
             Self::normalize_template_match_type(&return_type.as_ref().to_rust_type_str());
+        let resolution_cache_key = Self::fn_template_call_resolution_key(
+            fn_name,
+            namespace_path,
+            &instantiated_param_types_normalized,
+            &instantiated_return_type_normalized,
+            call_args,
+        );
 
-        for template_key in candidate_keys {
-            let has_param_dependent_template_arg =
-                self.fn_template_has_param_dependent_args(&template_key);
-            let inference_shape = self.fn_template_inference_shape(&template_key);
-            let type_args = if let Some(template_info) = self.fn_template_definitions.get(&template_key)
-            {
-                infer_fn_template_type_args_with_shape(
-                    template_info,
-                    params,
-                    return_type.as_ref(),
-                    Some(call_args),
-                    inference_shape.as_deref(),
-                )
-            } else {
-                None
-            };
-            let Some(type_args) = type_args else {
-                continue;
-            };
-            if fallback_instantiation.is_none()
-                && (has_param_dependent_template_arg || params.is_empty())
-            {
-                fallback_instantiation = Some((template_key.clone(), type_args.clone()));
-            }
-
-            let Some(concrete_shape) =
-                self.fn_template_concrete_match_shape(&template_key, &type_args)
-            else {
-                continue;
-            };
-            if concrete_shape.param_types_normalized.len()
-                != instantiated_param_types_normalized.len()
-            {
-                continue;
-            }
-            let mut param_types_match = true;
-            for (lhs_norm, rhs_norm) in concrete_shape
-                .param_types_normalized
-                .iter()
-                .zip(instantiated_param_types_normalized.iter())
-            {
-                if !Self::template_match_types_compatible(lhs_norm, rhs_norm) {
-                    param_types_match = false;
-                    break;
-                }
-            }
-            if !param_types_match {
-                continue;
-            }
-            if concrete_shape.return_type_normalized != "_"
-                && concrete_shape.return_type_normalized != instantiated_return_type_normalized
-            {
-                continue;
-            }
-
-            selected_instantiation = Some((template_key, type_args));
-            break;
-        }
-        if let Some((template_key, type_args)) = selected_instantiation.or(fallback_instantiation)
+        let resolved_instantiation = if let Some(cached_resolution) = self
+            .fn_template_call_resolution_cache
+            .get(&resolution_cache_key)
         {
-            let mangled_name =
-                Self::build_fn_template_mangled_name(&sanitized_fn_name, &type_args);
+            cached_resolution.clone()
+        } else {
+            for template_key in candidate_keys {
+                let has_param_dependent_template_arg =
+                    self.fn_template_has_param_dependent_args(&template_key);
+                let inference_shape = self.fn_template_inference_shape(&template_key);
+                let type_args = if let Some(template_info) = self.fn_template_definitions.get(&template_key)
+                {
+                    infer_fn_template_type_args_with_shape(
+                        template_info,
+                        params,
+                        return_type.as_ref(),
+                        Some(call_args),
+                        inference_shape.as_deref(),
+                    )
+                } else {
+                    None
+                };
+                let Some(type_args) = type_args else {
+                    continue;
+                };
+                if fallback_instantiation.is_none()
+                    && (has_param_dependent_template_arg || params.is_empty())
+                {
+                    fallback_instantiation = Some((template_key.clone(), type_args.clone()));
+                }
+
+                let Some(concrete_shape) =
+                    self.fn_template_concrete_match_shape(&template_key, &type_args)
+                else {
+                    continue;
+                };
+                if concrete_shape.param_types_normalized.len()
+                    != instantiated_param_types_normalized.len()
+                {
+                    continue;
+                }
+                let mut param_types_match = true;
+                for (lhs_norm, rhs_norm) in concrete_shape
+                    .param_types_normalized
+                    .iter()
+                    .zip(instantiated_param_types_normalized.iter())
+                {
+                    if !Self::template_match_types_compatible(lhs_norm, rhs_norm) {
+                        param_types_match = false;
+                        break;
+                    }
+                }
+                if !param_types_match {
+                    continue;
+                }
+                if concrete_shape.return_type_normalized != "_"
+                    && concrete_shape.return_type_normalized != instantiated_return_type_normalized
+                {
+                    continue;
+                }
+
+                selected_instantiation = Some((template_key, type_args));
+                break;
+            }
+            let resolved = selected_instantiation.or(fallback_instantiation);
+            self.fn_template_call_resolution_cache
+                .insert(resolution_cache_key, resolved.clone());
+            resolved
+        };
+
+        if let Some((template_key, type_args)) = resolved_instantiation {
+            let mangled_name = Self::build_fn_template_mangled_name(&sanitized_fn_name, &type_args);
             let concrete_template_info = if let Some(template_info) =
                 self.fn_template_definitions.get(&template_key)
             {
@@ -112961,6 +113016,138 @@ stream.PutN(c, n);
     }
 
     #[test]
+    fn test_collect_fn_template_instantiation_uses_cached_call_resolution() {
+        let templ_ty = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        let int_ty = CppType::Int { signed: true };
+        let call_fn_ty = CppType::Function {
+            return_type: Box::new(int_ty.clone()),
+            params: vec![int_ty.clone()],
+            is_variadic: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::FunctionTemplateDecl {
+                        name: "make".to_string(),
+                        template_params: vec!["T".to_string()],
+                        return_type: templ_ty.clone(),
+                        params: vec![
+                            ("lhs".to_string(), templ_ty.clone()),
+                            ("rhs".to_string(), templ_ty.clone()),
+                        ],
+                        is_definition: true,
+                        parameter_pack_indices: vec![],
+                        requires_clause: None,
+                        is_noexcept: false,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::NamespaceDecl {
+                        name: Some("rusty".to_string()),
+                        is_inline: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::FunctionTemplateDecl {
+                            name: "make".to_string(),
+                            template_params: vec!["T".to_string()],
+                            return_type: templ_ty.clone(),
+                            params: vec![("value".to_string(), templ_ty)],
+                            is_definition: true,
+                            parameter_pack_indices: vec![],
+                            requires_clause: None,
+                            is_noexcept: false,
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "call_make".to_string(),
+                        mangled_name: "call_make".to_string(),
+                        is_static: false,
+                        return_type: int_ty.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: int_ty.clone(),
+                                    template_instantiation: None,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "make".to_string(),
+                                            ty: call_fn_ty,
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::IntegerLiteral {
+                                            value: 7,
+                                            cpp_type: Some(int_ty),
+                                        },
+                                        vec![],
+                                    ),
+                                ],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let mut codegen = AstCodeGen::new();
+        codegen.collect_template_definitions_with_namespace(&ast.children, &[]);
+        codegen.rebuild_fn_template_leaf_index();
+        let call_node = &ast.children[2].children[0].children[0].children[0];
+        let call_args = &call_node.children[1..];
+        let resolution_key = AstCodeGen::fn_template_call_resolution_key(
+            "make",
+            &[],
+            &["i32".to_string()],
+            "i32",
+            call_args,
+        );
+        codegen.fn_template_call_resolution_cache.insert(
+            resolution_key,
+            Some(("make".to_string(), vec!["i64".to_string()])),
+        );
+
+        codegen.collect_template_usages(&ast.children);
+        let pending = codegen
+            .pending_fn_instantiations
+            .get("make_i64")
+            .cloned()
+            .expect("cached call resolution should be reused for matching call-site shape");
+        assert_eq!(
+            pending.0, "make",
+            "cached call resolution should bypass candidate loop recomputation"
+        );
+        assert_eq!(
+            pending.1,
+            vec!["i64".to_string()],
+            "cached call resolution should preserve cached concrete type args"
+        );
+    }
+
+    #[test]
     fn test_set_fn_template_definition_invalidates_param_dependency_cache() {
         let mut codegen = AstCodeGen::new();
         let dependent_info = FnTemplateInfo {
@@ -112985,6 +113172,10 @@ stream.PutN(c, n);
         assert!(
             codegen.fn_template_inference_shape("cache::swap").is_some(),
             "inference shape cache should populate for known template key"
+        );
+        codegen.fn_template_call_resolution_cache.insert(
+            "cache-key".to_string(),
+            Some(("cache::swap".to_string(), vec!["i32".to_string()])),
         );
         let concrete_type_args = vec!["i32".to_string()];
         assert!(
@@ -113014,6 +113205,10 @@ stream.PutN(c, n);
                 .fn_template_inference_shape_cache
                 .contains_key("cache::swap"),
             "replacing template definition should invalidate cached inference shape"
+        );
+        assert!(
+            codegen.fn_template_call_resolution_cache.is_empty(),
+            "replacing template definition should invalidate cached call-resolution entries"
         );
         let concrete_cache_key =
             AstCodeGen::fn_template_concrete_match_shape_key("cache::swap", &concrete_type_args);
