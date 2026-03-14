@@ -39587,13 +39587,39 @@ impl FragileAtomicBoolCompat for atomic_bool {
             )
         };
 
+        let try_cached_resolution =
+            |cached_resolution: &Option<(String, Vec<String>)>| -> Option<Option<String>> {
+            if let Some((template_key, type_args)) = cached_resolution {
+                // Ignore stale cached entries that no longer have a backing
+                // template definition.
+                if !self.fn_template_definitions.contains_key(template_key) {
+                    // Continue below and recover via candidate matching.
+                } else {
+                    let mangled_name =
+                        Self::build_fn_template_mangled_name(&sanitized_fn_name, type_args);
+                    let sanitized_mangled = sanitize_identifier(&mangled_name);
+                    if self.pending_fn_instantiations.contains_key(&mangled_name)
+                        || self.generated_functions.contains_key(&sanitized_mangled)
+                    {
+                        return Some(Some(self.compute_relative_path(namespace_path, &mangled_name)));
+                    }
+                }
+            } else {
+                return Some(None);
+            }
+            None
+        };
+
         // Prefer the candidate-set-selected cache-key shape and only materialize
         // the opposite shape on primary miss for desynchronized cache states.
-        let mut cached_resolution = self
+        if let Some(cached_resolution) = self
             .fn_template_call_resolution_cache
             .get(preferred_resolution_cache_key)
-            .cloned();
-        if cached_resolution.is_none() {
+        {
+            if let Some(resolved) = try_cached_resolution(cached_resolution) {
+                return resolved;
+            }
+        } else {
             let fallback_resolution_cache_key = if include_call_arg_bounds {
                 Self::ensure_fn_template_call_resolution_key(
                     &mut resolution_cache_key_without_bounds,
@@ -39615,29 +39641,13 @@ impl FragileAtomicBoolCompat for atomic_bool {
                     true,
                 )
             };
-            cached_resolution = self
+            if let Some(cached_resolution) = self
                 .fn_template_call_resolution_cache
                 .get(fallback_resolution_cache_key)
-                .cloned();
-        }
-        if let Some(cached_resolution) = cached_resolution.as_ref() {
-            if let Some((template_key, type_args)) = cached_resolution {
-                // Ignore stale cached entries that no longer have a backing
-                // template definition.
-                if !self.fn_template_definitions.contains_key(template_key) {
-                    // Continue below and recover via candidate matching.
-                } else {
-                    let mangled_name =
-                        Self::build_fn_template_mangled_name(&sanitized_fn_name, type_args);
-                    let sanitized_mangled = sanitize_identifier(&mangled_name);
-                    if self.pending_fn_instantiations.contains_key(&mangled_name)
-                        || self.generated_functions.contains_key(&sanitized_mangled)
-                    {
-                        return Some(self.compute_relative_path(namespace_path, &mangled_name));
-                    }
+            {
+                if let Some(resolved) = try_cached_resolution(cached_resolution) {
+                    return resolved;
                 }
-            } else {
-                return None;
             }
         }
 
@@ -115300,6 +115310,101 @@ stream.PutN(c, n);
             resolved.as_deref(),
             Some("swap_i32"),
             "resolver should ignore stale cached template keys lacking definitions and recover via definition-backed candidate matching"
+        );
+    }
+
+    #[test]
+    fn test_resolve_fn_template_call_name_from_args_ignores_stale_preferred_cached_shape_without_fallback_probe(
+    ) {
+        let int_ty = CppType::Int { signed: true };
+        let fn_ty = CppType::Function {
+            return_type: Box::new(int_ty.clone()),
+            params: vec![int_ty.clone()],
+            is_variadic: false,
+        };
+        let call_callee = make_node(
+            ClangNodeKind::DeclRefExpr {
+                name: "swap".to_string(),
+                ty: fn_ty,
+                namespace_path: vec![],
+            },
+            vec![],
+        );
+        let call_args = vec![make_node(
+            ClangNodeKind::IntegerLiteral {
+                value: 7,
+                cpp_type: Some(int_ty),
+            },
+            vec![],
+        )];
+
+        let mut codegen = AstCodeGen::new();
+        codegen
+            .fn_template_keys_by_leaf
+            .insert("swap".to_string(), vec!["swap".to_string()]);
+        let template_info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Named("T".to_string()),
+            params: vec![("value".to_string(), CppType::Named("T".to_string()))],
+            body: None,
+            is_noexcept: false,
+        };
+        codegen
+            .fn_template_definitions
+            .insert("swap".to_string(), template_info.clone());
+        codegen.pending_fn_instantiations.insert(
+            "swap_i32".to_string(),
+            (
+                "swap".to_string(),
+                vec!["i32".to_string()],
+                template_info.clone(),
+            ),
+        );
+        codegen.pending_fn_instantiations.insert(
+            "swap_i64".to_string(),
+            (
+                "swap".to_string(),
+                vec!["i64".to_string()],
+                template_info,
+            ),
+        );
+
+        let no_bounds_key = AstCodeGen::fn_template_call_resolution_key(
+            "swap",
+            &[],
+            &["i32".to_string()],
+            "i32",
+            &call_args,
+            false,
+        );
+        let with_bounds_key = AstCodeGen::fn_template_call_resolution_key(
+            "swap",
+            &[],
+            &["i32".to_string()],
+            "i32",
+            &call_args,
+            true,
+        );
+        codegen.fn_template_call_resolution_cache.insert(
+            no_bounds_key,
+            Some(("swap".to_string(), vec!["i64".to_string()])),
+        );
+        codegen.fn_template_call_resolution_cache.insert(
+            with_bounds_key,
+            Some(("ghost::swap".to_string(), vec!["i64".to_string()])),
+        );
+
+        let candidate_cache_key = AstCodeGen::fn_template_candidate_keys_cache_key("swap", &[]);
+        codegen
+            .fn_template_candidate_requires_call_arg_bounds_cache
+            .borrow_mut()
+            .insert(candidate_cache_key, true);
+
+        let resolved = codegen.resolve_fn_template_call_name_from_args(&call_callee, &call_args);
+        assert_eq!(
+            resolved.as_deref(),
+            Some("swap_i32"),
+            "resolver should treat stale preferred-shape cache hits as candidate-recovery cases and avoid alternate-shape fallback probes"
         );
     }
 

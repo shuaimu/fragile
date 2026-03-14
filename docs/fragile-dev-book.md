@@ -12153,3 +12153,48 @@ Deterministic evidence highlights:
 Leaf
 `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.b`
 is complete. Strict build-only replay remains timeout-bound on `src/rrr/base/misc.cpp`, and blocker inventory non-increase gating remains passing versus the `2.6.c.iii` baseline.
+
+## 2026-03-14: Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+
+### Decision and rationale
+
+- Selected the first pending high-priority implementation leaf under the active strict `2.6.c` repeat branch.
+- Scope stayed small (<500 LOC): reduce expression-time function-template resolver overhead by avoiding cloned cache-entry materialization on hot cache-hit paths.
+- Kept behavior semantics unchanged: preferred cache-shape precedence, preferred cached-`None` short-circuit, and stale-entry recovery via definition-backed candidate matching.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- No target-specific conditionals were introduced.
+- No fake semantic fallback bodies were added.
+- No force-native bypasses were introduced.
+
+### Implementation summary
+
+Updated `crates/fragile-clang/src/ast_codegen.rs`:
+
+- Refactored `resolve_fn_template_call_name_from_args` cache-hit branch to inspect cached entries by reference (`try_cached_resolution`) instead of cloning `Option<(String, Vec<String>)>` entries.
+- Preserved key-shape behavior by probing the alternate key only when the preferred key is absent.
+- Added focused regression test `test_resolve_fn_template_call_name_from_args_ignores_stale_preferred_cached_shape_without_fallback_probe`.
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang test_resolve_fn_template_call_name_from_args_ignores_stale_preferred_cached_shape_without_fallback_probe -- --nocapture`
+- `cargo test -p fragile-clang test_resolve_fn_template_call_name_from_args_preserves_preferred_cached_none_without_fallback_probe -- --nocapture`
+- `cargo test -p fragile-clang test_resolve_fn_template_call_name_from_args_warms_bounds_cache_when_missing_and_cache_keys_conflict -- --nocapture`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Full-suite baseline parity:
+
+- `cargo test --workspace --all-targets`: `fragile-clang` lib `792` passed / `46` failed
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`: `OK`, `29` ran, `1` skipped
+
+### Outcome
+
+Leaf
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+is complete. Resolver cache-hit handling is cheaper (borrowed lookups, no cloned cache payloads) with focused regression coverage locking preferred-shape semantics.
