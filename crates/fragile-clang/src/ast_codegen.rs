@@ -9361,6 +9361,511 @@ impl AstCodeGen {
         out
     }
 
+    /// Recover degraded tail default returns in functions that already compute a
+    /// typed local result value (`let result: T = ...; return Default::default();`).
+    fn normalize_default_tail_returns_to_matching_result_locals(code: &str) -> String {
+        fn normalize_type_key(ty: &str) -> String {
+            ty.chars().filter(|ch| !ch.is_whitespace()).collect()
+        }
+
+        fn is_default_return_line(trimmed: &str) -> bool {
+            matches!(
+                trimmed,
+                "return Default::default();"
+                    | "return std::default::Default::default();"
+                    | "return std::prelude::v1::Default::default();"
+            )
+        }
+
+        fn parse_typed_local_binding(line: &str) -> Option<(String, String)> {
+            let trimmed = line.trim_start();
+            let mut rest = trimmed.strip_prefix("let ")?.trim_start();
+            if let Some(after_mut) = rest.strip_prefix("mut ") {
+                rest = after_mut.trim_start();
+            }
+
+            let name: String = rest
+                .chars()
+                .take_while(|ch| AstCodeGen::is_identifier_char(*ch) || *ch == '#')
+                .collect();
+            if name.is_empty() {
+                return None;
+            }
+
+            let after_name = rest.get(name.len()..)?.trim_start();
+            let after_colon = after_name.strip_prefix(':')?.trim_start();
+            let (ty_src, _) = after_colon.split_once(" = ")?;
+            let ty = ty_src.trim();
+            if ty.is_empty() {
+                return None;
+            }
+
+            Some((name.trim_start_matches("r#").to_string(), ty.to_string()))
+        }
+
+        if !code.contains("return Default::default();")
+            && !code.contains("return std::default::Default::default();")
+            && !code.contains("return std::prelude::v1::Default::default();")
+        {
+            return code.to_string();
+        }
+
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        let mut i = 0usize;
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim_end();
+            let is_fn_start =
+                (trimmed.contains(" fn ") || trimmed.starts_with("fn ")) && trimmed.ends_with('{');
+            if !is_fn_start || !trimmed.contains("->") {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let Some(arrow_idx) = trimmed.rfind("->") else {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            };
+            let ret_ty = trimmed[arrow_idx + 2..].trim().trim_end_matches('{').trim();
+            if ret_ty.is_empty() || ret_ty == "()" {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+            let ret_ty_key = normalize_type_key(ret_ty);
+
+            let mut j = i;
+            let mut depth = 0isize;
+            while j < lines.len() {
+                let current = lines[j];
+                depth += current.chars().filter(|c| *c == '{').count() as isize;
+                depth -= current.chars().filter(|c| *c == '}').count() as isize;
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if j >= lines.len() || depth != 0 {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let body_indices: Vec<usize> = (i + 1..j)
+                .filter(|idx| !lines[*idx].trim().is_empty())
+                .collect();
+            let Some(&last_body_idx) = body_indices.last() else {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            };
+
+            if !is_default_return_line(lines[last_body_idx].trim()) {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+
+            let has_earlier_return = body_indices.iter().any(|idx| {
+                *idx != last_body_idx && lines[*idx].trim_start().starts_with("return ")
+            });
+            if has_earlier_return {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+
+            let mut typed_candidates: Vec<(String, usize)> = Vec::new();
+            for idx in i + 1..last_body_idx {
+                if let Some((name, ty)) = parse_typed_local_binding(lines[idx]) {
+                    if normalize_type_key(&ty) == ret_ty_key {
+                        typed_candidates.push((name, idx));
+                    }
+                }
+            }
+
+            let preferred_names = ["result", "ret", "retval", "rv", "out", "value"];
+            let selected_name = preferred_names
+                .iter()
+                .find_map(|preferred| {
+                    typed_candidates
+                        .iter()
+                        .find(|(name, _)| name == preferred)
+                        .map(|(name, _)| name.clone())
+                })
+                .or_else(|| {
+                    if typed_candidates.len() == 1 {
+                        typed_candidates.first().map(|(name, _)| name.clone())
+                    } else {
+                        None
+                    }
+                });
+
+            if let Some(name) = selected_name {
+                for k in i..=j {
+                    if k == last_body_idx {
+                        let indent_len =
+                            lines[k].len().saturating_sub(lines[k].trim_start().len());
+                        let indent = &lines[k][..indent_len];
+                        out.push_str(indent);
+                        out.push_str("return ");
+                        out.push_str(&name);
+                        out.push(';');
+                    } else {
+                        out.push_str(lines[k]);
+                    }
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+            } else {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+            }
+            i = j + 1;
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Recover degraded statement-only `unsafe { ... };` expression blocks that
+    /// should have initialized leading default locals in a function body.
+    ///
+    /// Degraded shapes this targets:
+    /// - `let mut ptr: *const T = std::ptr::null();`
+    /// - `let mut out: U = 0;`
+    /// - `unsafe { *ptr_ptr };`
+    /// - `unsafe { *unsafe { let __v = ptr; ptr = ptr.add(1); __v } };`
+    ///
+    /// The first two expression statements should be assignments to `ptr`/`out`.
+    fn normalize_default_preface_local_assignment_artifacts(code: &str) -> String {
+        fn parse_preface_default_local_name(line: &str) -> Option<String> {
+            let trimmed = line.trim_start();
+            let mut rest = trimmed.strip_prefix("let ")?.trim_start();
+            if let Some(after_mut) = rest.strip_prefix("mut ") {
+                rest = after_mut.trim_start();
+            }
+
+            let name: String = rest
+                .chars()
+                .take_while(|ch| AstCodeGen::is_identifier_char(*ch) || *ch == '#')
+                .collect();
+            if name.is_empty() {
+                return None;
+            }
+
+            let after_name = rest.get(name.len()..)?.trim_start();
+            if !after_name.starts_with(':') {
+                return None;
+            }
+            let (_, rhs) = after_name.split_once(" = ")?;
+            let rhs = rhs.trim();
+            let rhs = rhs.trim_end_matches(';').trim();
+            let is_default_numeric = {
+                let num_src = rhs.strip_prefix('-').unwrap_or(rhs);
+                let mut digit_end = 0usize;
+                for (idx, ch) in num_src.char_indices() {
+                    if ch.is_ascii_digit() {
+                        digit_end = idx + ch.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+                if digit_end == 0 {
+                    false
+                } else {
+                    num_src[digit_end..]
+                        .chars()
+                        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+                }
+            };
+            let is_default_init = matches!(
+                rhs,
+                "Default::default()"
+                    | "std::default::Default::default()"
+                    | "std::prelude::v1::Default::default()"
+                    | "std::ptr::null()"
+                    | "std::ptr::null_mut()"
+                    | "unsafe { std::mem::zeroed() }"
+            ) || is_default_numeric;
+            if !is_default_init {
+                return None;
+            }
+            Some(name)
+        }
+
+        fn has_top_level_assignment(expr: &str) -> bool {
+            let bytes = expr.as_bytes();
+            let mut paren = 0isize;
+            let mut brace = 0isize;
+            let mut bracket = 0isize;
+            let mut i = 0usize;
+            while i < bytes.len() {
+                let ch = bytes[i] as char;
+                match ch {
+                    '(' => paren += 1,
+                    ')' => paren -= 1,
+                    '{' => brace += 1,
+                    '}' => brace -= 1,
+                    '[' => bracket += 1,
+                    ']' => bracket -= 1,
+                    '=' if paren == 0 && brace == 0 && bracket == 0 => {
+                        let prev = if i > 0 { Some(bytes[i - 1]) } else { None };
+                        let next = if i + 1 < bytes.len() {
+                            Some(bytes[i + 1])
+                        } else {
+                            None
+                        };
+                        let prev_bad = prev.is_some_and(|b| {
+                            matches!(
+                                b,
+                                b'=' | b'!' | b'<' | b'>' | b'+' | b'-' | b'*' | b'/' | b'%' | b'&' | b'|' | b'^'
+                            )
+                        });
+                        let next_bad = next.is_some_and(|b| b == b'=' || b == b'>');
+                        if !prev_bad && !next_bad {
+                            return true;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            false
+        }
+
+        fn top_level_semicolon_count(expr: &str) -> usize {
+            let bytes = expr.as_bytes();
+            let mut paren = 0isize;
+            let mut brace = 0isize;
+            let mut bracket = 0isize;
+            let mut count = 0usize;
+            for b in bytes {
+                let ch = *b as char;
+                match ch {
+                    '(' => paren += 1,
+                    ')' => paren -= 1,
+                    '{' => brace += 1,
+                    '}' => brace -= 1,
+                    '[' => bracket += 1,
+                    ']' => bracket -= 1,
+                    ';' if paren == 0 && brace == 0 && bracket == 0 => count += 1,
+                    _ => {}
+                }
+            }
+            count
+        }
+
+        fn parse_candidate_expr_stmt(line: &str) -> Option<String> {
+            let trimmed = line.trim();
+            let expr = trimmed.strip_suffix(';')?.trim();
+            if !expr.starts_with("unsafe {") || !expr.ends_with('}') {
+                return None;
+            }
+            let body = expr.strip_prefix("unsafe {")?.strip_suffix('}')?.trim();
+            if body.is_empty() {
+                return None;
+            }
+            if has_top_level_assignment(body) {
+                return None;
+            }
+            if top_level_semicolon_count(body) > 0 {
+                return None;
+            }
+            Some(expr.to_string())
+        }
+
+        if !code.contains("return Default::default();")
+            || !code.contains("let mut ")
+            || !code.contains("unsafe {")
+        {
+            return code.to_string();
+        }
+
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        let mut i = 0usize;
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim_end();
+            let is_fn_start =
+                (trimmed.contains(" fn ") || trimmed.starts_with("fn ")) && trimmed.ends_with('{');
+            if !is_fn_start {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let mut j = i;
+            let mut depth = 0isize;
+            while j < lines.len() {
+                let current = lines[j];
+                depth += current.chars().filter(|c| *c == '{').count() as isize;
+                depth -= current.chars().filter(|c| *c == '}').count() as isize;
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if j >= lines.len() || depth != 0 {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let body_indices: Vec<usize> = (i + 1..j)
+                .filter(|idx| !lines[*idx].trim().is_empty())
+                .collect();
+            let has_default_tail = body_indices
+                .last()
+                .is_some_and(|idx| lines[*idx].trim() == "return Default::default();");
+            if !has_default_tail {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+
+            let mut preface_locals: Vec<(usize, String)> = Vec::new();
+            let mut cursor = i + 1;
+            while cursor < j {
+                let body_line = lines[cursor];
+                let body_trimmed = body_line.trim();
+                if body_trimmed.is_empty() {
+                    cursor += 1;
+                    continue;
+                }
+                if let Some(name) = parse_preface_default_local_name(body_line) {
+                    preface_locals.push((cursor, name));
+                    cursor += 1;
+                    continue;
+                }
+                break;
+            }
+
+            if preface_locals.is_empty() {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+
+            let mut candidate_lines: Vec<(usize, String)> = Vec::new();
+            let mut probe = cursor;
+            while probe < j {
+                let probe_line = lines[probe];
+                let probe_trimmed = probe_line.trim();
+                if probe_trimmed.is_empty() {
+                    probe += 1;
+                    continue;
+                }
+                let Some(expr) = parse_candidate_expr_stmt(probe_line) else {
+                    break;
+                };
+                candidate_lines.push((probe, expr));
+                probe += 1;
+            }
+
+            if candidate_lines.is_empty() {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+
+            let mut rewrites: HashMap<usize, String> = HashMap::new();
+            let pair_count = std::cmp::min(preface_locals.len(), candidate_lines.len());
+            for pair_idx in 0..pair_count {
+                let (_, local_name) = &preface_locals[pair_idx];
+                let (line_idx, expr) = &candidate_lines[pair_idx];
+                let line_src = lines[*line_idx];
+                let indent_len = line_src.len().saturating_sub(line_src.trim_start().len());
+                let indent = &line_src[..indent_len];
+                rewrites.insert(*line_idx, format!("{indent}{local_name} = {expr};"));
+            }
+
+            for k in i..=j {
+                if let Some(rewritten) = rewrites.get(&k) {
+                    out.push_str(rewritten);
+                } else {
+                    out.push_str(lines[k]);
+                }
+                if k + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            i = j + 1;
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
     fn is_primitive_scalar_type_name(ty: &str) -> bool {
         matches!(
             ty,
@@ -17186,14 +17691,158 @@ impl AstCodeGen {
         {
             return code.to_string();
         }
-        let mut out = String::with_capacity(code.len());
-        for line in code.lines() {
+        fn is_type_char(ch: char) -> bool {
+            ch.is_ascii_alphanumeric()
+                || matches!(
+                    ch,
+                    '_' | ':' | '<' | '>' | ',' | ' ' | '[' | ']' | '*' | '&' | '\''
+                )
+        }
+
+        fn pointer_depth(ty: &str) -> usize {
+            let mut depth = 0usize;
+            let mut rest = ty.trim_start();
+            loop {
+                if let Some(next) = rest.strip_prefix("*const ") {
+                    depth += 1;
+                    rest = next.trim_start();
+                    continue;
+                }
+                if let Some(next) = rest.strip_prefix("*mut ") {
+                    depth += 1;
+                    rest = next.trim_start();
+                    continue;
+                }
+                break;
+            }
+            depth
+        }
+
+        fn extract_cast_target_pointer_depth(cast_tail: &str) -> Option<usize> {
+            let cast_tail = cast_tail.trim_start();
+            let after_as = cast_tail.strip_prefix("as ")?;
+            let mut ty_end = 0usize;
+            for (idx, ch) in after_as.char_indices() {
+                if is_type_char(ch) {
+                    ty_end = idx + ch.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            if ty_end == 0 {
+                return None;
+            }
+            let depth = pointer_depth(after_as[..ty_end].trim());
+            if depth > 0 {
+                Some(depth)
+            } else {
+                None
+            }
+        }
+
+        fn collect_param_pointer_depths(signature_line: &str) -> HashMap<String, usize> {
+            let mut out = HashMap::new();
+            let Some(open_idx) = signature_line.find('(') else {
+                return out;
+            };
+            let Some(close_idx) = AstCodeGen::find_matching_close_paren(signature_line, open_idx)
+            else {
+                return out;
+            };
+            let params_src = &signature_line[open_idx + 1..close_idx];
+            for param in AstCodeGen::split_top_level_list(params_src, ',') {
+                let Some((lhs, rhs)) = param.split_once(':') else {
+                    continue;
+                };
+                let mut name = lhs.trim();
+                if let Some(stripped) = name.strip_prefix("mut ") {
+                    name = stripped.trim();
+                }
+                if let Some(last) = name.split_whitespace().last() {
+                    name = last;
+                }
+                if name.is_empty() || !name.chars().all(|ch| AstCodeGen::is_identifier_char(ch) || ch == '#') {
+                    continue;
+                }
+                let depth = pointer_depth(rhs.trim());
+                if depth > 0 {
+                    out.insert(name.trim_start_matches("r#").to_string(), depth);
+                }
+            }
+            out
+        }
+
+        fn parse_local_pointer_depth(line: &str) -> Option<(String, usize)> {
+            let trimmed = line.trim_start();
+            let Some(after_let) = trimmed.strip_prefix("let ") else {
+                return None;
+            };
+            let mut rest = after_let.trim_start();
+            if let Some(stripped) = rest.strip_prefix("mut ") {
+                rest = stripped.trim_start();
+            }
+            let ident: String = rest
+                .chars()
+                .take_while(|c| AstCodeGen::is_identifier_char(*c) || *c == '#')
+                .collect();
+            if ident.is_empty() {
+                return None;
+            }
+            let rest = rest[ident.len()..].trim_start();
+            let ty_src = rest.strip_prefix(':')?.trim_start();
+            let ty_end = ty_src
+                .find('=')
+                .or_else(|| ty_src.find(';'))
+                .unwrap_or(ty_src.len());
+            let depth = pointer_depth(ty_src[..ty_end].trim());
+            if depth == 0 {
+                return None;
+            }
+            Some((ident.trim_start_matches("r#").to_string(), depth))
+        }
+
+        fn lookup_ident_pointer_depth(
+            expr: &str,
+            pointer_depths: &HashMap<String, usize>,
+        ) -> Option<usize> {
+            let ident = expr.trim();
+            if ident.is_empty()
+                || !ident
+                    .chars()
+                    .all(|ch| AstCodeGen::is_identifier_char(ch) || ch == '#')
+            {
+                return None;
+            }
+            pointer_depths
+                .get(ident.trim_start_matches("r#"))
+                .copied()
+        }
+
+        fn should_preserve_deref_cast(
+            expr: &str,
+            cast_tail: &str,
+            pointer_depths: &HashMap<String, usize>,
+        ) -> bool {
+            let Some(expr_depth) = lookup_ident_pointer_depth(expr, pointer_depths) else {
+                return false;
+            };
+            let Some(target_depth) = extract_cast_target_pointer_depth(cast_tail) else {
+                return false;
+            };
+            expr_depth == target_depth + 1
+        }
+
+        fn rewrite_line(
+            line: &str,
+            pointer_depths: &HashMap<String, usize>,
+        ) -> String {
             let mut rewritten = line.to_string();
+
             // Shape 1: `(*expr) as *mut T` / `(*expr) as *const T`.
             let mut search_idx = 0usize;
             while let Some(rel) = rewritten[search_idx..].find("(*") {
                 let start = search_idx + rel;
-                let Some(close_idx) = Self::find_matching_close_paren(&rewritten, start) else {
+                let Some(close_idx) = AstCodeGen::find_matching_close_paren(&rewritten, start) else {
                     break;
                 };
                 let cast_tail_start = close_idx + 1;
@@ -17207,6 +17856,10 @@ impl AstCodeGen {
                 }
                 let expr = rewritten[start + 2..close_idx].trim();
                 if expr.is_empty() || expr.starts_with('*') {
+                    search_idx = close_idx + 1;
+                    continue;
+                }
+                if should_preserve_deref_cast(expr, cast_tail, pointer_depths) {
                     search_idx = close_idx + 1;
                     continue;
                 }
@@ -17239,6 +17892,10 @@ impl AstCodeGen {
                     unsafe_idx = expr_end + 1;
                     continue;
                 }
+                if should_preserve_deref_cast(expr, cast_tail, pointer_depths) {
+                    unsafe_idx = expr_end + 1;
+                    continue;
+                }
                 let replacement = format!("(unsafe {{ {} }})", expr);
                 rewritten.replace_range(start..cast_tail_start, &replacement);
                 unsafe_idx = start + replacement.len();
@@ -17253,7 +17910,7 @@ impl AstCodeGen {
                 let mut ident_end = ident_start;
                 while ident_end < rewritten.len() {
                     let ch = rewritten[ident_end..].chars().next().unwrap();
-                    if Self::is_identifier_char(ch) {
+                    if AstCodeGen::is_identifier_char(ch) || ch == '#' {
                         ident_end += ch.len_utf8();
                     } else {
                         break;
@@ -17273,12 +17930,81 @@ impl AstCodeGen {
                     continue;
                 }
                 let ident = rewritten[ident_start..ident_end].to_string();
+                if should_preserve_deref_cast(&ident, cast_tail.trim_start(), pointer_depths) {
+                    legacy_idx = close_idx + 1;
+                    continue;
+                }
                 let replacement = format!("({}{})", ident, cast_tail);
                 rewritten.replace_range(start..close_idx + 1, &replacement);
                 legacy_idx = start + replacement.len();
             }
-            out.push_str(&rewritten);
-            out.push('\n');
+
+            rewritten
+        }
+
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        let mut i = 0usize;
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim_end();
+            let is_fn_start =
+                (trimmed.contains(" fn ") || trimmed.starts_with("fn ")) && trimmed.ends_with('{');
+            if !is_fn_start {
+                let rewritten = rewrite_line(line, &HashMap::new());
+                out.push_str(&rewritten);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let mut j = i;
+            let mut depth = 0isize;
+            while j < lines.len() {
+                let current = lines[j];
+                depth += current.chars().filter(|c| *c == '{').count() as isize;
+                depth -= current.chars().filter(|c| *c == '}').count() as isize;
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if j >= lines.len() || depth != 0 {
+                let rewritten = rewrite_line(line, &HashMap::new());
+                out.push_str(&rewritten);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let mut pointer_depths = collect_param_pointer_depths(trimmed);
+            out.push_str(lines[i]);
+            if i + 1 < lines.len() || code.ends_with('\n') {
+                out.push('\n');
+            }
+            for k in i + 1..j {
+                if let Some((name, ptr_depth)) = parse_local_pointer_depth(lines[k]) {
+                    pointer_depths.insert(name, ptr_depth);
+                }
+                let rewritten = rewrite_line(lines[k], &pointer_depths);
+                out.push_str(&rewritten);
+                if k + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            out.push_str(lines[j]);
+            if j + 1 < lines.len() || code.ends_with('\n') {
+                out.push('\n');
+            }
+            i = j + 1;
         }
         if !code.ends_with('\n') && !out.is_empty() {
             out.pop();
@@ -25152,7 +25878,9 @@ impl AstCodeGen {
         output = Self::normalize_argv_cstring_indexing_artifacts(&output);
         output = Self::normalize_null_sockaddr_field_assignments(&output);
         output = Self::normalize_write_bytes_nonprimitive_count_casts(&output);
+        output = Self::normalize_default_preface_local_assignment_artifacts(&output);
         output = Self::normalize_primitive_return_zeroed_nonprimitive_mismatches(&output);
+        output = Self::normalize_default_tail_returns_to_matching_result_locals(&output);
         // Degraded placeholder rewrites can leak call-shaped tokens into local
         // binding names (e.g. `let mut Default::default(): T = ...;`).
         output = Self::normalize_invalid_local_binding_identifiers(&output);
@@ -25391,6 +26119,10 @@ impl AstCodeGen {
         output = Self::normalize_final_rpc_straggler_artifacts(&output);
         output = Self::normalize_malformed_unsafe_deref_size_casts(&output);
         output = Self::normalize_struct_literal_unit_entry_artifacts(&output);
+        // Final pass: late normalizations can still reintroduce statement-only
+        // degraded preface expressions and default tail returns in helper bodies.
+        output = Self::normalize_default_preface_local_assignment_artifacts(&output);
+        output = Self::normalize_default_tail_returns_to_matching_result_locals(&output);
         output = Self::append_compile_error_for_unresolved_non_c_abi_external_calls(&output);
         if Self::output_requires_c_variadic_feature(&output) {
             output = Self::ensure_c_variadic_feature_attr(&output);
@@ -103495,6 +104227,95 @@ pub fn std_find_int(first: *const i32, last: *const i32, value: i32) -> *const i
     }
 
     #[test]
+    fn test_normalize_default_tail_returns_to_matching_result_locals_rewrites_default_tail() {
+        let input = r#"
+pub fn get_and_advance(ptr_ptr: *mut *const i8) -> i8 {
+    let mut ptr: *const i8 = (unsafe { *ptr_ptr }) as *const i8;
+    let mut result: i8 = unsafe { *unsafe { let __v = ptr; ptr = (ptr).add(1); __v } };
+    unsafe { *ptr_ptr = ptr; *ptr_ptr };
+    return Default::default();
+}
+"#;
+        let output = AstCodeGen::normalize_default_tail_returns_to_matching_result_locals(input);
+        assert!(
+            output.contains("return result;"),
+            "default-tail return normalization should reuse the computed typed result local when available, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("return Default::default();"),
+            "default-tail return normalization should remove degraded default tail return in this pattern, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_default_tail_returns_to_matching_result_locals_skips_ambiguous_bodies() {
+        let input = r#"
+pub fn choose(flag: bool) -> i32 {
+    if flag {
+        return 1;
+    }
+    let mut result: i32 = 2;
+    return Default::default();
+}
+"#;
+        let output = AstCodeGen::normalize_default_tail_returns_to_matching_result_locals(input);
+        assert_eq!(
+            output, input,
+            "default-tail return normalization should not rewrite functions with earlier explicit returns"
+        );
+    }
+
+    #[test]
+    fn test_normalize_default_preface_local_assignment_artifacts_recovers_dropped_assignments() {
+        let input = r#"
+pub fn get_and_advance(ptr_ptr: *mut *const i8) -> i8 {
+    let mut ptr: *const i8 = std::ptr::null();
+    let mut result: i8 = 0;
+    unsafe { *ptr_ptr };
+    unsafe { *unsafe { let __v = ptr; ptr = (ptr).add(1); __v } };
+    unsafe { *ptr_ptr = (ptr) as *const i8; *ptr_ptr };
+    return Default::default();
+}
+"#;
+        let output =
+            AstCodeGen::normalize_default_preface_local_assignment_artifacts(input);
+        assert!(
+            output.contains("ptr = unsafe { *ptr_ptr };"),
+            "preface-assignment normalization should recover missing pointer initialization assignment, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("result = unsafe { *unsafe { let __v = ptr; ptr = (ptr).add(1); __v } };"),
+            "preface-assignment normalization should recover dropped scalar assignment from statement-only post-inc expression, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("unsafe { *ptr_ptr = (ptr) as *const i8; *ptr_ptr };"),
+            "preface-assignment normalization must preserve existing top-level assignment expression statements, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_default_preface_local_assignment_artifacts_requires_default_tail() {
+        let input = r#"
+pub fn probe(ptr_ptr: *mut *const i8) -> i8 {
+    let mut ptr: *const i8 = std::ptr::null();
+    unsafe { *ptr_ptr };
+    return 0;
+}
+"#;
+        let output =
+            AstCodeGen::normalize_default_preface_local_assignment_artifacts(input);
+        assert_eq!(
+            output, input,
+            "preface-assignment normalization should not rewrite functions that already have a concrete non-default tail return"
+        );
+    }
+
+    #[test]
     fn test_normalize_obvious_local_var_type_mismatches_repairs_pointer_and_ref_defaults() {
         let input = r#"
 let mut json: i32 = b"json\x00".as_ptr() as *const i8;
@@ -105174,6 +105995,208 @@ stream.PutN(c, n);
         assert!(
             !code.contains("TakeNode((*obj.Parent_1()) as *const XMLNode)"),
             "pointer parameter cast should not cast dereferenced non-pointer values, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_normalize_redundant_deref_in_pointer_casts_preserves_required_pointer_depth_deref() {
+        let input = r#"
+pub fn keep_needed_deref(mut ptr_ptr: *mut *const i8) -> *const i8 {
+    let mut ptr: *const i8 = (unsafe { *ptr_ptr }) as *const i8;
+    return ptr;
+}
+pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
+    let mut alias: *const i8 = (unsafe { *ptr }) as *const i8;
+    return alias;
+}
+"#;
+        let output = AstCodeGen::normalize_redundant_deref_in_pointer_casts(input);
+        assert!(
+            output.contains("(unsafe { *ptr_ptr }) as *const i8"),
+            "normalization should preserve deref when source pointer depth exceeds target depth by one, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("(unsafe { ptr }) as *const i8"),
+            "normalization should still remove redundant deref for same-depth pointer casts, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("(unsafe { *ptr }) as *const i8"),
+            "normalization should not keep redundant deref for same-depth pointer casts, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_postinc_deref_function_shape_keeps_result_return() {
+        let char_ty = CppType::Char { signed: true };
+        let const_char_ptr_ty = CppType::Pointer {
+            pointee: Box::new(char_ty.clone()),
+            is_const: true,
+        };
+        let ptr_ptr_ty = CppType::Pointer {
+            pointee: Box::new(const_char_ptr_ty.clone()),
+            is_const: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "get_and_advance".to_string(),
+                    mangled_name: "_Z15get_and_advancePPKc".to_string(),
+                    is_static: false,
+                    return_type: char_ty.clone(),
+                    params: vec![("ptr_ptr".to_string(), ptr_ptr_ty.clone())],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![
+                        make_node(
+                            ClangNodeKind::VarDecl {
+                                name: "ptr".to_string(),
+                                ty: const_char_ptr_ty.clone(),
+                                has_init: true,
+                                is_static: false,
+                                is_extern: false,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::ImplicitCastExpr {
+                                    cast_kind: CastKind::LValueToRValue,
+                                    ty: const_char_ptr_ty.clone(),
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::UnaryOperator {
+                                        op: UnaryOp::Deref,
+                                        ty: const_char_ptr_ty.clone(),
+                                    },
+                                    vec![make_node(
+                                        ClangNodeKind::ImplicitCastExpr {
+                                            cast_kind: CastKind::LValueToRValue,
+                                            ty: ptr_ptr_ty.clone(),
+                                        },
+                                        vec![make_node(
+                                            ClangNodeKind::DeclRefExpr {
+                                                name: "ptr_ptr".to_string(),
+                                                ty: ptr_ptr_ty.clone(),
+                                                namespace_path: vec![],
+                                            },
+                                            vec![],
+                                        )],
+                                    )],
+                                )],
+                            )],
+                        ),
+                        make_node(
+                            ClangNodeKind::VarDecl {
+                                name: "result".to_string(),
+                                ty: char_ty.clone(),
+                                has_init: true,
+                                is_static: false,
+                                is_extern: false,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::ImplicitCastExpr {
+                                    cast_kind: CastKind::LValueToRValue,
+                                    ty: char_ty.clone(),
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::UnaryOperator {
+                                        op: UnaryOp::Deref,
+                                        ty: char_ty.clone(),
+                                    },
+                                    vec![make_node(
+                                        ClangNodeKind::UnaryOperator {
+                                            op: UnaryOp::PostInc,
+                                            ty: const_char_ptr_ty.clone(),
+                                        },
+                                        vec![make_node(
+                                            ClangNodeKind::DeclRefExpr {
+                                                name: "ptr".to_string(),
+                                                ty: const_char_ptr_ty.clone(),
+                                                namespace_path: vec![],
+                                            },
+                                            vec![],
+                                        )],
+                                    )],
+                                )],
+                            )],
+                        ),
+                        make_node(
+                            ClangNodeKind::BinaryOperator {
+                                op: BinaryOp::Assign,
+                                ty: const_char_ptr_ty.clone(),
+                            },
+                            vec![
+                                make_node(
+                                    ClangNodeKind::UnaryOperator {
+                                        op: UnaryOp::Deref,
+                                        ty: const_char_ptr_ty.clone(),
+                                    },
+                                    vec![make_node(
+                                        ClangNodeKind::ImplicitCastExpr {
+                                            cast_kind: CastKind::LValueToRValue,
+                                            ty: ptr_ptr_ty.clone(),
+                                        },
+                                        vec![make_node(
+                                            ClangNodeKind::DeclRefExpr {
+                                                name: "ptr_ptr".to_string(),
+                                                ty: ptr_ptr_ty.clone(),
+                                                namespace_path: vec![],
+                                            },
+                                            vec![],
+                                        )],
+                                    )],
+                                ),
+                                make_node(
+                                    ClangNodeKind::ImplicitCastExpr {
+                                        cast_kind: CastKind::LValueToRValue,
+                                        ty: const_char_ptr_ty.clone(),
+                                    },
+                                    vec![make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "ptr".to_string(),
+                                            ty: const_char_ptr_ty.clone(),
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    )],
+                                ),
+                            ],
+                        ),
+                        make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::ImplicitCastExpr {
+                                    cast_kind: CastKind::LValueToRValue,
+                                    ty: char_ty.clone(),
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "result".to_string(),
+                                        ty: char_ty.clone(),
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                )],
+                            )],
+                        ),
+                    ],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("return result;") || code.contains("return (result) as i8;"),
+            "post-inc helper should return computed local result instead of default placeholder, got:\n{}",
             code
         );
     }

@@ -13962,3 +13962,61 @@ Full suites:
 ### Outcome
 
 Leaf `2.7.d.ii` is complete. Runtime mapping/runtime-link integration regressions were fixed without introducing target-specific transpiler behavior. Remaining `2.7.d` work is concentrated in algorithm/data-structure e2e failures (`2.7.d.iii`) and full-sweep non-increase tracking (`2.7.d.iv`).
+
+## 2026-03-14: Leaf 2.7.d.iii e2e post-increment degraded-shape recovery
+
+### Context
+
+After `2.7.d.ii`, the first remaining failing integration id in the workspace sweep was `test_e2e_deref_postinc`. The emitted helper shape was degraded in a way that dropped meaningful assignments and ended with a default-tail return:
+
+- default-initialized locals (`ptr = null`, `result = 0`),
+- statement-only `unsafe { ... };` expressions where assignments were expected,
+- `return Default::default();` even when a typed local result was already computed.
+
+### Wrong-approach check
+
+Checked against `docs/dev/wrong.md` and section `1.3` before implementation:
+
+- No RPC/mako/benchmark-specific conditionals were added.
+- No fake semantic stubs/fallback bodies were introduced.
+- Fix is generic normalization over degraded codegen artifacts, with focused regression coverage.
+
+### Plan
+
+1. Add a generic normalization pass to recover degraded preface assignment artifacts for leading default locals.
+2. Keep/extend default-tail return recovery so typed computed locals are returned instead of `Default::default()`.
+3. Add focused unit regressions for both passes and re-run the failing integration test.
+4. Re-run workspace/Python suites to capture residual baseline-red surface.
+
+### Execution
+
+Updated `crates/fragile-clang/src/ast_codegen.rs`:
+
+- Added `normalize_default_preface_local_assignment_artifacts` to recover statement-only `unsafe { ... };` expressions into assignments for matching preface default locals.
+- Kept and late-applied `normalize_default_tail_returns_to_matching_result_locals` so late pipeline passes do not reintroduce degraded default-tail returns.
+- Added focused tests:
+  - `test_normalize_default_preface_local_assignment_artifacts_recovers_dropped_assignments`
+  - `test_normalize_default_preface_local_assignment_artifacts_requires_default_tail`
+
+### Validation
+
+Targeted tests (pass):
+
+- `cargo test -p fragile-clang test_normalize_default_preface_local_assignment_artifacts_ -- --nocapture`
+- `cargo test -p fragile-clang test_postinc_deref_function_shape_keeps_result_return -- --nocapture`
+- `cargo test -p fragile-clang --test integration_test test_e2e_deref_postinc -- --nocapture`
+
+Suite sweeps:
+
+- `cargo test --workspace --all-targets` (log: `/tmp/fragile_workspace_all_targets_20260314_2_7d_iii_v2.log`):
+  - `fragile-clang` lib: `858 passed / 0 failed`,
+  - `grammar_tests`: `22 passed / 0 failed`,
+  - integration now includes `test_e2e_deref_postinc ... ok`,
+  - remaining baseline-red integration surface captured in log: `28` `test_e2e_* ... FAILED` lines plus `test_variadic_template_transpile ... FAILED`,
+  - run interrupted after prolonged long-running integration cases.
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`:
+  - `Ran 29 tests`, `OK`, `skipped=1`.
+
+### Outcome
+
+Leaf `2.7.d.iii` is complete for the top observed degraded post-increment failure class. `test_e2e_deref_postinc` is now green via a generic recovery fix and regression coverage, with remaining e2e failures tracked for follow-on reduction in `2.7.d.iv`.
