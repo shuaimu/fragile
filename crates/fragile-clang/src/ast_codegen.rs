@@ -38503,7 +38503,9 @@ impl FragileAtomicBoolCompat for atomic_bool {
         let mut candidate_keys: Vec<String> = Vec::with_capacity(expected_candidate_count);
         let mut candidate_keys_with_defs: Option<Vec<String>> = None;
         let mut all_candidates_have_definitions = true;
-        let mut seen_candidate_keys: Option<HashSet<String>> = None;
+        let mut seen_candidate_keys: Option<HashSet<String>> =
+            (expected_candidate_count > HASH_DEDUPE_THRESHOLD)
+                .then(|| HashSet::with_capacity(expected_candidate_count));
         let mut push_candidate = |key: &str, has_definition_hint: Option<bool>| {
             if key.is_empty() {
                 return;
@@ -114279,6 +114281,61 @@ stream.PutN(c, n);
         assert!(
             !Arc::ptr_eq(&with_defs, &candidates),
             "mixed-definition large candidate sets should not alias candidate and definition-backed subset allocations"
+        );
+    }
+
+    #[test]
+    fn test_collect_fn_template_candidate_keys_large_namespaced_leaf_index_deduplicates_prefix_entry() {
+        let mut codegen = AstCodeGen::new();
+        let mut leaf_entries: Vec<String> = vec!["std::swap".to_string()];
+        for idx in 0..40 {
+            leaf_entries.push(format!("ns{}::swap", idx % 20));
+        }
+        codegen
+            .fn_template_keys_by_leaf
+            .insert("swap".to_string(), leaf_entries);
+        let template_info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Named("T".to_string()),
+            params: vec![("value".to_string(), CppType::Named("T".to_string()))],
+            body: None,
+            is_noexcept: false,
+        };
+        codegen
+            .fn_template_definitions
+            .insert("swap".to_string(), template_info.clone());
+        codegen
+            .fn_template_definitions
+            .insert("std::swap".to_string(), template_info.clone());
+        for idx in 0..20 {
+            codegen
+                .fn_template_definitions
+                .insert(format!("ns{idx}::swap"), template_info.clone());
+        }
+
+        let namespace_path = vec!["std".to_string()];
+        let candidates = codegen.collect_fn_template_candidate_keys("swap", &namespace_path);
+        assert_eq!(
+            candidates.first().map(String::as_str),
+            Some("std::swap"),
+            "namespaced direct candidate should retain highest priority"
+        );
+        assert_eq!(
+            candidates.iter().filter(|key| key.as_str() == "std::swap").count(),
+            1,
+            "duplicate namespaced prefix entries should be deduplicated in large leaf-index candidate sets"
+        );
+        assert_eq!(
+            candidates.as_ref().len(),
+            22,
+            "large namespaced leaf-index candidate collection should keep deterministic deduplicated cardinality"
+        );
+
+        let with_defs = codegen.collect_fn_template_candidate_keys_with_defs("swap", &namespace_path);
+        assert_eq!(
+            with_defs.as_ref(),
+            candidates.as_ref(),
+            "definition-backed subset should preserve deduplicated candidate ordering when all entries have definitions"
         );
     }
 
