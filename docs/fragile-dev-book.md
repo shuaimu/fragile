@@ -13269,3 +13269,61 @@ Full suites:
 ### Outcome
 
 Leaf `2.6.c.xi` is complete with focused regression coverage and full-suite verification. No new failure class was introduced; Rust full-suite remains at baseline failure profile.
+
+## 2026-03-14: RPC leaf `2.6.c.xii` strict replay + nonincrease gate
+
+### Decision and rationale
+
+- Selected first actionable unfinished leaf under active task `2`: `2.6.c.xii`.
+- Scope is operational and small (<500 LOC): strict build-only replay plus deterministic nonincrease-gate verification.
+
+### Wrong-Approach Check
+
+Checked against section `1.3` and `docs/dev/wrong.md` before execution:
+
+- No target-specific `mako`/`rpcbench` conditionals were introduced.
+- No force-native bypass or TU delegation was used.
+- No fake semantic fallback stubs were introduced.
+- Work stays in generic harness/inventory gating flow.
+
+### Plan
+
+1. Rebuild release `fragilec`.
+2. Run strict single-lane `fragilec` build-only replay with deterministic run root.
+3. Enforce blocker inventory nonincrease against `2.6.c.iii` baseline manifest.
+4. Run full workspace Rust/Python suites.
+5. Record evidence in `TODO.md` and this book.
+
+### Execution
+
+Ran:
+
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict python3 scripts/mako_rpcbench_harness.py --run-root /tmp/fragile_rpc_leaf_2_6c_current_c44_s_xii_build_only_20260314_v1 --lanes fragilec --build-only --jobs 4 --build-timeout-seconds 180`
+- `python3 scripts/mako_rpc_compile_blocker_inventory.py --run-root /tmp/fragile_rpc_leaf_2_6c_current_c44_s_xii_build_only_20260314_v1 --lanes fragilec --baseline-manifest /tmp/fragile_rpc_leaf_2_6c_iii_build_only_20260313/rpc_compile_blocker_inventory_manifest.txt --enforce-nonincreasing`
+
+Observed manifest markers:
+
+- Harness (`benchmark_harness_manifest.txt`):
+  - `build_only=true`
+  - `lane_fragilec_configure_status=0`
+  - `lane_fragilec_clean_status=0`
+  - `lane_fragilec_build_status=124`
+  - `lane_fragilec_failure_class=build_timeout`
+  - `no_regression_verdict=not_executed`
+- Inventory (`rpc_compile_blocker_inventory_manifest.txt`):
+  - `lane_fragilec_first_failing_compile_class=build_timeout`
+  - `lane_fragilec_first_failing_compile_file=src/rrr/base/misc.cpp`
+  - `lane_fragilec_class_rank_delta_vs_baseline=0`
+  - `lane_fragilec_e0425_delta_vs_baseline=0`
+  - `lane_fragilec_nonincrease_gate_pass=true`
+  - `nonincrease_gate_pass=true`
+
+### Full-suite verification
+
+- `cargo test --workspace --all-targets` -> baseline red in `fragile-clang` lib (`801` passed, `46` failed, `EXIT:101`).
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'` -> `OK`, `Ran 29 tests`, `skipped=1`.
+
+### Outcome
+
+Leaf `2.6.c.xii` is complete with deterministic replay and nonincrease-gate evidence; strict fragilec build lane remains timeout-bound at `src/rrr/base/misc.cpp` with no class/E0425 regression versus `2.6.c.iii`.
