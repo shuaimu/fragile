@@ -13553,3 +13553,55 @@ Observed manifest markers:
 ### Outcome
 
 Leaf `2.6.c.xvi` is complete with deterministic replay and nonincrease-gate evidence; strict build lane remains timeout-bound at `src/rrr/base/misc.cpp` with no class/E0425 regression versus `2.6.c.iii`.
+
+## 2026-03-14: RPC leaf `2.6.c.xvii` resolver inference-shape cache reuse
+
+### Decision and rationale
+
+- Selected first actionable unfinished leaf under active task `2`: `2.6.c.xvii`.
+- Scope is small (<500 LOC): optimize hot template-call resolver candidate inference to reuse already-cached inference-shape metadata instead of rebuilding it in every resolver candidate pass.
+
+### Wrong-Approach Check
+
+Checked against section `1.3` and `docs/dev/wrong.md` before coding:
+
+- No target-specific `mako`/`rpcbench` conditional behavior was introduced.
+- No force-native bypass paths were introduced.
+- No semantic fallback stubs or fake unresolved method-body implementations were introduced.
+- Change stays in shared generic template-call resolution logic.
+
+### Plan
+
+1. Update resolver candidate inference path to consume prewarmed `fn_template_inference_shape_cache` entries when available.
+2. Preserve existing candidate filtering, cache-shape selection, and stale-resolution recovery semantics.
+3. Add focused regression proving resolver reuses prewarmed inference-shape cache on candidate matching path.
+4. Run focused `fragile-clang` tests and full workspace suites.
+5. Record evidence in `TODO.md` and this book.
+
+### Execution
+
+Code changes in `crates/fragile-clang/src/ast_codegen.rs`:
+
+- Kept `resolve_fn_template_call_name_from_args` signature as `&self`.
+- In resolver candidate loop, replaced unconditional `infer_fn_template_type_args` calls with:
+  - prewarmed lookup from `fn_template_inference_shape_cache`,
+  - `infer_fn_template_type_args_with_shape(..., precomputed_shape)` so warm paths avoid rebuilding inference shape metadata.
+- Added focused regression:
+  - `test_resolve_fn_template_call_name_from_args_reuses_prewarmed_inference_shape_cache`
+  - Uses an intentionally prewarmed inference-shape cache entry to validate resolver candidate matching reuses cached shape metadata on hot path.
+
+### Validation
+
+Focused tests:
+
+- `cargo test -p fragile-clang test_resolve_fn_template_call_name_from_args_ -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_fast_paths_warm_cached_resolution_without_candidate_collection -- --nocapture`
+
+Full suites:
+
+- `cargo test --workspace --all-targets` -> baseline red in `fragile-clang` lib (`804` passed, `46` failed, `EXIT:101`).
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'` -> `OK`, `Ran 29 tests`, `skipped=1`.
+
+### Outcome
+
+Leaf `2.6.c.xvii` is complete with focused regression coverage and full-suite verification; no new failure class was introduced beyond the known baseline-red Rust profile.

@@ -39805,14 +39805,19 @@ impl FragileAtomicBoolCompat for atomic_bool {
         }
 
         for template_key in candidate_keys_with_defs.iter() {
+            let inference_shape = self
+                .fn_template_inference_shape_cache
+                .get(template_key)
+                .map(std::sync::Arc::as_ref);
             let Some(template_info) = self.fn_template_definitions.get(template_key) else {
                 continue;
             };
-            let Some(type_args) = infer_fn_template_type_args(
+            let Some(type_args) = infer_fn_template_type_args_with_shape(
                 template_info,
                 params,
                 return_type.as_ref(),
                 Some(call_arg_nodes),
+                inference_shape.as_deref(),
             ) else {
                 continue;
             };
@@ -115926,6 +115931,75 @@ stream.PutN(c, n);
             resolved.as_deref(),
             Some("swap_i32"),
             "template-call resolution should skip undefined candidate keys and resolve using the definition-backed subset"
+        );
+    }
+
+    #[test]
+    fn test_resolve_fn_template_call_name_from_args_reuses_prewarmed_inference_shape_cache(
+    ) {
+        let int_ty = CppType::Int { signed: true };
+        let fn_ty = CppType::Function {
+            return_type: Box::new(int_ty.clone()),
+            params: vec![int_ty.clone()],
+            is_variadic: false,
+        };
+        let call_callee = make_node(
+            ClangNodeKind::DeclRefExpr {
+                name: "swap".to_string(),
+                ty: fn_ty,
+                namespace_path: vec![],
+            },
+            vec![],
+        );
+        let call_args = vec![make_node(
+            ClangNodeKind::IntegerLiteral {
+                value: 7,
+                cpp_type: Some(int_ty),
+            },
+            vec![],
+        )];
+
+        let mut codegen = AstCodeGen::new();
+        codegen
+            .fn_template_keys_by_leaf
+            .insert("swap".to_string(), vec!["swap".to_string()]);
+        let template_info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Named("T".to_string()),
+            // Deliberately arity-mismatched against call-site function type so
+            // resolver candidate matching only succeeds when it reuses a
+            // prewarmed inference-shape cache entry.
+            params: vec![],
+            body: None,
+            is_noexcept: false,
+        };
+        codegen
+            .fn_template_definitions
+            .insert("swap".to_string(), template_info.clone());
+        codegen.fn_template_inference_shape_cache.insert(
+            "swap".to_string(),
+            std::sync::Arc::new(FnTemplateInferenceShape {
+                template_param_first_param_positions: vec![Some(0)],
+                template_param_appears_in_return: vec![false],
+                has_parameter_pack: true,
+                has_unsized_array_ref_param: false,
+                has_non_type_param_candidate: false,
+            }),
+        );
+        codegen.pending_fn_instantiations.insert(
+            "swap_i32".to_string(),
+            (
+                "swap".to_string(),
+                vec!["i32".to_string()],
+                template_info,
+            ),
+        );
+
+        let resolved = codegen.resolve_fn_template_call_name_from_args(&call_callee, &call_args);
+        assert_eq!(
+            resolved.as_deref(),
+            Some("swap_i32"),
+            "resolver candidate matching should reuse prewarmed inference-shape cache entries on hot paths"
         );
     }
 
