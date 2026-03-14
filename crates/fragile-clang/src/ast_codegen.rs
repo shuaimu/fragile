@@ -1215,10 +1215,10 @@ pub struct AstCodeGen {
     fn_template_call_resolution_cache: HashMap<String, Option<(String, Vec<String>)>>,
     /// Cache of function-template candidate-key vectors keyed by
     /// `(fn_name, namespace_path)` call-site lookup shape.
-    fn_template_candidate_keys_cache: RefCell<HashMap<String, Vec<String>>>,
+    fn_template_candidate_keys_cache: RefCell<HashMap<String, Arc<Vec<String>>>>,
     /// Cache of definition-backed function-template candidate-key vectors keyed by
     /// `(fn_name, namespace_path)` call-site lookup shape.
-    fn_template_candidate_keys_with_defs_cache: RefCell<HashMap<String, Vec<String>>>,
+    fn_template_candidate_keys_with_defs_cache: RefCell<HashMap<String, Arc<Vec<String>>>>,
     /// Cache of whether definition-backed function-template candidate sets for
     /// a `(fn_name, namespace_path)` lookup shape require call-argument bound
     /// hashing in call-resolution keys.
@@ -38458,15 +38458,13 @@ impl FragileAtomicBoolCompat for atomic_bool {
         &self,
         fn_name: &str,
         namespace_path: &[String],
-    ) -> Vec<String> {
+    ) -> Arc<Vec<String>> {
         let cache_key = Self::fn_template_candidate_keys_cache_key(fn_name, namespace_path);
-        if let Some(cached) = self
-            .fn_template_candidate_keys_cache
-            .borrow()
-            .get(&cache_key)
-            .cloned()
         {
-            return cached;
+            let cache_ref = self.fn_template_candidate_keys_cache.borrow();
+            if let Some(cached) = cache_ref.get(&cache_key) {
+                return cached.clone();
+            }
         }
 
         let mut candidate_keys: Vec<String> = Vec::new();
@@ -38502,6 +38500,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
             }
         }
 
+        let candidate_keys = Arc::new(candidate_keys);
         self.fn_template_candidate_keys_cache
             .borrow_mut()
             .insert(cache_key, candidate_keys.clone());
@@ -38512,22 +38511,22 @@ impl FragileAtomicBoolCompat for atomic_bool {
         &self,
         fn_name: &str,
         namespace_path: &[String],
-    ) -> Vec<String> {
+    ) -> Arc<Vec<String>> {
         let cache_key = Self::fn_template_candidate_keys_cache_key(fn_name, namespace_path);
-        if let Some(cached) = self
-            .fn_template_candidate_keys_with_defs_cache
-            .borrow()
-            .get(&cache_key)
-            .cloned()
         {
-            return cached;
+            let cache_ref = self.fn_template_candidate_keys_with_defs_cache.borrow();
+            if let Some(cached) = cache_ref.get(&cache_key) {
+                return cached.clone();
+            }
         }
 
         let candidate_keys = self.collect_fn_template_candidate_keys(fn_name, namespace_path);
         let candidate_keys_with_defs: Vec<String> = candidate_keys
-            .into_iter()
+            .iter()
+            .cloned()
             .filter(|key| self.fn_template_definitions.contains_key(key))
             .collect();
+        let candidate_keys_with_defs = Arc::new(candidate_keys_with_defs);
         self.fn_template_candidate_keys_with_defs_cache
             .borrow_mut()
             .insert(cache_key, candidate_keys_with_defs.clone());
@@ -39097,7 +39096,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
         let include_call_arg_bounds = self.fn_template_candidate_set_requires_call_arg_bounds(
             fn_name,
             namespace_path,
-            &candidate_keys_with_defs,
+            candidate_keys_with_defs.as_ref(),
         );
         let resolution_cache_key = Self::fn_template_call_resolution_key(
             fn_name,
@@ -39114,11 +39113,11 @@ impl FragileAtomicBoolCompat for atomic_bool {
         {
             cached_resolution.clone()
         } else {
-            for template_key in candidate_keys_with_defs {
+            for template_key in candidate_keys_with_defs.iter() {
                 let has_param_dependent_template_arg =
-                    self.fn_template_has_param_dependent_args(&template_key);
-                let inference_shape = self.fn_template_inference_shape(&template_key);
-                let type_args = if let Some(template_info) = self.fn_template_definitions.get(&template_key)
+                    self.fn_template_has_param_dependent_args(template_key);
+                let inference_shape = self.fn_template_inference_shape(template_key);
+                let type_args = if let Some(template_info) = self.fn_template_definitions.get(template_key)
                 {
                     infer_fn_template_type_args_with_shape(
                         template_info,
@@ -39140,7 +39139,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 }
 
                 let Some(concrete_shape) =
-                    self.fn_template_concrete_match_shape(&template_key, &type_args)
+                    self.fn_template_concrete_match_shape(template_key, &type_args)
                 else {
                     continue;
                 };
@@ -39169,7 +39168,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
                     continue;
                 }
 
-                selected_instantiation = Some((template_key, type_args));
+                selected_instantiation = Some((template_key.clone(), type_args));
                 break;
             }
             let resolved = selected_instantiation.or(fallback_instantiation);
@@ -39340,8 +39339,8 @@ impl FragileAtomicBoolCompat for atomic_bool {
         let candidate_keys = self.collect_fn_template_candidate_keys(fn_name, namespace_path);
         let sanitized_fn_name = sanitize_identifier(fn_name);
 
-        for template_key in candidate_keys {
-            let Some(template_info) = self.fn_template_definitions.get(&template_key) else {
+        for template_key in candidate_keys.iter() {
+            let Some(template_info) = self.fn_template_definitions.get(template_key) else {
                 continue;
             };
             let Some(type_args) = infer_fn_template_type_args(
@@ -113049,7 +113048,8 @@ stream.PutN(c, n);
         codegen.rebuild_fn_template_leaf_index();
 
         let candidates = codegen.collect_fn_template_candidate_keys("make_shared", &[]);
-        let candidate_set: std::collections::HashSet<String> = candidates.into_iter().collect();
+        let candidate_set: std::collections::HashSet<String> =
+            candidates.iter().cloned().collect();
         assert!(
             candidate_set.contains("make_shared"),
             "candidate key collection should include unqualified template key"
@@ -113775,8 +113775,8 @@ stream.PutN(c, n);
         let namespace_path = vec!["rusty".to_string()];
         let candidates = codegen.collect_fn_template_candidate_keys("make_shared", &namespace_path);
         assert_eq!(
-            candidates,
-            vec![
+            candidates.as_ref(),
+            &vec![
                 "rusty::make_shared".to_string(),
                 "make_shared".to_string(),
                 "std::make_shared".to_string(),
@@ -113795,9 +113795,13 @@ stream.PutN(c, n);
         );
         let cached_candidates =
             codegen.collect_fn_template_candidate_keys("make_shared", &namespace_path);
+        assert!(
+            Arc::ptr_eq(&cached_candidates, &candidates),
+            "second lookup should reuse cached Arc-backed candidate-key vector allocation"
+        );
         assert_eq!(
-            cached_candidates,
-            candidates,
+            cached_candidates.as_ref(),
+            candidates.as_ref(),
             "second lookup should reuse cached candidate-key vector without recomputing from mutated leaf index"
         );
     }
@@ -113822,8 +113826,8 @@ stream.PutN(c, n);
 
         let with_defs = codegen.collect_fn_template_candidate_keys_with_defs("swap", &[]);
         assert_eq!(
-            with_defs,
-            vec!["swap".to_string()],
+            with_defs.as_ref(),
+            &vec!["swap".to_string()],
             "definition-backed candidate subset should include only keys with known template definitions"
         );
 
@@ -113841,8 +113845,13 @@ stream.PutN(c, n);
             .fn_template_definitions
             .insert("std::swap".to_string(), template_info);
         let cached_with_defs = codegen.collect_fn_template_candidate_keys_with_defs("swap", &[]);
+        assert!(
+            Arc::ptr_eq(&cached_with_defs, &with_defs),
+            "second lookup should reuse cached Arc-backed definition-backed candidate subset allocation"
+        );
         assert_eq!(
-            cached_with_defs, with_defs,
+            cached_with_defs.as_ref(),
+            with_defs.as_ref(),
             "second lookup should reuse cached definition-backed subset without recomputing from mutated maps"
         );
     }
@@ -113862,8 +113871,8 @@ stream.PutN(c, n);
 
         let candidates = codegen.collect_fn_template_candidate_keys("swap", &["std".to_string()]);
         assert_eq!(
-            candidates,
-            vec!["std::swap".to_string(), "swap".to_string()],
+            candidates.as_ref(),
+            &vec!["std::swap".to_string(), "swap".to_string()],
             "candidate-key collection should ignore empty leaf-index entries while preserving first-seen priority order"
         );
     }
