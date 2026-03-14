@@ -2,6 +2,84 @@
 
 use fragile_clang::{AstCodeGen, ClangParser};
 
+fn normalize_for_semantic_assertions(code: &str) -> String {
+    code.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn assert_code_contains_any(code: &str, expected_patterns: &[&str], context: &str) {
+    let normalized = normalize_for_semantic_assertions(code);
+    assert!(
+        expected_patterns
+            .iter()
+            .any(|pattern| normalized.contains(pattern)),
+        "{}\nExpected one of patterns: {:?}\nGenerated code snippet:\n{}",
+        context,
+        expected_patterns,
+        &code[..code.len().min(2000)]
+    );
+}
+
+fn extract_function_block<'a>(code: &'a str, fn_name: &str) -> Option<&'a str> {
+    let markers = [
+        format!("pub extern \"C\" fn {fn_name}("),
+        format!("pub fn {fn_name}("),
+        format!("fn {fn_name}("),
+    ];
+
+    let start = markers
+        .iter()
+        .filter_map(|marker| code.find(marker))
+        .min()?;
+
+    let body_start = code[start..].find('{')? + start;
+    let mut depth = 0usize;
+    for (offset, ch) in code[body_start..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                if depth == 0 {
+                    return None;
+                }
+                depth -= 1;
+                if depth == 0 {
+                    let end = body_start + offset + ch.len_utf8();
+                    return Some(&code[start..end]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn assert_function_contains_any(code: &str, fn_name: &str, expected_patterns: &[&str], context: &str) {
+    let fn_block = extract_function_block(code, fn_name).unwrap_or(code);
+    assert_code_contains_any(fn_block, expected_patterns, context);
+}
+
+fn extract_block_from_marker<'a>(code: &'a str, marker: &str) -> Option<&'a str> {
+    let start = code.find(marker)?;
+    let body_start = code[start..].find('{')? + start;
+    let mut depth = 0usize;
+    for (offset, ch) in code[body_start..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                if depth == 0 {
+                    return None;
+                }
+                depth -= 1;
+                if depth == 0 {
+                    let end = body_start + offset + ch.len_utf8();
+                    return Some(&code[start..end]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Test parsing a simple add function.
 #[test]
 fn test_parse_add_function() {
@@ -48,7 +126,12 @@ fn test_generate_rust_code() {
     assert!(code.contains("a: i32"));
     assert!(code.contains("b: i32"));
     assert!(code.contains("-> i32"));
-    assert!(code.contains("return a + b"));
+    assert_function_contains_any(
+        &code,
+        "add",
+        &["return a + b", "a + b"],
+        "add body should preserve addition semantics",
+    );
 }
 
 /// Test generating stubs from C++ source.
@@ -106,8 +189,18 @@ fn test_end_to_end() {
     // Verify both functions are generated
     assert!(code.contains("pub extern \"C\" fn add"));
     assert!(code.contains("pub extern \"C\" fn multiply"));
-    assert!(code.contains("return a + b"));
-    assert!(code.contains("return x * y"));
+    assert_function_contains_any(
+        &code,
+        "add",
+        &["return a + b", "a + b"],
+        "add body should preserve addition semantics",
+    );
+    assert_function_contains_any(
+        &code,
+        "multiply",
+        &["return x * y", "x * y"],
+        "multiply body should preserve multiplication semantics",
+    );
 }
 
 /// Test parsing and generating namespaced functions.
@@ -130,7 +223,12 @@ fn test_namespace_function() {
 
     // Function should be generated
     assert!(code.contains("fn compute"));
-    assert!(code.contains("return x * 2"));
+    assert_function_contains_any(
+        &code,
+        "compute",
+        &["return x * 2", "x * 2"],
+        "namespaced function body should preserve multiplication semantics",
+    );
 }
 
 /// Test control flow generation.
@@ -154,10 +252,28 @@ fn test_control_flow() {
     let code = AstCodeGen::new().generate(&ast.translation_unit);
 
     // Check natural control flow is preserved
-    assert!(code.contains("if a > b"));
-    assert!(code.contains("return a"));
-    assert!(code.contains("} else {"));
-    assert!(code.contains("return b"));
+    let max_block =
+        extract_block_from_marker(&code, "fn max(a: i32, b: i32) -> i32").unwrap_or(&code);
+    assert_code_contains_any(
+        max_block,
+        &["if a > b", "if (a > b)"],
+        "max body should preserve branch condition",
+    );
+    assert_code_contains_any(
+        max_block,
+        &["} else {", "else {"],
+        "max body should preserve else branch",
+    );
+    assert_code_contains_any(
+        max_block,
+        &["return a", "return (a) as i32", "{ a }", "{ (a) as i32 }"],
+        "max body should preserve true-branch value",
+    );
+    assert_code_contains_any(
+        max_block,
+        &["return b", "return (b) as i32", "{ b }", "{ (b) as i32 }"],
+        "max body should preserve false-branch value",
+    );
 }
 
 /// Test while loop generation.
@@ -183,8 +299,50 @@ fn test_while_loop() {
     let code = AstCodeGen::new().generate(&ast.translation_unit);
 
     // Check while loop is preserved
-    assert!(code.contains("while i <= n"));
-    assert!(code.contains("return sum"));
+    assert_function_contains_any(
+        &code,
+        "sum_to_n",
+        &["while i <= n", "while (i <= n)"],
+        "sum_to_n body should preserve while-loop condition",
+    );
+    assert_function_contains_any(
+        &code,
+        "sum_to_n",
+        &[
+            "sum + i",
+            "sum = sum + i",
+            "sum += i",
+            "sum = (sum + i)",
+            "sum = sum.wrapping_add(i)",
+            "sum = i + sum",
+            "sum = (i + sum)",
+        ],
+        "sum_to_n body should preserve accumulation update",
+    );
+    assert_function_contains_any(
+        &code,
+        "sum_to_n",
+        &[
+            "i + 1",
+            "i = i + 1",
+            "i += 1",
+            "i = (i + 1)",
+            "i = i.wrapping_add(1)",
+        ],
+        "sum_to_n body should preserve loop counter update",
+    );
+    assert_function_contains_any(
+        &code,
+        "sum_to_n",
+        &[
+            "return sum",
+            "return (sum)",
+            "return (sum) as i32",
+            "{ sum }",
+            "} sum }",
+        ],
+        "sum_to_n body should preserve final sum result",
+    );
 }
 
 // ============================================================================

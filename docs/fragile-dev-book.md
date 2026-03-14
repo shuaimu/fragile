@@ -13827,3 +13827,65 @@ Added focused regressions:
 ### Outcome
 
 Leaf `2.7.c` is complete: structural array-initializer and `MaybeUninit` pointer-cast regressions are fixed with focused tests, and `grammar_tests` are fully green. Remaining workspace integration failures are tracked separately in `2.7.d`.
+
+## 2026-03-14: Leaf 2.7.d.i integration assertion de-brittling
+
+### Context
+
+Leaf `2.7.d.i` targeted false-red integration failures caused by syntax-shape assertions that required exact `return ...` text even when generated Rust preserved equivalent semantics (for example, extra casts/parens or expression-style returns).
+
+### Wrong-approach check
+
+Checked against `docs/dev/wrong.md` and section `1.3` of this book before changes:
+
+- No target-specific hacks were introduced.
+- No fake/stubbed method bodies were added.
+- No parser/codegen semantics were masked; only brittle test assertions were repaired.
+- Assertions still validate function-level semantics (operation/control-flow presence), not just test pass-through.
+
+### Plan
+
+1. Reproduce the failing smoke integration tests and classify failure mode.
+2. Replace exact text assertions with normalized semantic pattern checks.
+3. Scope body checks to target functions where needed to avoid preamble collisions.
+4. Re-run targeted tests and workspace/Python suites; record residual failure classes.
+
+### Execution
+
+Updated `crates/fragile-clang/tests/integration_test.rs`:
+
+- Added helper utilities:
+  - `normalize_for_semantic_assertions`
+  - `assert_code_contains_any`
+  - `extract_function_block`
+  - `assert_function_contains_any`
+- Reworked smoke assertions in:
+  - `test_generate_rust_code`
+  - `test_end_to_end`
+  - `test_namespace_function`
+  - `test_control_flow`
+  - `test_while_loop`
+- Assertions now tolerate equivalent forms such as `return (sum) as i32` and cast-wrapped arithmetic while still enforcing expected arithmetic/control-flow semantics.
+
+### Validation
+
+Targeted smoke tests (all pass):
+
+- `cargo test -p fragile-clang --test integration_test test_generate_rust_code -- --nocapture`
+- `cargo test -p fragile-clang --test integration_test test_end_to_end -- --nocapture`
+- `cargo test -p fragile-clang --test integration_test test_namespace_function -- --nocapture`
+- `cargo test -p fragile-clang --test integration_test test_control_flow -- --nocapture`
+- `cargo test -p fragile-clang --test integration_test test_while_loop -- --nocapture`
+
+Workspace/Python sweeps:
+
+- `cargo test --workspace --all-targets` (captured in `/tmp/fragile_workspace_all_targets_20260314_2_7d_i.log`):
+  - repaired smoke tests are now green (`test_control_flow`, `test_generate_rust_code`, `test_end_to_end`, `test_namespace_function`, `test_while_loop` all `ok`),
+  - remaining failures are runtime/e2e integration families (`34` failed lines), first remaining failing id `test_e2e_deref_postinc` (integration failure class),
+  - run was interrupted after prolonged no-progress hang in long-running integration target.
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`:
+  - `Ran 29 tests`, `OK`, `skipped=1`.
+
+### Outcome
+
+Leaf `2.7.d.i` is complete: brittle syntax-shape smoke assertions were replaced with semantic checks, and the targeted failures no longer reproduce. Remaining `2.7.d` work is concentrated in runtime mapping and e2e algorithm/data-structure failures (`2.7.d.ii` and `2.7.d.iii`).
