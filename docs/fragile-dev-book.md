@@ -13438,3 +13438,60 @@ Observed manifest markers:
 ### Outcome
 
 Leaf `2.6.c.xiv` is complete with deterministic replay and nonincrease-gate evidence; strict build lane remains timeout-bound at `src/rrr/base/misc.cpp`, so next leaves `2.6.c.xv`/`2.6.c.xvi` remain queued.
+
+## 2026-03-14: RPC leaf `2.6.c.xv` warm-miss resolution-key reuse
+
+### Decision and rationale
+
+- Selected first actionable unfinished leaf under active task `2`: `2.6.c.xv`.
+- Scope is small (<500 LOC): remove duplicate resolution-key recompute/reprobe work from a template-instantiation hot path while preserving matching semantics.
+
+### Wrong-Approach Check
+
+Checked against section `1.3` and `docs/dev/wrong.md` before coding:
+
+- No target-specific `mako`/`rpcbench` conditionals were introduced.
+- No force-native bypass paths were introduced.
+- No fake semantic fallback or stubbed unresolved method-body behavior was added.
+- Change stays in shared function-template cache probing logic.
+
+### Plan
+
+1. Optimize `collect_fn_template_instantiation` so a warm cache miss on the selected key shape is reused later in the same call path.
+2. Add focused regression coverage for warm-miss key-shape reuse.
+3. Run focused `fragile-clang` tests around template-instantiation cache behavior.
+4. Run full workspace Rust/Python suites and record outcomes.
+
+### Execution
+
+Code changes in `crates/fragile-clang/src/ast_codegen.rs`:
+
+- Added `warm_resolution_cache_miss: Option<(bool, String)>` in `collect_fn_template_instantiation`.
+- When `fn_template_candidate_requires_call_arg_bounds_cache` is warm and the first
+  `fn_template_call_resolution_cache` lookup misses, preserve the miss key/shape.
+- In the cold candidate-resolution branch:
+  - if key-shape decision is unchanged, reuse the warm-miss key directly and skip duplicate key generation/reprobe;
+  - otherwise, keep existing behavior by generating/probing the alternate key shape.
+- Kept all matching, fallback, and cache-insertion semantics unchanged.
+
+Added focused regression:
+
+- `test_collect_fn_template_instantiation_reuses_warm_miss_resolution_key_shape`
+
+### Validation
+
+Focused tests:
+
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_reuses_warm_miss_resolution_key_shape -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_fast_paths_warm_cached_resolution_without_candidate_collection -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_uses_cached_call_resolution -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_uses_param_dependent_fallback_after_shape_mismatch -- --nocapture`
+
+Full suites:
+
+- `cargo test --workspace --all-targets` -> baseline red in `fragile-clang` lib (`803` passed, `46` failed, `EXIT:101`).
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'` -> `OK`, `Ran 29 tests`, `skipped=1`.
+
+### Outcome
+
+Leaf `2.6.c.xv` is complete with focused regression coverage and full-suite verification. No new failure class was introduced; Rust full-suite remains at baseline failure profile.

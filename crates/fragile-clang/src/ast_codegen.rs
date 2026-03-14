@@ -39214,6 +39214,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
         let candidate_cache_key = Self::fn_template_candidate_keys_cache_key(fn_name, namespace_path);
         let mut resolved_instantiation: Option<(String, Vec<String>)> = None;
         let mut resolution_cache_hit = false;
+        let mut warm_resolution_cache_miss: Option<(bool, String)> = None;
         if let Some(include_call_arg_bounds) = self
             .fn_template_candidate_requires_call_arg_bounds_cache
             .borrow()
@@ -39234,6 +39235,9 @@ impl FragileAtomicBoolCompat for atomic_bool {
             {
                 resolution_cache_hit = true;
                 resolved_instantiation = cached_resolution.clone();
+            } else {
+                warm_resolution_cache_miss =
+                    Some((include_call_arg_bounds, resolution_cache_key));
             }
         }
 
@@ -39274,20 +39278,51 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 namespace_path,
                 candidate_keys_with_defs.as_ref(),
             );
-            let resolution_cache_key = Self::fn_template_call_resolution_key(
-                fn_name,
-                namespace_path,
-                &instantiated_param_types_normalized,
-                &instantiated_return_type_normalized,
-                call_args,
-                include_call_arg_bounds,
-            );
+            let mut second_cache_probe: Option<(String, Vec<String>)> = None;
+            let resolution_cache_key =
+                if let Some((warm_include_call_arg_bounds, warm_resolution_cache_key)) =
+                    warm_resolution_cache_miss.take()
+                {
+                    // Warm path already probed this key shape and observed a
+                    // miss, so skip rebuilding/reprobing when the key-shape
+                    // decision remains unchanged.
+                    if warm_include_call_arg_bounds == include_call_arg_bounds {
+                        warm_resolution_cache_key
+                    } else {
+                        let resolution_cache_key = Self::fn_template_call_resolution_key(
+                            fn_name,
+                            namespace_path,
+                            &instantiated_param_types_normalized,
+                            &instantiated_return_type_normalized,
+                            call_args,
+                            include_call_arg_bounds,
+                        );
+                        second_cache_probe = self
+                            .fn_template_call_resolution_cache
+                            .get(&resolution_cache_key)
+                            .cloned()
+                            .flatten();
+                        resolution_cache_key
+                    }
+                } else {
+                    let resolution_cache_key = Self::fn_template_call_resolution_key(
+                        fn_name,
+                        namespace_path,
+                        &instantiated_param_types_normalized,
+                        &instantiated_return_type_normalized,
+                        call_args,
+                        include_call_arg_bounds,
+                    );
+                    second_cache_probe = self
+                        .fn_template_call_resolution_cache
+                        .get(&resolution_cache_key)
+                        .cloned()
+                        .flatten();
+                    resolution_cache_key
+                };
 
-            if let Some(cached_resolution) = self
-                .fn_template_call_resolution_cache
-                .get(&resolution_cache_key)
-            {
-                resolved_instantiation = cached_resolution.clone();
+            if let Some(cached_resolution) = second_cache_probe {
+                resolved_instantiation = Some(cached_resolution);
             } else {
                 let mut selected_instantiation: Option<(usize, Vec<String>)> = None;
                 let mut fallback_instantiation: Option<(usize, Vec<String>)> = None;
@@ -114008,6 +114043,84 @@ stream.PutN(c, n);
                 .borrow()
                 .is_empty(),
             "warm cached call-resolution fast path should bypass definition-backed candidate-key collection on hot lookup path"
+        );
+    }
+
+    #[test]
+    fn test_collect_fn_template_instantiation_reuses_warm_miss_resolution_key_shape() {
+        let int_ty = CppType::Int { signed: true };
+        let call_ty = CppType::Function {
+            return_type: Box::new(int_ty.clone()),
+            params: vec![int_ty.clone()],
+            is_variadic: false,
+        };
+        let call = make_node(
+            ClangNodeKind::CallExpr {
+                ty: int_ty.clone(),
+                template_instantiation: None,
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "swap".to_string(),
+                        ty: call_ty,
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::IntegerLiteral {
+                        value: 7,
+                        cpp_type: Some(int_ty),
+                    },
+                    vec![],
+                ),
+            ],
+        );
+
+        let mut codegen = AstCodeGen::new();
+        let template_info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Named("T".to_string()),
+            params: vec![("value".to_string(), CppType::Named("T".to_string()))],
+            body: None,
+            is_noexcept: false,
+        };
+        codegen
+            .fn_template_definitions
+            .insert("swap".to_string(), template_info);
+        let candidate_cache_key = AstCodeGen::fn_template_candidate_keys_cache_key("swap", &[]);
+        codegen
+            .fn_template_candidate_requires_call_arg_bounds_cache
+            .borrow_mut()
+            .insert(candidate_cache_key, false);
+
+        codegen.collect_fn_template_instantiation(&call);
+
+        assert!(
+            codegen.pending_fn_instantiations.contains_key("swap_i32"),
+            "warm cache-shape miss path should still materialize concrete instantiation"
+        );
+        let resolution_key = AstCodeGen::fn_template_call_resolution_key(
+            "swap",
+            &[],
+            &["i32".to_string()],
+            "i32",
+            &call.children[1..],
+            false,
+        );
+        assert_eq!(
+            codegen.fn_template_call_resolution_cache.len(),
+            1,
+            "warm miss path should keep a single preferred-shape cache entry"
+        );
+        assert_eq!(
+            codegen
+                .fn_template_call_resolution_cache
+                .get(&resolution_key)
+                .cloned(),
+            Some(Some(("swap".to_string(), vec!["i32".to_string()]))),
+            "warm miss path should cache resolved instantiation under the preferred key shape"
         );
     }
 
