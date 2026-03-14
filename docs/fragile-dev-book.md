@@ -10598,3 +10598,107 @@ candidate and definition prepass hot paths while preserving existing callshape
 and cache-key semantics. Strict replay remains timeout-bound on
 `src/rrr/base/misc.cpp`; next leaf is
 `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.b`.
+
+## 2026-03-14: Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.b`
+
+### Decision and rationale
+
+- Selected the first pending high-priority leaf under active `2.6` chain:
+  strict build-only replay plus blocker non-increase verification.
+- This leaf is bounded verification/evidence work (<500 LOC), so no further
+  TODO decomposition was required beyond opening the next repeat node.
+
+### Wrong-approach check
+
+- No target-specific parser/codegen conditionals were introduced.
+- No force-native bypasses were used.
+- No fake semantic stubs/fallback method bodies were introduced.
+
+### Validation
+
+Executed:
+
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict python3 scripts/mako_rpcbench_harness.py --run-root /tmp/fragile_rpc_leaf_2_6c_current_c_c_c_c_c_c_c_c_c_c_c_b_build_only_20260314_v1 --lanes fragilec --build-only --jobs 4 --build-timeout-seconds 180`
+- `python3 scripts/mako_rpc_compile_blocker_inventory.py --run-root /tmp/fragile_rpc_leaf_2_6c_current_c_c_c_c_c_c_c_c_c_c_c_b_build_only_20260314_v1 --lanes fragilec --baseline-manifest /tmp/fragile_rpc_leaf_2_6c_iii_build_only_20260313/rpc_compile_blocker_inventory_manifest.txt --enforce-nonincreasing`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- `/tmp/fragile_rpc_leaf_2_6c_current_c_c_c_c_c_c_c_c_c_c_c_b_build_only_20260314_v1/benchmark_harness_manifest.txt`:
+  - `lane_fragilec_configure_status=0`
+  - `lane_fragilec_clean_status=0`
+  - `lane_fragilec_build_status=124`
+  - `lane_fragilec_failure_class=build_timeout`
+  - `no_regression_verdict=not_executed`
+- `/tmp/fragile_rpc_leaf_2_6c_current_c_c_c_c_c_c_c_c_c_c_c_b_build_only_20260314_v1/rpc_compile_blocker_inventory_manifest.txt`:
+  - `lane_fragilec_first_failing_compile_class=build_timeout`
+  - `lane_fragilec_first_failing_compile_file=src/rrr/base/misc.cpp`
+  - `lane_fragilec_class_rank_delta_vs_baseline=0`
+  - `lane_fragilec_e0425_delta_vs_baseline=0`
+  - `lane_fragilec_nonincrease_gate_pass=true`
+  - `nonincrease_gate_pass=true`
+- full-suite baseline parity:
+  - `cargo test --workspace --all-targets`: `fragile-clang` lib `775` passed / `46` failed
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`: `OK`, `29` ran, `1` skipped
+
+### Outcome
+
+Leaf
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.b`
+is complete. Strict build-only replay remains timeout-bound on
+`src/rrr/base/misc.cpp`, and blocker inventory non-increase enforcement remains
+passing versus `2.6.c.iii` baseline. Next leaf is
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`.
+
+## 2026-03-14: Leaf `2.6.d.a`
+
+### Decision and rationale
+
+- Selected the first pending leaf under `2.6.d` to run strict full-lane replay without `--build-only` and capture deterministic runtime-stage execution evidence.
+- This leaf is verification-only and bounded (<500 LOC), so no codegen implementation split was required.
+
+### Wrong-approach check
+
+- No target-specific parser/codegen conditionals were introduced.
+- No force-native bypasses were used.
+- No fake semantic stubs/fallback method bodies were introduced.
+
+### Validation
+
+Executed:
+
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict python3 scripts/mako_rpcbench_harness.py --run-root /tmp/fragile_rpc_leaf_2_6d_full_20260314_v1 --lanes fragilec --jobs 4 --build-timeout-seconds 180`
+- `python3 scripts/mako_rpc_compile_blocker_inventory.py --run-root /tmp/fragile_rpc_leaf_2_6d_full_20260314_v1 --lanes fragilec --baseline-manifest /tmp/fragile_rpc_leaf_2_6c_iii_build_only_20260313/rpc_compile_blocker_inventory_manifest.txt --enforce-nonincreasing`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- `/tmp/fragile_rpc_leaf_2_6d_full_20260314_v1/benchmark_harness_manifest.txt`:
+  - `build_only=false`
+  - `lane_fragilec_configure_status=0`
+  - `lane_fragilec_clean_status=0`
+  - `lane_fragilec_build_status=124`
+  - `lane_fragilec_failure_class=build_timeout`
+  - `lane_fragilec_test_rpc_status=-1`
+  - `lane_fragilec_completed_trials=0`
+  - `no_regression_verdict=insufficient_data`
+- `/tmp/fragile_rpc_leaf_2_6d_full_20260314_v1/rpc_compile_blocker_inventory_manifest.txt`:
+  - `lane_fragilec_first_failing_compile_class=build_timeout`
+  - `lane_fragilec_first_failing_compile_file=src/rrr/base/misc.cpp`
+  - `lane_fragilec_class_rank_delta_vs_baseline=0`
+  - `lane_fragilec_e0425_delta_vs_baseline=0`
+  - `nonincrease_gate_pass=true`
+- full-suite baseline parity:
+  - `cargo test --workspace --all-targets`: `fragile-clang` lib `775` passed / `46` failed
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`: `OK`, `29` ran, `1` skipped
+
+### Outcome
+
+Leaf `2.6.d.a` is complete. Full strict-lane replay remains blocked before runtime
+execution due to the existing build-timeout blocker on `src/rrr/base/misc.cpp`.
+Follow-up leaf `2.6.d.b` remains open and depends on `2.6.c` reaching
+`lane_fragilec_build_status=0`.
