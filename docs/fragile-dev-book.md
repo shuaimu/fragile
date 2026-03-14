@@ -9294,3 +9294,74 @@ Leaf
 is complete. Timeout-bound blocker remains `src/rrr/base/misc.cpp` with
 non-increase gate still passing versus `2.6.c.iii` baseline. Next leaf is
 `...c.c.c.c.c.a`.
+
+## 2026-03-14: Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+
+### Decision and rationale
+
+- Implemented a new generic function-template candidate-key cache in
+  `AstCodeGen` (`fn_template_candidate_keys_cache`) keyed by
+  `(fn_name, namespace_path)` lookup shape.
+- Reused cached candidate vectors in `collect_fn_template_candidate_keys` to
+  avoid repeated namespace-prefix candidate synthesis and leaf-index scans for
+  repeated call-site lookups.
+- Added deterministic invalidation where candidate-key lookup inputs can change:
+  `collect_template_info`, `rebuild_fn_template_leaf_index`, and
+  `set_fn_template_definition`.
+
+This stayed within the intended small-leaf scope (single-file codegen/test
+changes, no new subsystem).
+
+### Wrong-approach check
+
+- No target-specific `mako`/`rpc` conditionals were added.
+- No force-native bypasses were used.
+- No semantic stub/fallback bodies were introduced.
+- Changes are generic cache + invalidation correctness improvements.
+
+### Validation
+
+Executed focused coverage:
+
+- `cargo test -p fragile-clang test_collect_fn_template_candidate_keys_deduplicates_and_keeps_priority_order -- --nocapture`
+- `cargo test -p fragile-clang test_set_fn_template_definition_invalidates_param_dependency_cache -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_uses_cached_call_resolution -- --nocapture`
+- `cargo test -p fragile-clang test_fn_template_concrete_match_shape_reuses_cached_value -- --nocapture`
+- `cargo test -p fragile-clang function_template_type_arg_inference_ -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_uses_leaf_index_candidate_after_mismatch -- --nocapture`
+
+Strict replay profiling/timing evidence:
+
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c_a_callshape_profile_120_v2.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c_a_stage_timing_120_v2.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c_a_callshape_profile_300_v2.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c_a_stage_timing_300_v2.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+
+Artifact highlights:
+
+- `/tmp/fragile_rpc_leaf_2_6c_current_c_a_callshape_profile_120_v2.txt`:
+  `status=codegen_after_template_collection`.
+- `/tmp/fragile_rpc_leaf_2_6c_current_c_a_callshape_profile_300_v2.txt`:
+  `status=codegen_after_template_instantiation_generation`,
+  `input_bytes=565443`.
+- Delta vs prior `...c.c.c.c.c.a` v1 profile (`input_bytes=575307`):
+  `-9864` bytes.
+- `/tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313/rpc_compile_blocker_replay_manifest.txt`:
+  `replay_01_status=124`, `replay_01_timed_out=true`,
+  `replay_01_first_failure_class=build_timeout`,
+  `replay_01_blocker_file=src/rrr/base/misc.cpp`.
+
+Full-suite regression check:
+
+- `cargo test --workspace --all-targets`:
+  `fragile-clang` lib `762` passed / `46` failed (known baseline count unchanged).
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`:
+  `OK`, `29` ran, `1` skipped.
+
+### Outcome
+
+Leaf
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+is complete. Function-template candidate-key resolution now reuses deterministic
+cache entries with explicit invalidation on template-definition/index refresh
+paths. Strict replay remains timeout-bound on `src/rrr/base/misc.cpp`; next leaf
+is `...c.c.c.c.c.b`.

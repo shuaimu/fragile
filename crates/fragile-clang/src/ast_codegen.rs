@@ -1210,6 +1210,9 @@ pub struct AstCodeGen {
     /// Cache of resolved function-template call candidates keyed by
     /// call-site signature shape.
     fn_template_call_resolution_cache: HashMap<String, Option<(String, Vec<String>)>>,
+    /// Cache of function-template candidate-key vectors keyed by
+    /// `(fn_name, namespace_path)` call-site lookup shape.
+    fn_template_candidate_keys_cache: RefCell<HashMap<String, Vec<String>>>,
     /// Function-template keys indexed by unqualified leaf name to avoid scanning
     /// the full definition map for every call-site candidate lookup.
     fn_template_keys_by_leaf: HashMap<String, Vec<String>>,
@@ -1411,6 +1414,7 @@ impl AstCodeGen {
             fn_template_inference_shape_cache: HashMap::new(),
             fn_template_concrete_match_shape_cache: HashMap::new(),
             fn_template_call_resolution_cache: HashMap::new(),
+            fn_template_candidate_keys_cache: RefCell::new(HashMap::new()),
             fn_template_keys_by_leaf: HashMap::new(),
             pending_fn_instantiations: HashMap::new(),
             skip_vtable_generation: HashSet::new(),
@@ -38390,6 +38394,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
     /// This enables generating structs for template types like MyVec<int>.
     fn collect_template_info(&mut self, children: &[ClangNode]) {
         self.fn_template_call_resolution_cache.clear();
+        self.fn_template_candidate_keys_cache.borrow_mut().clear();
         // Precollect definitions first so a single usage pass can resolve
         // call-sites/type uses that appear before template declarations.
         self.collect_template_definitions_with_namespace(children, &[]);
@@ -38398,6 +38403,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
     }
 
     fn rebuild_fn_template_leaf_index(&mut self) {
+        self.fn_template_candidate_keys_cache.borrow_mut().clear();
         self.fn_template_keys_by_leaf.clear();
         for key in self.fn_template_definitions.keys() {
             let leaf = key.rsplit("::").next().unwrap_or(key).to_string();
@@ -38412,11 +38418,31 @@ impl FragileAtomicBoolCompat for atomic_bool {
         }
     }
 
+    fn fn_template_candidate_keys_cache_key(fn_name: &str, namespace_path: &[String]) -> String {
+        if namespace_path.is_empty() {
+            return fn_name.to_string();
+        }
+        let mut cache_key = namespace_path.join("::");
+        cache_key.push('\u{1f}');
+        cache_key.push_str(fn_name);
+        cache_key
+    }
+
     fn collect_fn_template_candidate_keys(
         &self,
         fn_name: &str,
         namespace_path: &[String],
     ) -> Vec<String> {
+        let cache_key = Self::fn_template_candidate_keys_cache_key(fn_name, namespace_path);
+        if let Some(cached) = self
+            .fn_template_candidate_keys_cache
+            .borrow()
+            .get(&cache_key)
+            .cloned()
+        {
+            return cached;
+        }
+
         let mut candidate_keys: Vec<String> = Vec::new();
         let mut push_candidate = |key: &str| {
             if key.is_empty() {
@@ -38448,6 +38474,9 @@ impl FragileAtomicBoolCompat for atomic_bool {
             }
         }
 
+        self.fn_template_candidate_keys_cache
+            .borrow_mut()
+            .insert(cache_key, candidate_keys.clone());
         candidate_keys
     }
 
@@ -38455,6 +38484,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
         self.fn_template_param_dependency_cache.remove(&key);
         self.fn_template_inference_shape_cache.remove(&key);
         self.fn_template_call_resolution_cache.clear();
+        self.fn_template_candidate_keys_cache.borrow_mut().clear();
         let cache_prefix = format!("{key}\u{1f}");
         self.fn_template_concrete_match_shape_cache
             .retain(|cache_key, _| !cache_key.starts_with(&cache_prefix));
@@ -113177,6 +113207,12 @@ stream.PutN(c, n);
             "cache-key".to_string(),
             Some(("cache::swap".to_string(), vec!["i32".to_string()])),
         );
+        let candidate_namespace = vec!["cache".to_string()];
+        let _ = codegen.collect_fn_template_candidate_keys("swap", &candidate_namespace);
+        assert!(
+            !codegen.fn_template_candidate_keys_cache.borrow().is_empty(),
+            "candidate-key cache should populate after first lookup"
+        );
         let concrete_type_args = vec!["i32".to_string()];
         assert!(
             codegen
@@ -113209,6 +113245,10 @@ stream.PutN(c, n);
         assert!(
             codegen.fn_template_call_resolution_cache.is_empty(),
             "replacing template definition should invalidate cached call-resolution entries"
+        );
+        assert!(
+            codegen.fn_template_candidate_keys_cache.borrow().is_empty(),
+            "replacing template definition should invalidate cached candidate-key entries"
         );
         let concrete_cache_key =
             AstCodeGen::fn_template_concrete_match_shape_key("cache::swap", &concrete_type_args);
@@ -113247,6 +113287,23 @@ stream.PutN(c, n);
                 "std::make_shared".to_string(),
             ],
             "candidate-key collection should deduplicate while preserving deterministic priority order"
+        );
+
+        codegen.fn_template_keys_by_leaf.insert(
+            "make_shared".to_string(),
+            vec![
+                "rusty::make_shared".to_string(),
+                "make_shared".to_string(),
+                "std::make_shared".to_string(),
+                "extra::make_shared".to_string(),
+            ],
+        );
+        let cached_candidates =
+            codegen.collect_fn_template_candidate_keys("make_shared", &namespace_path);
+        assert_eq!(
+            cached_candidates,
+            candidates,
+            "second lookup should reuse cached candidate-key vector without recomputing from mutated leaf index"
         );
     }
 
