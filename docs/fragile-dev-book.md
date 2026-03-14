@@ -10518,3 +10518,83 @@ is complete. Strict build-only replay remains timeout-bound on
 `src/rrr/base/misc.cpp`, and blocker inventory non-increase enforcement remains
 passing versus `2.6.c.iii` baseline. Next leaf is
 `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`.
+
+## 2026-03-14: Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+
+### Decision and rationale
+
+- The active top-level repeat node (`2.6.c...`) still required iteration, and
+  its previous `.a/.b` children were already complete, so I expanded it into
+  the next `.c.a/.c.b` pair and executed `.c.a` first.
+- Implemented a bounded generic namespace-serialization hot-path optimization
+  by adding reusable builders:
+  - `joined_namespace_path`
+  - `namespaced_leaf_name`
+- Replaced repeated `namespace_path.join("::")` + `format!` allocations in:
+  - `collect_fn_template_candidate_keys` namespaced candidate construction
+  - class/function template full-name registration in
+    `collect_template_definitions_with_namespace_stack`
+  - inline-namespace alias parent/full-path string assembly in the same prepass
+
+This stayed localized and small (<500 LOC), so no additional decomposition was
+required for this leaf.
+
+### Wrong-approach check
+
+- No target-specific parser/codegen conditionals were introduced.
+- No force-native bypasses were used.
+- No fake semantic stubs/fallback method bodies were introduced.
+
+### Validation
+
+Executed focused coverage:
+
+- `cargo test -p fragile-clang test_joined_namespace_path_serializes_segments_shape -- --nocapture`
+- `cargo test -p fragile-clang test_namespaced_leaf_name_serializes_segments_shape -- --nocapture`
+- `cargo test -p fragile-clang test_fn_template_candidate_keys_cache_key_namespaced_shape -- --nocapture`
+- `cargo test -p fragile-clang test_fn_template_call_resolution_key_includes_namespaced_path_segments -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_candidate_keys_ -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_uses_cached_call_resolution -- --nocapture`
+- `cargo test -p fragile-clang function_template_type_arg_inference_ -- --nocapture`
+
+Added focused regressions:
+
+- `test_joined_namespace_path_serializes_segments_shape`
+- `test_namespaced_leaf_name_serializes_segments_shape`
+
+Strict replay profiling/timing evidence:
+
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c_c_c_c_c_c_c_c_c_c_c_a_callshape_profile_120_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c_c_c_c_c_c_c_c_c_c_c_a_stage_timing_120_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c_c_c_c_c_c_c_c_c_c_c_a_callshape_profile_300_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c_c_c_c_c_c_c_c_c_c_c_a_stage_timing_300_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+
+Artifact highlights:
+
+- `/tmp/fragile_rpc_leaf_2_6c_current_c_c_c_c_c_c_c_c_c_c_c_a_callshape_profile_120_v1.txt`:
+  `status=codegen_after_template_collection`.
+- `/tmp/fragile_rpc_leaf_2_6c_current_c_c_c_c_c_c_c_c_c_c_c_a_callshape_profile_300_v1.txt`:
+  `status=codegen_after_template_instantiation_generation`,
+  `input_bytes=573453`.
+- Delta vs prior leaf (`2.6...c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`,
+  `input_bytes=565972`): `+7481` bytes.
+- `/tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313/rpc_compile_blocker_replay_manifest.txt`:
+  `replay_01_status=124`, `replay_01_timed_out=true`,
+  `replay_01_first_failure_class=build_timeout`,
+  `replay_01_blocker_file=src/rrr/base/misc.cpp`.
+
+Full-suite regression check:
+
+- `cargo test --workspace --all-targets`:
+  `fragile-clang` lib `775` passed / `46` failed (known baseline failure count unchanged).
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`:
+  `OK`, `29` ran, `1` skipped.
+
+### Outcome
+
+Leaf
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+is complete. Namespace serialization now reuses manual builders on template
+candidate and definition prepass hot paths while preserving existing callshape
+and cache-key semantics. Strict replay remains timeout-bound on
+`src/rrr/base/misc.cpp`; next leaf is
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.b`.

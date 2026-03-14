@@ -38448,18 +38448,37 @@ impl FragileAtomicBoolCompat for atomic_bool {
         if namespace_path.is_empty() {
             return fn_name.to_string();
         }
-        let namespace_len = namespace_path.iter().map(|segment| segment.len()).sum::<usize>()
-            + 2 * namespace_path.len().saturating_sub(1);
-        let mut cache_key = String::with_capacity(namespace_len + 1 + fn_name.len());
-        for (idx, segment) in namespace_path.iter().enumerate() {
-            if idx > 0 {
-                cache_key.push_str("::");
-            }
-            cache_key.push_str(segment);
-        }
+        let namespace = Self::joined_namespace_path(namespace_path);
+        let mut cache_key = String::with_capacity(namespace.len() + 1 + fn_name.len());
+        cache_key.push_str(&namespace);
         cache_key.push('\u{1f}');
         cache_key.push_str(fn_name);
         cache_key
+    }
+
+    fn joined_namespace_path(namespace_path: &[String]) -> String {
+        let namespace_len = namespace_path.iter().map(|segment| segment.len()).sum::<usize>()
+            + 2 * namespace_path.len().saturating_sub(1);
+        let mut namespace = String::with_capacity(namespace_len);
+        for (idx, segment) in namespace_path.iter().enumerate() {
+            if idx > 0 {
+                namespace.push_str("::");
+            }
+            namespace.push_str(segment);
+        }
+        namespace
+    }
+
+    fn namespaced_leaf_name(namespace_path: &[String], leaf: &str) -> String {
+        if namespace_path.is_empty() {
+            return leaf.to_string();
+        }
+        let namespace = Self::joined_namespace_path(namespace_path);
+        let mut full_name = String::with_capacity(namespace.len() + 2 + leaf.len());
+        full_name.push_str(&namespace);
+        full_name.push_str("::");
+        full_name.push_str(leaf);
+        full_name
     }
 
     fn collect_fn_template_candidate_keys(
@@ -38501,7 +38520,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
         };
 
         if !namespace_path.is_empty() {
-            let namespaced = format!("{}::{}", namespace_path.join("::"), fn_name);
+            let namespaced = Self::namespaced_leaf_name(namespace_path, fn_name);
             push_candidate(&namespaced);
         }
         push_candidate(fn_name);
@@ -38860,7 +38879,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
 
                         // Also store with fully-qualified name if in a namespace
                         if !namespace_path.is_empty() {
-                            let full_name = format!("{}::{}", namespace_path.join("::"), name);
+                            let full_name = Self::namespaced_leaf_name(namespace_path, name);
                             self.store_class_template_definition_if_better(
                                 &full_name,
                                 template_params,
@@ -38914,7 +38933,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
                     }
                     // Also store with fully-qualified name if in a namespace
                     if !namespace_path.is_empty() {
-                        let full_name = format!("{}::{}", namespace_path.join("::"), name);
+                        let full_name = Self::namespaced_leaf_name(namespace_path, name);
                         self.set_fn_template_definition(full_name, template_info);
                     }
                     if has_children {
@@ -38930,14 +38949,14 @@ impl FragileAtomicBoolCompat for atomic_bool {
                         // For inline namespaces (like std::__1), register alias
                         // from parent::name to parent::inline::name.
                         let parent_path = if *is_inline && !namespace_path.is_empty() {
-                            Some(namespace_path.join("::"))
+                            Some(Self::joined_namespace_path(namespace_path))
                         } else {
                             None
                         };
                         namespace_path.push(ns_name.clone());
 
                         if let Some(parent_path) = parent_path {
-                            let full_path = namespace_path.join("::");
+                            let full_path = Self::joined_namespace_path(namespace_path);
                             self.inline_namespace_aliases.insert(parent_path, full_path);
                         }
                         if has_children {
@@ -113447,6 +113466,28 @@ stream.PutN(c, n);
             cache_key,
             "std::chrono\u{1f}swap",
             "candidate-key cache shape should preserve namespaced path segments with template-key delimiter",
+        );
+    }
+
+    #[test]
+    fn test_joined_namespace_path_serializes_segments_shape() {
+        let joined =
+            AstCodeGen::joined_namespace_path(&["std".to_string(), "chrono".to_string()]);
+        assert_eq!(
+            joined, "std::chrono",
+            "joined namespace helper should preserve all path segments and separators",
+        );
+    }
+
+    #[test]
+    fn test_namespaced_leaf_name_serializes_segments_shape() {
+        let namespaced = AstCodeGen::namespaced_leaf_name(
+            &["std".to_string(), "chrono".to_string()],
+            "swap",
+        );
+        assert_eq!(
+            namespaced, "std::chrono::swap",
+            "namespaced leaf helper should preserve namespace segments and append leaf name",
         );
     }
 
