@@ -14020,3 +14020,59 @@ Suite sweeps:
 ### Outcome
 
 Leaf `2.7.d.iii` is complete for the top observed degraded post-increment failure class. `test_e2e_deref_postinc` is now green via a generic recovery fix and regression coverage, with remaining e2e failures tracked for follow-on reduction in `2.7.d.iv`.
+
+## 2026-03-14: Leaf 2.7.d.iv full integration/workspace non-increase verification
+
+### Context
+
+Leaf `2.7.d.iv` required rerunning both:
+
+- full `fragile-clang` integration target, and
+- workspace `--all-targets` sweep,
+
+then proving failure-class counts are non-increasing relative to the `2.7.d.iii` baseline.
+
+### Wrong-approach check
+
+Checked against `docs/dev/wrong.md` and section `1.3` before execution:
+
+- No target-specific transpiler hacks were introduced.
+- No semantic fallback stubs were added.
+- This leaf is a verification/evidence task only; no codegen behavior was altered.
+
+### Plan
+
+1. Re-run full integration target and capture deterministic log artifacts.
+2. Re-run workspace `--all-targets` and capture deterministic log artifacts.
+3. Compare failure-class counts (`test_e2e_*` failed lines and total `FAILED` lines) against baseline.
+4. Record evidence in `TODO.md` and preserve non-increase tracking.
+
+### Execution
+
+Executed:
+
+- `cargo test -p fragile-clang --test integration_test`  
+  log: `/tmp/fragile_integration_test_20260314_2_7d_iv.log`
+- `cargo test --workspace --all-targets`  
+  log: `/tmp/fragile_workspace_all_targets_20260314_2_7d_iv.log`
+- Count comparisons versus baseline log `/tmp/fragile_workspace_all_targets_20260314_2_7d_iii_v2.log`:
+  - `rg -n "^test test_e2e_.*FAILED$" ... | wc -l`
+  - `rg -n "FAILED" ... | wc -l`
+
+### Validation
+
+Non-increase checks:
+
+- `test_e2e_* ... FAILED` count: `28` (baseline) -> `28` (current), non-increasing.
+- total `FAILED` lines in integration surface: `29` (baseline) -> `29` (current), non-increasing.
+- representative remaining failing ids unchanged in class family: `test_e2e_access_specifiers`, `test_e2e_quicksort`, `test_e2e_prime_sieve`, `test_e2e_pthread`, `test_e2e_trie`, `test_variadic_template_transpile`.
+
+Suite status:
+
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`:
+  - `Ran 29 tests`, `OK`, `skipped=1`.
+- As in prior sweeps, long-running libcxx tail tests required interrupt after prolonged no-progress, but deterministic failure-class counts were captured before interruption in both logs.
+
+### Outcome
+
+Leaf `2.7.d.iv` is complete. Full integration/workspace reruns were performed, failure-class counts were verified as non-increasing versus the 2026-03-14 baseline, and evidence was recorded in `TODO.md`.
