@@ -12766,3 +12766,43 @@ Results:
 Leaf
 `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
 is complete with focused regression coverage and full-suite baseline parity preserved.
+
+## 2026-03-14: Periodic maintenance leaf `1) Local test-failure sweep`
+
+### Decision and rationale
+
+- Selected the top unfinished high-priority leaf in `TODO.md`: periodic maintenance task `1) Local test-failure sweep`.
+- Scope stayed small (<500 LOC) and process-oriented: run full suites, capture current failure evidence, and add concrete follow-up tasks under the active plan.
+
+### Wrong-Approach Check
+
+Checked against `docs/dev/wrong.md` and project guardrails:
+
+- No target-specific hacks were added.
+- No semantic fallback stubs or fake method bodies were introduced.
+- Follow-up tasks were framed as generic parser/codegen/runtime fixes.
+
+### Execution
+
+Ran:
+
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Observed:
+
+- Python suite passed: `Ran 29 tests`, `OK`, `skipped=1`.
+- Rust workspace remained baseline-red in `fragile-clang` lib: `797 passed`, `46 failed`, `EXIT:101`.
+- First failing test id in this sweep: `ast_codegen::tests::test_fallback_heavily_degraded_function_bodies_stubs_getter_field_artifacts` (failure class: unit assertion failure).
+
+### TODO updates
+
+- Marked periodic maintenance leaf `1)` done for this cycle in `TODO.md` with concrete command/result evidence.
+- Added active-plan follow-ups under `2.7` with required minimal evidence (failing command, failing target/test ids, first failure class):
+  - `2.7.a` degraded-function fallback stubbing family.
+  - `2.7.b` declref/global-storage + enum-argument fallback family.
+  - `2.7.c` structural control-flow/pointer/vtable family.
+
+### Outcome
+
+The maintenance sweep leaf is complete for this cycle, and concrete remediation tasks are now explicitly queued under the active RPC bring-up plan.
