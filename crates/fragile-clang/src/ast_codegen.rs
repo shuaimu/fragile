@@ -39475,6 +39475,47 @@ impl FragileAtomicBoolCompat for atomic_bool {
             return None;
         }
         let sanitized_fn_name = sanitize_identifier(fn_name);
+        let instantiated_param_types_normalized: Vec<String> = params
+            .iter()
+            .map(CppType::to_rust_type_str)
+            .map(|ty| Self::normalize_template_match_type(&ty))
+            .collect();
+        let instantiated_return_type_normalized =
+            Self::normalize_template_match_type(&return_type.as_ref().to_rust_type_str());
+        let resolution_cache_key_without_bounds = Self::fn_template_call_resolution_key(
+            fn_name,
+            namespace_path,
+            &instantiated_param_types_normalized,
+            &instantiated_return_type_normalized,
+            call_arg_nodes,
+            false,
+        );
+        let resolution_cache_key_with_bounds = Self::fn_template_call_resolution_key(
+            fn_name,
+            namespace_path,
+            &instantiated_param_types_normalized,
+            &instantiated_return_type_normalized,
+            call_arg_nodes,
+            true,
+        );
+        let cached_resolution = self
+            .fn_template_call_resolution_cache
+            .get(&resolution_cache_key_without_bounds)
+            .or_else(|| self.fn_template_call_resolution_cache.get(&resolution_cache_key_with_bounds))
+            .cloned();
+        if let Some(cached_resolution) = cached_resolution {
+            if let Some((_, type_args)) = cached_resolution {
+                let mangled_name = Self::build_fn_template_mangled_name(&sanitized_fn_name, &type_args);
+                let sanitized_mangled = sanitize_identifier(&mangled_name);
+                if self.pending_fn_instantiations.contains_key(&mangled_name)
+                    || self.generated_functions.contains_key(&sanitized_mangled)
+                {
+                    return Some(self.compute_relative_path(namespace_path, &mangled_name));
+                }
+            } else {
+                return None;
+            }
+        }
 
         for template_key in candidate_keys_with_defs.iter() {
             let Some(template_info) = self.fn_template_definitions.get(template_key) else {
@@ -114982,6 +115023,75 @@ stream.PutN(c, n);
             resolved.as_deref(),
             Some("swap_i32"),
             "template-call resolution should skip undefined candidate keys and resolve using the definition-backed subset"
+        );
+    }
+
+    #[test]
+    fn test_resolve_fn_template_call_name_from_args_reuses_cached_resolution_shape() {
+        let int_ty = CppType::Int { signed: true };
+        let fn_ty = CppType::Function {
+            return_type: Box::new(int_ty.clone()),
+            params: vec![int_ty.clone()],
+            is_variadic: false,
+        };
+        let call_callee = make_node(
+            ClangNodeKind::DeclRefExpr {
+                name: "swap".to_string(),
+                ty: fn_ty,
+                namespace_path: vec![],
+            },
+            vec![],
+        );
+        let call_args = vec![make_node(
+            ClangNodeKind::IntegerLiteral {
+                value: 7,
+                cpp_type: Some(int_ty),
+            },
+            vec![],
+        )];
+
+        let mut codegen = AstCodeGen::new();
+        codegen.fn_template_keys_by_leaf.insert(
+            "swap".to_string(),
+            vec!["swap".to_string(), "ghost::swap".to_string()],
+        );
+        let template_info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Named("T".to_string()),
+            params: vec![("value".to_string(), CppType::Named("T".to_string()))],
+            body: None,
+            is_noexcept: false,
+        };
+        codegen
+            .fn_template_definitions
+            .insert("swap".to_string(), template_info.clone());
+        codegen.pending_fn_instantiations.insert(
+            "swap_i64".to_string(),
+            (
+                "swap".to_string(),
+                vec!["i64".to_string()],
+                template_info.clone(),
+            ),
+        );
+
+        let resolution_key = AstCodeGen::fn_template_call_resolution_key(
+            "swap",
+            &[],
+            &["i32".to_string()],
+            "i32",
+            &call_args,
+            false,
+        );
+        codegen.fn_template_call_resolution_cache.insert(
+            resolution_key,
+            Some(("swap".to_string(), vec!["i64".to_string()])),
+        );
+
+        let resolved = codegen.resolve_fn_template_call_name_from_args(&call_callee, &call_args);
+        assert_eq!(
+            resolved.as_deref(),
+            Some("swap_i64"),
+            "template-call resolution should honor cached call-resolution shape when matching pending instantiations"
         );
     }
 
