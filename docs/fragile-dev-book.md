@@ -12806,3 +12806,49 @@ Observed:
 ### Outcome
 
 The maintenance sweep leaf is complete for this cycle, and concrete remediation tasks are now explicitly queued under the active RPC bring-up plan.
+
+## 2026-03-14: Periodic maintenance leaf `2) GitHub CI failure sweep`
+
+### Decision and rationale
+
+- Selected the top unfinished high-priority maintenance leaf in `TODO.md`: periodic `2) GitHub CI failure sweep`.
+- Scope stayed small (<500 LOC): collect current GitHub Actions status evidence and translate failures into concrete active-plan follow-up tasks.
+
+### Wrong-Approach Check
+
+Checked against `docs/dev/wrong.md` and repository guardrails:
+
+- No target-specific hacks were introduced.
+- No semantic fallback stubs/fake bodies were introduced.
+- Follow-up actions are framed as generic lowering/codegen correctness work.
+
+### Execution
+
+Ran:
+
+- `gh run list --limit 20 --json databaseId,workflowName,status,conclusion,url,createdAt,updatedAt,headBranch,event`
+- `gh run view 23091601943 --json url,workflowName,status,conclusion,jobs,createdAt,updatedAt`
+- `gh run view 23091601943 --job 67077040383 --log-failed`
+
+Observed:
+
+- Latest three runs are still in progress:
+  - `https://github.com/shuaimu/fragile/actions/runs/23092059323`
+  - `https://github.com/shuaimu/fragile/actions/runs/23091965952`
+  - `https://github.com/shuaimu/fragile/actions/runs/23091802173`
+- Latest completed run failed:
+  - `https://github.com/shuaimu/fragile/actions/runs/23091601943`
+- First failing job in that run:
+  - `rapidjson-smoke-baseline` (`https://github.com/shuaimu/fragile/actions/runs/23091601943/job/67077040383`)
+- First failure class for that job: `rustc_compile_error` (dominant diagnostics `E0530`, `E0425`, `E0308`).
+
+### TODO updates
+
+- Marked periodic leaf `2)` done for this cycle with concrete evidence.
+- Added active-plan follow-up tasks under `2.8`:
+  - `2.8.a` generic fixes for RapidJSON smoke compile regressions seen in CI.
+  - `2.8.b` CI-aligned rerun gate for `rapidjson-smoke-baseline` and `build` test phases.
+
+### Outcome
+
+The CI sweep leaf is complete for this cycle, and concrete CI-derived remediation tasks are now queued in the active plan.
