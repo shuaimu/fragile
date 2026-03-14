@@ -38499,19 +38499,39 @@ impl FragileAtomicBoolCompat for atomic_bool {
             .get(fn_name)
             .map_or(0, Vec::len);
         let expected_candidate_count = leaf_candidate_count.saturating_add(2);
+        const HASH_DEDUPE_THRESHOLD: usize = 16;
         let mut candidate_keys: Vec<String> = Vec::with_capacity(expected_candidate_count);
         let mut candidate_keys_with_defs: Option<Vec<String>> = None;
         let mut all_candidates_have_definitions = true;
+        let mut seen_candidate_keys: Option<HashSet<String>> = None;
         let mut push_candidate = |key: &str, has_definition_hint: Option<bool>| {
             if key.is_empty() {
                 return;
             }
-            if candidate_keys.iter().any(|existing| existing == key) {
+            if seen_candidate_keys
+                .as_ref()
+                .is_some_and(|seen| seen.contains(key))
+            {
+                return;
+            }
+            if seen_candidate_keys.is_none()
+                && candidate_keys.iter().any(|existing| existing == key)
+            {
                 return;
             }
             let has_definition = has_definition_hint
                 .unwrap_or_else(|| self.fn_template_definitions.contains_key(key));
+            if seen_candidate_keys.is_none() && candidate_keys.len() >= HASH_DEDUPE_THRESHOLD {
+                let mut seen = HashSet::with_capacity(candidate_keys.len().saturating_add(1));
+                for existing in &candidate_keys {
+                    seen.insert(existing.clone());
+                }
+                seen_candidate_keys = Some(seen);
+            }
             let owned_key = key.to_string();
+            if let Some(seen) = seen_candidate_keys.as_mut() {
+                seen.insert(owned_key.clone());
+            }
             if has_definition {
                 if let Some(with_defs) = candidate_keys_with_defs.as_mut() {
                     with_defs.push(owned_key.clone());
@@ -114144,6 +114164,59 @@ stream.PutN(c, n);
         assert!(
             Arc::ptr_eq(&cached_with_defs, &with_defs),
             "second lookup should reuse cached definition-backed candidate subset allocation"
+        );
+    }
+
+    #[test]
+    fn test_collect_fn_template_candidate_keys_large_leaf_index_deduplicates_without_reordering() {
+        let mut codegen = AstCodeGen::new();
+        let mut leaf_entries: Vec<String> = Vec::new();
+        for idx in 0..40 {
+            leaf_entries.push(format!("ns{}::bulk", idx % 20));
+        }
+        codegen
+            .fn_template_keys_by_leaf
+            .insert("bulk".to_string(), leaf_entries.clone());
+        let template_info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Named("T".to_string()),
+            params: vec![("value".to_string(), CppType::Named("T".to_string()))],
+            body: None,
+            is_noexcept: false,
+        };
+        codegen
+            .fn_template_definitions
+            .insert("bulk".to_string(), template_info.clone());
+        for idx in 0..20 {
+            codegen
+                .fn_template_definitions
+                .insert(format!("ns{idx}::bulk"), template_info.clone());
+        }
+
+        let mut expected = vec!["bulk".to_string()];
+        let mut seen = HashSet::new();
+        for key in leaf_entries {
+            if seen.insert(key.clone()) {
+                expected.push(key);
+            }
+        }
+
+        let candidates = codegen.collect_fn_template_candidate_keys("bulk", &[]);
+        assert_eq!(
+            candidates.as_ref(),
+            &expected,
+            "large leaf-index candidate collection should deduplicate repeated entries without reordering first-seen keys"
+        );
+
+        let with_defs = codegen.collect_fn_template_candidate_keys_with_defs("bulk", &[]);
+        assert!(
+            Arc::ptr_eq(&with_defs, &candidates),
+            "definition-backed subset should alias candidate vector allocation when all keys are definition-backed even for large leaf indexes"
+        );
+        assert_eq!(
+            with_defs.as_ref(),
+            &expected,
+            "definition-backed subset should preserve deduplicated ordering for large leaf indexes"
         );
     }
 
