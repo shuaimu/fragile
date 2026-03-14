@@ -13713,3 +13713,117 @@ Results:
 ### Outcome
 
 Leaf `2.7.a` is complete: degraded fallback stubbing detection for known placeholder families is restored and locked by focused regression coverage. Remaining full-suite failures are tracked in follow-up leaves `2.7.b` and `2.7.c`.
+
+## 2026-03-14: Leaf 2.7.b declref/global-storage remap + enum-argument fallback repairs
+
+### Context
+
+Follow-up leaf `2.7.b` targeted periodic-sweep failures around:
+
+- function-like declrefs being remapped/shadowed through `__gv_*` storage aliases;
+- degraded call-site enum argument metadata failing to normalize enum constants to qualified enum variants.
+
+### Wrong-approach check
+
+Reviewed the wrong-approach guidance (book section `1.3` and `docs/dev/wrong.md`) before changes:
+
+- No target-specific (`rpcbench`/`test_rpc`/single-benchmark) conditionals were added.
+- No semantic fake-body fallback stubs were introduced.
+- Fixes stayed in generic declref/call-lowering and post-normalization logic.
+
+### Plan
+
+1. Reproduce targeted failing tests from `2.7.b` evidence.
+2. Patch generic declref remap and enum fallback selection paths.
+3. Add/adjust focused assertions so tests lock semantic behavior instead of incidental return-cast formatting.
+4. Re-run targeted tests and full Rust/Python suites.
+5. Record evidence in `TODO.md` and this book.
+
+### Execution
+
+Implemented in `crates/fragile-clang/src/ast_codegen.rs`:
+
+- `normalize_unprefixed_global_static_reads_to_locals`:
+  - collected top-level function item names from generated code;
+  - prevented `__gv_*` local snapshot injection for aliases that match function symbols, avoiding call-site function shadowing (`let mut target = unsafe { __gv_target... }`).
+- Declared-parameter fallback preference in call lowering:
+  - broadened enum-degraded preference to treat declared `enum <name>` params as enum-like when call-site inferred types degrade to integrals/bool.
+- Added enum-variant declref guard:
+  - new helper `is_known_enum_variant_declref_name`;
+  - suppressed unresolved function-scope static fallback synthesis for known enum constants, preventing artifacts like `let mut CODES: i32 = 0;` in enum argument calls.
+
+Focused test assertions were tightened/adjusted to verify intended semantics:
+
+- function declref call remains callable and not `__gv_`-shadowed/remapped;
+- degraded function-like declref use-site text remains function-symbol-based;
+- enum argument lowering checks `take_kind(codetype::CODES)` directly (independent of optional return-cast normalization).
+
+### Validation
+
+Targeted tests:
+
+- `cargo test -p fragile-clang test_call_expr_function_declref_is_not_remapped_to_global_storage_symbol -- --nocapture`
+- `cargo test -p fragile-clang test_declref_known_function_name_with_degraded_type_not_remapped_to_global_storage -- --nocapture`
+- `cargo test -p fragile-clang test_enum_function_argument_integer_literal_is_lowered_to_variant -- --nocapture`
+- `cargo test -p fragile-clang test_enum_function_argument_declref_uses_declared_param_type_fallback -- --nocapture`
+
+All targeted tests pass.
+
+Full suites:
+
+- `cargo test --workspace --all-targets` -> still red in `fragile-clang` lib, now `831` passed / `19` failed (`EXIT:101`), first failing id `ast_codegen::tests::test_const_this_eq_mut_raw_pointer_casts_both_sides_to_const` (unit assertion).
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'` -> `OK` (`Ran 29`, `skipped=1`).
+
+### Outcome
+
+Leaf `2.7.b` is complete: declref/global-storage remap and enum-argument fallback regressions are fixed and locked with focused tests. Remaining baseline-red Rust failures are tracked by `2.7.c`.
+
+## 2026-03-14: Leaf 2.7.c structural control-flow/pointer/vtable repairs
+
+### Context
+
+Follow-up leaf `2.7.c` targeted structural regressions in control-flow/pointer/vtable families, with remaining red tests including `if`/`switch`/`simple_function`/out-of-line/vtable assertions and downstream grammar failures (`test_21_mutex`, `test_22_condvar`).
+
+### Wrong-approach check
+
+- No target-specific (`rpcbench`/`test_rpc`) conditionals were added.
+- No semantic stub/fake success bodies were introduced.
+- Fixes were applied in generic AST/codegen normalization paths:
+  - in-class field-initializer capture;
+  - late `MaybeUninit` pointer-cast rewriting.
+
+### Plan
+
+1. Reproduce remaining grammar/structural failures and inspect emitted Rust.
+2. Fix structural root causes in generic codegen (not test-only edits).
+3. Add focused regressions for both root causes.
+4. Re-run `fragile-clang` lib + grammar tests and Python suite.
+
+### Execution
+
+Implemented in `crates/fragile-clang/src/ast_codegen.rs`:
+
+- In-class array field initializer capture:
+  - updated `FieldDecl` initializer discovery in record generation so array-bound metadata nodes (`IntegerLiteral` children used for `[T; N]` shape) are not treated as default member initializers;
+  - for array fields, only explicit initializer forms are accepted (`InitListExpr`, string/construct wrappers).
+- `MaybeUninit` global pointer-cast normalization:
+  - added `normalize_maybeuninit_global_pointer_casts`;
+  - rewrites `unsafe { &mut __gv_* as *mut T }` -> `unsafe { __gv_*.as_mut_ptr() } as *mut T` and `unsafe { &__gv_* as *const T }` -> `unsafe { __gv_*.as_ptr() } as *const T` for `std::mem::MaybeUninit` globals;
+  - wired this pass into the late normalization pipeline after clone-read normalization.
+
+Added focused regressions:
+
+- `test_default_ctor_ignores_array_size_field_child_without_initializer`
+- `test_normalize_maybeuninit_global_pointer_casts_rewrites_addr_of_global_casts`
+
+### Validation
+
+- `cargo test -p fragile-clang --lib` -> `852` passed, `0` failed.
+- `cargo test -p fragile-clang --test grammar_tests` -> `22` passed, `0` failed.
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'` -> `OK`, `Ran 29`, `skipped=1`.
+
+`cargo test --workspace --all-targets` remains baseline-red in integration/e2e targets (representative failures: `test_end_to_end`, `test_generate_rust_code`, `test_e2e_quicksort`, `test_e2e_prime_sieve`, `test_e2e_pthread`, `test_runtime_function_name_mapping`), tracked in follow-up leaf `2.7.d`.
+
+### Outcome
+
+Leaf `2.7.c` is complete: structural array-initializer and `MaybeUninit` pointer-cast regressions are fixed with focused tests, and `grammar_tests` are fully green. Remaining workspace integration failures are tracked separately in `2.7.d`.
