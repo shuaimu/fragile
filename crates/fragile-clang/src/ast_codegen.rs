@@ -38470,14 +38470,16 @@ impl FragileAtomicBoolCompat for atomic_bool {
         }
 
         let mut candidate_keys: Vec<String> = Vec::new();
+        let mut seen_candidate_keys: HashSet<String> = HashSet::new();
         let mut push_candidate = |key: &str| {
             if key.is_empty() {
                 return;
             }
-            if candidate_keys.iter().any(|existing| existing == key) {
+            let owned_key = key.to_string();
+            if !seen_candidate_keys.insert(owned_key.clone()) {
                 return;
             }
-            candidate_keys.push(key.to_string());
+            candidate_keys.push(owned_key);
         };
 
         if !namespace_path.is_empty() {
@@ -113842,6 +113844,27 @@ stream.PutN(c, n);
         assert_eq!(
             cached_with_defs, with_defs,
             "second lookup should reuse cached definition-backed subset without recomputing from mutated maps"
+        );
+    }
+
+    #[test]
+    fn test_collect_fn_template_candidate_keys_skips_empty_leaf_entries() {
+        let mut codegen = AstCodeGen::new();
+        codegen.fn_template_keys_by_leaf.insert(
+            "swap".to_string(),
+            vec![
+                "".to_string(),
+                "std::swap".to_string(),
+                "".to_string(),
+                "swap".to_string(),
+            ],
+        );
+
+        let candidates = codegen.collect_fn_template_candidate_keys("swap", &["std".to_string()]);
+        assert_eq!(
+            candidates,
+            vec!["std::swap".to_string(), "swap".to_string()],
+            "candidate-key collection should ignore empty leaf-index entries while preserving first-seen priority order"
         );
     }
 
