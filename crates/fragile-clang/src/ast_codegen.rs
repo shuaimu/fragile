@@ -22654,8 +22654,18 @@ impl AstCodeGen {
         let mut impl_prefix_alias_candidates: HashMap<String, HashMap<String, HashSet<String>>> =
             HashMap::new();
         let mut top_level_function_names: HashSet<String> = HashSet::new();
+        let mut top_level_static_item_names: HashSet<String> = HashSet::new();
         for line in code.lines() {
             let trimmed = line.trim_start();
+            let static_name = Self::parse_static_item_name(trimmed);
+            if let Some(static_name) = static_name.as_ref() {
+                if let Some(raw) = static_name.strip_prefix("r#") {
+                    if !raw.is_empty() {
+                        top_level_static_item_names.insert(raw.to_string());
+                    }
+                }
+                top_level_static_item_names.insert(static_name.clone());
+            }
             if trimmed.len() == line.len() {
                 if let Some(fn_name) = parse_fn_item_name(trimmed) {
                     if let Some(raw) = fn_name.strip_prefix("r#") {
@@ -22666,7 +22676,7 @@ impl AstCodeGen {
                     top_level_function_names.insert(fn_name);
                 }
             }
-            if let Some(static_name) = Self::parse_static_item_name(trimmed) {
+            if let Some(static_name) = static_name {
                 if let Some(alias_name) = static_name.strip_prefix("__gv_") {
                     if !alias_name.is_empty() {
                         let alias_name = alias_name.to_string();
@@ -22763,6 +22773,11 @@ impl AstCodeGen {
             let mut needed: Vec<String> = Vec::new();
             for alias in candidate_aliases.keys() {
                 if occupied_names.contains(alias) || occupied_names.contains(&format!("r#{}", alias))
+                {
+                    continue;
+                }
+                if top_level_static_item_names.contains(alias)
+                    || top_level_static_item_names.contains(&format!("r#{}", alias))
                 {
                     continue;
                 }
@@ -80327,6 +80342,21 @@ fn default_value_for_type(ty: &CppType) -> String {
 /// Correct a field initializer value based on the field's type.
 /// Converts literal `0` to `std::ptr::null_mut()` for pointer fields.
 fn correct_initializer_for_type(value: &str, ty: &CppType) -> String {
+    let is_union_named_type = match ty {
+        CppType::Named(name) => {
+            let raw = name.trim();
+            if raw.is_empty() {
+                false
+            } else {
+                raw.starts_with("union ")
+                    || raw.starts_with("(unnamed union at ")
+                    || raw.contains("unnamed union at ")
+                    || sanitize_identifier(raw).starts_with("union__")
+            }
+        }
+        _ => false,
+    };
+
     // If value is `0` and the type is a pointer, use null pointer of matching mutability.
     if matches!(ty, CppType::Pointer { .. })
         && (is_zero_integer_literal_str(value)
@@ -80342,6 +80372,10 @@ fn correct_initializer_for_type(value: &str, ty: &CppType) -> String {
         } else {
             "std::ptr::null_mut()".to_string()
         }
+    } else if is_union_named_type && is_zero_integer_literal_str(value) {
+        // Union fields cannot be assigned scalar integer literals directly in Rust.
+        // Preserve zero-init intent with a typed zeroed initializer.
+        "unsafe { std::mem::zeroed() }".to_string()
     } else if matches!(ty, CppType::Pointer { pointee, .. } if !matches!(pointee.as_ref(), CppType::Function { .. }))
     {
         // Global arrays frequently appear as `unsafe { __gv_name }` in aggregate
@@ -93530,6 +93564,33 @@ pub fn probe() {
         assert!(
             normalized.contains("let _c = mako::len;"),
             "non-rooted module paths should remain unchanged, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_unprefixed_global_static_reads_to_locals_skips_static_name_collisions() {
+        let input = r#"
+pub(crate) static mut __gv_stdin: *mut std::ffi::c_void = std::ptr::null_mut();
+extern "C" {
+    pub static mut stdin: *mut std::ffi::c_void;
+}
+
+pub fn read_stdin() -> *mut std::ffi::c_void {
+    unsafe { stdin }
+}
+"#;
+
+        let normalized = AstCodeGen::normalize_unprefixed_global_static_reads_to_locals(input);
+        assert!(
+            !normalized.contains("let mut stdin = unsafe { __gv_stdin")
+                && !normalized.contains("let mut stdin = unsafe { __gv_stdin.clone()"),
+            "global-static alias normalization must not inject locals that shadow top-level statics, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("unsafe { stdin }"),
+            "existing top-level static references should remain untouched when alias injection is skipped, got:\n{}",
             normalized
         );
     }
@@ -108012,6 +108073,24 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
             correct_initializer_for_type("[]", &unsized_uch_array),
             "std::ptr::null_mut()"
         );
+    }
+
+    #[test]
+    fn test_union_named_type_zero_initializer_uses_typed_zeroed_value() {
+        let source_union_ty =
+            CppType::Named("union (unnamed union at /tmp/header.h:16:3)".to_string());
+        let lowered_union_ty =
+            CppType::Named("union__unnamed_union_at__tmp_header_h_16_3_".to_string());
+
+        assert_eq!(
+            correct_initializer_for_type("0", &source_union_ty),
+            "unsafe { std::mem::zeroed() }"
+        );
+        assert_eq!(
+            correct_initializer_for_type("0", &lowered_union_ty),
+            "unsafe { std::mem::zeroed() }"
+        );
+        assert_eq!(correct_initializer_for_type("7", &source_union_ty), "7");
     }
 
     #[test]

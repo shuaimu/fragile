@@ -14076,3 +14076,62 @@ Suite status:
 ### Outcome
 
 Leaf `2.7.d.iv` is complete. Full integration/workspace reruns were performed, failure-class counts were verified as non-increasing versus the 2026-03-14 baseline, and evidence was recorded in `TODO.md`.
+
+## 2026-03-14: Leaf 2.8.a RapidJSON single-TU smoke compile regression fixes
+
+### Context
+
+CI sweep leaf `2)` identified `rapidjson-smoke-baseline` compile regressions (`E0530`, `E0425`, `E0308`) in single-TU replay output. Local reproduction confirmed two hard compile blockers in generated Rust:
+
+- injected locals shadowing existing `extern` statics (`stdin`, `stdout`) via `normalize_unprefixed_global_static_reads_to_locals`,
+- scalar `0` assigned to union-typed fields in constructor initialization.
+
+### Wrong-approach check
+
+Checked against `docs/dev/wrong.md` and section `1.3` before editing:
+
+- no target-specific rapidjson-only branch logic was introduced,
+- no force-native bypasses were used,
+- no fake semantic method-body stubs were added.
+
+All fixes are generic normalization/lowering correctness improvements in shared codegen paths.
+
+### Plan
+
+1. Prevent unprefixed-global alias injection when the alias name collides with an existing static item name.
+2. Normalize zero-literal union initializers to typed zeroed initialization.
+3. Add focused regressions for both behaviors.
+4. Re-run CI-aligned rapidjson smoke fixture commands and broad suite commands.
+
+### Execution
+
+Updated `crates/fragile-clang/src/ast_codegen.rs`:
+
+- `normalize_unprefixed_global_static_reads_to_locals` now tracks parsed static item names (including indented `extern` statics) and skips alias-local injection for colliding names.
+- `correct_initializer_for_type` now detects union-like named types and rewrites zero-literal initializers to `unsafe { std::mem::zeroed() }` to preserve typed zero-init semantics.
+- Added focused tests:
+  - `test_normalize_unprefixed_global_static_reads_to_locals_skips_static_name_collisions`
+  - `test_union_named_type_zero_initializer_uses_typed_zeroed_value`
+
+### Validation
+
+Focused tests (pass):
+
+- `cargo test -p fragile-clang test_normalize_unprefixed_global_static_reads_to_locals_skips_static_name_collisions -- --nocapture`
+- `cargo test -p fragile-clang test_union_named_type_zero_initializer_uses_typed_zeroed_value -- --nocapture`
+
+CI-aligned rapidjson smoke local fixture commands (all pass):
+
+- `cargo test -p fragile-clang --test real_world_rapidjson_tests test_rapidjson_native_no_stl_examples_local_fixture_success -- --nocapture`
+- `cargo test -p fragile-clang --test real_world_rapidjson_tests test_rapidjson_no_stl_command_plan_local_fixture_success -- --nocapture`
+- `cargo test -p fragile-clang --test real_world_rapidjson_tests test_rapidjson_fragile_condense_single_tu_replay_local_fixture_success -- --nocapture`
+- `cargo test -p fragile-clang --test real_world_rapidjson_tests test_rapidjson_fragilec_driver_no_stl_examples_local_fixture_success -- --nocapture`
+
+Full-suite sweep status:
+
+- `cargo test --workspace --all-targets` reached and passed `fragile-clang` lib (`860/860`) and progressed through integration runs, reproducing baseline-red integration failures (for example `test_e2e_access_specifiers`, `test_e2e_insertion_sort`, `test_e2e_binary_search_tree`, `test_e2e_pthread`, `test_variadic_template_transpile`); run was interrupted after prolonged no-progress in long libcxx integration tails.
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`: `Ran 29`, `OK`, `skipped=1`.
+
+### Outcome
+
+Leaf `2.8.a` is complete: the reproduced rapidjson single-TU smoke compile blockers are cleared with generic fixes and focused regressions, and CI-aligned rapidjson smoke local fixture coverage is green.
