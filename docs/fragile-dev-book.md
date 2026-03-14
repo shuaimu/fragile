@@ -13107,3 +13107,54 @@ Observed:
 ### Outcome
 
 Leaf `2.6.c.viii` is complete with deterministic replay + nonincrease evidence. Build lane remains timeout-bound at `src/rrr/base/misc.cpp`, so next generic optimization/replay iteration remains queued.
+
+## 2026-03-14: RPC leaf `2.6.c.ix` borrow-first sanitize helper for template resolver hot paths
+
+### Decision and rationale
+
+- Selected active RPC leaf `2.6.c.ix` in `TODO.md` (next generic codegen hot-path optimization before `codegen_after_top_level_generation`).
+- Scope check: small targeted change (<500 LOC) in `crates/fragile-clang/src/ast_codegen.rs` plus focused regression coverage.
+
+### Wrong-Approach Check
+
+Checked against `docs/dev/wrong.md` and section `1.3` in this book before editing:
+
+- No rollback-pattern expansion, target-specific conditionals, or force-native bypasses.
+- No semantic stubs/fake method bodies were introduced.
+- Change is a generic fast path for function-template name sanitization behavior.
+
+### Plan
+
+1. Add a borrow-first helper that only allocates sanitized identifiers when required.
+2. Reuse it in the template-instantiation and call-resolution hot paths where `sanitize_identifier` was unconditional.
+3. Add focused regression coverage for helper behavior.
+4. Run targeted and full suites.
+
+### Implementation
+
+- Added `sanitize_identifier_if_needed(name: &str) -> Cow<'_, str>` in `AstCodeGen`.
+- Updated these hot paths to use the helper instead of unconditional `sanitize_identifier` allocation:
+  - `collect_fn_template_instantiation`
+  - `resolve_existing_fn_template_path`
+  - `resolve_fn_template_call_name_from_args`
+- Kept behavior unchanged for symbolic identifier shapes (`swap::i32` still sanitizes to `swap_i32`) and unchanged fallback ordering (pending -> generated direct -> generated sanitized).
+- Added focused unit test `test_sanitize_identifier_if_needed_borrows_clean_names_and_rewrites_symbolic_names`.
+
+### Validation
+
+Focused regressions:
+
+- `cargo test -p fragile-clang test_sanitize_identifier_if_needed_borrows_clean_names_and_rewrites_symbolic_names -- --nocapture`
+- `cargo test -p fragile-clang test_identifier_requires_sanitization_matches_identifier_shapes -- --nocapture`
+- `cargo test -p fragile-clang test_resolve_existing_fn_template_path_prefers_pending_and_falls_back_to_generated -- --nocapture`
+- `cargo test -p fragile-clang test_resolve_fn_template_call_name_from_args_ -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_ -- --nocapture`
+
+Full suites:
+
+- `cargo test --workspace --all-targets` -> baseline red in `fragile-clang` lib (`800` passed, `46` failed, `EXIT:101`).
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'` -> `OK`, `Ran 29 tests`, `skipped=1`.
+
+### Outcome
+
+Leaf `2.6.c.ix` is complete with focused regression coverage and full-suite verification; no new failure class beyond the known baseline-red Rust profile was introduced.

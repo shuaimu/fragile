@@ -9,6 +9,7 @@ use crate::ast::{
     CoroutineKind, TemplateSpecializationKind, UnaryOp,
 };
 use crate::types::{normalize_rusty_type_alias_to_std, parse_template_args, CppType};
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
@@ -39230,7 +39231,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
             }
             return;
         }
-        let sanitized_fn_name = sanitize_identifier(fn_name);
+        let sanitized_fn_name = Self::sanitize_identifier_if_needed(fn_name);
         let mut selected_instantiation: Option<(usize, Vec<String>)> = None;
         let mut fallback_instantiation: Option<(usize, Vec<String>)> = None;
         let instantiated_param_types_normalized: Vec<String> = params
@@ -39350,7 +39351,8 @@ impl FragileAtomicBoolCompat for atomic_bool {
         };
 
         if let Some((template_key, type_args)) = resolved_instantiation {
-            let mangled_name = Self::build_fn_template_mangled_name(&sanitized_fn_name, &type_args);
+            let mangled_name =
+                Self::build_fn_template_mangled_name(sanitized_fn_name.as_ref(), &type_args);
             let concrete_template_info = if let Some(template_info) =
                 self.fn_template_definitions.get(&template_key)
             {
@@ -39422,6 +39424,14 @@ impl FragileAtomicBoolCompat for atomic_bool {
             return true;
         }
         chars.any(|ch| !(ch == '_' || ch.is_ascii_alphanumeric()))
+    }
+
+    fn sanitize_identifier_if_needed(name: &str) -> Cow<'_, str> {
+        if Self::identifier_requires_sanitization(name) {
+            Cow::Owned(sanitize_identifier(name))
+        } else {
+            Cow::Borrowed(name)
+        }
     }
 
     fn normalize_template_match_type(ty: &str) -> String {
@@ -39506,10 +39516,12 @@ impl FragileAtomicBoolCompat for atomic_bool {
         if self.generated_functions.contains_key(mangled_name) {
             return Some(self.compute_relative_path(namespace_path, mangled_name));
         }
-        if Self::identifier_requires_sanitization(mangled_name) {
-            let sanitized_mangled = sanitize_identifier(mangled_name);
+        {
+            let sanitized_mangled = Self::sanitize_identifier_if_needed(mangled_name);
             if sanitized_mangled != mangled_name
-                && self.generated_functions.contains_key(&sanitized_mangled)
+                && self
+                    .generated_functions
+                    .contains_key(sanitized_mangled.as_ref())
             {
                 return Some(self.compute_relative_path(namespace_path, mangled_name));
             }
@@ -39559,7 +39571,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
             return None;
         };
 
-        let sanitized_fn_name = sanitize_identifier(fn_name);
+        let sanitized_fn_name = Self::sanitize_identifier_if_needed(fn_name);
         let instantiated_param_types_normalized: Vec<String> = params
             .iter()
             .map(CppType::to_rust_type_str)
@@ -39662,8 +39674,10 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 if !self.fn_template_definitions.contains_key(template_key) {
                     // Continue below and recover via candidate matching.
                 } else {
-                    let mangled_name =
-                        Self::build_fn_template_mangled_name(&sanitized_fn_name, type_args);
+                    let mangled_name = Self::build_fn_template_mangled_name(
+                        sanitized_fn_name.as_ref(),
+                        type_args,
+                    );
                     if let Some(path) =
                         self.resolve_existing_fn_template_path(namespace_path, &mangled_name)
                     {
@@ -39736,7 +39750,8 @@ impl FragileAtomicBoolCompat for atomic_bool {
             ) else {
                 continue;
             };
-            let mangled_name = Self::build_fn_template_mangled_name(&sanitized_fn_name, &type_args);
+            let mangled_name =
+                Self::build_fn_template_mangled_name(sanitized_fn_name.as_ref(), &type_args);
             if let Some(path) =
                 self.resolve_existing_fn_template_path(namespace_path, &mangled_name)
             {
@@ -116029,6 +116044,25 @@ stream.PutN(c, n);
         assert!(
             AstCodeGen::identifier_requires_sanitization("swap-i32"),
             "symbol-containing shapes should require sanitization fallback probing"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_identifier_if_needed_borrows_clean_names_and_rewrites_symbolic_names() {
+        let clean = AstCodeGen::sanitize_identifier_if_needed("swap_i32");
+        assert!(
+            matches!(clean, std::borrow::Cow::Borrowed("swap_i32")),
+            "clean identifier shapes should stay borrowed and avoid rewrite allocation"
+        );
+        let namespaced = AstCodeGen::sanitize_identifier_if_needed("swap::i32");
+        assert_eq!(
+            namespaced.as_ref(),
+            "swap_i32",
+            "symbolic identifier shapes should still sanitize to generated-function spelling"
+        );
+        assert!(
+            matches!(namespaced, std::borrow::Cow::Owned(_)),
+            "symbolic identifier shapes should allocate rewritten sanitized spelling"
         );
     }
 
