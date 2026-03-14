@@ -9548,3 +9548,73 @@ is complete. Strict build-only replay remains timeout-bound on
 `src/rrr/base/misc.cpp`, and blocker inventory non-increase enforcement still
 passes versus `2.6.c.iii` baseline. Next leaf is
 `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`.
+
+## 2026-03-14: Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+
+### Decision and rationale
+
+- Implemented a generic function-template call-resolution hot-path optimization
+  in `collect_fn_template_instantiation`.
+- Added `fn_template_requires_call_arg_bounds_cache` and used it to gate
+  `fn_template_call_resolution_key` so literal-bound extraction from call
+  arguments runs only when candidate templates can infer non-type array-ref
+  parameters (`has_non_type_param_candidate`).
+- This removes unnecessary recursive literal scans for non-NTTP templates while
+  preserving bound-sensitive behavior for NTTP-dependent templates.
+
+This remained a small bounded change (<500 LOC) with focused cache invalidation
+and regression coverage.
+
+### Wrong-approach check
+
+- No target-specific `mako`/`rpc` conditionals were introduced.
+- No force-native bypasses were used.
+- No synthesized fake method bodies/stubs were added.
+- Change is generic codegen cache-key shaping and applies to all templates.
+
+### Validation
+
+Executed focused coverage:
+
+- `cargo test -p fragile-clang test_fn_template_call_resolution_key_omits_literal_bound_dimension_when_disabled -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_reuses_resolution_cache_for_non_nttp_string_literal_calls -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_uses_cached_call_resolution -- --nocapture`
+- `cargo test -p fragile-clang function_template_type_arg_inference_ -- --nocapture`
+- `cargo test -p fragile-clang test_set_fn_template_definition_invalidates_param_dependency_cache -- --nocapture`
+
+Strict replay profiling/timing evidence:
+
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c_c_c_a_callshape_profile_120_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c_c_c_a_stage_timing_120_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c_c_c_a_callshape_profile_300_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c_c_c_a_stage_timing_300_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+
+Artifact highlights:
+
+- `/tmp/fragile_rpc_leaf_2_6c_current_c_c_c_a_callshape_profile_120_v1.txt`:
+  `status=codegen_after_template_collection`.
+- `/tmp/fragile_rpc_leaf_2_6c_current_c_c_c_a_callshape_profile_300_v1.txt`:
+  `status=codegen_after_template_instantiation_generation`,
+  `input_bytes=567988`.
+- Delta vs prior leaf (`2.6...c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`,
+  `input_bytes=575218`): `-7230` bytes.
+- `/tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313/rpc_compile_blocker_replay_manifest.txt`:
+  `replay_01_status=124`, `replay_01_timed_out=true`,
+  `replay_01_first_failure_class=build_timeout`,
+  `replay_01_blocker_file=src/rrr/base/misc.cpp`.
+
+Full-suite regression check:
+
+- `cargo test --workspace --all-targets`:
+  `fragile-clang` lib `766` passed / `46` failed (known baseline failure count unchanged).
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`:
+  `OK`, `29` ran, `1` skipped.
+
+### Outcome
+
+Leaf
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+is complete. Function-template resolution now avoids unnecessary literal-bound
+hashing when call-argument bounds cannot affect type-arg inference, while
+retaining bound-sensitive matching for NTTP array-ref templates. Strict replay
+remains timeout-bound on `src/rrr/base/misc.cpp`; next leaf is
+`...c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.b`.

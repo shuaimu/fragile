@@ -1204,6 +1204,9 @@ pub struct AstCodeGen {
     /// Cache of function-template inference shape metadata used by
     /// `infer_fn_template_type_args` in hot call-site matching paths.
     fn_template_inference_shape_cache: HashMap<String, Arc<FnTemplateInferenceShape>>,
+    /// Cache of whether function-template resolution for a template key can
+    /// depend on call-argument literal bounds (non-type array-ref candidates).
+    fn_template_requires_call_arg_bounds_cache: HashMap<String, bool>,
     /// Cache of normalized concrete signature shapes for function-template
     /// matching keyed by `(template_key, concrete_type_args)`.
     fn_template_concrete_match_shape_cache: HashMap<String, Arc<FnTemplateConcreteMatchShape>>,
@@ -1412,6 +1415,7 @@ impl AstCodeGen {
             fn_template_definitions: HashMap::new(),
             fn_template_param_dependency_cache: HashMap::new(),
             fn_template_inference_shape_cache: HashMap::new(),
+            fn_template_requires_call_arg_bounds_cache: HashMap::new(),
             fn_template_concrete_match_shape_cache: HashMap::new(),
             fn_template_call_resolution_cache: HashMap::new(),
             fn_template_candidate_keys_cache: RefCell::new(HashMap::new()),
@@ -38395,6 +38399,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
     fn collect_template_info(&mut self, children: &[ClangNode]) {
         self.fn_template_call_resolution_cache.clear();
         self.fn_template_candidate_keys_cache.borrow_mut().clear();
+        self.fn_template_requires_call_arg_bounds_cache.clear();
         // Precollect definitions first so a single usage pass can resolve
         // call-sites/type uses that appear before template declarations.
         self.collect_template_definitions_with_namespace(children, &[]);
@@ -38483,6 +38488,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
     fn set_fn_template_definition(&mut self, key: String, info: FnTemplateInfo) {
         self.fn_template_param_dependency_cache.remove(&key);
         self.fn_template_inference_shape_cache.remove(&key);
+        self.fn_template_requires_call_arg_bounds_cache.remove(&key);
         self.fn_template_call_resolution_cache.clear();
         self.fn_template_candidate_keys_cache.borrow_mut().clear();
         let cache_prefix = format!("{key}\u{1f}");
@@ -38497,6 +38503,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
         instantiated_param_types_normalized: &[String],
         instantiated_return_type_normalized: &str,
         call_args: &[ClangNode],
+        include_call_arg_bounds: bool,
     ) -> String {
         let mut key = String::new();
         key.push_str(fn_name);
@@ -38512,13 +38519,17 @@ impl FragileAtomicBoolCompat for atomic_bool {
         key.push('\u{1f}');
         key.push_str(&call_args.len().to_string());
         key.push('\u{1f}');
-        for arg in call_args {
-            if let Some(bound) = infer_nttp_array_bound_literal_len_with_nul(arg) {
-                key.push_str(&bound.to_string());
-            } else {
-                key.push('_');
+        key.push(if include_call_arg_bounds { '1' } else { '0' });
+        if include_call_arg_bounds {
+            key.push('\u{1f}');
+            for arg in call_args {
+                if let Some(bound) = infer_nttp_array_bound_literal_len_with_nul(arg) {
+                    key.push_str(&bound.to_string());
+                } else {
+                    key.push('_');
+                }
+                key.push('\u{1e}');
             }
-            key.push('\u{1e}');
         }
         key
     }
@@ -38614,6 +38625,22 @@ impl FragileAtomicBoolCompat for atomic_bool {
             has_param_dependent_template_arg,
         );
         has_param_dependent_template_arg
+    }
+
+    fn fn_template_requires_call_arg_bounds(&mut self, template_key: &str) -> bool {
+        if let Some(cached) = self
+            .fn_template_requires_call_arg_bounds_cache
+            .get(template_key)
+        {
+            return *cached;
+        }
+        let requires = self
+            .fn_template_inference_shape(template_key)
+            .as_ref()
+            .is_some_and(|shape| shape.has_non_type_param_candidate);
+        self.fn_template_requires_call_arg_bounds_cache
+            .insert(template_key.to_string(), requires);
+        requires
     }
 
     fn class_template_children_have_fields(children: &[ClangNode]) -> bool {
@@ -38991,12 +39018,16 @@ impl FragileAtomicBoolCompat for atomic_bool {
             .collect();
         let instantiated_return_type_normalized =
             Self::normalize_template_match_type(&return_type.as_ref().to_rust_type_str());
+        let include_call_arg_bounds = candidate_keys_with_defs
+            .iter()
+            .any(|template_key| self.fn_template_requires_call_arg_bounds(template_key));
         let resolution_cache_key = Self::fn_template_call_resolution_key(
             fn_name,
             namespace_path,
             &instantiated_param_types_normalized,
             &instantiated_return_type_normalized,
             call_args,
+            include_call_arg_bounds,
         );
 
         let resolved_instantiation = if let Some(cached_resolution) = self
@@ -113187,6 +113218,7 @@ stream.PutN(c, n);
             &["i32".to_string()],
             "i32",
             call_args,
+            false,
         );
         codegen.fn_template_call_resolution_cache.insert(
             resolution_key,
@@ -113207,6 +113239,180 @@ stream.PutN(c, n);
             pending.1,
             vec!["i64".to_string()],
             "cached call resolution should preserve cached concrete type args"
+        );
+    }
+
+    #[test]
+    fn test_fn_template_call_resolution_key_omits_literal_bound_dimension_when_disabled() {
+        let short_literal_args = vec![make_node(ClangNodeKind::StringLiteral("x".to_string()), vec![])];
+        let long_literal_args = vec![make_node(
+            ClangNodeKind::StringLiteral("longer_literal".to_string()),
+            vec![],
+        )];
+        let params = vec!["*consti8".to_string()];
+
+        let short_no_bounds = AstCodeGen::fn_template_call_resolution_key(
+            "match_literal",
+            &[],
+            &params,
+            "bool",
+            &short_literal_args,
+            false,
+        );
+        let long_no_bounds = AstCodeGen::fn_template_call_resolution_key(
+            "match_literal",
+            &[],
+            &params,
+            "bool",
+            &long_literal_args,
+            false,
+        );
+        assert_eq!(
+            short_no_bounds, long_no_bounds,
+            "resolution key should ignore literal-bound dimension when call-arg bounds are not required"
+        );
+
+        let short_with_bounds = AstCodeGen::fn_template_call_resolution_key(
+            "match_literal",
+            &[],
+            &params,
+            "bool",
+            &short_literal_args,
+            true,
+        );
+        let long_with_bounds = AstCodeGen::fn_template_call_resolution_key(
+            "match_literal",
+            &[],
+            &params,
+            "bool",
+            &long_literal_args,
+            true,
+        );
+        assert_ne!(
+            short_with_bounds, long_with_bounds,
+            "resolution key should remain literal-bound-sensitive when call-arg bounds are required"
+        );
+    }
+
+    #[test]
+    fn test_collect_fn_template_instantiation_reuses_resolution_cache_for_non_nttp_string_literal_calls()
+    {
+        let templ_ty = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        let bool_ty = CppType::Bool;
+        let const_char_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        let call_fn_ty = CppType::Function {
+            return_type: Box::new(bool_ty.clone()),
+            params: vec![const_char_ptr.clone(), const_char_ptr.clone()],
+            is_variadic: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::FunctionTemplateDecl {
+                        name: "match_literal".to_string(),
+                        template_params: vec!["T".to_string()],
+                        return_type: bool_ty.clone(),
+                        params: vec![
+                            ("lhs".to_string(), templ_ty.clone()),
+                            ("rhs".to_string(), templ_ty),
+                        ],
+                        is_definition: true,
+                        parameter_pack_indices: vec![],
+                        requires_clause: None,
+                        is_noexcept: false,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "call_match_literal".to_string(),
+                        mangled_name: "call_match_literal".to_string(),
+                        is_static: false,
+                        return_type: CppType::Void,
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![
+                            make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: bool_ty.clone(),
+                                    template_instantiation: None,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "match_literal".to_string(),
+                                            ty: call_fn_ty.clone(),
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(ClangNodeKind::StringLiteral("x".to_string()), vec![]),
+                                    make_node(ClangNodeKind::StringLiteral("y".to_string()), vec![]),
+                                ],
+                            ),
+                            make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: bool_ty,
+                                    template_instantiation: None,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "match_literal".to_string(),
+                                            ty: call_fn_ty,
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::StringLiteral("alphabet".to_string()),
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::StringLiteral("soup".to_string()),
+                                        vec![],
+                                    ),
+                                ],
+                            ),
+                        ],
+                    )],
+                ),
+            ],
+        );
+
+        let mut codegen = AstCodeGen::new();
+        codegen.collect_template_definitions_with_namespace(&ast.children, &[]);
+        codegen.rebuild_fn_template_leaf_index();
+        codegen.collect_template_usages(&ast.children);
+
+        assert_eq!(
+            codegen.fn_template_call_resolution_cache.len(),
+            1,
+            "non-NTTP string-literal calls should reuse a single resolution-cache key when literal bounds are not part of matching"
+        );
+        assert!(
+            codegen
+                .fn_template_call_resolution_cache
+                .keys()
+                .next()
+                .is_some_and(|k| k.contains("\u{1f}0")),
+            "resolution-cache key should record that call-arg bounds are omitted for this template shape"
         );
     }
 
@@ -113359,6 +113565,15 @@ stream.PutN(c, n);
             codegen.fn_template_inference_shape("cache::swap").is_some(),
             "inference shape cache should populate for known template key"
         );
+        let _ = codegen.fn_template_requires_call_arg_bounds("cache::swap");
+        assert_eq!(
+            codegen
+                .fn_template_requires_call_arg_bounds_cache
+                .get("cache::swap")
+                .copied(),
+            Some(false),
+            "call-arg-bound requirement cache should populate alongside inference-shape cache"
+        );
         codegen.fn_template_call_resolution_cache.insert(
             "cache-key".to_string(),
             Some(("cache::swap".to_string(), vec!["i32".to_string()])),
@@ -113397,6 +113612,12 @@ stream.PutN(c, n);
                 .fn_template_inference_shape_cache
                 .contains_key("cache::swap"),
             "replacing template definition should invalidate cached inference shape"
+        );
+        assert!(
+            !codegen
+                .fn_template_requires_call_arg_bounds_cache
+                .contains_key("cache::swap"),
+            "replacing template definition should invalidate cached call-arg-bound requirement"
         );
         assert!(
             codegen.fn_template_call_resolution_cache.is_empty(),
