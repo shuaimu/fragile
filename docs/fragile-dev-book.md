@@ -9422,3 +9422,76 @@ is complete. Strict build-only replay remains timeout-bound at
 `src/rrr/base/misc.cpp`, and blocker inventory non-increase enforcement remains
 passing versus `2.6.c.iii`. Next leaf is
 `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`.
+
+## 2026-03-14: Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+
+### Decision and rationale
+
+- Implemented a generic non-template fast path in
+  `collect_fn_template_instantiation` by filtering speculative candidate-key
+  vectors to definition-backed keys before expensive template call-resolution
+  work.
+- When no definition-backed candidates exist, the path now exits before
+  instantiation param/return normalization, resolution-key construction, and
+  `fn_template_call_resolution_cache` `None` insertion.
+- Preserved `same_ptr_const_i8` fallback synthesis behavior on the fast-exit
+  path.
+
+This remained a small patch under the leaf-size envelope (single file, focused
+behavior + tests).
+
+### Wrong-approach check
+
+- No target-specific `mako`/`rpc` conditionals were added.
+- No force-native bypasses were used.
+- No semantic stubs/fallback bodies were introduced.
+- The change is a generic codegen hot-path pruning with behavior-guard tests.
+
+### Validation
+
+Executed focused coverage:
+
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_skips_resolution_cache_when_no_candidates -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_same_ptr_fallback_without_candidates -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_uses_cached_call_resolution -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_candidate_keys_deduplicates_and_keeps_priority_order -- --nocapture`
+- `cargo test -p fragile-clang test_set_fn_template_definition_invalidates_param_dependency_cache -- --nocapture`
+- `cargo test -p fragile-clang function_template_type_arg_inference_ -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_uses_leaf_index_candidate_after_mismatch -- --nocapture`
+
+Strict replay profiling/timing evidence:
+
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c_c_a_callshape_profile_120_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c_c_a_stage_timing_120_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c_c_a_callshape_profile_300_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c_c_a_stage_timing_300_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+
+Artifact highlights:
+
+- `/tmp/fragile_rpc_leaf_2_6c_current_c_c_a_callshape_profile_120_v1.txt`:
+  `status=codegen_after_template_collection`.
+- `/tmp/fragile_rpc_leaf_2_6c_current_c_c_a_callshape_profile_300_v1.txt`:
+  `status=codegen_after_template_instantiation_generation`,
+  `input_bytes=575218`.
+- Delta vs prior leaf (`2.6...c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`,
+  `input_bytes=565443`): `+9775` bytes.
+- `/tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313/rpc_compile_blocker_replay_manifest.txt`:
+  `replay_01_status=124`, `replay_01_timed_out=true`,
+  `replay_01_first_failure_class=build_timeout`,
+  `replay_01_blocker_file=src/rrr/base/misc.cpp`.
+
+Full-suite regression check:
+
+- `cargo test --workspace --all-targets`:
+  `fragile-clang` lib `764` passed / `46` failed (known baseline failure count unchanged).
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`:
+  `OK`, `29` ran, `1` skipped.
+
+### Outcome
+
+Leaf
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+is complete. Function-template call scanning now skips heavy resolution work when
+candidate keys are not backed by template definitions, while preserving
+`same_ptr_const_i8` fallback synthesis behavior. Strict replay remains
+timeout-bound on `src/rrr/base/misc.cpp`; next leaf is
+`...c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.b`.

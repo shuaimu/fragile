@@ -38946,8 +38946,41 @@ impl FragileAtomicBoolCompat for atomic_bool {
             return;
         };
 
-        let candidate_keys = self.collect_fn_template_candidate_keys(fn_name, namespace_path);
         let call_args = &call_node.children[1..];
+        let candidate_keys = self.collect_fn_template_candidate_keys(fn_name, namespace_path);
+        let candidate_keys_with_defs: Vec<String> = candidate_keys
+            .into_iter()
+            .filter(|key| self.fn_template_definitions.contains_key(key))
+            .collect();
+        if candidate_keys_with_defs.is_empty() {
+            if Self::is_same_ptr_const_i8_synthesis_candidate(
+                fn_name,
+                params,
+                return_type.as_ref(),
+                call_args,
+            ) {
+                self.pending_fn_instantiations
+                    .entry("same_ptr_const_i8".to_string())
+                    .or_insert_with(|| {
+                        (
+                            "__fragile_yaml_same_literal_cmp".to_string(),
+                            vec!["*const i8".to_string()],
+                            FnTemplateInfo {
+                                template_params: vec!["N".to_string()],
+                                return_type: CppType::Bool,
+                                params: vec![
+                                    ("str".to_string(), params[0].clone()),
+                                    ("size".to_string(), params[1].clone()),
+                                    ("literal".to_string(), params[2].clone()),
+                                ],
+                                body: None,
+                                is_noexcept: false,
+                            },
+                        )
+                    });
+            }
+            return;
+        }
         let sanitized_fn_name = sanitize_identifier(fn_name);
         let mut selected_instantiation: Option<(String, Vec<String>)> = None;
         let mut fallback_instantiation: Option<(String, Vec<String>)> = None;
@@ -38972,7 +39005,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
         {
             cached_resolution.clone()
         } else {
-            for template_key in candidate_keys {
+            for template_key in candidate_keys_with_defs {
                 let has_param_dependent_template_arg =
                     self.fn_template_has_param_dependent_args(&template_key);
                 let inference_shape = self.fn_template_inference_shape(&template_key);
@@ -113174,6 +113207,129 @@ stream.PutN(c, n);
             pending.1,
             vec!["i64".to_string()],
             "cached call resolution should preserve cached concrete type args"
+        );
+    }
+
+    #[test]
+    fn test_collect_fn_template_instantiation_skips_resolution_cache_when_no_candidates() {
+        let int_ty = CppType::Int { signed: true };
+        let call_ty = CppType::Function {
+            return_type: Box::new(int_ty.clone()),
+            params: vec![int_ty.clone()],
+            is_variadic: false,
+        };
+        let call = make_node(
+            ClangNodeKind::CallExpr {
+                ty: int_ty.clone(),
+                template_instantiation: None,
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "__fragile_unique_no_template_candidate_01".to_string(),
+                        ty: call_ty,
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::IntegerLiteral {
+                        value: 7,
+                        cpp_type: Some(int_ty),
+                    },
+                    vec![],
+                ),
+            ],
+        );
+
+        let mut codegen = AstCodeGen::new();
+        codegen.fn_template_definitions.clear();
+        codegen.fn_template_keys_by_leaf.clear();
+        codegen.fn_template_candidate_keys_cache.borrow_mut().clear();
+        codegen.collect_fn_template_instantiation(&call);
+
+        assert!(
+            codegen.pending_fn_instantiations.is_empty(),
+            "no template candidates should not queue function-template instantiations"
+        );
+        assert!(
+            codegen.fn_template_call_resolution_cache.is_empty(),
+            "no template candidates should bypass call-resolution cache key creation/insertions, cache keys: {:?}",
+            codegen
+                .fn_template_call_resolution_cache
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_collect_fn_template_instantiation_same_ptr_fallback_without_candidates() {
+        let bool_ty = CppType::Bool;
+        let const_char_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        let same_call_ty = CppType::Function {
+            return_type: Box::new(bool_ty.clone()),
+            params: vec![
+                const_char_ptr_ty.clone(),
+                CppType::LongLong { signed: false },
+                const_char_ptr_ty.clone(),
+            ],
+            is_variadic: false,
+        };
+        let call = make_node(
+            ClangNodeKind::CallExpr {
+                ty: bool_ty,
+                template_instantiation: None,
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "same".to_string(),
+                        ty: same_call_ty,
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "str".to_string(),
+                        ty: const_char_ptr_ty.clone(),
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "size".to_string(),
+                        ty: CppType::LongLong { signed: false },
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(ClangNodeKind::StringLiteral("~".to_string()), vec![]),
+            ],
+        );
+
+        let mut codegen = AstCodeGen::new();
+        codegen.fn_template_definitions.clear();
+        codegen.fn_template_keys_by_leaf.clear();
+        codegen.fn_template_candidate_keys_cache.borrow_mut().clear();
+        codegen.collect_fn_template_instantiation(&call);
+
+        let synthesized = codegen
+            .pending_fn_instantiations
+            .get("same_ptr_const_i8")
+            .expect("same_ptr fallback should still synthesize helper when no template candidates exist");
+        assert_eq!(
+            synthesized.0, "__fragile_yaml_same_literal_cmp",
+            "same_ptr fallback should map to fragile literal-compare helper"
+        );
+        assert!(
+            codegen.fn_template_call_resolution_cache.is_empty(),
+            "same_ptr fallback path should not populate call-resolution cache when candidate set is empty"
         );
     }
 
