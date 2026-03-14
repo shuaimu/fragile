@@ -1204,6 +1204,9 @@ pub struct AstCodeGen {
     /// Cache of function-template inference shape metadata used by
     /// `infer_fn_template_type_args` in hot call-site matching paths.
     fn_template_inference_shape_cache: HashMap<String, Arc<FnTemplateInferenceShape>>,
+    /// Cache of normalized concrete signature shapes for function-template
+    /// matching keyed by `(template_key, concrete_type_args)`.
+    fn_template_concrete_match_shape_cache: HashMap<String, Arc<FnTemplateConcreteMatchShape>>,
     /// Function-template keys indexed by unqualified leaf name to avoid scanning
     /// the full definition map for every call-site candidate lookup.
     fn_template_keys_by_leaf: HashMap<String, Vec<String>>,
@@ -1308,6 +1311,12 @@ struct FnTemplateInferenceShape {
 }
 
 #[derive(Clone)]
+struct FnTemplateConcreteMatchShape {
+    param_types_normalized: Vec<String>,
+    return_type_normalized: String,
+}
+
+#[derive(Clone)]
 struct SwitchArm<'a> {
     values: Vec<i128>,
     body: Vec<&'a ClangNode>,
@@ -1397,6 +1406,7 @@ impl AstCodeGen {
             fn_template_definitions: HashMap::new(),
             fn_template_param_dependency_cache: HashMap::new(),
             fn_template_inference_shape_cache: HashMap::new(),
+            fn_template_concrete_match_shape_cache: HashMap::new(),
             fn_template_keys_by_leaf: HashMap::new(),
             pending_fn_instantiations: HashMap::new(),
             skip_vtable_generation: HashSet::new(),
@@ -38439,7 +38449,63 @@ impl FragileAtomicBoolCompat for atomic_bool {
     fn set_fn_template_definition(&mut self, key: String, info: FnTemplateInfo) {
         self.fn_template_param_dependency_cache.remove(&key);
         self.fn_template_inference_shape_cache.remove(&key);
+        let cache_prefix = format!("{key}\u{1f}");
+        self.fn_template_concrete_match_shape_cache
+            .retain(|cache_key, _| !cache_key.starts_with(&cache_prefix));
         self.fn_template_definitions.insert(key, info);
+    }
+
+    fn fn_template_concrete_match_shape_key(template_key: &str, type_args: &[String]) -> String {
+        let mut cache_key = String::with_capacity(
+            template_key.len() + type_args.iter().map(|a| a.len() + 1).sum::<usize>(),
+        );
+        cache_key.push_str(template_key);
+        for type_arg in type_args {
+            cache_key.push('\u{1f}');
+            cache_key.push_str(type_arg);
+        }
+        cache_key
+    }
+
+    fn fn_template_concrete_match_shape(
+        &mut self,
+        template_key: &str,
+        type_args: &[String],
+    ) -> Option<Arc<FnTemplateConcreteMatchShape>> {
+        let cache_key = Self::fn_template_concrete_match_shape_key(template_key, type_args);
+        if let Some(cached_shape) = self.fn_template_concrete_match_shape_cache.get(&cache_key) {
+            return Some(cached_shape.clone());
+        }
+
+        let (param_types_normalized, return_type_normalized) = {
+            let template_info = self.fn_template_definitions.get(template_key)?;
+            let mut subst_map: HashMap<String, String> =
+                HashMap::with_capacity(template_info.template_params.len());
+            for (param, arg) in template_info.template_params.iter().zip(type_args.iter()) {
+                subst_map.insert(param.clone(), arg.clone());
+            }
+            let param_types_normalized: Vec<String> = template_info
+                .params
+                .iter()
+                .map(|(_, ty)| {
+                    let substituted = self.substitute_template_type(ty, &subst_map);
+                    Self::normalize_template_match_type(&substituted)
+                })
+                .collect();
+            let substituted_return_type =
+                self.substitute_template_type(&template_info.return_type, &subst_map);
+            let return_type_normalized =
+                Self::normalize_template_match_type(&substituted_return_type);
+            (param_types_normalized, return_type_normalized)
+        };
+
+        let concrete_shape = Arc::new(FnTemplateConcreteMatchShape {
+            param_types_normalized,
+            return_type_normalized,
+        });
+        self.fn_template_concrete_match_shape_cache
+            .insert(cache_key, concrete_shape.clone());
+        Some(concrete_shape)
     }
 
     fn fn_template_inference_shape(
@@ -38829,19 +38895,19 @@ impl FragileAtomicBoolCompat for atomic_bool {
             let has_param_dependent_template_arg =
                 self.fn_template_has_param_dependent_args(&template_key);
             let inference_shape = self.fn_template_inference_shape(&template_key);
-            let Some(template_info) = self.fn_template_definitions.get(&template_key) else {
-                continue;
+            let type_args = if let Some(template_info) = self.fn_template_definitions.get(&template_key)
+            {
+                infer_fn_template_type_args_with_shape(
+                    template_info,
+                    params,
+                    return_type.as_ref(),
+                    Some(call_args),
+                    inference_shape.as_deref(),
+                )
+            } else {
+                None
             };
-            // Build type substitution map by comparing template param patterns with instantiated types.
-            // For example, if template has (T* a, T* b) and instantiated is (int*, int*),
-            // we need to extract T = int, not T = int*.
-            let Some(type_args) = infer_fn_template_type_args_with_shape(
-                template_info,
-                params,
-                return_type.as_ref(),
-                Some(call_args),
-                inference_shape.as_deref(),
-            ) else {
+            let Some(type_args) = type_args else {
                 continue;
             };
             if fallback_instantiation.is_none()
@@ -38850,22 +38916,23 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 fallback_instantiation = Some((template_key.clone(), type_args.clone()));
             }
 
-            let mut subst_map: HashMap<String, String> = HashMap::new();
-            for (param, arg) in template_info.template_params.iter().zip(type_args.iter()) {
-                subst_map.insert(param.clone(), arg.clone());
-            }
-            if template_info.params.len() != instantiated_param_types_normalized.len() {
+            let Some(concrete_shape) =
+                self.fn_template_concrete_match_shape(&template_key, &type_args)
+            else {
+                continue;
+            };
+            if concrete_shape.param_types_normalized.len()
+                != instantiated_param_types_normalized.len()
+            {
                 continue;
             }
             let mut param_types_match = true;
-            for ((_, ty), rhs_norm) in template_info
-                .params
+            for (lhs_norm, rhs_norm) in concrete_shape
+                .param_types_normalized
                 .iter()
                 .zip(instantiated_param_types_normalized.iter())
             {
-                let lhs = self.substitute_template_type(ty, &subst_map);
-                let lhs_norm = Self::normalize_template_match_type(&lhs);
-                if !Self::template_match_types_compatible(&lhs_norm, rhs_norm) {
+                if !Self::template_match_types_compatible(lhs_norm, rhs_norm) {
                     param_types_match = false;
                     break;
                 }
@@ -38873,12 +38940,8 @@ impl FragileAtomicBoolCompat for atomic_bool {
             if !param_types_match {
                 continue;
             }
-            let substituted_return_type =
-                self.substitute_template_type(&template_info.return_type, &subst_map);
-            let substituted_return_norm =
-                Self::normalize_template_match_type(&substituted_return_type);
-            if substituted_return_norm != "_"
-                && substituted_return_norm != instantiated_return_type_normalized
+            if concrete_shape.return_type_normalized != "_"
+                && concrete_shape.return_type_normalized != instantiated_return_type_normalized
             {
                 continue;
             }
@@ -112853,6 +112916,51 @@ stream.PutN(c, n);
     }
 
     #[test]
+    fn test_fn_template_concrete_match_shape_reuses_cached_value() {
+        let mut codegen = AstCodeGen::new();
+        let info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Named("T".to_string()),
+            params: vec![("value".to_string(), CppType::Named("T".to_string()))],
+            body: None,
+            is_noexcept: false,
+        };
+        let type_args = vec!["i32".to_string()];
+        codegen.set_fn_template_definition("cache::concrete".to_string(), info);
+        let initial_shape = codegen
+            .fn_template_concrete_match_shape("cache::concrete", &type_args)
+            .expect("concrete match shape should be computed for known template key");
+        assert_eq!(
+            initial_shape.param_types_normalized,
+            vec!["i32".to_string()],
+            "computed concrete shape should normalize substituted parameter types"
+        );
+        assert_eq!(
+            initial_shape.return_type_normalized,
+            "i32".to_string(),
+            "computed concrete shape should normalize substituted return type"
+        );
+
+        let cache_key =
+            AstCodeGen::fn_template_concrete_match_shape_key("cache::concrete", &type_args);
+        codegen.fn_template_concrete_match_shape_cache.insert(
+            cache_key,
+            Arc::new(FnTemplateConcreteMatchShape {
+                param_types_normalized: vec!["u64".to_string()],
+                return_type_normalized: "u64".to_string(),
+            }),
+        );
+        let reused_shape = codegen
+            .fn_template_concrete_match_shape("cache::concrete", &type_args)
+            .expect("second concrete-shape lookup should reuse cached value");
+        assert_eq!(
+            reused_shape.param_types_normalized,
+            vec!["u64".to_string()],
+            "second concrete-shape lookup should use cache entry without recomputing"
+        );
+    }
+
+    #[test]
     fn test_set_fn_template_definition_invalidates_param_dependency_cache() {
         let mut codegen = AstCodeGen::new();
         let dependent_info = FnTemplateInfo {
@@ -112878,6 +112986,13 @@ stream.PutN(c, n);
             codegen.fn_template_inference_shape("cache::swap").is_some(),
             "inference shape cache should populate for known template key"
         );
+        let concrete_type_args = vec!["i32".to_string()];
+        assert!(
+            codegen
+                .fn_template_concrete_match_shape("cache::swap", &concrete_type_args)
+                .is_some(),
+            "concrete shape cache should populate for known template key"
+        );
         assert_eq!(
             codegen
                 .fn_template_param_dependency_cache
@@ -112899,6 +113014,14 @@ stream.PutN(c, n);
                 .fn_template_inference_shape_cache
                 .contains_key("cache::swap"),
             "replacing template definition should invalidate cached inference shape"
+        );
+        let concrete_cache_key =
+            AstCodeGen::fn_template_concrete_match_shape_key("cache::swap", &concrete_type_args);
+        assert!(
+            !codegen
+                .fn_template_concrete_match_shape_cache
+                .contains_key(&concrete_cache_key),
+            "replacing template definition should invalidate concrete-shape cache entries for key"
         );
         assert!(
             !codegen.fn_template_has_param_dependent_args("cache::swap"),

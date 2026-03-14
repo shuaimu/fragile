@@ -9026,3 +9026,149 @@ is complete. Strict build-only replay remains timeout-bound at
 `src/rrr/base/misc.cpp`, and blocker inventory non-increase enforcement remains
 passing versus `2.6.c.iii`. Next leaf is
 `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`.
+
+## 130. RPC Compile Blocker Leaf 2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a: Cached Concrete Function-Template Match Shapes (2026-03-14)
+
+### Problem
+
+`collect_fn_template_instantiation` still rebuilt a substitution map and
+re-substituted all template parameter/return types for each candidate key at
+call-site match time. On repeated call-shapes this created avoidable
+per-candidate substitution churn in the dominant pre-top-level window.
+
+### Execution Plan
+
+1. Add a cache for concrete function-template signature match shapes keyed by
+   `(template_key, concrete type args)`.
+2. Reuse cached normalized substituted param/return shapes in candidate
+   compatibility checks.
+3. Invalidate concrete-shape cache entries when template definitions are
+   replaced.
+4. Add focused cache reuse + invalidation regressions.
+5. Re-run strict replay profiling and full regression gates.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no target-specific hacks
+- no force-native bypasses
+- no semantic stubs/fallback bodies
+- no suppression of failing replay/test outcomes
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang test_fn_template_concrete_match_shape_reuses_cached_value -- --nocapture`
+- `cargo test -p fragile-clang test_set_fn_template_definition_invalidates_param_dependency_cache -- --nocapture`
+- `cargo test -p fragile-clang function_template_type_arg_inference_ -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_uses_leaf_index_candidate_after_mismatch -- --nocapture`
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_a_callshape_profile_120_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_a_stage_timing_120_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_a_callshape_profile_300_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_a_stage_timing_300_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+- `cargo test --workspace --all-targets > /tmp/full_test_20260314_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_a.log 2>&1`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- focused suites:
+  - `test_fn_template_concrete_match_shape_reuses_cached_value`: pass
+  - `test_set_fn_template_definition_invalidates_param_dependency_cache`: pass
+  - `function_template_type_arg_inference_`: `11` passed / `0` failed
+  - `test_collect_fn_template_instantiation_uses_leaf_index_candidate_after_mismatch`: pass
+- 120s profile:
+  - `status=codegen_after_template_collection`
+  - `status_history=codegen_started,codegen_after_template_collection`
+- 300s profile:
+  - `status=codegen_after_template_instantiation_generation`
+  - `status_history=codegen_started,codegen_after_template_collection,codegen_after_template_instantiation_generation`
+  - `input_bytes=567934`
+- 120s/300s stage timing traces:
+  - both reached `event=stage_start stage=codegen` after completed export/parse/enrichment stages
+- replay manifest (`/tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313/rpc_compile_blocker_replay_manifest.txt`):
+  - `replay_01_status=124`
+  - `replay_01_timed_out=true`
+  - `replay_01_first_failure_class=build_timeout`
+  - `replay_01_blocker_file=src/rrr/base/misc.cpp`
+- comparison vs prior leaf
+  (`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`,
+  `input_bytes=573054`):
+  - delta `-5120`
+- full-suite baseline parity:
+  - `cargo test --workspace --all-targets`: `fragile-clang` lib
+    `761` passed / `46` failed (failure count unchanged)
+  - Python suite: `OK`, `29` ran, `1` skipped
+
+### Outcome
+
+Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+is complete. Function-template candidate matching now reuses cached concrete
+substituted signature shapes, avoiding repeated per-candidate substitution-map
+construction and substitution passes while preserving deterministic cache
+invalidation on template-definition replacement. Strict replay remains
+timeout-bound on `src/rrr/base/misc.cpp`; next leaf is
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.b`.
+
+## 131. RPC Compile Blocker Leaf 2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.b: Strict Build-Only Non-Increase Gate Replay (2026-03-14)
+
+### Problem
+
+After completing leaf
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`,
+we needed to verify strict build-only behavior remained non-regressive versus
+the `2.6.c.iii` blocker baseline.
+
+### Execution Plan
+
+1. Re-run strict single-lane build-only harness with a fresh run root.
+2. Enforce blocker inventory non-increase versus `2.6.c.iii` baseline manifest.
+3. Re-run full regression suites and confirm baseline parity.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no target-specific hacks
+- no force-native bypasses
+- no semantic stubs/fallback bodies
+- no suppression of failing replay/test outcomes
+
+### Validation
+
+Executed:
+
+- `FRAGILEC_MODE=strict python3 scripts/mako_rpcbench_harness.py --run-root /tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_b_build_only_20260313_v1 --lanes fragilec --build-only --jobs 4 --build-timeout-seconds 180`
+- `python3 scripts/mako_rpc_compile_blocker_inventory.py --run-root /tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_b_build_only_20260313_v1 --lanes fragilec --baseline-manifest /tmp/fragile_rpc_leaf_2_6c_iii_build_only_20260313/rpc_compile_blocker_inventory_manifest.txt --enforce-nonincreasing`
+- `cargo test --workspace --all-targets > /tmp/full_test_20260314_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_a.log 2>&1`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- strict build-only harness manifest
+  (`/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_b_build_only_20260313_v1/benchmark_harness_manifest.txt`):
+  - `lane_fragilec_configure_status=0`
+  - `lane_fragilec_clean_status=0`
+  - `lane_fragilec_build_status=124`
+  - `lane_fragilec_failure_class=build_timeout`
+  - `no_regression_verdict=not_executed`
+- blocker inventory manifest
+  (`/tmp/fragile_rpc_leaf_2_6c_iv_d_iv_c_iv_c_iii_c_iii_c_iii_c_iii_c_iii_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_b_build_only_20260313_v1/rpc_compile_blocker_inventory_manifest.txt`):
+  - `lane_fragilec_first_failing_compile_class=build_timeout`
+  - `lane_fragilec_first_failing_compile_file=src/rrr/base/misc.cpp`
+  - `lane_fragilec_class_rank_delta_vs_baseline=0`
+  - `lane_fragilec_e0425_delta_vs_baseline=0`
+  - `lane_fragilec_nonincrease_gate_pass=true`
+  - `nonincrease_gate_pass=true`
+- full-suite baseline parity:
+  - `cargo test --workspace --all-targets`: `fragile-clang` lib
+    `761` passed / `46` failed (failure count unchanged)
+  - Python suite: `OK`, `29` ran, `1` skipped
+
+### Outcome
+
+Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.b`
+is complete. Strict build-only replay remains timeout-bound at
+`src/rrr/base/misc.cpp`, and blocker inventory non-increase enforcement remains
+passing versus `2.6.c.iii`. Next leaf is
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`.
