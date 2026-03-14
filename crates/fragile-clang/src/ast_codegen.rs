@@ -38500,8 +38500,8 @@ impl FragileAtomicBoolCompat for atomic_bool {
             .map_or(0, Vec::len);
         let expected_candidate_count = leaf_candidate_count.saturating_add(2);
         let mut candidate_keys: Vec<String> = Vec::with_capacity(expected_candidate_count);
-        let mut candidate_keys_with_defs: Vec<String> =
-            Vec::with_capacity(expected_candidate_count);
+        let mut candidate_keys_with_defs: Option<Vec<String>> = None;
+        let mut all_candidates_have_definitions = true;
         let mut push_candidate = |key: &str, has_definition_hint: Option<bool>| {
             if key.is_empty() {
                 return;
@@ -38513,7 +38513,12 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 .unwrap_or_else(|| self.fn_template_definitions.contains_key(key));
             let owned_key = key.to_string();
             if has_definition {
-                candidate_keys_with_defs.push(owned_key.clone());
+                if let Some(with_defs) = candidate_keys_with_defs.as_mut() {
+                    with_defs.push(owned_key.clone());
+                }
+            } else if all_candidates_have_definitions {
+                candidate_keys_with_defs = Some(candidate_keys.clone());
+                all_candidates_have_definitions = false;
             }
             candidate_keys.push(owned_key);
         };
@@ -38542,7 +38547,11 @@ impl FragileAtomicBoolCompat for atomic_bool {
         }
 
         let candidate_keys = Arc::new(candidate_keys);
-        let candidate_keys_with_defs = Arc::new(candidate_keys_with_defs);
+        let candidate_keys_with_defs = if all_candidates_have_definitions {
+            candidate_keys.clone()
+        } else {
+            Arc::new(candidate_keys_with_defs.unwrap_or_default())
+        };
         self.fn_template_candidate_keys_cache
             .borrow_mut()
             .insert(cache_key.clone(), candidate_keys.clone());
@@ -114040,6 +114049,59 @@ stream.PutN(c, n);
         assert!(
             Arc::ptr_eq(&with_defs, &prewarmed_with_defs),
             "definition-backed lookup should reuse prewarmed subset cache allocation"
+        );
+    }
+
+    #[test]
+    fn test_collect_fn_template_candidate_keys_prewarms_definition_subset_by_aliasing_candidates_when_all_have_definitions(
+    ) {
+        let mut codegen = AstCodeGen::new();
+        codegen.fn_template_keys_by_leaf.insert(
+            "swap".to_string(),
+            vec!["swap".to_string(), "std::swap".to_string()],
+        );
+        let template_info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Named("T".to_string()),
+            params: vec![("value".to_string(), CppType::Named("T".to_string()))],
+            body: None,
+            is_noexcept: false,
+        };
+        codegen
+            .fn_template_definitions
+            .insert("swap".to_string(), template_info.clone());
+        codegen
+            .fn_template_definitions
+            .insert("std::swap".to_string(), template_info);
+
+        let cache_key = AstCodeGen::fn_template_candidate_keys_cache_key("swap", &[]);
+        let candidates = codegen.collect_fn_template_candidate_keys("swap", &[]);
+        assert_eq!(
+            candidates.as_ref(),
+            &vec!["swap".to_string(), "std::swap".to_string()],
+            "candidate-key collection should preserve deterministic ordering when all keys have definitions"
+        );
+
+        let prewarmed_with_defs = {
+            let cache_ref = codegen.fn_template_candidate_keys_with_defs_cache.borrow();
+            cache_ref.get(&cache_key).cloned().expect(
+                "candidate-key collection should prewarm definition-backed cache for matching lookup shape",
+            )
+        };
+        assert!(
+            Arc::ptr_eq(&prewarmed_with_defs, &candidates),
+            "when every candidate key has a definition, prewarmed definition-backed subset should alias candidate vector allocation"
+        );
+
+        let with_defs = codegen.collect_fn_template_candidate_keys_with_defs("swap", &[]);
+        assert!(
+            Arc::ptr_eq(&with_defs, &candidates),
+            "definition-backed lookup should reuse aliased candidate vector allocation when all keys are definition-backed"
+        );
+        assert_eq!(
+            with_defs.as_ref(),
+            candidates.as_ref(),
+            "definition-backed lookup should preserve candidate ordering when all keys are definition-backed"
         );
     }
 
