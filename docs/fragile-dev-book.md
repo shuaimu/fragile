@@ -11257,7 +11257,7 @@ Deterministic evidence highlights:
   - `replay_01_first_failure_class=build_timeout`
   - `replay_01_blocker_file=src/rrr/base/misc.cpp`
 - Full-suite baseline parity:
-  - `cargo test --workspace --all-targets`: `fragile-clang` lib `781` passed / `46` failed
+  - `cargo test --workspace --all-targets`: `fragile-clang` lib `782` passed / `46` failed
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`: `OK`, `29` ran, `1` skipped
 
 ### Outcome
@@ -11316,3 +11316,56 @@ Deterministic evidence highlights:
 Leaf
 `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.b`
 is complete. Strict build-only replay remains timeout-bound on `src/rrr/base/misc.cpp`, and blocker inventory non-increase gating remains passing versus the `2.6.c.iii` baseline.
+
+## 2026-03-14: Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+
+### Decision and rationale
+
+- Selected the first pending high-priority implementation leaf under the active strict `2.6.c` repeat branch.
+- Scope stayed small (<500 LOC): remove clone-heavy template-body duplication in function-template instantiation collection while preserving emitted function bodies.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- No target-specific behavior was introduced.
+- No semantic fallback stubs/fake bodies were added.
+- No force-native bypasses were introduced.
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang test_build_concrete_fn_template_info_rewrites_unresolved_param_and_return_slots -- --nocapture`
+- `cargo test -p fragile-clang test_generate_fn_template_instantiations_uses_definition_body_when_pending_body_is_none -- --nocapture`
+- `cargo test -p fragile-clang test_generate_fn_template_instantiations_consumes_pending_map_and_generates_functions -- --nocapture`
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c42_a_callshape_profile_120_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c42_a_stage_timing_120_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c42_a_callshape_profile_300_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c42_a_stage_timing_300_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Deterministic evidence highlights:
+
+- `/tmp/fragile_rpc_leaf_2_6c_current_c42_a_callshape_profile_120_v1.txt`:
+  - `status=codegen_after_template_collection`
+  - `status_history=codegen_started,codegen_after_template_collection`
+- `/tmp/fragile_rpc_leaf_2_6c_current_c42_a_callshape_profile_300_v1.txt`:
+  - `status=codegen_after_template_instantiation_generation`
+  - `status_history=codegen_started,codegen_after_template_collection,codegen_after_template_instantiation_generation`
+  - `input_bytes=573247` (`-144` vs prior `c41_a` value `573391`)
+- `/tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313/rpc_compile_blocker_replay_manifest.txt`:
+  - `timeout_seconds=300`
+  - `replay_01_status=124`
+  - `replay_01_timed_out=true`
+  - `replay_01_first_failure_class=build_timeout`
+  - `replay_01_blocker_file=src/rrr/base/misc.cpp`
+- Full-suite baseline parity:
+  - `cargo test --workspace --all-targets`: `fragile-clang` lib `781` passed / `46` failed
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`: `OK`, `29` ran, `1` skipped
+
+### Outcome
+
+Leaf
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+is complete. `build_concrete_fn_template_info` now emits lightweight pending concrete signatures (`body: None`) and `generate_fn_template_instance` resolves missing bodies from canonical template definitions at emission time, reducing clone churn in the function-template call-site collection hot path while preserving generated function behavior.

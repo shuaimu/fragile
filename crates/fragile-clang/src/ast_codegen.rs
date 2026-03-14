@@ -39375,20 +39375,29 @@ impl FragileAtomicBoolCompat for atomic_bool {
         instantiated_params: &[CppType],
         instantiated_return_type: &CppType,
     ) -> FnTemplateInfo {
-        let mut concrete_template_info = template_info.clone();
-        if concrete_template_info.params.len() == instantiated_params.len() {
-            for (idx, (_, ty)) in concrete_template_info.params.iter_mut().enumerate() {
+        let mut concrete_params = template_info.params.clone();
+        if concrete_params.len() == instantiated_params.len() {
+            for (idx, (_, ty)) in concrete_params.iter_mut().enumerate() {
                 let ty_str = ty.to_rust_type_str();
                 if ty_str == "_" || Self::has_unresolved_template_placeholder(&ty_str) {
                     *ty = instantiated_params[idx].clone();
                 }
             }
         }
-        let ret_str = concrete_template_info.return_type.to_rust_type_str();
+        let mut concrete_return_type = template_info.return_type.clone();
+        let ret_str = concrete_return_type.to_rust_type_str();
         if ret_str == "_" || Self::has_unresolved_template_placeholder(&ret_str) {
-            concrete_template_info.return_type = instantiated_return_type.clone();
+            concrete_return_type = instantiated_return_type.clone();
         }
-        concrete_template_info
+        FnTemplateInfo {
+            template_params: template_info.template_params.clone(),
+            return_type: concrete_return_type,
+            params: concrete_params,
+            // Keep pending concrete infos lightweight; resolve the body from the
+            // canonical template definition during generation when needed.
+            body: None,
+            is_noexcept: template_info.is_noexcept,
+        }
     }
 
     fn is_same_ptr_const_i8_synthesis_candidate(
@@ -43106,8 +43115,17 @@ impl FragileAtomicBoolCompat for atomic_bool {
         ));
         self.indent += 1;
 
+        let definition_body_fallback = if template_info.body.is_none() {
+            self.fn_template_definitions
+                .get(template_name)
+                .and_then(|info| info.body.clone())
+        } else {
+            None
+        };
+        let template_body = template_info.body.as_ref().or(definition_body_fallback.as_ref());
+
         // Generate body by processing the template body with type substitutions
-        if let Some(ref body) = template_info.body {
+        if let Some(body) = template_body {
             // Move current scope-tracking state out to avoid clone-heavy snapshots
             // for each generated function-template instance.
             let saved_local_vars = std::mem::take(&mut self.local_vars);
@@ -113005,6 +113023,72 @@ stream.PutN(c, n);
             concrete.return_type.to_rust_type_str(),
             "bool",
             "unresolved function-template return slot should be rewritten to instantiated return type"
+        );
+        assert!(
+            concrete.body.is_none(),
+            "concrete function-template info should keep deferred body resolution and avoid cloning large template bodies during collection"
+        );
+    }
+
+    #[test]
+    fn test_generate_fn_template_instantiations_uses_definition_body_when_pending_body_is_none() {
+        let templ_ty = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        let body = make_node(
+            ClangNodeKind::CompoundStmt,
+            vec![make_node(
+                ClangNodeKind::ReturnStmt,
+                vec![make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "x".to_string(),
+                        ty: templ_ty.clone(),
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                )],
+            )],
+        );
+
+        let mut codegen = AstCodeGen::new();
+        codegen.fn_template_definitions.insert(
+            "identity".to_string(),
+            FnTemplateInfo {
+                template_params: vec!["T".to_string()],
+                return_type: templ_ty.clone(),
+                params: vec![("x".to_string(), templ_ty.clone())],
+                body: Some(body),
+                is_noexcept: false,
+            },
+        );
+        codegen.pending_fn_instantiations.insert(
+            "identity_i32".to_string(),
+            (
+                "identity".to_string(),
+                vec!["i32".to_string()],
+                FnTemplateInfo {
+                    template_params: vec!["T".to_string()],
+                    return_type: templ_ty.clone(),
+                    params: vec![("x".to_string(), templ_ty)],
+                    body: None,
+                    is_noexcept: false,
+                },
+            ),
+        );
+
+        codegen.generate_fn_template_instantiations();
+
+        assert!(
+            codegen.output.contains("pub fn identity_i32(x: i32) -> i32 {"),
+            "function-template generation should still emit concrete signature when pending info defers body resolution, got:\n{}",
+            codegen.output
+        );
+        assert!(
+            codegen.output.contains("return x;"),
+            "function-template generation should resolve missing pending body from canonical template definition, got:\n{}",
+            codegen.output
         );
     }
 
