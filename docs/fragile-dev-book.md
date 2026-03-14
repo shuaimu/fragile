@@ -12902,3 +12902,49 @@ Observed:
 ### Outcome
 
 The selected leaf is complete: strict replay/inventory evidence was captured and nonincrease gating passed while the build lane remains timeout-bound (`build_status=124`), so iterative generic optimization work remains queued.
+
+## 2026-03-14: RPC leaf `2.6.c.v` template-instantiation fallback probe laziness
+
+### Decision and rationale
+
+- Selected active RPC leaf `2.6.c.v` in `TODO.md` (next generic codegen hot-path optimization in the dominant pre-`codegen_after_top_level_generation` window).
+- Scope check: this is a small targeted change (<500 LOC) in one hot function (`collect_fn_template_instantiation`) plus focused unit coverage.
+
+### Wrong-Approach Check
+
+Checked against `docs/dev/wrong.md` and section `1.3` in this book before editing:
+
+- No `mako`/`rpcbench` target-specific conditionals were added.
+- No force-native bypasses were introduced.
+- No fake fallback bodies or semantic stubs were introduced.
+- Change is generic template call-shape/runtime cache behavior that applies across workloads.
+
+### Plan
+
+1. Make fallback dependency probing lazy per candidate in `collect_fn_template_instantiation`.
+2. Add a focused regression proving direct-match paths avoid the dependency probe.
+3. Run focused template-instantiation tests.
+4. Run full suites and confirm no new regressions beyond known baseline failures.
+
+### Implementation
+
+- Updated `collect_fn_template_instantiation` in `crates/fragile-clang/src/ast_codegen.rs` so fallback-seeding probe (`fn_template_has_param_dependent_args`) is evaluated lazily and memoized per candidate only when a mismatch branch needs fallback eligibility.
+- Preserved existing fallback behavior by reusing the same decision across mismatch branches for a candidate.
+- Added focused test `test_collect_fn_template_instantiation_avoids_param_dependency_probe_on_direct_match` to lock the direct-match no-probe behavior.
+
+### Validation
+
+Focused regressions:
+
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_avoids_param_dependency_probe_on_direct_match -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_skips_extra_param_dependency_probe_after_fallback_seeded -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_ -- --nocapture`
+
+Full suites:
+
+- `cargo test --workspace --all-targets` -> baseline red in `fragile-clang` lib (`798` passed, `46` failed, `EXIT:101`).
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'` -> `OK`, `Ran 29 tests`, `skipped=1`.
+
+### Outcome
+
+Leaf `2.6.c.v` is complete with focused regression coverage and full-suite verification; no new failure class was introduced relative to existing baseline-red workspace state.

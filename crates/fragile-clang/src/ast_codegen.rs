@@ -39262,8 +39262,21 @@ impl FragileAtomicBoolCompat for atomic_bool {
         } else {
             for (candidate_idx, template_key) in candidate_keys_with_defs.iter().enumerate() {
                 let should_consider_fallback = fallback_instantiation.is_none();
-                let has_param_dependent_template_arg = should_consider_fallback
-                    && self.fn_template_has_param_dependent_args(template_key);
+                // Probe param-dependency lazily per candidate: direct matches
+                // should not pay fallback-seeding cache probes.
+                let mut should_seed_fallback_cache: Option<bool> = None;
+                let mut should_seed_fallback = |codegen: &mut Self| {
+                    if !should_consider_fallback {
+                        return false;
+                    }
+                    if let Some(cached) = should_seed_fallback_cache {
+                        return cached;
+                    }
+                    let computed =
+                        params.is_empty() || codegen.fn_template_has_param_dependent_args(template_key);
+                    should_seed_fallback_cache = Some(computed);
+                    computed
+                };
                 let inference_shape = self.fn_template_inference_shape(template_key);
                 let type_args = if let Some(template_info) = self.fn_template_definitions.get(template_key)
                 {
@@ -39280,13 +39293,11 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 let Some(type_args) = type_args else {
                     continue;
                 };
-                let should_seed_fallback = should_consider_fallback
-                    && (has_param_dependent_template_arg || params.is_empty());
 
                 let Some(concrete_shape) =
                     self.fn_template_concrete_match_shape(template_key, &type_args)
                 else {
-                    if should_seed_fallback {
+                    if should_seed_fallback(self) {
                         fallback_instantiation = Some((candidate_idx, type_args));
                     }
                     continue;
@@ -39294,7 +39305,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 if concrete_shape.param_types_normalized.len()
                     != instantiated_param_types_normalized.len()
                 {
-                    if should_seed_fallback {
+                    if should_seed_fallback(self) {
                         fallback_instantiation = Some((candidate_idx, type_args));
                     }
                     continue;
@@ -39311,7 +39322,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
                     }
                 }
                 if !param_types_match {
-                    if should_seed_fallback {
+                    if should_seed_fallback(self) {
                         fallback_instantiation = Some((candidate_idx, type_args));
                     }
                     continue;
@@ -39319,7 +39330,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 if concrete_shape.return_type_normalized != "_"
                     && concrete_shape.return_type_normalized != instantiated_return_type_normalized
                 {
-                    if should_seed_fallback {
+                    if should_seed_fallback(self) {
                         fallback_instantiation = Some((candidate_idx, type_args));
                     }
                     continue;
@@ -115147,6 +115158,99 @@ stream.PutN(c, n);
                 .fn_template_param_dependency_cache
                 .contains_key("rusty::make"),
             "after fallback is seeded, later candidates should skip extra dependency probes"
+        );
+    }
+
+    #[test]
+    fn test_collect_fn_template_instantiation_avoids_param_dependency_probe_on_direct_match() {
+        let templ_ty = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        let int_ty = CppType::Int { signed: true };
+        let call_fn_ty = CppType::Function {
+            return_type: Box::new(int_ty.clone()),
+            params: vec![int_ty.clone()],
+            is_variadic: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::FunctionTemplateDecl {
+                        name: "make".to_string(),
+                        template_params: vec!["T".to_string()],
+                        return_type: templ_ty.clone(),
+                        params: vec![("value".to_string(), templ_ty)],
+                        is_definition: true,
+                        parameter_pack_indices: vec![],
+                        requires_clause: None,
+                        is_noexcept: false,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "call_make".to_string(),
+                        mangled_name: "call_make".to_string(),
+                        is_static: false,
+                        return_type: int_ty.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: int_ty.clone(),
+                                    template_instantiation: None,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "make".to_string(),
+                                            ty: call_fn_ty,
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::IntegerLiteral {
+                                            value: 7,
+                                            cpp_type: Some(int_ty),
+                                        },
+                                        vec![],
+                                    ),
+                                ],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let mut codegen = AstCodeGen::new();
+        codegen.collect_template_info(&ast.children);
+        let pending = codegen
+            .pending_fn_instantiations
+            .get("make_i32")
+            .cloned()
+            .expect("direct template match should record concrete instantiation");
+        assert_eq!(
+            pending.0, "make",
+            "direct match should keep the original template key"
+        );
+        assert!(
+            !codegen.fn_template_param_dependency_cache.contains_key("make"),
+            "direct match path should avoid param-dependency probing"
         );
     }
 
