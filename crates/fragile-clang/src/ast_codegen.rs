@@ -38601,9 +38601,10 @@ impl FragileAtomicBoolCompat for atomic_bool {
             }
         }
 
-        // Candidate-key collection now prewarms the definition-backed cache to
-        // avoid an extra first-pass filter on hot lookup shapes.
-        let _ = self.collect_fn_template_candidate_keys(fn_name, namespace_path);
+        // Candidate-key collection prewarms the definition-backed cache on
+        // cold paths; keep a direct handle so any fallback rebuild does not
+        // trigger a second candidate-key collection call.
+        let candidate_keys = self.collect_fn_template_candidate_keys(fn_name, namespace_path);
         {
             let cache_ref = self.fn_template_candidate_keys_with_defs_cache.borrow();
             if let Some(cached) = cache_ref.get(&cache_key) {
@@ -38611,7 +38612,9 @@ impl FragileAtomicBoolCompat for atomic_bool {
             }
         }
 
-        let candidate_keys = self.collect_fn_template_candidate_keys(fn_name, namespace_path);
+        // Fallback for intentionally desynchronized cache states used by
+        // focused tests: rebuild the definition-backed subset from candidate
+        // keys without re-running candidate discovery.
         let candidate_keys_with_defs: Vec<String> = candidate_keys
             .iter()
             .cloned()
@@ -39466,10 +39469,14 @@ impl FragileAtomicBoolCompat for atomic_bool {
             return None;
         };
 
-        let candidate_keys = self.collect_fn_template_candidate_keys(fn_name, namespace_path);
+        let candidate_keys_with_defs =
+            self.collect_fn_template_candidate_keys_with_defs(fn_name, namespace_path);
+        if candidate_keys_with_defs.is_empty() {
+            return None;
+        }
         let sanitized_fn_name = sanitize_identifier(fn_name);
 
-        for template_key in candidate_keys.iter() {
+        for template_key in candidate_keys_with_defs.iter() {
             let Some(template_info) = self.fn_template_definitions.get(template_key) else {
                 continue;
             };
@@ -114363,6 +114370,53 @@ stream.PutN(c, n);
     }
 
     #[test]
+    fn test_collect_fn_template_candidate_keys_with_defs_rebuilds_subset_when_only_candidate_cache_is_present(
+    ) {
+        let mut codegen = AstCodeGen::new();
+        codegen.fn_template_keys_by_leaf.insert(
+            "swap".to_string(),
+            vec!["swap".to_string(), "std::swap".to_string()],
+        );
+        codegen.fn_template_definitions.insert(
+            "swap".to_string(),
+            FnTemplateInfo {
+                template_params: vec!["T".to_string()],
+                return_type: CppType::Named("T".to_string()),
+                params: vec![("value".to_string(), CppType::Named("T".to_string()))],
+                body: None,
+                is_noexcept: false,
+            },
+        );
+
+        let _ = codegen.collect_fn_template_candidate_keys("swap", &[]);
+        let cache_key = AstCodeGen::fn_template_candidate_keys_cache_key("swap", &[]);
+        codegen
+            .fn_template_candidate_keys_with_defs_cache
+            .borrow_mut()
+            .clear();
+        assert!(
+            codegen
+                .fn_template_candidate_keys_cache
+                .borrow()
+                .contains_key(&cache_key),
+            "candidate-key cache should remain populated for fallback subset rebuild path"
+        );
+
+        let rebuilt_with_defs = codegen.collect_fn_template_candidate_keys_with_defs("swap", &[]);
+        assert_eq!(
+            rebuilt_with_defs.as_ref(),
+            &vec!["swap".to_string()],
+            "definition-backed subset rebuild should keep only keys with concrete template definitions"
+        );
+
+        let cached_with_defs = codegen.collect_fn_template_candidate_keys_with_defs("swap", &[]);
+        assert!(
+            Arc::ptr_eq(&cached_with_defs, &rebuilt_with_defs),
+            "definition-backed subset rebuild should repopulate cache for subsequent lookups"
+        );
+    }
+
+    #[test]
     fn test_collect_fn_template_candidate_keys_large_leaf_index_deduplicates_without_reordering() {
         let mut codegen = AstCodeGen::new();
         let mut leaf_entries: Vec<String> = Vec::new();
@@ -114868,6 +114922,66 @@ stream.PutN(c, n);
             pending.1,
             vec!["2".to_string()],
             "non-type template param should infer from string-literal bound including NUL"
+        );
+    }
+
+    #[test]
+    fn test_resolve_fn_template_call_name_from_args_uses_definition_backed_candidates_only() {
+        let int_ty = CppType::Int { signed: true };
+        let fn_ty = CppType::Function {
+            return_type: Box::new(int_ty.clone()),
+            params: vec![int_ty.clone()],
+            is_variadic: false,
+        };
+        let call_callee = make_node(
+            ClangNodeKind::DeclRefExpr {
+                name: "swap".to_string(),
+                ty: fn_ty,
+                namespace_path: vec![],
+            },
+            vec![],
+        );
+        let call_args = vec![make_node(
+            ClangNodeKind::IntegerLiteral {
+                value: 7,
+                cpp_type: Some(int_ty.clone()),
+            },
+            vec![],
+        )];
+
+        let mut codegen = AstCodeGen::new();
+        codegen.fn_template_keys_by_leaf.insert(
+            "swap".to_string(),
+            vec![
+                "ghost::swap".to_string(),
+                "swap".to_string(),
+                "ghost::swap".to_string(),
+            ],
+        );
+        let template_info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Named("T".to_string()),
+            params: vec![("value".to_string(), CppType::Named("T".to_string()))],
+            body: None,
+            is_noexcept: false,
+        };
+        codegen
+            .fn_template_definitions
+            .insert("swap".to_string(), template_info.clone());
+        codegen.pending_fn_instantiations.insert(
+            "swap_i32".to_string(),
+            (
+                "swap".to_string(),
+                vec!["i32".to_string()],
+                template_info.clone(),
+            ),
+        );
+
+        let resolved = codegen.resolve_fn_template_call_name_from_args(&call_callee, &call_args);
+        assert_eq!(
+            resolved.as_deref(),
+            Some("swap_i32"),
+            "template-call resolution should skip undefined candidate keys and resolve using the definition-backed subset"
         );
     }
 
