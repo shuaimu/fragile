@@ -1219,6 +1219,10 @@ pub struct AstCodeGen {
     /// Cache of definition-backed function-template candidate-key vectors keyed by
     /// `(fn_name, namespace_path)` call-site lookup shape.
     fn_template_candidate_keys_with_defs_cache: RefCell<HashMap<String, Vec<String>>>,
+    /// Cache of whether definition-backed function-template candidate sets for
+    /// a `(fn_name, namespace_path)` lookup shape require call-argument bound
+    /// hashing in call-resolution keys.
+    fn_template_candidate_requires_call_arg_bounds_cache: RefCell<HashMap<String, bool>>,
     /// Function-template keys indexed by unqualified leaf name to avoid scanning
     /// the full definition map for every call-site candidate lookup.
     fn_template_keys_by_leaf: HashMap<String, Vec<String>>,
@@ -1423,6 +1427,7 @@ impl AstCodeGen {
             fn_template_call_resolution_cache: HashMap::new(),
             fn_template_candidate_keys_cache: RefCell::new(HashMap::new()),
             fn_template_candidate_keys_with_defs_cache: RefCell::new(HashMap::new()),
+            fn_template_candidate_requires_call_arg_bounds_cache: RefCell::new(HashMap::new()),
             fn_template_keys_by_leaf: HashMap::new(),
             pending_fn_instantiations: HashMap::new(),
             skip_vtable_generation: HashSet::new(),
@@ -38406,6 +38411,9 @@ impl FragileAtomicBoolCompat for atomic_bool {
         self.fn_template_candidate_keys_with_defs_cache
             .borrow_mut()
             .clear();
+        self.fn_template_candidate_requires_call_arg_bounds_cache
+            .borrow_mut()
+            .clear();
         self.fn_template_requires_call_arg_bounds_cache.clear();
         // Precollect definitions first so a single usage pass can resolve
         // call-sites/type uses that appear before template declarations.
@@ -38417,6 +38425,9 @@ impl FragileAtomicBoolCompat for atomic_bool {
     fn rebuild_fn_template_leaf_index(&mut self) {
         self.fn_template_candidate_keys_cache.borrow_mut().clear();
         self.fn_template_candidate_keys_with_defs_cache
+            .borrow_mut()
+            .clear();
+        self.fn_template_candidate_requires_call_arg_bounds_cache
             .borrow_mut()
             .clear();
         self.fn_template_keys_by_leaf.clear();
@@ -38530,10 +38541,37 @@ impl FragileAtomicBoolCompat for atomic_bool {
         self.fn_template_candidate_keys_with_defs_cache
             .borrow_mut()
             .clear();
+        self.fn_template_candidate_requires_call_arg_bounds_cache
+            .borrow_mut()
+            .clear();
         let cache_prefix = format!("{key}\u{1f}");
         self.fn_template_concrete_match_shape_cache
             .retain(|cache_key, _| !cache_key.starts_with(&cache_prefix));
         self.fn_template_definitions.insert(key, info);
+    }
+
+    fn fn_template_candidate_set_requires_call_arg_bounds(
+        &mut self,
+        fn_name: &str,
+        namespace_path: &[String],
+        candidate_keys_with_defs: &[String],
+    ) -> bool {
+        let cache_key = Self::fn_template_candidate_keys_cache_key(fn_name, namespace_path);
+        if let Some(cached) = self
+            .fn_template_candidate_requires_call_arg_bounds_cache
+            .borrow()
+            .get(&cache_key)
+            .copied()
+        {
+            return cached;
+        }
+        let requires = candidate_keys_with_defs
+            .iter()
+            .any(|template_key| self.fn_template_requires_call_arg_bounds(template_key));
+        self.fn_template_candidate_requires_call_arg_bounds_cache
+            .borrow_mut()
+            .insert(cache_key, requires);
+        requires
     }
 
     fn fn_template_call_resolution_key(
@@ -39054,9 +39092,11 @@ impl FragileAtomicBoolCompat for atomic_bool {
             .collect();
         let instantiated_return_type_normalized =
             Self::normalize_template_match_type(&return_type.as_ref().to_rust_type_str());
-        let include_call_arg_bounds = candidate_keys_with_defs
-            .iter()
-            .any(|template_key| self.fn_template_requires_call_arg_bounds(template_key));
+        let include_call_arg_bounds = self.fn_template_candidate_set_requires_call_arg_bounds(
+            fn_name,
+            namespace_path,
+            &candidate_keys_with_defs,
+        );
         let resolution_cache_key = Self::fn_template_call_resolution_key(
             fn_name,
             namespace_path,
@@ -113628,6 +113668,24 @@ stream.PutN(c, n);
                 .is_empty(),
             "definition-backed candidate-key cache should populate after first lookup"
         );
+        let candidate_cache_key =
+            AstCodeGen::fn_template_candidate_keys_cache_key("swap", &candidate_namespace);
+        let candidate_keys_with_defs =
+            codegen.collect_fn_template_candidate_keys_with_defs("swap", &candidate_namespace);
+        let _ = codegen.fn_template_candidate_set_requires_call_arg_bounds(
+            "swap",
+            &candidate_namespace,
+            &candidate_keys_with_defs,
+        );
+        assert_eq!(
+            codegen
+                .fn_template_candidate_requires_call_arg_bounds_cache
+                .borrow()
+                .get(&candidate_cache_key)
+                .copied(),
+            Some(false),
+            "candidate-set call-arg-bound cache should populate alongside candidate-key caches"
+        );
         let concrete_type_args = vec!["i32".to_string()];
         assert!(
             codegen
@@ -113677,6 +113735,13 @@ stream.PutN(c, n);
                 .borrow()
                 .is_empty(),
             "replacing template definition should invalidate cached definition-backed candidate-key entries"
+        );
+        assert!(
+            codegen
+                .fn_template_candidate_requires_call_arg_bounds_cache
+                .borrow()
+                .is_empty(),
+            "replacing template definition should invalidate cached candidate-set call-arg-bound requirements"
         );
         let concrete_cache_key =
             AstCodeGen::fn_template_concrete_match_shape_key("cache::swap", &concrete_type_args);
@@ -113777,6 +113842,61 @@ stream.PutN(c, n);
         assert_eq!(
             cached_with_defs, with_defs,
             "second lookup should reuse cached definition-backed subset without recomputing from mutated maps"
+        );
+    }
+
+    #[test]
+    fn test_fn_template_candidate_set_requires_call_arg_bounds_reuses_cached_value() {
+        let mut codegen = AstCodeGen::new();
+        codegen.fn_template_keys_by_leaf.insert(
+            "swap".to_string(),
+            vec!["swap".to_string(), "std::swap".to_string()],
+        );
+        let template_info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Named("T".to_string()),
+            params: vec![("value".to_string(), CppType::Named("T".to_string()))],
+            body: None,
+            is_noexcept: false,
+        };
+        codegen
+            .fn_template_definitions
+            .insert("swap".to_string(), template_info);
+
+        let cache_key = AstCodeGen::fn_template_candidate_keys_cache_key("swap", &[]);
+        let candidate_keys_with_defs = codegen.collect_fn_template_candidate_keys_with_defs("swap", &[]);
+        let first = codegen.fn_template_candidate_set_requires_call_arg_bounds(
+            "swap",
+            &[],
+            &candidate_keys_with_defs,
+        );
+        assert!(
+            !first,
+            "single-type-parameter template candidate should not require call-arg bounds"
+        );
+        assert_eq!(
+            codegen
+                .fn_template_candidate_requires_call_arg_bounds_cache
+                .borrow()
+                .get(&cache_key)
+                .copied(),
+            Some(false),
+            "first lookup should populate candidate-set call-arg-bound cache"
+        );
+
+        // Mutate lower-level per-template cache after first lookup; second
+        // lookup should still reuse cached candidate-set value.
+        codegen
+            .fn_template_requires_call_arg_bounds_cache
+            .insert("swap".to_string(), true);
+        let second = codegen.fn_template_candidate_set_requires_call_arg_bounds(
+            "swap",
+            &[],
+            &candidate_keys_with_defs,
+        );
+        assert!(
+            !second,
+            "second lookup should reuse candidate-set cache and ignore later lower-level cache mutations"
         );
     }
 
