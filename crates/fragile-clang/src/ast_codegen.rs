@@ -39231,8 +39231,8 @@ impl FragileAtomicBoolCompat for atomic_bool {
             return;
         }
         let sanitized_fn_name = sanitize_identifier(fn_name);
-        let mut selected_instantiation: Option<(String, Vec<String>)> = None;
-        let mut fallback_instantiation: Option<(String, Vec<String>)> = None;
+        let mut selected_instantiation: Option<(usize, Vec<String>)> = None;
+        let mut fallback_instantiation: Option<(usize, Vec<String>)> = None;
         let instantiated_param_types_normalized: Vec<String> = params
             .iter()
             .map(CppType::to_rust_type_str)
@@ -39260,7 +39260,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
         {
             cached_resolution.clone()
         } else {
-            for template_key in candidate_keys_with_defs.iter() {
+            for (candidate_idx, template_key) in candidate_keys_with_defs.iter().enumerate() {
                 let should_consider_fallback = fallback_instantiation.is_none();
                 let has_param_dependent_template_arg = should_consider_fallback
                     && self.fn_template_has_param_dependent_args(template_key);
@@ -39287,7 +39287,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
                     self.fn_template_concrete_match_shape(template_key, &type_args)
                 else {
                     if should_seed_fallback {
-                        fallback_instantiation = Some((template_key.clone(), type_args));
+                        fallback_instantiation = Some((candidate_idx, type_args));
                     }
                     continue;
                 };
@@ -39295,7 +39295,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
                     != instantiated_param_types_normalized.len()
                 {
                     if should_seed_fallback {
-                        fallback_instantiation = Some((template_key.clone(), type_args));
+                        fallback_instantiation = Some((candidate_idx, type_args));
                     }
                     continue;
                 }
@@ -39312,7 +39312,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 }
                 if !param_types_match {
                     if should_seed_fallback {
-                        fallback_instantiation = Some((template_key.clone(), type_args));
+                        fallback_instantiation = Some((candidate_idx, type_args));
                     }
                     continue;
                 }
@@ -39320,15 +39320,19 @@ impl FragileAtomicBoolCompat for atomic_bool {
                     && concrete_shape.return_type_normalized != instantiated_return_type_normalized
                 {
                     if should_seed_fallback {
-                        fallback_instantiation = Some((template_key.clone(), type_args));
+                        fallback_instantiation = Some((candidate_idx, type_args));
                     }
                     continue;
                 }
 
-                selected_instantiation = Some((template_key.clone(), type_args));
+                selected_instantiation = Some((candidate_idx, type_args));
                 break;
             }
-            let resolved = selected_instantiation.or(fallback_instantiation);
+            let resolved = selected_instantiation
+                .or(fallback_instantiation)
+                .map(|(candidate_idx, type_args)| {
+                    (candidate_keys_with_defs[candidate_idx].clone(), type_args)
+                });
             self.fn_template_call_resolution_cache
                 .insert(resolution_cache_key, resolved.clone());
             resolved
@@ -115210,6 +115214,119 @@ stream.PutN(c, n);
             pending.1,
             vec!["i32".to_string()],
             "fallback path should preserve inferred concrete type args"
+        );
+    }
+
+    #[test]
+    fn test_collect_fn_template_instantiation_keeps_first_fallback_across_multiple_mismatches() {
+        let templ_ty = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        let int_ty = CppType::Int { signed: true };
+        let call_fn_ty = CppType::Function {
+            return_type: Box::new(int_ty.clone()),
+            params: vec![int_ty.clone()],
+            is_variadic: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::FunctionTemplateDecl {
+                        name: "make".to_string(),
+                        template_params: vec!["T".to_string()],
+                        return_type: CppType::Bool,
+                        params: vec![("value".to_string(), templ_ty.clone())],
+                        is_definition: true,
+                        parameter_pack_indices: vec![],
+                        requires_clause: None,
+                        is_noexcept: false,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::NamespaceDecl {
+                        name: Some("rusty".to_string()),
+                        is_inline: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::FunctionTemplateDecl {
+                            name: "make".to_string(),
+                            template_params: vec!["T".to_string()],
+                            return_type: CppType::Bool,
+                            params: vec![("value".to_string(), templ_ty)],
+                            is_definition: true,
+                            parameter_pack_indices: vec![],
+                            requires_clause: None,
+                            is_noexcept: false,
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "call_make".to_string(),
+                        mangled_name: "call_make".to_string(),
+                        is_static: false,
+                        return_type: int_ty.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: int_ty.clone(),
+                                    template_instantiation: None,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "make".to_string(),
+                                            ty: call_fn_ty,
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::IntegerLiteral {
+                                            value: 7,
+                                            cpp_type: Some(int_ty),
+                                        },
+                                        vec![],
+                                    ),
+                                ],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let mut codegen = AstCodeGen::new();
+        codegen.collect_template_info(&ast.children);
+        let pending = codegen
+            .pending_fn_instantiations
+            .get("make_i32")
+            .cloned()
+            .expect("mismatch-only candidate set should still record param-dependent fallback");
+        assert_eq!(
+            pending.0, "make",
+            "fallback selection should keep the first mismatching candidate instead of being overwritten by later mismatches"
+        );
+        assert_eq!(
+            pending.1,
+            vec!["i32".to_string()],
+            "fallback selection should preserve inferred concrete type args"
         );
     }
 

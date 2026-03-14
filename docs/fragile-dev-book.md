@@ -12440,3 +12440,45 @@ Deterministic evidence highlights:
 Leaf
 `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.b`
 is complete. Strict build-only replay remains timeout-bound on `src/rrr/base/misc.cpp`, and blocker inventory non-increase gating remains passing versus the `2.6.c.iii` baseline.
+
+## 2026-03-14: Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+
+### Decision and rationale
+
+- Selected the first leaf under the newly expanded top-priority active repeat branch (`...c`) in `2.6.c`.
+- Kept scope under 500 LOC by focusing on a single allocation hot spot in template-instantiation candidate matching.
+
+### Wrong-Approach Check
+
+Checked against the wrong-approach guidance before landing:
+
+- No target-name conditional behavior was introduced.
+- No fake fallback method bodies were synthesized.
+- No force-native bypasses were added.
+
+### Implementation
+
+- Optimized `collect_fn_template_instantiation` in `crates/fragile-clang/src/ast_codegen.rs` by replacing repeated per-candidate `template_key.clone()` allocations with index-tracked fallback/selection (`usize`) and a single late key clone at resolution materialization.
+- Preserved behavior: first fallback candidate remains sticky across later mismatches; selected-candidate precedence is unchanged.
+- Added focused regression: `test_collect_fn_template_instantiation_keeps_first_fallback_across_multiple_mismatches`.
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_keeps_first_fallback_across_multiple_mismatches -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_ -- --nocapture`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Results:
+
+- Focused tests passed (`1/1` and `9/9`).
+- Full Rust suite stayed at baseline failure count: `fragile-clang` lib `795` passed / `46` failed (`EXIT:101`).
+- Python suite passed: `Ran 29 tests`, `OK (skipped=1)`.
+
+### Outcome
+
+Leaf
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+is complete with behavior-locked regression coverage and baseline full-suite parity.
