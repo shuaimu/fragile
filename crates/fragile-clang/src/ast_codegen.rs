@@ -39203,40 +39203,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
         };
 
         let call_args = &call_node.children[1..];
-        let candidate_keys_with_defs =
-            self.collect_fn_template_candidate_keys_with_defs(fn_name, namespace_path);
-        if candidate_keys_with_defs.is_empty() {
-            if Self::is_same_ptr_const_i8_synthesis_candidate(
-                fn_name,
-                params,
-                return_type.as_ref(),
-                call_args,
-            ) {
-                self.pending_fn_instantiations
-                    .entry("same_ptr_const_i8".to_string())
-                    .or_insert_with(|| {
-                        (
-                            "__fragile_yaml_same_literal_cmp".to_string(),
-                            vec!["*const i8".to_string()],
-                            FnTemplateInfo {
-                                template_params: vec!["N".to_string()],
-                                return_type: CppType::Bool,
-                                params: vec![
-                                    ("str".to_string(), params[0].clone()),
-                                    ("size".to_string(), params[1].clone()),
-                                    ("literal".to_string(), params[2].clone()),
-                                ],
-                                body: None,
-                                is_noexcept: false,
-                            },
-                        )
-                    });
-            }
-            return;
-        }
         let sanitized_fn_name = Self::sanitize_identifier_if_needed(fn_name);
-        let mut selected_instantiation: Option<(usize, Vec<String>)> = None;
-        let mut fallback_instantiation: Option<(usize, Vec<String>)> = None;
         let instantiated_param_types_normalized: Vec<String> = params
             .iter()
             .map(CppType::to_rust_type_str)
@@ -39244,114 +39211,175 @@ impl FragileAtomicBoolCompat for atomic_bool {
             .collect();
         let instantiated_return_type_normalized =
             Self::normalize_template_match_type(&return_type.as_ref().to_rust_type_str());
-        let include_call_arg_bounds = self.fn_template_candidate_set_requires_call_arg_bounds(
-            fn_name,
-            namespace_path,
-            candidate_keys_with_defs.as_ref(),
-        );
-        let resolution_cache_key = Self::fn_template_call_resolution_key(
-            fn_name,
-            namespace_path,
-            &instantiated_param_types_normalized,
-            &instantiated_return_type_normalized,
-            call_args,
-            include_call_arg_bounds,
-        );
-
-        let resolved_instantiation = if let Some(cached_resolution) = self
-            .fn_template_call_resolution_cache
-            .get(&resolution_cache_key)
+        let candidate_cache_key = Self::fn_template_candidate_keys_cache_key(fn_name, namespace_path);
+        let mut resolved_instantiation: Option<(String, Vec<String>)> = None;
+        let mut resolution_cache_hit = false;
+        if let Some(include_call_arg_bounds) = self
+            .fn_template_candidate_requires_call_arg_bounds_cache
+            .borrow()
+            .get(&candidate_cache_key)
+            .copied()
         {
-            cached_resolution.clone()
-        } else {
-            for (candidate_idx, template_key) in candidate_keys_with_defs.iter().enumerate() {
-                let should_consider_fallback = fallback_instantiation.is_none();
-                // Probe param-dependency lazily per candidate: direct matches
-                // should not pay fallback-seeding cache probes.
-                let mut should_seed_fallback_cache: Option<bool> = None;
-                let mut should_seed_fallback = |codegen: &mut Self| {
-                    if !should_consider_fallback {
-                        return false;
-                    }
-                    if let Some(cached) = should_seed_fallback_cache {
-                        return cached;
-                    }
-                    let computed =
-                        params.is_empty() || codegen.fn_template_has_param_dependent_args(template_key);
-                    should_seed_fallback_cache = Some(computed);
-                    computed
-                };
-                let inference_shape = self.fn_template_inference_shape(template_key);
-                let type_args = if let Some(template_info) = self.fn_template_definitions.get(template_key)
-                {
-                    infer_fn_template_type_args_with_shape(
-                        template_info,
-                        params,
-                        return_type.as_ref(),
-                        Some(call_args),
-                        inference_shape.as_deref(),
-                    )
-                } else {
-                    None
-                };
-                let Some(type_args) = type_args else {
-                    continue;
-                };
-
-                let Some(concrete_shape) =
-                    self.fn_template_concrete_match_shape(template_key, &type_args)
-                else {
-                    if should_seed_fallback(self) {
-                        fallback_instantiation = Some((candidate_idx, type_args));
-                    }
-                    continue;
-                };
-                if concrete_shape.param_types_normalized.len()
-                    != instantiated_param_types_normalized.len()
-                {
-                    if should_seed_fallback(self) {
-                        fallback_instantiation = Some((candidate_idx, type_args));
-                    }
-                    continue;
-                }
-                let mut param_types_match = true;
-                for (lhs_norm, rhs_norm) in concrete_shape
-                    .param_types_normalized
-                    .iter()
-                    .zip(instantiated_param_types_normalized.iter())
-                {
-                    if !Self::template_match_types_compatible(lhs_norm, rhs_norm) {
-                        param_types_match = false;
-                        break;
-                    }
-                }
-                if !param_types_match {
-                    if should_seed_fallback(self) {
-                        fallback_instantiation = Some((candidate_idx, type_args));
-                    }
-                    continue;
-                }
-                if concrete_shape.return_type_normalized != "_"
-                    && concrete_shape.return_type_normalized != instantiated_return_type_normalized
-                {
-                    if should_seed_fallback(self) {
-                        fallback_instantiation = Some((candidate_idx, type_args));
-                    }
-                    continue;
-                }
-
-                selected_instantiation = Some((candidate_idx, type_args));
-                break;
+            let resolution_cache_key = Self::fn_template_call_resolution_key(
+                fn_name,
+                namespace_path,
+                &instantiated_param_types_normalized,
+                &instantiated_return_type_normalized,
+                call_args,
+                include_call_arg_bounds,
+            );
+            if let Some(cached_resolution) = self
+                .fn_template_call_resolution_cache
+                .get(&resolution_cache_key)
+            {
+                resolution_cache_hit = true;
+                resolved_instantiation = cached_resolution.clone();
             }
-            let resolved = selected_instantiation
-                .or(fallback_instantiation)
-                .map(|(candidate_idx, type_args)| {
-                    (candidate_keys_with_defs[candidate_idx].clone(), type_args)
-                });
-            self.fn_template_call_resolution_cache
-                .insert(resolution_cache_key, resolved.clone());
-            resolved
-        };
+        }
+
+        if !resolution_cache_hit {
+            let candidate_keys_with_defs =
+                self.collect_fn_template_candidate_keys_with_defs(fn_name, namespace_path);
+            if candidate_keys_with_defs.is_empty() {
+                if Self::is_same_ptr_const_i8_synthesis_candidate(
+                    fn_name,
+                    params,
+                    return_type.as_ref(),
+                    call_args,
+                ) {
+                    self.pending_fn_instantiations
+                        .entry("same_ptr_const_i8".to_string())
+                        .or_insert_with(|| {
+                            (
+                                "__fragile_yaml_same_literal_cmp".to_string(),
+                                vec!["*const i8".to_string()],
+                                FnTemplateInfo {
+                                    template_params: vec!["N".to_string()],
+                                    return_type: CppType::Bool,
+                                    params: vec![
+                                        ("str".to_string(), params[0].clone()),
+                                        ("size".to_string(), params[1].clone()),
+                                        ("literal".to_string(), params[2].clone()),
+                                    ],
+                                    body: None,
+                                    is_noexcept: false,
+                                },
+                            )
+                        });
+                }
+                return;
+            }
+            let include_call_arg_bounds = self.fn_template_candidate_set_requires_call_arg_bounds(
+                fn_name,
+                namespace_path,
+                candidate_keys_with_defs.as_ref(),
+            );
+            let resolution_cache_key = Self::fn_template_call_resolution_key(
+                fn_name,
+                namespace_path,
+                &instantiated_param_types_normalized,
+                &instantiated_return_type_normalized,
+                call_args,
+                include_call_arg_bounds,
+            );
+
+            if let Some(cached_resolution) = self
+                .fn_template_call_resolution_cache
+                .get(&resolution_cache_key)
+            {
+                resolved_instantiation = cached_resolution.clone();
+            } else {
+                let mut selected_instantiation: Option<(usize, Vec<String>)> = None;
+                let mut fallback_instantiation: Option<(usize, Vec<String>)> = None;
+                for (candidate_idx, template_key) in candidate_keys_with_defs.iter().enumerate() {
+                    let should_consider_fallback = fallback_instantiation.is_none();
+                    // Probe param-dependency lazily per candidate: direct matches
+                    // should not pay fallback-seeding cache probes.
+                    let mut should_seed_fallback_cache: Option<bool> = None;
+                    let mut should_seed_fallback = |codegen: &mut Self| {
+                        if !should_consider_fallback {
+                            return false;
+                        }
+                        if let Some(cached) = should_seed_fallback_cache {
+                            return cached;
+                        }
+                        let computed = params.is_empty()
+                            || codegen.fn_template_has_param_dependent_args(template_key);
+                        should_seed_fallback_cache = Some(computed);
+                        computed
+                    };
+                    let inference_shape = self.fn_template_inference_shape(template_key);
+                    let type_args =
+                        if let Some(template_info) = self.fn_template_definitions.get(template_key) {
+                            infer_fn_template_type_args_with_shape(
+                                template_info,
+                                params,
+                                return_type.as_ref(),
+                                Some(call_args),
+                                inference_shape.as_deref(),
+                            )
+                        } else {
+                            None
+                        };
+                    let Some(type_args) = type_args else {
+                        continue;
+                    };
+
+                    let Some(concrete_shape) =
+                        self.fn_template_concrete_match_shape(template_key, &type_args)
+                    else {
+                        if should_seed_fallback(self) {
+                            fallback_instantiation = Some((candidate_idx, type_args));
+                        }
+                        continue;
+                    };
+                    if concrete_shape.param_types_normalized.len()
+                        != instantiated_param_types_normalized.len()
+                    {
+                        if should_seed_fallback(self) {
+                            fallback_instantiation = Some((candidate_idx, type_args));
+                        }
+                        continue;
+                    }
+                    let mut param_types_match = true;
+                    for (lhs_norm, rhs_norm) in concrete_shape
+                        .param_types_normalized
+                        .iter()
+                        .zip(instantiated_param_types_normalized.iter())
+                    {
+                        if !Self::template_match_types_compatible(lhs_norm, rhs_norm) {
+                            param_types_match = false;
+                            break;
+                        }
+                    }
+                    if !param_types_match {
+                        if should_seed_fallback(self) {
+                            fallback_instantiation = Some((candidate_idx, type_args));
+                        }
+                        continue;
+                    }
+                    if concrete_shape.return_type_normalized != "_"
+                        && concrete_shape.return_type_normalized != instantiated_return_type_normalized
+                    {
+                        if should_seed_fallback(self) {
+                            fallback_instantiation = Some((candidate_idx, type_args));
+                        }
+                        continue;
+                    }
+
+                    selected_instantiation = Some((candidate_idx, type_args));
+                    break;
+                }
+                let resolved = selected_instantiation
+                    .or(fallback_instantiation)
+                    .map(|(candidate_idx, type_args)| {
+                        (candidate_keys_with_defs[candidate_idx].clone(), type_args)
+                    });
+                self.fn_template_call_resolution_cache
+                    .insert(resolution_cache_key, resolved.clone());
+                resolved_instantiation = resolved;
+            }
+        }
 
         if let Some((template_key, type_args)) = resolved_instantiation {
             let mangled_name =
@@ -113899,6 +113927,87 @@ stream.PutN(c, n);
             pending.1,
             vec!["i64".to_string()],
             "cached call resolution should preserve cached concrete type args"
+        );
+    }
+
+    #[test]
+    fn test_collect_fn_template_instantiation_fast_paths_warm_cached_resolution_without_candidate_collection(
+    ) {
+        let int_ty = CppType::Int { signed: true };
+        let call_ty = CppType::Function {
+            return_type: Box::new(int_ty.clone()),
+            params: vec![int_ty.clone()],
+            is_variadic: false,
+        };
+        let call = make_node(
+            ClangNodeKind::CallExpr {
+                ty: int_ty.clone(),
+                template_instantiation: None,
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "swap".to_string(),
+                        ty: call_ty,
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::IntegerLiteral {
+                        value: 7,
+                        cpp_type: Some(int_ty),
+                    },
+                    vec![],
+                ),
+            ],
+        );
+
+        let mut codegen = AstCodeGen::new();
+        let template_info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Named("T".to_string()),
+            params: vec![("value".to_string(), CppType::Named("T".to_string()))],
+            body: None,
+            is_noexcept: false,
+        };
+        codegen
+            .fn_template_definitions
+            .insert("swap".to_string(), template_info.clone());
+        let candidate_cache_key = AstCodeGen::fn_template_candidate_keys_cache_key("swap", &[]);
+        codegen
+            .fn_template_candidate_requires_call_arg_bounds_cache
+            .borrow_mut()
+            .insert(candidate_cache_key, false);
+        let resolution_key = AstCodeGen::fn_template_call_resolution_key(
+            "swap",
+            &[],
+            &["i32".to_string()],
+            "i32",
+            &call.children[1..],
+            false,
+        );
+        codegen.fn_template_call_resolution_cache.insert(
+            resolution_key,
+            Some(("swap".to_string(), vec!["i64".to_string()])),
+        );
+
+        codegen.collect_fn_template_instantiation(&call);
+
+        assert!(
+            codegen.pending_fn_instantiations.contains_key("swap_i64"),
+            "warm cached call-resolution should still materialize pending instantiation from cached template/type args"
+        );
+        assert!(
+            codegen.fn_template_candidate_keys_cache.borrow().is_empty(),
+            "warm cached call-resolution fast path should bypass candidate-key collection on hot lookup path"
+        );
+        assert!(
+            codegen
+                .fn_template_candidate_keys_with_defs_cache
+                .borrow()
+                .is_empty(),
+            "warm cached call-resolution fast path should bypass definition-backed candidate-key collection on hot lookup path"
         );
     }
 

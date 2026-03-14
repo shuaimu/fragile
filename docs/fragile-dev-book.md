@@ -13327,3 +13327,56 @@ Observed manifest markers:
 ### Outcome
 
 Leaf `2.6.c.xii` is complete with deterministic replay and nonincrease-gate evidence; strict fragilec build lane remains timeout-bound at `src/rrr/base/misc.cpp` with no class/E0425 regression versus `2.6.c.iii`.
+
+## 2026-03-14: RPC leaf `2.6.c.xiii` warm-cache template-instantiation fast path
+
+### Decision and rationale
+
+- Selected first actionable unfinished leaf under active task `2`: `2.6.c.xiii`.
+- Scope is small (<500 LOC): remove redundant candidate-key collection work from a repeated cached-resolution hot path without semantic change.
+
+### Wrong-Approach Check
+
+Checked against section `1.3` and `docs/dev/wrong.md` before coding:
+
+- No RPC-target or mako-target specific conditionals were introduced.
+- No force-native/escape-hatch behavior was used.
+- No semantic stub/fake fallback body behavior was introduced.
+- Change is generic in shared function-template call-resolution logic.
+
+### Plan
+
+1. Add a warm-cache fast path in `collect_fn_template_instantiation` that consults prewarmed bounds-shape cache and resolution cache before candidate discovery.
+2. Preserve existing cached-`None` and fallback behavior.
+3. Add focused regression coverage proving candidate-key caches are not populated on the warm-cache fast path.
+4. Run focused tests and full workspace suites.
+
+### Execution
+
+Code changes in `crates/fragile-clang/src/ast_codegen.rs`:
+
+- Refactored `collect_fn_template_instantiation` to:
+  - check `fn_template_candidate_requires_call_arg_bounds_cache` for a warm include-bounds decision,
+  - build the corresponding resolution key,
+  - consume `fn_template_call_resolution_cache` directly when present,
+  - skip candidate-key collection on this cache-hit path.
+- Preserved semantics for cached `None` entries via explicit cache-hit tracking (`resolution_cache_hit`) so candidate recomputation is still skipped when the cache explicitly stores `None`.
+- Added focused regression:
+  - `test_collect_fn_template_instantiation_fast_paths_warm_cached_resolution_without_candidate_collection`
+
+### Validation
+
+Focused tests:
+
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_fast_paths_warm_cached_resolution_without_candidate_collection -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_uses_cached_call_resolution -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_ -- --nocapture`
+
+Full suites:
+
+- `cargo test --workspace --all-targets` -> baseline red in `fragile-clang` lib (`802` passed, `46` failed, `EXIT:101`).
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'` -> `OK`, `Ran 29 tests`, `skipped=1`.
+
+### Outcome
+
+Leaf `2.6.c.xiii` is complete with focused regression coverage and full-suite verification; no new failure class was introduced beyond the known baseline-red Rust profile.
