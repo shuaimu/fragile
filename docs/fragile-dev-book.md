@@ -12533,3 +12533,45 @@ Deterministic manifest highlights:
 Leaf
 `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.b`
 is complete. Strict build-only replay remains timeout-bound on `src/rrr/base/misc.cpp`, and blocker inventory non-increase remains passing versus the `2.6.c.iii` baseline.
+
+## 2026-03-14: Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+
+### Decision and rationale
+
+- Selected the first pending leaf under the newly expanded top-priority active `2.6.c...c` repeat branch.
+- Kept scope under 500 LOC by targeting a single allocation-heavy helper used on function-template instantiation/resolution paths.
+
+### Wrong-Approach Check
+
+Checked against `docs/dev/wrong.md` and project anti-pattern rules before finalizing:
+
+- No target-specific conditionals were introduced.
+- No synthetic fallback/stub method bodies were added.
+- No force-native bypasses were introduced.
+
+### Implementation
+
+- Optimized `build_fn_template_mangled_name` in `crates/fragile-clang/src/ast_codegen.rs` to build the mangled output string in one pass using a pre-sized `String` and incremental sanitized type-arg appends.
+- Removed intermediate allocation churn from `Vec<String>` + `join("_")` + `format!` while preserving mangled-name semantics for empty and non-empty type-arg lists.
+- Added focused regression `test_build_fn_template_mangled_name_preserves_empty_type_arg_shape` and kept existing semantic lock `test_build_fn_template_mangled_name_sanitizes_type_args`.
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang test_build_fn_template_mangled_name_ -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_ -- --nocapture`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Results:
+
+- Focused tests passed (`2/2` mangled-name tests, `9/9` instantiation tests).
+- Full Rust suite remained at baseline failure count: `fragile-clang` lib `796` passed / `46` failed (`EXIT:101`).
+- Python suite passed: `Ran 29 tests`, `OK (skipped=1)`.
+
+### Outcome
+
+Leaf
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+is complete with behavior-locked regression coverage and baseline full-suite parity.

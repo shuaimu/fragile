@@ -39388,9 +39388,18 @@ impl FragileAtomicBoolCompat for atomic_bool {
     }
 
     fn build_fn_template_mangled_name(sanitized_fn_name: &str, type_args: &[String]) -> String {
-        let sanitized_args: Vec<String> =
-            type_args.iter().map(|a| sanitize_type_for_fn_name(a)).collect();
-        format!("{}_{}", sanitized_fn_name, sanitized_args.join("_"))
+        let mut mangled_name = String::with_capacity(
+            sanitized_fn_name.len() + 1 + type_args.iter().map(|arg| arg.len() + 1).sum::<usize>(),
+        );
+        mangled_name.push_str(sanitized_fn_name);
+        mangled_name.push('_');
+        for (idx, arg) in type_args.iter().enumerate() {
+            if idx > 0 {
+                mangled_name.push('_');
+            }
+            mangled_name.push_str(&sanitize_type_for_fn_name(arg));
+        }
+        mangled_name
     }
 
     fn normalize_template_match_type(ty: &str) -> String {
@@ -116184,6 +116193,15 @@ stream.PutN(c, n);
             mangled,
             "fallback_make_i32_ptr_const_i8_ref_mut_std_string_String",
             "deferred template-instantiation mangled-name builder should preserve existing sanitized-name semantics"
+        );
+    }
+
+    #[test]
+    fn test_build_fn_template_mangled_name_preserves_empty_type_arg_shape() {
+        let mangled = AstCodeGen::build_fn_template_mangled_name("fallback_make", &[]);
+        assert_eq!(
+            mangled, "fallback_make_",
+            "mangled-name builder should preserve empty-type-arg suffix shape used by deferred template instantiation paths"
         );
     }
 
