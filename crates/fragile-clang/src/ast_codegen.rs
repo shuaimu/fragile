@@ -38448,7 +38448,15 @@ impl FragileAtomicBoolCompat for atomic_bool {
         if namespace_path.is_empty() {
             return fn_name.to_string();
         }
-        let mut cache_key = namespace_path.join("::");
+        let namespace_len = namespace_path.iter().map(|segment| segment.len()).sum::<usize>()
+            + 2 * namespace_path.len().saturating_sub(1);
+        let mut cache_key = String::with_capacity(namespace_len + 1 + fn_name.len());
+        for (idx, segment) in namespace_path.iter().enumerate() {
+            if idx > 0 {
+                cache_key.push_str("::");
+            }
+            cache_key.push_str(segment);
+        }
         cache_key.push('\u{1f}');
         cache_key.push_str(fn_name);
         cache_key
@@ -38610,10 +38618,40 @@ impl FragileAtomicBoolCompat for atomic_bool {
         call_args: &[ClangNode],
         include_call_arg_bounds: bool,
     ) -> String {
-        let mut key = String::new();
+        let namespace_len = namespace_path.iter().map(|segment| segment.len()).sum::<usize>()
+            + 2 * namespace_path.len().saturating_sub(1);
+        let params_len = instantiated_param_types_normalized
+            .iter()
+            .map(|param| param.len() + 1)
+            .sum::<usize>();
+        let call_args_len_chars = call_args.len().to_string().len();
+        let bounds_capacity = if include_call_arg_bounds {
+            1 + call_args.len() * 2
+        } else {
+            0
+        };
+        let mut key = String::with_capacity(
+            fn_name.len()
+                + 1
+                + namespace_len
+                + 1
+                + instantiated_return_type_normalized.len()
+                + 1
+                + params_len
+                + 1
+                + call_args_len_chars
+                + 1
+                + 1
+                + bounds_capacity,
+        );
         key.push_str(fn_name);
         key.push('\u{1f}');
-        key.push_str(&namespace_path.join("::"));
+        for (idx, segment) in namespace_path.iter().enumerate() {
+            if idx > 0 {
+                key.push_str("::");
+            }
+            key.push_str(segment);
+        }
         key.push('\u{1f}');
         key.push_str(instantiated_return_type_normalized);
         key.push('\u{1f}');
@@ -113396,6 +113434,40 @@ stream.PutN(c, n);
         assert_ne!(
             short_with_bounds, long_with_bounds,
             "resolution key should remain literal-bound-sensitive when call-arg bounds are required"
+        );
+    }
+
+    #[test]
+    fn test_fn_template_candidate_keys_cache_key_namespaced_shape() {
+        let cache_key = AstCodeGen::fn_template_candidate_keys_cache_key(
+            "swap",
+            &["std".to_string(), "chrono".to_string()],
+        );
+        assert_eq!(
+            cache_key,
+            "std::chrono\u{1f}swap",
+            "candidate-key cache shape should preserve namespaced path segments with template-key delimiter",
+        );
+    }
+
+    #[test]
+    fn test_fn_template_call_resolution_key_includes_namespaced_path_segments() {
+        let args = vec![make_node(
+            ClangNodeKind::StringLiteral("x".to_string()),
+            vec![],
+        )];
+        let key = AstCodeGen::fn_template_call_resolution_key(
+            "match_literal",
+            &["std".to_string(), "chrono".to_string()],
+            &["*consti8".to_string()],
+            "bool",
+            &args,
+            false,
+        );
+        assert_eq!(
+            key,
+            "match_literal\u{1f}std::chrono\u{1f}bool\u{1f}*consti8\u{1e}\u{1f}1\u{1f}0",
+            "call-resolution key should serialize namespaced paths without changing delimiter layout",
         );
     }
 
