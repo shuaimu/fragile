@@ -38502,18 +38502,17 @@ impl FragileAtomicBoolCompat for atomic_bool {
         let mut candidate_keys: Vec<String> = Vec::with_capacity(expected_candidate_count);
         let mut candidate_keys_with_defs: Vec<String> =
             Vec::with_capacity(expected_candidate_count);
-        let mut seen_candidate_keys: HashSet<String> =
-            HashSet::with_capacity(expected_candidate_count);
-        let mut push_candidate = |key: &str| {
+        let mut push_candidate = |key: &str, has_definition_hint: Option<bool>| {
             if key.is_empty() {
                 return;
             }
-            if seen_candidate_keys.contains(key) {
+            if candidate_keys.iter().any(|existing| existing == key) {
                 return;
             }
+            let has_definition = has_definition_hint
+                .unwrap_or_else(|| self.fn_template_definitions.contains_key(key));
             let owned_key = key.to_string();
-            seen_candidate_keys.insert(owned_key.clone());
-            if self.fn_template_definitions.contains_key(key) {
+            if has_definition {
                 candidate_keys_with_defs.push(owned_key.clone());
             }
             candidate_keys.push(owned_key);
@@ -38521,20 +38520,23 @@ impl FragileAtomicBoolCompat for atomic_bool {
 
         if !namespace_path.is_empty() {
             let namespaced = Self::namespaced_leaf_name(namespace_path, fn_name);
-            push_candidate(&namespaced);
+            let namespaced_has_definition = self.fn_template_definitions.contains_key(&namespaced);
+            push_candidate(&namespaced, Some(namespaced_has_definition));
         }
-        push_candidate(fn_name);
+        let leaf_has_definition = self.fn_template_definitions.contains_key(fn_name);
+        push_candidate(fn_name, Some(leaf_has_definition));
 
         if let Some(qualified_keys) = self.fn_template_keys_by_leaf.get(fn_name) {
             for key in qualified_keys {
-                push_candidate(key);
+                let has_definition = self.fn_template_definitions.contains_key(key);
+                push_candidate(key, Some(has_definition));
             }
         } else {
             // Fallback for call paths that bypass collect_template_info in tests.
             let qualified_suffix = format!("::{}", fn_name);
             for key in self.fn_template_definitions.keys() {
                 if key.ends_with(&qualified_suffix) {
-                    push_candidate(key);
+                    push_candidate(key, Some(true));
                 }
             }
         }
@@ -114101,6 +114103,40 @@ stream.PutN(c, n);
             candidates.as_ref(),
             &vec!["std::swap".to_string(), "swap".to_string()],
             "candidate-key collection should ignore empty leaf-index entries while preserving first-seen priority order"
+        );
+    }
+
+    #[test]
+    fn test_collect_fn_template_candidate_keys_fallback_without_leaf_index_deduplicates_namespaced_definition_key(
+    ) {
+        let mut codegen = AstCodeGen::new();
+        let template_info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Named("T".to_string()),
+            params: vec![("value".to_string(), CppType::Named("T".to_string()))],
+            body: None,
+            is_noexcept: false,
+        };
+        codegen
+            .fn_template_definitions
+            .insert("swap".to_string(), template_info.clone());
+        codegen
+            .fn_template_definitions
+            .insert("std::swap".to_string(), template_info);
+
+        let namespace_path = vec!["std".to_string()];
+        let candidates = codegen.collect_fn_template_candidate_keys("swap", &namespace_path);
+        assert_eq!(
+            candidates.as_ref(),
+            &vec!["std::swap".to_string(), "swap".to_string()],
+            "fallback candidate-key collection should deduplicate namespaced direct key with definition-suffix scan entries"
+        );
+
+        let with_defs = codegen.collect_fn_template_candidate_keys_with_defs("swap", &namespace_path);
+        assert_eq!(
+            with_defs.as_ref(),
+            &vec!["std::swap".to_string(), "swap".to_string()],
+            "definition-backed fallback subset should preserve deduplicated deterministic ordering"
         );
     }
 
