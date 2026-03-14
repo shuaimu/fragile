@@ -39413,6 +39413,17 @@ impl FragileAtomicBoolCompat for atomic_bool {
         mangled_name
     }
 
+    fn identifier_requires_sanitization(name: &str) -> bool {
+        let mut chars = name.chars();
+        let Some(first) = chars.next() else {
+            return true;
+        };
+        if !(first == '_' || first.is_ascii_alphabetic()) {
+            return true;
+        }
+        chars.any(|ch| !(ch == '_' || ch.is_ascii_alphanumeric()))
+    }
+
     fn normalize_template_match_type(ty: &str) -> String {
         ty.split_whitespace().collect::<String>()
     }
@@ -39495,11 +39506,13 @@ impl FragileAtomicBoolCompat for atomic_bool {
         if self.generated_functions.contains_key(mangled_name) {
             return Some(self.compute_relative_path(namespace_path, mangled_name));
         }
-        let sanitized_mangled = sanitize_identifier(mangled_name);
-        if sanitized_mangled != mangled_name
-            && self.generated_functions.contains_key(&sanitized_mangled)
-        {
-            return Some(self.compute_relative_path(namespace_path, mangled_name));
+        if Self::identifier_requires_sanitization(mangled_name) {
+            let sanitized_mangled = sanitize_identifier(mangled_name);
+            if sanitized_mangled != mangled_name
+                && self.generated_functions.contains_key(&sanitized_mangled)
+            {
+                return Some(self.compute_relative_path(namespace_path, mangled_name));
+            }
         }
         None
     }
@@ -115992,6 +116005,30 @@ stream.PutN(c, n);
             codegen.resolve_existing_fn_template_path(&[], "swap_i64"),
             None,
             "resolver helper should report None when no pending/generated symbol exists"
+        );
+    }
+
+    #[test]
+    fn test_identifier_requires_sanitization_matches_identifier_shapes() {
+        assert!(
+            !AstCodeGen::identifier_requires_sanitization("swap_i32"),
+            "already-sanitized identifier shapes should bypass sanitization probes"
+        );
+        assert!(
+            !AstCodeGen::identifier_requires_sanitization("_swap9"),
+            "leading underscore and alnum identifier shapes should bypass sanitization probes"
+        );
+        assert!(
+            AstCodeGen::identifier_requires_sanitization("swap::i32"),
+            "namespaced lookup shapes should require sanitization fallback probing"
+        );
+        assert!(
+            AstCodeGen::identifier_requires_sanitization("9swap_i32"),
+            "non-identifier-leading shapes should require sanitization fallback probing"
+        );
+        assert!(
+            AstCodeGen::identifier_requires_sanitization("swap-i32"),
+            "symbol-containing shapes should require sanitization fallback probing"
         );
     }
 

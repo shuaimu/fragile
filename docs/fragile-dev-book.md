@@ -13000,3 +13000,52 @@ Observed:
 ### Outcome
 
 Leaf `2.6.c.vi` is complete with deterministic replay + nonincrease evidence. Build lane remains timeout-bound at `src/rrr/base/misc.cpp`, so next generic optimization/replay iteration remains queued.
+
+## 2026-03-14: RPC leaf `2.6.c.vii` template-path sanitize-probe fast path
+
+### Decision and rationale
+
+- Selected active RPC leaf `2.6.c.vii` in `TODO.md` (next generic codegen hot-path optimization before `codegen_after_top_level_generation`).
+- Scope check: small targeted change (<500 LOC) in `crates/fragile-clang/src/ast_codegen.rs` plus focused regression coverage.
+
+### Wrong-Approach Check
+
+Checked against `docs/dev/wrong.md` and section `1.3` in this book before editing:
+
+- No rollback-pattern expansion, target-specific conditionals, or force-native bypasses.
+- No semantic stubs/fake method bodies were introduced.
+- Change is a generic resolver fast path for all template call-resolution workloads.
+
+### Plan
+
+1. Add a low-cost identifier-shape pre-check to skip unnecessary sanitization work on already-sanitized mangled names.
+2. Wire the pre-check into `resolve_existing_fn_template_path` while preserving fallback semantics.
+3. Add focused tests for identifier-shape coverage and existing resolver behavior.
+4. Run targeted and full suites.
+
+### Implementation
+
+- Added `identifier_requires_sanitization(name: &str) -> bool` in `AstCodeGen`.
+- Updated `resolve_existing_fn_template_path` to call `sanitize_identifier` only when `identifier_requires_sanitization(mangled_name)` is true.
+- Preserved existing behavior order:
+  - pending instantiation lookup first,
+  - direct generated-function lookup second,
+  - sanitized generated-function fallback third.
+- Added focused unit test `test_identifier_requires_sanitization_matches_identifier_shapes`.
+
+### Validation
+
+Focused regressions:
+
+- `cargo test -p fragile-clang test_identifier_requires_sanitization_matches_identifier_shapes -- --nocapture`
+- `cargo test -p fragile-clang test_resolve_existing_fn_template_path_prefers_pending_and_falls_back_to_generated -- --nocapture`
+- `cargo test -p fragile-clang test_resolve_fn_template_call_name_from_args_ -- --nocapture`
+
+Full suites:
+
+- `cargo test --workspace --all-targets` -> baseline red in `fragile-clang` lib (`799` passed, `46` failed, `EXIT:101`).
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'` -> `OK`, `Ran 29 tests`, `skipped=1`.
+
+### Outcome
+
+Leaf `2.6.c.vii` is complete with focused regression coverage and full-suite verification; no new failure class beyond the known baseline-red Rust profile was introduced.
