@@ -12249,3 +12249,48 @@ Deterministic evidence highlights:
 Leaf
 `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.b`
 is complete. Strict build-only replay remains timeout-bound on `src/rrr/base/misc.cpp`, and blocker inventory non-increase gating remains passing versus the `2.6.c.iii` baseline.
+
+## 2026-03-14: Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+
+### Decision and rationale
+
+- Selected the first pending high-priority implementation leaf under the active strict `2.6.c` repeat branch.
+- Scope stayed small (<500 LOC): remove clone churn from function-template instantiation fallback handling on the hot candidate loop.
+- Kept semantics unchanged: fallback is still seeded for param-dependent candidates when concrete-shape compatibility fails.
+
+### Wrong-Approach Check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- No target-specific conditionals were introduced.
+- No fake semantic fallback bodies were added.
+- No force-native bypasses were introduced.
+
+### Implementation summary
+
+Updated `crates/fragile-clang/src/ast_codegen.rs`:
+
+- Refactored `collect_fn_template_instantiation` to avoid eager `type_args.clone()` when seeding `fallback_instantiation`.
+- Added `should_seed_fallback` and moved `type_args` into fallback only on mismatch/continue branches (`no concrete shape`, arity mismatch, incompatible params, incompatible return).
+- Preserved selected-instantiation path by moving `type_args` directly into `selected_instantiation` without fallback clone overhead.
+- Added focused regression `test_collect_fn_template_instantiation_uses_param_dependent_fallback_after_shape_mismatch`.
+
+### Validation
+
+Executed:
+
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_uses_param_dependent_fallback_after_shape_mismatch -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_ -- --nocapture`
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Full-suite baseline parity:
+
+- `cargo test --workspace --all-targets`: `fragile-clang` lib `793` passed / `46` failed (`EXIT:101`)
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`: `OK`, `29` ran, `1` skipped
+
+### Outcome
+
+Leaf
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+is complete. Function-template fallback handling now avoids unnecessary type-arg cloning on common match paths while preserving fallback correctness.

@@ -39279,20 +39279,23 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 let Some(type_args) = type_args else {
                     continue;
                 };
-                if fallback_instantiation.is_none()
-                    && (has_param_dependent_template_arg || params.is_empty())
-                {
-                    fallback_instantiation = Some((template_key.clone(), type_args.clone()));
-                }
+                let should_seed_fallback = fallback_instantiation.is_none()
+                    && (has_param_dependent_template_arg || params.is_empty());
 
                 let Some(concrete_shape) =
                     self.fn_template_concrete_match_shape(template_key, &type_args)
                 else {
+                    if should_seed_fallback {
+                        fallback_instantiation = Some((template_key.clone(), type_args));
+                    }
                     continue;
                 };
                 if concrete_shape.param_types_normalized.len()
                     != instantiated_param_types_normalized.len()
                 {
+                    if should_seed_fallback {
+                        fallback_instantiation = Some((template_key.clone(), type_args));
+                    }
                     continue;
                 }
                 let mut param_types_match = true;
@@ -39307,11 +39310,17 @@ impl FragileAtomicBoolCompat for atomic_bool {
                     }
                 }
                 if !param_types_match {
+                    if should_seed_fallback {
+                        fallback_instantiation = Some((template_key.clone(), type_args));
+                    }
                     continue;
                 }
                 if concrete_shape.return_type_normalized != "_"
                     && concrete_shape.return_type_normalized != instantiated_return_type_normalized
                 {
+                    if should_seed_fallback {
+                        fallback_instantiation = Some((template_key.clone(), type_args));
+                    }
                     continue;
                 }
 
@@ -114987,6 +114996,100 @@ stream.PutN(c, n);
             pending.1,
             vec!["i32".to_string()],
             "selected candidate should preserve inferred concrete type arguments"
+        );
+    }
+
+    #[test]
+    fn test_collect_fn_template_instantiation_uses_param_dependent_fallback_after_shape_mismatch() {
+        let templ_ty = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        let int_ty = CppType::Int { signed: true };
+        let call_fn_ty = CppType::Function {
+            return_type: Box::new(int_ty.clone()),
+            params: vec![int_ty.clone()],
+            is_variadic: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::FunctionTemplateDecl {
+                        name: "make".to_string(),
+                        template_params: vec!["T".to_string()],
+                        return_type: CppType::Bool,
+                        params: vec![("value".to_string(), templ_ty)],
+                        is_definition: true,
+                        parameter_pack_indices: vec![],
+                        requires_clause: None,
+                        is_noexcept: false,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "call_make".to_string(),
+                        mangled_name: "call_make".to_string(),
+                        is_static: false,
+                        return_type: int_ty.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: int_ty.clone(),
+                                    template_instantiation: None,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "make".to_string(),
+                                            ty: call_fn_ty,
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::IntegerLiteral {
+                                            value: 7,
+                                            cpp_type: Some(int_ty),
+                                        },
+                                        vec![],
+                                    ),
+                                ],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let mut codegen = AstCodeGen::new();
+        codegen.collect_template_info(&ast.children);
+        let pending = codegen
+            .pending_fn_instantiations
+            .get("make_i32")
+            .cloned()
+            .expect("param-dependent fallback should still record concrete instantiation when shape matching rejects candidate");
+        assert_eq!(
+            pending.0, "make",
+            "fallback path should preserve original template key"
+        );
+        assert_eq!(
+            pending.1,
+            vec!["i32".to_string()],
+            "fallback path should preserve inferred concrete type args"
         );
     }
 
