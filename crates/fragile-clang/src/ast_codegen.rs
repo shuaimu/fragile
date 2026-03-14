@@ -38553,14 +38553,18 @@ impl FragileAtomicBoolCompat for atomic_bool {
 
         if let Some(qualified_keys) = self.fn_template_keys_by_leaf.get(fn_name) {
             for key in qualified_keys {
-                let has_definition = self.fn_template_definitions.contains_key(key);
-                push_candidate(key, Some(has_definition));
+                // Let duplicate filtering happen before map lookups so
+                // repeated leaf-index entries avoid redundant contains_key
+                // probes on hot lookup paths.
+                push_candidate(key, None);
             }
         } else {
             // Fallback for call paths that bypass collect_template_info in tests.
-            let qualified_suffix = format!("::{}", fn_name);
             for key in self.fn_template_definitions.keys() {
-                if key.ends_with(&qualified_suffix) {
+                if key
+                    .rsplit_once("::")
+                    .is_some_and(|(_, leaf_name)| leaf_name == fn_name)
+                {
                     push_candidate(key, Some(true));
                 }
             }
@@ -114217,6 +114221,64 @@ stream.PutN(c, n);
             with_defs.as_ref(),
             &expected,
             "definition-backed subset should preserve deduplicated ordering for large leaf indexes"
+        );
+    }
+
+    #[test]
+    fn test_collect_fn_template_candidate_keys_large_leaf_index_mixed_definitions_keeps_with_defs_subset()
+    {
+        let mut codegen = AstCodeGen::new();
+        let mut leaf_entries: Vec<String> = Vec::new();
+        for idx in 0..40 {
+            leaf_entries.push(format!("ns{}::bulk", idx % 20));
+        }
+        codegen
+            .fn_template_keys_by_leaf
+            .insert("bulk".to_string(), leaf_entries.clone());
+        let template_info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Named("T".to_string()),
+            params: vec![("value".to_string(), CppType::Named("T".to_string()))],
+            body: None,
+            is_noexcept: false,
+        };
+        codegen
+            .fn_template_definitions
+            .insert("bulk".to_string(), template_info.clone());
+        for idx in (0..20).step_by(2) {
+            codegen
+                .fn_template_definitions
+                .insert(format!("ns{idx}::bulk"), template_info.clone());
+        }
+
+        let mut expected_candidates = vec!["bulk".to_string()];
+        let mut expected_with_defs = vec!["bulk".to_string()];
+        let mut seen = HashSet::new();
+        for key in leaf_entries {
+            if seen.insert(key.clone()) {
+                if codegen.fn_template_definitions.contains_key(&key) {
+                    expected_with_defs.push(key.clone());
+                }
+                expected_candidates.push(key);
+            }
+        }
+
+        let candidates = codegen.collect_fn_template_candidate_keys("bulk", &[]);
+        assert_eq!(
+            candidates.as_ref(),
+            &expected_candidates,
+            "large mixed-definition leaf-index candidate collection should keep deterministic deduplicated order"
+        );
+
+        let with_defs = codegen.collect_fn_template_candidate_keys_with_defs("bulk", &[]);
+        assert_eq!(
+            with_defs.as_ref(),
+            &expected_with_defs,
+            "definition-backed subset should keep only definition-backed keys after dedupe in large mixed-definition leaf indexes"
+        );
+        assert!(
+            !Arc::ptr_eq(&with_defs, &candidates),
+            "mixed-definition large candidate sets should not alias candidate and definition-backed subset allocations"
         );
     }
 
