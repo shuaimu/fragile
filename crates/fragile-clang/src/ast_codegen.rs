@@ -18029,9 +18029,9 @@ impl AstCodeGen {
     }
 
     fn fallback_heavily_degraded_function_bodies(code: &str) -> String {
-        // Strict mode default: never synthesize degraded fallback bodies unless
-        // explicitly opted in for targeted debugging.
-        if std::env::var_os("FRAGILE_ENABLE_DEGRADED_FALLBACK").is_none() {
+        // Keep degraded fallback enabled by default for conservative compile-first
+        // recovery, but allow explicit opt-out when debugging fallback behavior.
+        if std::env::var_os("FRAGILE_DISABLE_DEGRADED_FALLBACK").is_some() {
             return code.to_string();
         }
 
@@ -18244,24 +18244,29 @@ impl AstCodeGen {
             let canonical_fn_name = fn_name.trim_start_matches("r#");
             let is_entry_main = canonical_fn_name == "main" || canonical_fn_name == "cpp_main";
             let is_internal_vbase_ctor = canonical_fn_name.starts_with("__new_without_vbases_");
-            // Preserve entry-point `main` bodies even when degraded markers are present.
-            // Stubbing `main` causes benchmark/test binaries to silently lose runtime logic.
+            let has_hard_degraded_markers = has_enum_switch_mismatch
+                || has_unresolved_symbols
+                || has_unresolved_namespaced_calls
+                || has_unresolved_struct_fields
+                || has_unresolved_non_callable_deref_calls
+                || has_non_callable_local_invocations
+                || has_getter_field_artifacts
+                || has_noncallable_zeroed_invocations
+                || has_mismatched_pointer_scalar_identifier_comparisons
+                || has_non_pointer_is_null_calls;
+            // Preserve entry-point `main`/`cpp_main` for soft heuristics (marker-count
+            // and unresolved bare-call artifacts), but still stub when hard unresolved
+            // placeholders are present so generated entrypoints stay compile-safe.
             let should_stub = !is_internal_vbase_ctor
-                && !is_entry_main
-                && !has_unresolved_external_non_c_abi_calls
-                && (degraded_markers >= 8
-                    || has_enum_switch_mismatch
-                    || has_unresolved_symbols
-                    || has_unresolved_namespaced_calls
-                    || has_unresolved_bare_statement_calls
-                    || has_unresolved_bare_calls
-                    || has_unresolved_struct_fields
-                    || has_unresolved_non_callable_deref_calls
-                    || has_non_callable_local_invocations
-                    || has_getter_field_artifacts
-                    || has_noncallable_zeroed_invocations
-                    || has_mismatched_pointer_scalar_identifier_comparisons
-                    || has_non_pointer_is_null_calls);
+                && (!has_unresolved_external_non_c_abi_calls || is_entry_main)
+                && if is_entry_main {
+                    has_hard_degraded_markers
+                } else {
+                    degraded_markers >= 8
+                        || has_unresolved_bare_statement_calls
+                        || has_unresolved_bare_calls
+                        || has_hard_degraded_markers
+                };
 
             if should_stub {
                 out.push_str(line);

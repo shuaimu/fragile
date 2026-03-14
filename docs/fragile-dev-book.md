@@ -13663,3 +13663,53 @@ Observed manifest markers:
 ### Outcome
 
 Leaf `2.6.c.xviii` is complete with deterministic replay and nonincrease-gate evidence; strict build lane remains timeout-bound at `src/rrr/base/misc.cpp` with no class/E0425 regression versus `2.6.c.iii`.
+
+## 2026-03-14: Leaf 2.7.a degraded fallback stubbing detection repair
+
+### Context
+
+Periodic sweep follow-up `2.7.a` targeted baseline `fragile-clang` unit failures in `fallback_heavily_degraded_function_bodies` (placeholder/degraded artifact families no longer being stubbed).
+
+### Wrong-approach check
+
+- No target-specific (`rpcbench`/`test_rpc`) conditionals were added.
+- No synthetic fake success paths were introduced; this change restores existing generic degraded-body fallback detection behavior.
+- Changes are confined to generic fallback gating/heuristics in `ast_codegen` and validated with existing focused regressions.
+
+### Plan
+
+1. Restore degraded-body fallback pass execution by default.
+2. Keep an explicit opt-out knob for debugging fallback behavior.
+3. Refine entrypoint handling so `main`/`cpp_main` keep soft-marker tolerance but still stub on hard unresolved placeholder families.
+4. Re-run focused fallback tests and full suite sweeps.
+
+### Execution
+
+Implemented in `crates/fragile-clang/src/ast_codegen.rs`:
+
+- `fallback_heavily_degraded_function_bodies` now runs by default; explicit bypass is `FRAGILE_DISABLE_DEGRADED_FALLBACK=1`.
+- `should_stub` entrypoint logic now:
+  - preserves `main`/`cpp_main` for soft-marker-only cases,
+  - still stubs entrypoints for hard degraded markers (for example unresolved namespaced call artifacts),
+  - preserves non-entry behavior for existing bare-call + marker-count heuristics.
+
+### Verification
+
+Focused:
+
+- `cargo test -p fragile-clang fallback_heavily_degraded_function_bodies -- --nocapture`
+- Result: `35` passed, `0` failed.
+
+Full suites:
+
+- `cargo test --workspace --all-targets`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+Results:
+
+- Python suite: `OK` (`Ran 29`, `skipped=1`).
+- Rust workspace: still red, but `fragile-clang` lib failures reduced from `46` to `23` (`827` passed / `23` failed, `EXIT:101`), with first remaining failure `ast_codegen::tests::test_enum_function_argument_integer_literal_is_lowered_to_variant` (unit assertion).
+
+### Outcome
+
+Leaf `2.7.a` is complete: degraded fallback stubbing detection for known placeholder families is restored and locked by focused regression coverage. Remaining full-suite failures are tracked in follow-up leaves `2.7.b` and `2.7.c`.
