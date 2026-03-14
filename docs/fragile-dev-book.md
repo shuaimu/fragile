@@ -12852,3 +12852,53 @@ Observed:
 ### Outcome
 
 The CI sweep leaf is complete for this cycle, and concrete CI-derived remediation tasks are now queued in the active plan.
+
+## 2026-03-14: RPC leaf `2.6.c...b` strict build-only replay + nonincrease gate
+
+### Decision and rationale
+
+- Selected the first unfinished leaf under the highest-priority unfinished task in `TODO.md`: `2.6.c...b` (strict single-lane build-only replay plus blocker inventory non-increase gate).
+- Scope is operational and small (<500 LOC): no codegen logic changes, only deterministic replay/inventory verification and documentation.
+
+### Wrong-Approach Check
+
+Checked against `docs/dev/wrong.md` and project guardrails before running:
+
+- No target-specific hacks were introduced.
+- No force-native bypasses were used.
+- No semantic fallback stubs/fake bodies were introduced.
+- The leaf remains evidence-driven and generic (status/gate validation only).
+
+### Execution
+
+Ran:
+
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict python3 scripts/mako_rpcbench_harness.py --run-root /tmp/fragile_rpc_leaf_2_6c_current_c44_n_b_build_only_20260314_v1 --lanes fragilec --build-only --jobs 4 --build-timeout-seconds 180`
+- `python3 scripts/mako_rpc_compile_blocker_inventory.py --run-root /tmp/fragile_rpc_leaf_2_6c_current_c44_n_b_build_only_20260314_v1 --lanes fragilec --baseline-manifest /tmp/fragile_rpc_leaf_2_6c_iii_build_only_20260313/rpc_compile_blocker_inventory_manifest.txt --enforce-nonincreasing`
+
+Observed:
+
+- Build-only strict replay manifest markers:
+  - `build_only=true`
+  - `lane_fragilec_configure_status=0`
+  - `lane_fragilec_clean_status=0`
+  - `lane_fragilec_build_status=124`
+  - `lane_fragilec_failure_class=build_timeout`
+  - `no_regression_verdict=not_executed`
+- Blocker inventory non-increase gate markers:
+  - `lane_fragilec_first_failing_compile_class=build_timeout`
+  - `lane_fragilec_first_failing_compile_file=src/rrr/base/misc.cpp`
+  - `lane_fragilec_class_rank_delta_vs_baseline=0`
+  - `lane_fragilec_e0425_delta_vs_baseline=0`
+  - `lane_fragilec_nonincrease_gate_pass=true`
+  - `nonincrease_gate_pass=true`
+
+### TODO updates
+
+- Marked the targeted `2.6.c...b` leaf as done with this run-root evidence.
+- Added explicit next-step leaves `2.6.c.v` and `2.6.c.vi` to continue the strict build-only optimization/replay loop without further recursive path expansion.
+
+### Outcome
+
+The selected leaf is complete: strict replay/inventory evidence was captured and nonincrease gating passed while the build lane remains timeout-bound (`build_status=124`), so iterative generic optimization work remains queued.
