@@ -13889,3 +13889,76 @@ Workspace/Python sweeps:
 ### Outcome
 
 Leaf `2.7.d.i` is complete: brittle syntax-shape smoke assertions were replaced with semantic checks, and the targeted failures no longer reproduce. Remaining `2.7.d` work is concentrated in runtime mapping and e2e algorithm/data-structure failures (`2.7.d.ii` and `2.7.d.iii`).
+
+## 2026-03-14: Leaf 2.7.d.ii runtime mapping + runtime-link harness fixes
+
+### Context
+
+Leaf `2.7.d.ii` targeted three runtime integration failures:
+
+- `test_runtime_function_name_mapping`
+- `test_e2e_runtime_file_io`
+- `test_e2e_runtime_pthread`
+
+Observed failure classes before fixes:
+
+- mapping assertion failure for `fopen` check in `test_runtime_function_name_mapping`;
+- `E0514` rustc crate-version mismatch in runtime e2e tests caused by selecting a stale `fragile_runtime` rlib built with a different toolchain.
+
+### Wrong-approach check
+
+Checked against `docs/dev/wrong.md` and section `1.3` before implementation:
+
+- No target-specific parser/codegen hacks were introduced.
+- No fallback semantic stubs were added.
+- Fixes are generic test-harness and assertion correctness improvements:
+  - deterministic compatible runtime rlib selection,
+  - stricter unqualified-call detection for runtime mapping assertions.
+
+### Plan
+
+1. Reproduce the three runtime failures and separate assertion vs link-toolchain causes.
+2. Fix runtime rlib selection to choose a candidate compatible with the active `rustc`.
+3. Tighten runtime mapping assertions to detect actual unqualified call sites (not declarations).
+4. Add focused regression coverage for call-site detection helper behavior.
+5. Re-run targeted runtime tests and full workspace/python sweeps.
+
+### Execution
+
+Updated `crates/fragile-clang/tests/integration_test.rs`:
+
+- Added `contains_unqualified_call` helper (+ `is_identifier_char`) to identify bare call sites while ignoring declarations and already-qualified paths.
+- Added focused regression:
+  - `test_contains_unqualified_call_ignores_decls_and_qualified_calls`.
+- Updated `test_runtime_function_name_mapping` assertions to use `contains_unqualified_call` instead of raw `contains("fopen(")`/`contains("pthread_create(")` checks.
+- Reworked runtime link helper:
+  - split into `find_fragile_runtime_link_info_uncached` + cached wrapper (`OnceLock`),
+  - candidate collection via `collect_runtime_rlib_candidates_for_profile` (debug first, then release),
+  - compatibility probe via `runtime_rlib_is_compatible_with_current_rustc` that compiles a tiny `extern crate fragile_runtime` program with each candidate and selects the first successful one,
+  - retained fallback behavior if probing cannot run.
+
+### Validation
+
+Targeted runtime tests:
+
+- `cargo test -p fragile-clang --test integration_test test_contains_unqualified_call_ignores_decls_and_qualified_calls -- --nocapture` -> pass.
+- `cargo test -p fragile-clang --test integration_test test_runtime_function_name_mapping -- --nocapture` -> pass (`pthread mapping: OK`, `stdio mapping: Not triggered (header not parsed)`).
+- `cargo test -p fragile-clang --test integration_test test_e2e_runtime_file_io -- --nocapture` -> pass.
+- `cargo test -p fragile-clang --test integration_test test_e2e_runtime_pthread -- --nocapture` -> pass.
+
+Full suites:
+
+- `cargo test --workspace --all-targets` (log: `/tmp/fragile_workspace_all_targets_20260314_2_7d_ii.log`):
+  - `fragile-clang` lib: `852 passed / 0 failed`.
+  - `grammar_tests`: `22 passed / 0 failed`.
+  - integration target still baseline-red, but runtime regressions fixed:
+    - `test_e2e_runtime_file_io ... ok`
+    - `test_e2e_runtime_pthread ... ok`
+    - `test_runtime_function_name_mapping ... ok`
+  - total integration `FAILED` lines reduced from `34` to `31` versus prior `2.7.d.i` sweep.
+  - run was interrupted after prolonged no-progress hang in long-running integration phase.
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'` -> `Ran 29`, `OK`, `skipped=1`.
+
+### Outcome
+
+Leaf `2.7.d.ii` is complete. Runtime mapping/runtime-link integration regressions were fixed without introducing target-specific transpiler behavior. Remaining `2.7.d` work is concentrated in algorithm/data-structure e2e failures (`2.7.d.iii`) and full-sweep non-increase tracking (`2.7.d.iv`).

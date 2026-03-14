@@ -57,6 +57,37 @@ fn assert_function_contains_any(code: &str, fn_name: &str, expected_patterns: &[
     assert_code_contains_any(fn_block, expected_patterns, context);
 }
 
+fn is_identifier_char(ch: char) -> bool {
+    ch == '_' || ch.is_ascii_alphanumeric()
+}
+
+fn contains_unqualified_call(code: &str, func_name: &str) -> bool {
+    let needle = format!("{func_name}(");
+    for line in code.lines() {
+        let bytes = line.as_bytes();
+        let mut i = 0usize;
+        while i + needle.len() <= bytes.len() {
+            if &line[i..i + needle.len()] == needle.as_str() {
+                let prev = if i > 0 { Some(bytes[i - 1]) } else { None };
+                let prefix = &line[..i];
+                let already_qualified = prefix.ends_with("crate::")
+                    || prefix.ends_with("super::")
+                    || prefix.ends_with("self::");
+                let looks_like_fn_decl = prefix.trim_end().ends_with("fn");
+                let prev_is_ident =
+                    prev.is_some_and(|byte| is_identifier_char(byte as char));
+                let prev_is_path_sep = matches!(prev, Some(b':') | Some(b'.'));
+                if !already_qualified && !looks_like_fn_decl && !prev_is_ident && !prev_is_path_sep
+                {
+                    return true;
+                }
+            }
+            i += 1;
+        }
+    }
+    false
+}
+
 fn extract_block_from_marker<'a>(code: &'a str, marker: &str) -> Option<&'a str> {
     let start = code.find(marker)?;
     let body_start = code[start..].find('{')? + start;
@@ -78,6 +109,32 @@ fn extract_block_from_marker<'a>(code: &'a str, marker: &str) -> Option<&'a str>
         }
     }
     None
+}
+
+#[test]
+fn test_contains_unqualified_call_ignores_decls_and_qualified_calls() {
+    let code = r#"
+pub fn fopen(path: *const i8, mode: *const i8) -> *mut c_void;
+pub fn demo(path: *const i8, mode: *const i8) {
+    crate::fragile_runtime::fopen(path, mode);
+    super::fopen(path, mode);
+    self::fopen(path, mode);
+}
+"#;
+    assert!(
+        !contains_unqualified_call(code, "fopen"),
+        "declarations and qualified helper calls should not be treated as unqualified calls"
+    );
+
+    let code_with_unqualified = r#"
+pub fn demo(path: *const i8, mode: *const i8) {
+    let _file = fopen(path, mode);
+}
+"#;
+    assert!(
+        contains_unqualified_call(code_with_unqualified, "fopen"),
+        "bare runtime helper call should be detected as unqualified"
+    );
 }
 
 /// Test parsing a simple add function.
@@ -352,6 +409,7 @@ fn test_while_loop() {
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone)]
 struct FragileRuntimeLinkInfo {
@@ -364,7 +422,81 @@ struct FragileRuntimeLinkInfo {
 /// Looks in the target directory for either:
 /// - `target/{debug,release}/libfragile_runtime.rlib`
 /// - `target/{debug,release}/deps/libfragile_runtime-*.rlib`
-fn find_fragile_runtime_link_info() -> Option<FragileRuntimeLinkInfo> {
+fn collect_runtime_rlib_candidates_for_profile(
+    profile_dir: &std::path::Path,
+) -> Vec<(std::time::SystemTime, PathBuf, PathBuf)> {
+    let deps_dir = profile_dir.join("deps");
+    let mut candidates: Vec<(std::time::SystemTime, PathBuf, PathBuf)> = Vec::new();
+
+    if let Ok(deps_entries) = fs::read_dir(&deps_dir) {
+        candidates.extend(
+            deps_entries
+                .filter_map(|entry| entry.ok())
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.file_name().and_then(|name| name.to_str()).is_some_and(|name| {
+                        name.starts_with("libfragile_runtime-") && name.ends_with(".rlib")
+                    })
+                })
+                .map(|rlib_path| {
+                    let modified = fs::metadata(&rlib_path)
+                        .and_then(|m| m.modified())
+                        .unwrap_or(std::time::UNIX_EPOCH);
+                    (modified, deps_dir.clone(), rlib_path)
+                }),
+        );
+    }
+
+    let direct_rlib = profile_dir.join("libfragile_runtime.rlib");
+    if direct_rlib.exists() {
+        let modified = fs::metadata(&direct_rlib)
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::UNIX_EPOCH);
+        candidates.push((modified, deps_dir, direct_rlib));
+    }
+
+    candidates.sort_by_key(|(modified, _, _)| *modified);
+    candidates.reverse();
+    candidates
+}
+
+fn runtime_rlib_is_compatible_with_current_rustc(
+    profile_dir: &std::path::Path,
+    deps_dir: &std::path::Path,
+    rlib_path: &std::path::Path,
+) -> bool {
+    let probe_dir = std::env::temp_dir().join("fragile_runtime_link_probe");
+    if fs::create_dir_all(&probe_dir).is_err() {
+        return false;
+    }
+
+    let pid = std::process::id();
+    let probe_src = probe_dir.join(format!("probe_{pid}.rs"));
+    let probe_bin = probe_dir.join(format!("probe_{pid}"));
+    let probe_code = "extern crate fragile_runtime; fn main() {}";
+    if fs::write(&probe_src, probe_code).is_err() {
+        return false;
+    }
+
+    let output = Command::new("rustc")
+        .arg(&probe_src)
+        .arg("-o")
+        .arg(&probe_bin)
+        .arg("--edition=2021")
+        .arg("-L")
+        .arg(profile_dir)
+        .arg("-L")
+        .arg(deps_dir)
+        .arg("--extern")
+        .arg(format!("fragile_runtime={}", rlib_path.display()))
+        .output();
+
+    let _ = fs::remove_file(&probe_src);
+    let _ = fs::remove_file(&probe_bin);
+    output.is_ok_and(|out| out.status.success())
+}
+
+fn find_fragile_runtime_link_info_uncached() -> Option<FragileRuntimeLinkInfo> {
     // Try to find the workspace root by looking for Cargo.toml
     let mut current = std::env::current_dir().ok()?;
 
@@ -375,54 +507,49 @@ fn find_fragile_runtime_link_info() -> Option<FragileRuntimeLinkInfo> {
             let content = fs::read_to_string(&cargo_toml).ok()?;
             if content.contains("[workspace]") {
                 // Found workspace root, look for runtime library
-                // Check release first (more common in CI), then debug
-                for profile in ["release", "debug"] {
+                // Prefer debug artifacts from the current test toolchain first, then release.
+                // Runtime e2e tests invoke rustc directly and can fail with E0514 when a stale
+                // release rlib from a different toolchain is selected.
+                let mut fallback_candidate: Option<FragileRuntimeLinkInfo> = None;
+                for profile in ["debug", "release"] {
                     let profile_dir = current.join("target").join(profile);
-                    let direct_rlib = profile_dir.join("libfragile_runtime.rlib");
-                    let deps_dir = profile_dir.join("deps");
-
-                    if let Ok(deps_entries) = fs::read_dir(&deps_dir) {
-                        let mut hashed_rlibs: Vec<(std::time::SystemTime, PathBuf)> = deps_entries
-                            .filter_map(|entry| entry.ok())
-                            .map(|entry| entry.path())
-                            .filter(|path| {
-                                path.file_name().and_then(|name| name.to_str()).is_some_and(
-                                    |name| {
-                                        name.starts_with("libfragile_runtime-")
-                                            && name.ends_with(".rlib")
-                                    },
-                                )
-                            })
-                            .map(|path| {
-                                let modified = fs::metadata(&path)
-                                    .and_then(|m| m.modified())
-                                    .unwrap_or(std::time::UNIX_EPOCH);
-                                (modified, path)
-                            })
-                            .collect();
-                        hashed_rlibs.sort_by_key(|(modified, _)| *modified);
-                        if let Some((_, rlib_path)) = hashed_rlibs.pop() {
-                            return Some(FragileRuntimeLinkInfo {
-                                profile_dir,
-                                deps_dir,
-                                rlib_path,
-                            });
+                    for (_, deps_dir, rlib_path) in
+                        collect_runtime_rlib_candidates_for_profile(&profile_dir)
+                    {
+                        let candidate = FragileRuntimeLinkInfo {
+                            profile_dir: profile_dir.clone(),
+                            deps_dir,
+                            rlib_path,
+                        };
+                        if fallback_candidate.is_none() {
+                            fallback_candidate = Some(candidate.clone());
+                        }
+                        if runtime_rlib_is_compatible_with_current_rustc(
+                            &candidate.profile_dir,
+                            &candidate.deps_dir,
+                            &candidate.rlib_path,
+                        ) {
+                            return Some(candidate);
                         }
                     }
-
-                    if direct_rlib.exists() {
-                        return Some(FragileRuntimeLinkInfo {
-                            profile_dir,
-                            deps_dir,
-                            rlib_path: direct_rlib,
-                        });
-                    }
+                }
+                // If compatibility probing failed (for example rustc invocation issue), keep prior
+                // behavior by returning the best candidate we discovered.
+                if let Some(candidate) = fallback_candidate {
+                    return Some(candidate);
                 }
             }
         }
         current = current.parent()?.to_path_buf();
     }
     None
+}
+
+fn find_fragile_runtime_link_info() -> Option<FragileRuntimeLinkInfo> {
+    static RUNTIME_LINK_INFO_CACHE: OnceLock<Option<FragileRuntimeLinkInfo>> = OnceLock::new();
+    RUNTIME_LINK_INFO_CACHE
+        .get_or_init(find_fragile_runtime_link_info_uncached)
+        .clone()
 }
 
 /// Helper function to transpile C++ source, compile with rustc, and run.
@@ -4599,7 +4726,7 @@ fn test_runtime_function_name_mapping() {
         rust_code.contains("fragile_runtime::fragile_pthread_create") ||
         // Note: The function might not appear if pthread.h is not fully parsed
         // In that case, the test validates the mapping mechanism is in place
-        !rust_code.contains("pthread_create("),
+        !contains_unqualified_call(&rust_code, "pthread_create"),
         "pthread_create should be mapped to fragile_runtime::fragile_pthread_create\nGenerated code snippet:\n{}",
         &rust_code[..rust_code.len().min(2000)]
     );
@@ -4627,7 +4754,7 @@ fn test_runtime_function_name_mapping() {
     assert!(
         rust_code2.contains("fragile_runtime::fopen") ||
         // Note: The function might not appear if stdio.h is not fully parsed
-        !rust_code2.contains("fopen("),
+        !contains_unqualified_call(&rust_code2, "fopen"),
         "fopen should be mapped to fragile_runtime::fopen\nGenerated code snippet:\n{}",
         &rust_code2[..rust_code2.len().min(2000)]
     );
