@@ -13216,3 +13216,56 @@ Observed:
 ### Outcome
 
 Leaf `2.6.c.x` is complete with deterministic replay + nonincrease evidence. Build lane remains timeout-bound at `src/rrr/base/misc.cpp`, so next generic optimization/replay iteration remains queued.
+
+## 2026-03-14: RPC leaf `2.6.c.xi` template-resolution key hot-path optimization
+
+### Decision and rationale
+
+- Selected first actionable unfinished leaf under active task `2`: `2.6.c.xi`.
+- Scope is small (<500 LOC): optimize a known template-call hot path without changing lookup semantics.
+
+### Wrong-Approach Check
+
+Checked against `docs/dev/wrong.md` and section `1.3` in this book before coding:
+
+- No RPC- or mako-specific conditionals were added.
+- No force-native bypass or C++ fallback path was introduced.
+- No fake/stub method-body synthesis was introduced.
+- Change is generic inside shared template-resolution key construction.
+
+### Plan
+
+1. Optimize `fn_template_call_resolution_key` to reduce temporary numeric string allocations.
+2. Add focused regression to lock key-shape behavior for multi-digit bound/count formatting.
+3. Run focused `fragile-clang` tests around key/cached-resolution behavior.
+4. Run full workspace Rust/Python suites and record outcomes.
+
+### Execution
+
+Code changes in `crates/fragile-clang/src/ast_codegen.rs`:
+
+- Imported `std::fmt::Write`.
+- In `fn_template_call_resolution_key`:
+  - Reused a single precomputed `call_arg_count_str` (instead of recomputing `to_string` for capacity and write).
+  - Replaced per-bound `bound.to_string()` temporaries with direct `write!` into the preallocated key buffer.
+
+Focused regression added:
+
+- `test_fn_template_call_resolution_key_formats_multi_digit_literal_bounds`
+
+### Validation
+
+Focused tests:
+
+- `cargo test -p fragile-clang test_fn_template_call_resolution_key_formats_multi_digit_literal_bounds -- --nocapture`
+- `cargo test -p fragile-clang test_fn_template_call_resolution_key_omits_literal_bound_dimension_when_disabled -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_uses_cached_call_resolution -- --nocapture`
+
+Full suites:
+
+- `cargo test --workspace --all-targets` -> baseline red in `fragile-clang` lib (`801` passed, `46` failed, `EXIT:101`).
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'` -> `OK`, `Ran 29 tests`, `skipped=1`.
+
+### Outcome
+
+Leaf `2.6.c.xi` is complete with focused regression coverage and full-suite verification. No new failure class was introduced; Rust full-suite remains at baseline failure profile.

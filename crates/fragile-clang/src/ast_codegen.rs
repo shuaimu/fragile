@@ -12,6 +12,7 @@ use crate::types::{normalize_rusty_type_alias_to_std, parse_template_args, CppTy
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fmt::Write;
 use std::sync::Arc;
 
 /// Convert C++ access specifier to Rust visibility prefix.
@@ -38678,13 +38679,14 @@ impl FragileAtomicBoolCompat for atomic_bool {
         call_args: &[ClangNode],
         include_call_arg_bounds: bool,
     ) -> String {
+        let call_arg_count = call_args.len();
+        let call_arg_count_str = call_arg_count.to_string();
         let namespace_len = namespace_path.iter().map(|segment| segment.len()).sum::<usize>()
             + 2 * namespace_path.len().saturating_sub(1);
         let params_len = instantiated_param_types_normalized
             .iter()
             .map(|param| param.len() + 1)
             .sum::<usize>();
-        let call_args_len_chars = call_args.len().to_string().len();
         let bounds_capacity = if include_call_arg_bounds {
             1 + call_args.len() * 2
         } else {
@@ -38699,7 +38701,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 + 1
                 + params_len
                 + 1
-                + call_args_len_chars
+                + call_arg_count_str.len()
                 + 1
                 + 1
                 + bounds_capacity,
@@ -38720,14 +38722,15 @@ impl FragileAtomicBoolCompat for atomic_bool {
             key.push('\u{1e}');
         }
         key.push('\u{1f}');
-        key.push_str(&call_args.len().to_string());
+        key.push_str(&call_arg_count_str);
         key.push('\u{1f}');
         key.push(if include_call_arg_bounds { '1' } else { '0' });
         if include_call_arg_bounds {
             key.push('\u{1f}');
             for arg in call_args {
                 if let Some(bound) = infer_nttp_array_bound_literal_len_with_nul(arg) {
-                    key.push_str(&bound.to_string());
+                    write!(&mut key, "{bound}")
+                        .expect("writing numeric bound into String should never fail");
                 } else {
                     key.push('_');
                 }
@@ -113948,6 +113951,44 @@ stream.PutN(c, n);
         assert_ne!(
             short_with_bounds, long_with_bounds,
             "resolution key should remain literal-bound-sensitive when call-arg bounds are required"
+        );
+    }
+
+    #[test]
+    fn test_fn_template_call_resolution_key_formats_multi_digit_literal_bounds() {
+        let args = vec![
+            make_node(
+                ClangNodeKind::StringLiteral("abcdefghijk".to_string()),
+                vec![],
+            ),
+            make_node(
+                ClangNodeKind::IntegerLiteral {
+                    value: 7,
+                    cpp_type: Some(CppType::Int { signed: true }),
+                },
+                vec![],
+            ),
+            make_node(
+                ClangNodeKind::DeclRefExpr {
+                    name: "value".to_string(),
+                    ty: CppType::Int { signed: true },
+                    namespace_path: vec![],
+                },
+                vec![],
+            ),
+        ];
+        let key = AstCodeGen::fn_template_call_resolution_key(
+            "match_literal",
+            &[],
+            &["*consti8".to_string()],
+            "bool",
+            &args,
+            true,
+        );
+        assert_eq!(
+            key,
+            "match_literal\u{1f}\u{1f}bool\u{1f}*consti8\u{1e}\u{1f}3\u{1f}1\u{1f}12\u{1e}_\u{1e}_\u{1e}",
+            "resolution-key serialization should preserve multi-digit bound and arg-count formatting in bounds-aware mode"
         );
     }
 
