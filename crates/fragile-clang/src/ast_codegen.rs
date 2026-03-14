@@ -43108,23 +43108,23 @@ impl FragileAtomicBoolCompat for atomic_bool {
 
         // Generate body by processing the template body with type substitutions
         if let Some(ref body) = template_info.body {
-            // Save current state
-            let saved_local_vars = self.local_vars.clone();
-            let saved_scoped_local_var_counts = self.scoped_local_var_counts.clone();
-            let saved_scoped_local_scope_stack = self.scoped_local_scope_stack.clone();
-            let saved_scoped_local_ptr_state = self.scoped_local_ptr_state.clone();
-            let saved_scoped_local_ptr_scope_stack = self.scoped_local_ptr_scope_stack.clone();
-            let saved_ref_vars = self.ref_vars.clone();
-            let saved_const_receiver_vars = self.const_receiver_vars.clone();
-            let saved_ptr_vars = self.ptr_vars.clone();
-            let saved_arr_vars = self.arr_vars.clone();
+            // Move current scope-tracking state out to avoid clone-heavy snapshots
+            // for each generated function-template instance.
+            let saved_local_vars = std::mem::take(&mut self.local_vars);
+            let saved_scoped_local_var_counts =
+                std::mem::take(&mut self.scoped_local_var_counts);
+            let saved_scoped_local_scope_stack =
+                std::mem::take(&mut self.scoped_local_scope_stack);
+            let saved_scoped_local_ptr_state =
+                std::mem::take(&mut self.scoped_local_ptr_state);
+            let saved_scoped_local_ptr_scope_stack =
+                std::mem::take(&mut self.scoped_local_ptr_scope_stack);
+            let saved_ref_vars = std::mem::take(&mut self.ref_vars);
+            let saved_const_receiver_vars = std::mem::take(&mut self.const_receiver_vars);
+            let saved_ptr_vars = std::mem::take(&mut self.ptr_vars);
+            let saved_arr_vars = std::mem::take(&mut self.arr_vars);
 
-            // Clear for this function
-            self.local_vars.clear();
-            self.scoped_local_var_counts.clear();
-            self.scoped_local_scope_stack.clear();
-            self.scoped_local_ptr_state.clear();
-            self.scoped_local_ptr_scope_stack.clear();
+            // Start with a clean function-local scope state.
             self.push_local_scope();
             for (param_name, param_ty) in &template_info.params {
                 self.declare_scoped_local_var_with_ptr_hint(
@@ -43135,11 +43135,6 @@ impl FragileAtomicBoolCompat for atomic_bool {
             for var_name in Self::extract_vardecl_names(body) {
                 self.local_vars.insert(sanitize_identifier(&var_name));
             }
-            self.ref_vars.clear();
-            self.const_receiver_vars.clear();
-            self.ptr_vars.clear();
-            self.arr_vars.clear();
-
             // Track reference parameters that are still lowered to pointer/reference-like
             // forms in Rust, so reads use dereference semantics. If substitution lowered
             // a reference param to a by-value primitive (for example const int& -> i32),
@@ -112858,6 +112853,116 @@ stream.PutN(c, n);
         assert!(
             codegen.pending_fn_instantiations.is_empty(),
             "current pending function instantiations should be consumed without clone-backed staging"
+        );
+    }
+
+    #[test]
+    fn test_generate_fn_template_instance_restores_outer_scope_tracking_state() {
+        let templ_ty = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        let mut codegen = AstCodeGen::new();
+        codegen.local_vars.insert("outer_local".to_string());
+        codegen
+            .scoped_local_var_counts
+            .insert("outer_local".to_string(), 1);
+        codegen
+            .scoped_local_scope_stack
+            .push(vec!["outer_local".to_string()]);
+        codegen
+            .scoped_local_ptr_state
+            .insert("outer_local".to_string(), vec![true]);
+        codegen
+            .scoped_local_ptr_scope_stack
+            .push(vec!["outer_local".to_string()]);
+        codegen.ref_vars.insert("outer_ref".to_string());
+        codegen
+            .const_receiver_vars
+            .insert("outer_const".to_string());
+        codegen.ptr_vars.insert("outer_ptr".to_string());
+        codegen.arr_vars.insert("outer_arr".to_string());
+
+        let saved_local_vars = codegen.local_vars.clone();
+        let saved_scoped_local_var_counts = codegen.scoped_local_var_counts.clone();
+        let saved_scoped_local_scope_stack = codegen.scoped_local_scope_stack.clone();
+        let saved_scoped_local_ptr_state = codegen.scoped_local_ptr_state.clone();
+        let saved_scoped_local_ptr_scope_stack = codegen.scoped_local_ptr_scope_stack.clone();
+        let saved_ref_vars = codegen.ref_vars.clone();
+        let saved_const_receiver_vars = codegen.const_receiver_vars.clone();
+        let saved_ptr_vars = codegen.ptr_vars.clone();
+        let saved_arr_vars = codegen.arr_vars.clone();
+
+        codegen.pending_fn_instantiations.insert(
+            "identity_i32".to_string(),
+            (
+                "identity".to_string(),
+                vec!["i32".to_string()],
+                FnTemplateInfo {
+                    template_params: vec!["T".to_string()],
+                    return_type: templ_ty.clone(),
+                    params: vec![("x".to_string(), templ_ty.clone())],
+                    body: Some(make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::DeclRefExpr {
+                                    name: "x".to_string(),
+                                    ty: templ_ty,
+                                    namespace_path: vec![],
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )),
+                    is_noexcept: false,
+                },
+            ),
+        );
+
+        codegen.generate_fn_template_instantiations();
+
+        assert!(
+            codegen.generated_functions.contains_key("identity_i32"),
+            "function template instantiation should emit the concrete function"
+        );
+        assert_eq!(
+            codegen.local_vars, saved_local_vars,
+            "function-template generation should restore outer local-vars state"
+        );
+        assert_eq!(
+            codegen.scoped_local_var_counts, saved_scoped_local_var_counts,
+            "function-template generation should restore scoped local-var counters"
+        );
+        assert_eq!(
+            codegen.scoped_local_scope_stack, saved_scoped_local_scope_stack,
+            "function-template generation should restore local scope stack"
+        );
+        assert_eq!(
+            codegen.scoped_local_ptr_state, saved_scoped_local_ptr_state,
+            "function-template generation should restore scoped local pointer-state tracking"
+        );
+        assert_eq!(
+            codegen.scoped_local_ptr_scope_stack, saved_scoped_local_ptr_scope_stack,
+            "function-template generation should restore scoped pointer scope stack"
+        );
+        assert_eq!(
+            codegen.ref_vars, saved_ref_vars,
+            "function-template generation should restore reference-var tracking"
+        );
+        assert_eq!(
+            codegen.const_receiver_vars, saved_const_receiver_vars,
+            "function-template generation should restore const-receiver tracking"
+        );
+        assert_eq!(
+            codegen.ptr_vars, saved_ptr_vars,
+            "function-template generation should restore pointer-var tracking"
+        );
+        assert_eq!(
+            codegen.arr_vars, saved_arr_vars,
+            "function-template generation should restore array-var tracking"
         );
     }
 
