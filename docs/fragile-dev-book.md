@@ -9671,3 +9671,70 @@ is complete. Strict build-only replay remains timeout-bound on
 `src/rrr/base/misc.cpp`, and blocker inventory non-increase enforcement remains
 passing versus `2.6.c.iii` baseline. Next leaf is
 `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`.
+
+## 2026-03-14: Leaf `2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+
+### Decision and rationale
+
+- Implemented a generic call-site matching hot-path optimization in
+  `collect_fn_template_instantiation`.
+- Added `fn_template_candidate_keys_with_defs_cache` to memoize
+  definition-backed candidate-key subsets by call lookup shape
+  (`fn_name + namespace_path`).
+- Switched the hot path to consume cached definition-backed vectors instead of
+  filtering speculative candidate vectors against `fn_template_definitions` on
+  each call-site visit.
+
+This was bounded and small (<500 LOC), and required no TODO breakdown expansion.
+
+### Wrong-approach check
+
+- No target-specific `mako`/`rpc` conditionals were added.
+- No force-native bypasses were used.
+- No fake semantic fallback bodies/stubs were introduced.
+
+### Validation
+
+Executed focused coverage:
+
+- `cargo test -p fragile-clang test_collect_fn_template_candidate_keys_with_defs_reuses_cached_subset -- --nocapture`
+- `cargo test -p fragile-clang test_set_fn_template_definition_invalidates_param_dependency_cache -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_instantiation_uses_cached_call_resolution -- --nocapture`
+- `cargo test -p fragile-clang function_template_type_arg_inference_ -- --nocapture`
+
+Strict replay profiling/timing evidence:
+
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c_c_c_c_a_callshape_profile_120_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c_c_c_c_a_stage_timing_120_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+- `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c_c_c_c_a_callshape_profile_300_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c_c_c_c_a_stage_timing_300_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+
+Artifact highlights:
+
+- `/tmp/fragile_rpc_leaf_2_6c_current_c_c_c_c_a_callshape_profile_120_v1.txt`:
+  `status=codegen_after_template_collection`.
+- `/tmp/fragile_rpc_leaf_2_6c_current_c_c_c_c_a_callshape_profile_300_v1.txt`:
+  `status=codegen_after_template_instantiation_generation`,
+  `input_bytes=573339`.
+- Delta vs prior leaf (`2.6...c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`,
+  `input_bytes=567988`): `+5351` bytes.
+- `/tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313/rpc_compile_blocker_replay_manifest.txt`:
+  `replay_01_status=124`, `replay_01_timed_out=true`,
+  `replay_01_first_failure_class=build_timeout`,
+  `replay_01_blocker_file=src/rrr/base/misc.cpp`.
+
+Full-suite regression check:
+
+- `cargo test --workspace --all-targets`:
+  `fragile-clang` lib `767` passed / `46` failed (known baseline failure count unchanged).
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`:
+  `OK`, `29` ran, `1` skipped.
+
+### Outcome
+
+Leaf
+`2.6.c.iv.d.iv.c.iv.c.iii.c.iii.c.iii.c.iii.c.iii.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a`
+is complete. Definition-backed function-template candidate subsets now reuse a
+cache keyed by call lookup shape, reducing repeated per-call filtering in the
+hot instantiation path. Strict replay remains timeout-bound on
+`src/rrr/base/misc.cpp`; next leaf is
+`...c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.b`.

@@ -1216,6 +1216,9 @@ pub struct AstCodeGen {
     /// Cache of function-template candidate-key vectors keyed by
     /// `(fn_name, namespace_path)` call-site lookup shape.
     fn_template_candidate_keys_cache: RefCell<HashMap<String, Vec<String>>>,
+    /// Cache of definition-backed function-template candidate-key vectors keyed by
+    /// `(fn_name, namespace_path)` call-site lookup shape.
+    fn_template_candidate_keys_with_defs_cache: RefCell<HashMap<String, Vec<String>>>,
     /// Function-template keys indexed by unqualified leaf name to avoid scanning
     /// the full definition map for every call-site candidate lookup.
     fn_template_keys_by_leaf: HashMap<String, Vec<String>>,
@@ -1419,6 +1422,7 @@ impl AstCodeGen {
             fn_template_concrete_match_shape_cache: HashMap::new(),
             fn_template_call_resolution_cache: HashMap::new(),
             fn_template_candidate_keys_cache: RefCell::new(HashMap::new()),
+            fn_template_candidate_keys_with_defs_cache: RefCell::new(HashMap::new()),
             fn_template_keys_by_leaf: HashMap::new(),
             pending_fn_instantiations: HashMap::new(),
             skip_vtable_generation: HashSet::new(),
@@ -38399,6 +38403,9 @@ impl FragileAtomicBoolCompat for atomic_bool {
     fn collect_template_info(&mut self, children: &[ClangNode]) {
         self.fn_template_call_resolution_cache.clear();
         self.fn_template_candidate_keys_cache.borrow_mut().clear();
+        self.fn_template_candidate_keys_with_defs_cache
+            .borrow_mut()
+            .clear();
         self.fn_template_requires_call_arg_bounds_cache.clear();
         // Precollect definitions first so a single usage pass can resolve
         // call-sites/type uses that appear before template declarations.
@@ -38409,6 +38416,9 @@ impl FragileAtomicBoolCompat for atomic_bool {
 
     fn rebuild_fn_template_leaf_index(&mut self) {
         self.fn_template_candidate_keys_cache.borrow_mut().clear();
+        self.fn_template_candidate_keys_with_defs_cache
+            .borrow_mut()
+            .clear();
         self.fn_template_keys_by_leaf.clear();
         for key in self.fn_template_definitions.keys() {
             let leaf = key.rsplit("::").next().unwrap_or(key).to_string();
@@ -38485,12 +38495,41 @@ impl FragileAtomicBoolCompat for atomic_bool {
         candidate_keys
     }
 
+    fn collect_fn_template_candidate_keys_with_defs(
+        &self,
+        fn_name: &str,
+        namespace_path: &[String],
+    ) -> Vec<String> {
+        let cache_key = Self::fn_template_candidate_keys_cache_key(fn_name, namespace_path);
+        if let Some(cached) = self
+            .fn_template_candidate_keys_with_defs_cache
+            .borrow()
+            .get(&cache_key)
+            .cloned()
+        {
+            return cached;
+        }
+
+        let candidate_keys = self.collect_fn_template_candidate_keys(fn_name, namespace_path);
+        let candidate_keys_with_defs: Vec<String> = candidate_keys
+            .into_iter()
+            .filter(|key| self.fn_template_definitions.contains_key(key))
+            .collect();
+        self.fn_template_candidate_keys_with_defs_cache
+            .borrow_mut()
+            .insert(cache_key, candidate_keys_with_defs.clone());
+        candidate_keys_with_defs
+    }
+
     fn set_fn_template_definition(&mut self, key: String, info: FnTemplateInfo) {
         self.fn_template_param_dependency_cache.remove(&key);
         self.fn_template_inference_shape_cache.remove(&key);
         self.fn_template_requires_call_arg_bounds_cache.remove(&key);
         self.fn_template_call_resolution_cache.clear();
         self.fn_template_candidate_keys_cache.borrow_mut().clear();
+        self.fn_template_candidate_keys_with_defs_cache
+            .borrow_mut()
+            .clear();
         let cache_prefix = format!("{key}\u{1f}");
         self.fn_template_concrete_match_shape_cache
             .retain(|cache_key, _| !cache_key.starts_with(&cache_prefix));
@@ -38974,11 +39013,8 @@ impl FragileAtomicBoolCompat for atomic_bool {
         };
 
         let call_args = &call_node.children[1..];
-        let candidate_keys = self.collect_fn_template_candidate_keys(fn_name, namespace_path);
-        let candidate_keys_with_defs: Vec<String> = candidate_keys
-            .into_iter()
-            .filter(|key| self.fn_template_definitions.contains_key(key))
-            .collect();
+        let candidate_keys_with_defs =
+            self.collect_fn_template_candidate_keys_with_defs(fn_name, namespace_path);
         if candidate_keys_with_defs.is_empty() {
             if Self::is_same_ptr_const_i8_synthesis_candidate(
                 fn_name,
@@ -113584,6 +113620,14 @@ stream.PutN(c, n);
             !codegen.fn_template_candidate_keys_cache.borrow().is_empty(),
             "candidate-key cache should populate after first lookup"
         );
+        let _ = codegen.collect_fn_template_candidate_keys_with_defs("swap", &candidate_namespace);
+        assert!(
+            !codegen
+                .fn_template_candidate_keys_with_defs_cache
+                .borrow()
+                .is_empty(),
+            "definition-backed candidate-key cache should populate after first lookup"
+        );
         let concrete_type_args = vec!["i32".to_string()];
         assert!(
             codegen
@@ -113626,6 +113670,13 @@ stream.PutN(c, n);
         assert!(
             codegen.fn_template_candidate_keys_cache.borrow().is_empty(),
             "replacing template definition should invalidate cached candidate-key entries"
+        );
+        assert!(
+            codegen
+                .fn_template_candidate_keys_with_defs_cache
+                .borrow()
+                .is_empty(),
+            "replacing template definition should invalidate cached definition-backed candidate-key entries"
         );
         let concrete_cache_key =
             AstCodeGen::fn_template_concrete_match_shape_key("cache::swap", &concrete_type_args);
@@ -113681,6 +113732,51 @@ stream.PutN(c, n);
             cached_candidates,
             candidates,
             "second lookup should reuse cached candidate-key vector without recomputing from mutated leaf index"
+        );
+    }
+
+    #[test]
+    fn test_collect_fn_template_candidate_keys_with_defs_reuses_cached_subset() {
+        let mut codegen = AstCodeGen::new();
+        codegen.fn_template_keys_by_leaf.insert(
+            "swap".to_string(),
+            vec!["swap".to_string(), "std::swap".to_string()],
+        );
+        let template_info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Named("T".to_string()),
+            params: vec![("value".to_string(), CppType::Named("T".to_string()))],
+            body: None,
+            is_noexcept: false,
+        };
+        codegen
+            .fn_template_definitions
+            .insert("swap".to_string(), template_info.clone());
+
+        let with_defs = codegen.collect_fn_template_candidate_keys_with_defs("swap", &[]);
+        assert_eq!(
+            with_defs,
+            vec!["swap".to_string()],
+            "definition-backed candidate subset should include only keys with known template definitions"
+        );
+
+        // Mutate underlying maps without invalidating caches; second lookup
+        // should reuse the cached subset computed from the original state.
+        codegen.fn_template_keys_by_leaf.insert(
+            "swap".to_string(),
+            vec![
+                "swap".to_string(),
+                "std::swap".to_string(),
+                "extra::swap".to_string(),
+            ],
+        );
+        codegen
+            .fn_template_definitions
+            .insert("std::swap".to_string(), template_info);
+        let cached_with_defs = codegen.collect_fn_template_candidate_keys_with_defs("swap", &[]);
+        assert_eq!(
+            cached_with_defs, with_defs,
+            "second lookup should reuse cached definition-backed subset without recomputing from mutated maps"
         );
     }
 
