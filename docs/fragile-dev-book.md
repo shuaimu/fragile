@@ -14135,3 +14135,56 @@ Full-suite sweep status:
 ### Outcome
 
 Leaf `2.8.a` is complete: the reproduced rapidjson single-TU smoke compile blockers are cleared with generic fixes and focused regressions, and CI-aligned rapidjson smoke local fixture coverage is green.
+
+## 2026-03-14: Leaf 2.8.b.i CI-aligned command inventory capture
+
+### Context
+
+Leaf `2.8.b` requires CI-aligned rerun closure with zero failures, but first needed deterministic local evidence from the exact workflow command set after `2.8.a`.
+
+### Wrong-approach check
+
+Checked against `docs/dev/wrong.md` and section `1.3` before execution:
+
+- no fake semantic stubs were introduced,
+- no target-name special-case transpiler hacks were introduced,
+- no force-native bypass paths were used.
+
+This leaf is evidence capture + decomposition only.
+
+### Plan
+
+1. Run the exact CI commands for `rapidjson-smoke-baseline` and `build` phases.
+2. Persist deterministic per-command status/log artifacts.
+3. Classify the first failing build-phase test id and failure class.
+4. Decompose `2.8.b` into smaller leaves if zero-failure closure is still too broad.
+
+### Execution
+
+Executed exact commands and captured artifacts under `/tmp/fragile_ci_leaf_2_8b_20260314`:
+
+- rapidjson smoke commands (`rapidjson_smoke_1..4`) from workflow,
+- `cargo build --verbose`,
+- `cargo test --verbose`.
+
+Observed statuses (from `statuses.txt`):
+
+- `rapidjson_smoke_1=0`
+- `rapidjson_smoke_2=0`
+- `rapidjson_smoke_3=0`
+- `rapidjson_smoke_4=0`
+- `build_phase_build=0`
+
+`build_phase_test.log` captured baseline-red integration failures (first failing id `test_e2e_access_specifiers`; first failure class `integration_test_failure`) and then entered prolonged no-progress in long libcxx integration tails.
+
+### Validation
+
+Deterministic failure inventory extraction from `build_phase_test.log`:
+
+- `FAILED` surfaces include `test_e2e_access_specifiers`, `test_e2e_insertion_sort`, `test_e2e_binary_search_tree`, `test_e2e_pthread`, and `test_variadic_template_transpile`.
+- long-tail warnings include `test_libcxx_iostream_transpilation has been running for over 60 seconds`, `test_libcxx_thread_transpilation has been running for over 60 seconds`, and `test_libcxx_vector_transpilation has been running for over 60 seconds`.
+
+### Outcome
+
+Leaf `2.8.b.i` is complete: CI-aligned command evidence is captured deterministically and `2.8.b` has been decomposed into smaller leaves (`2.8.b.ii`-`2.8.b.iv`) for bounded, non-corner-cutting follow-up.
+
