@@ -7929,6 +7929,54 @@ impl AstCodeGen {
             None
         }
 
+        fn parse_declared_item_name(trimmed: &str) -> Option<String> {
+            let mut rest = trimmed;
+            if let Some(stripped) = rest.strip_prefix("pub(crate) ") {
+                rest = stripped;
+            } else if let Some(stripped) = rest.strip_prefix("pub(super) ") {
+                rest = stripped;
+            } else if let Some(stripped) = rest.strip_prefix("pub ") {
+                rest = stripped;
+            }
+
+            if let Some(stripped) = rest.strip_prefix("unsafe ") {
+                rest = stripped;
+            }
+            if let Some(stripped) = rest.strip_prefix("extern \"C\" ") {
+                rest = stripped;
+            } else if let Some(stripped) = rest.strip_prefix("extern ") {
+                rest = stripped;
+            }
+            if let Some(stripped) = rest.strip_prefix("unsafe ") {
+                rest = stripped;
+            }
+
+            let parse_name = |after_keyword: &str| -> Option<String> {
+                let mut source = after_keyword.trim_start();
+                if let Some(stripped) = source.strip_prefix("mut ") {
+                    source = stripped.trim_start();
+                }
+                let ident: String = source
+                    .chars()
+                    .take_while(|ch| AstCodeGen::is_identifier_char(*ch))
+                    .collect();
+                if ident.is_empty() {
+                    return None;
+                }
+                Some(ident.trim_start_matches("r#").to_string())
+            };
+
+            for keyword in [
+                "struct ", "enum ", "union ", "trait ", "type ", "mod ", "const ", "static ",
+                "fn ",
+            ] {
+                if let Some(after) = rest.strip_prefix(keyword) {
+                    return parse_name(after);
+                }
+            }
+            None
+        }
+
         fn is_binding_like_alias(alias: &str) -> bool {
             let trimmed = alias.trim_start_matches("r#");
             if !trimmed.starts_with('_') {
@@ -7946,6 +7994,14 @@ impl AstCodeGen {
             return code.to_string();
         }
 
+        let mut declared_item_names: HashSet<String> = HashSet::new();
+        for line in &lines {
+            let trimmed = line.trim_start();
+            if let Some(name) = parse_declared_item_name(trimmed) {
+                declared_item_names.insert(name);
+            }
+        }
+
         let mut c_void_aliases: HashSet<String> = HashSet::new();
         for line in &lines {
             let trimmed = line.trim_start();
@@ -7959,7 +8015,10 @@ impl AstCodeGen {
 
         let rewrite_aliases: HashSet<String> = c_void_aliases
             .into_iter()
-            .filter(|alias| !is_binding_like_alias(alias))
+            .filter(|alias| {
+                let raw = alias.trim_start_matches("r#");
+                !is_binding_like_alias(alias) && !declared_item_names.contains(raw)
+            })
             .collect();
         if rewrite_aliases.is_empty() {
             return code.to_string();
@@ -12361,7 +12420,14 @@ impl AstCodeGen {
             if name == "_" {
                 return true;
             }
+            let is_raw_identifier = name.starts_with("r#");
             let raw = name.strip_prefix("r#").unwrap_or(name);
+            if raw.is_empty() {
+                return false;
+            }
+            if !is_raw_identifier && RUST_KEYWORDS.contains(&raw) {
+                return false;
+            }
             let mut chars = raw.chars();
             let Some(first) = chars.next() else {
                 return false;
@@ -12434,6 +12500,92 @@ impl AstCodeGen {
             }
             out.push_str(&rewritten);
             out.push('\n');
+        }
+        if !code.ends_with('\n') && !out.is_empty() {
+            out.pop();
+        }
+        out
+    }
+
+    fn normalize_invalid_item_declaration_namespaced_identifiers(code: &str) -> String {
+        fn parse_item_name_span(line: &str) -> Option<(usize, usize)> {
+            let indent_len = line.len().saturating_sub(line.trim_start().len());
+            let mut cursor = indent_len;
+
+            for vis in ["pub(crate) ", "pub(super) ", "pub(self) ", "pub "] {
+                if line[cursor..].starts_with(vis) {
+                    cursor += vis.len();
+                    break;
+                }
+            }
+            if line[cursor..].starts_with("unsafe ") {
+                cursor += "unsafe ".len();
+            }
+            if line[cursor..].starts_with("extern \"C\" ") {
+                cursor += "extern \"C\" ".len();
+            } else if line[cursor..].starts_with("extern ") {
+                cursor += "extern ".len();
+            }
+            if line[cursor..].starts_with("unsafe ") {
+                cursor += "unsafe ".len();
+            }
+
+            let mut matched_keyword = false;
+            for kw in [
+                "struct ", "enum ", "union ", "trait ", "type ", "mod ", "const ", "static ",
+                "fn ",
+            ] {
+                if line[cursor..].starts_with(kw) {
+                    cursor += kw.len();
+                    matched_keyword = true;
+                    if kw == "static " && line[cursor..].starts_with("mut ") {
+                        cursor += "mut ".len();
+                    }
+                    break;
+                }
+            }
+            if !matched_keyword {
+                return None;
+            }
+
+            while cursor < line.len() && line.as_bytes()[cursor].is_ascii_whitespace() {
+                cursor += 1;
+            }
+            let name_start = cursor;
+            while cursor < line.len() {
+                let ch = line[cursor..].chars().next().unwrap();
+                if AstCodeGen::is_identifier_char(ch) || ch == ':' || ch == '#' {
+                    cursor += ch.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            if cursor <= name_start {
+                return None;
+            }
+            Some((name_start, cursor))
+        }
+
+        let mut out = String::with_capacity(code.len());
+        let mut changed = false;
+        for line in code.lines() {
+            let mut rewritten = line.to_string();
+            if let Some((name_start, name_end)) = parse_item_name_span(line) {
+                let name = &line[name_start..name_end];
+                if name.contains("::") {
+                    let leaf = name.rsplit("::").next().unwrap_or(name);
+                    if !leaf.is_empty() {
+                        rewritten = format!("{}{}{}", &line[..name_start], leaf, &line[name_end..]);
+                        changed = true;
+                    }
+                }
+            }
+            out.push_str(&rewritten);
+            out.push('\n');
+        }
+
+        if !changed {
+            return code.to_string();
         }
         if !code.ends_with('\n') && !out.is_empty() {
             out.pop();
@@ -24026,6 +24178,21 @@ impl AstCodeGen {
             false
         }
 
+        fn is_injectable_alias_name(alias: &str) -> bool {
+            let raw = alias.trim().trim_start_matches("r#");
+            if raw.is_empty() || RUST_KEYWORDS.contains(&raw) {
+                return false;
+            }
+            let mut chars = raw.chars();
+            let Some(first) = chars.next() else {
+                return false;
+            };
+            if !(first == '_' || first.is_ascii_alphabetic()) {
+                return false;
+            }
+            chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+        }
+
         fn parse_impl_target_prefix(line: &str) -> Option<String> {
             let trimmed = line.trim_start();
             let after_impl = trimmed.strip_prefix("impl ")?;
@@ -24232,6 +24399,9 @@ impl AstCodeGen {
 
             let mut needed: Vec<String> = Vec::new();
             for alias in candidate_aliases.keys() {
+                if !is_injectable_alias_name(alias) {
+                    continue;
+                }
                 if occupied_names.contains(alias) || occupied_names.contains(&format!("r#{}", alias))
                 {
                     continue;
@@ -27505,6 +27675,7 @@ impl AstCodeGen {
         output = Self::normalize_unused_c_void_type_aliases(&output);
         output = Self::normalize_unused_c_void_use_aliases(&output);
         output = Self::normalize_c_void_type_aliases_to_use_imports(&output);
+        output = Self::normalize_invalid_item_declaration_namespaced_identifiers(&output);
         // Late alias/c_void normalizers can still synthesize unresolved lowered
         // container spellings; run one last fixed-point closure before return.
         output = Self::close_unresolved_type_reference_gaps(&output);
@@ -27613,6 +27784,8 @@ impl AstCodeGen {
         // Late pointer/assignment rewrites can still surface malformed
         // `wrapping_add((arg })` call args; run one final cast-shape cleanup.
         output = Self::normalize_wrapping_add_argument_casts(&output);
+        output = Self::normalize_invalid_local_binding_identifiers(&output);
+        output = Self::normalize_invalid_item_declaration_namespaced_identifiers(&output);
         output = Self::append_compile_error_for_unresolved_non_c_abi_external_calls(&output);
         if Self::output_requires_c_variadic_feature(&output) {
             output = Self::ensure_c_variadic_feature_attr(&output);
@@ -33559,6 +33732,26 @@ impl FragileAtomicBoolCompat for atomic_bool {
             Some(format!("{indent}();"))
         }
 
+        fn parse_let_binding_name(line: &str) -> Option<(String, usize)> {
+            let indent_len = line.chars().take_while(|c| c.is_whitespace()).count();
+            let trimmed = line[indent_len..].trim_start();
+            let after_let = trimmed.strip_prefix("let ")?;
+            let after_let = after_let.trim_start();
+            let after_mut = if let Some(stripped) = after_let.strip_prefix("mut ") {
+                stripped.trim_start()
+            } else {
+                after_let
+            };
+            let name: String = after_mut
+                .chars()
+                .take_while(|c| AstCodeGen::is_identifier_char(*c))
+                .collect();
+            if name.is_empty() {
+                return None;
+            }
+            Some((name, indent_len))
+        }
+
         fn rewrite_static_unsafe_binding_clone(line: &str) -> Option<String> {
             let marker = "= unsafe { ";
             let (lhs, rhs) = line.split_once(marker)?;
@@ -33569,6 +33762,13 @@ impl FragileAtomicBoolCompat for atomic_bool {
             }
             if expr == "__gv_None" || expr == "__fsv_None" {
                 return None;
+            }
+            if let Some((binding_name, indent_len)) = parse_let_binding_name(line) {
+                let raw = binding_name.trim_start_matches("r#");
+                if !raw.is_empty() && RUST_KEYWORDS.contains(&raw) {
+                    let indent = &line[..indent_len];
+                    return Some(format!("{indent}();{tail}"));
+                }
             }
             Some(format!("{lhs}= unsafe {{ {expr}.clone() }};{tail}"))
         }
@@ -95649,6 +95849,31 @@ pub fn read_stdin() -> *mut std::ffi::c_void {
     }
 
     #[test]
+    fn test_normalize_unprefixed_global_static_reads_to_locals_skips_keyword_alias_candidates() {
+        let input = r#"
+pub(crate) static mut __gv_in: i32 = 0;
+pub fn probe() {
+    for i in 0..3 {
+        i;
+    }
+}
+"#;
+
+        let normalized = AstCodeGen::normalize_unprefixed_global_static_reads_to_locals(input);
+        assert!(
+            !normalized.contains("let mut in = unsafe { __gv_in")
+                && !normalized.contains("let mut r#in = unsafe { __gv_in"),
+            "keyword alias candidates should not be synthesized as snapshot locals, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("for i in 0..3 {"),
+            "loop syntax should remain unchanged when keyword alias snapshots are skipped, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
     fn test_unreferenced_static_cleanup_keeps_globals_referenced_via_late_alias_rewrite() {
         let input = r#"
 pub(crate) static mut __gv_pxs_workers_g: vector_shared_ptr_PaxosWorker = unsafe { std::mem::zeroed() };
@@ -104239,6 +104464,36 @@ pub fn write(o: *mut basic_ostream_char) -> *const basic_ostream_char {
     }
 
     #[test]
+    fn test_normalize_c_void_alias_identifier_references_skips_colliding_declared_item_names() {
+        let input = r#"
+pub use std::ffi::c_void as ctype_char_;
+pub struct ctype_char_ {
+    pub next: *mut ctype_char_,
+}
+pub fn passthrough(raw: *mut ctype_char_) -> *mut ctype_char_ {
+    raw
+}
+"#;
+        let output = AstCodeGen::normalize_c_void_alias_identifier_references(input);
+        assert!(
+            output.contains("pub struct ctype_char_ {"),
+            "declared item names that collide with c_void aliases must not be rewritten, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn passthrough(raw: *mut ctype_char_) -> *mut ctype_char_ {"),
+            "colliding alias names should remain stable in signatures to avoid declaration corruption, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("pub struct std::ffi::c_void {")
+                && !output.contains("pub fn passthrough(raw: *mut std::ffi::c_void)"),
+            "colliding alias rewrites must not synthesize std::ffi::c_void item names, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
     fn test_normalize_unused_c_void_use_aliases_removes_unreferenced_alias() {
         let input = r#"
 /// c_void alias
@@ -107284,6 +107539,73 @@ pub fn probe() {
         assert!(
             !output.contains("let mut Default::default(): allocator_char"),
             "invalid call-shaped local binding must not survive normalization, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_invalid_local_binding_identifiers_repairs_keyword_bindings() {
+        let input = r#"
+pub fn probe() {
+    let mut in = unsafe { __gv_in.clone() };
+}
+"#;
+        let output = AstCodeGen::normalize_invalid_local_binding_identifiers(input);
+        assert!(
+            output.contains("let mut __fragile_local_0 = unsafe { __gv_in.clone() };"),
+            "keyword local binding names should be repaired to compile-safe placeholders, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("let mut in = unsafe { __gv_in.clone() };"),
+            "raw keyword bindings should not survive local binding normalization, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_invalid_local_binding_identifiers_preserves_raw_keyword_bindings() {
+        let input = r#"
+pub fn probe() {
+    let mut r#ref: i32 = 1;
+    let _ = r#ref;
+}
+"#;
+        let output = AstCodeGen::normalize_invalid_local_binding_identifiers(input);
+        assert!(
+            output.contains("let mut r#ref: i32 = 1;"),
+            "raw keyword identifiers are valid Rust bindings and should not be rewritten, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("let _ = r#ref;"),
+            "all raw-keyword local references should remain consistent when no rewrite is required, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("__fragile_local_"),
+            "raw keyword bindings should not trigger synthetic placeholder locals, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_invalid_item_declaration_namespaced_identifiers_strips_qualified_struct_name()
+    {
+        let input = r#"
+pub struct std::ffi::c_void {
+    pub _opaque: [u8; 1],
+}
+"#;
+        let output = AstCodeGen::normalize_invalid_item_declaration_namespaced_identifiers(input);
+        assert!(
+            output.contains("pub struct c_void {"),
+            "namespaced struct declaration identifiers should collapse to leaf names, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("pub struct std::ffi::c_void {"),
+            "qualified struct declaration identifiers are invalid and must be normalized, got:\n{}",
             output
         );
     }
@@ -122684,6 +123006,29 @@ pub fn call(argc: i32, argv: *const *mut i8) -> i32 {
         assert!(
             !output.contains("Fiber::create_run_impl("),
             "legacy create_run_impl callshape should not remain after normalization, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_problematic_callshape_artifacts_drops_reserved_keyword_snapshot_bindings() {
+        let input = r#"pub(crate) static mut __gv_in: i32 = 0;
+pub fn demo() {
+    let mut in = unsafe { __gv_in };
+    for i in 0..3 {
+        i;
+    }
+}"#;
+        let output = AstCodeGen::normalize_problematic_callshape_artifacts(input);
+        assert!(
+            !output.contains("let mut in = unsafe { __gv_in")
+                && !output.contains("let mut in = unsafe { __gv_in.clone()"),
+            "reserved-keyword snapshot bindings should be dropped during problematic-callshape normalization, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("for i in 0..3 {"),
+            "keyword loop syntax should remain valid after dropping bad snapshot bindings, got:\n{}",
             output
         );
     }

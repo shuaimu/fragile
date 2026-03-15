@@ -15558,3 +15558,80 @@ Strict single-lane build-only replay evidence (`2.6.d.b.ii.c.b`):
 ### Outcome
 
 Leaves `2.6.d.b.ii.c.a` and `2.6.d.b.ii.c.b` are complete: the targeted `__charset_alias_match` unclosed-delimiter family is cleared generically, and deterministic strict build-only replay evidence confirms a concrete shift to the next blocker family.
+
+## 2026-03-15: Leaf 2.6.d.b.ii.c.c.i reserved-keyword snapshot alias hardening
+
+### Context
+
+After leaf `2.6.d.b.ii.c.b`, strict replay shifted to a syntax blocker family that included:
+
+- `error: expected identifier, found keyword in`
+- malformed keyword snapshot locals like `let mut in = unsafe { __gv_in.clone() };`
+
+The required leaf was to fix this generically in normalization/codegen without
+RPC-target conditionals.
+
+### Wrong-approach check
+
+Checked against Section `1.3` and `docs/dev/wrong.md` before editing:
+
+- no target-specific conditionals (`rpcbench`/`test_rpc`),
+- no parser-backend escape hatch,
+- no fake semantic stubs/fallback bodies to force compile success.
+
+### Implementation
+
+Updated `crates/fragile-clang/src/ast_codegen.rs`:
+
+1. `normalize_unprefixed_global_static_reads_to_locals`
+   - added `is_injectable_alias_name` guard,
+   - refuses alias injection when candidate names are Rust keywords or invalid identifiers.
+2. `normalize_problematic_callshape_artifacts`
+   - drops reserved-keyword snapshot clone rewrites in `rewrite_static_unsafe_binding_clone`
+     instead of emitting invalid `let mut <keyword> = ...` bindings.
+3. `normalize_invalid_local_binding_identifiers`
+   - rejects bare keyword locals,
+   - preserves valid raw-keyword identifiers (`r#ref`) to avoid inconsistent rewrites.
+
+Also retained/added safety coverage for the coupled syntax family:
+
+- c_void alias declaration-collision guard,
+- namespaced item declaration identifier normalization.
+
+### Validation
+
+Focused tests:
+
+- `cargo test -p fragile-clang test_normalize_unprefixed_global_static_reads_to_locals_skips_keyword_alias_candidates -- --nocapture`
+- `cargo test -p fragile-clang test_normalize_problematic_callshape_artifacts_drops_reserved_keyword_snapshot_bindings -- --nocapture`
+- `cargo test -p fragile-clang test_normalize_invalid_local_binding_identifiers_repairs_keyword_bindings -- --nocapture`
+- `cargo test -p fragile-clang test_normalize_invalid_local_binding_identifiers_preserves_raw_keyword_bindings -- --nocapture`
+- `cargo test -p fragile-clang test_normalize_c_void_alias_identifier_references_skips_colliding_declared_item_names -- --nocapture`
+- `cargo test -p fragile-clang test_normalize_invalid_item_declaration_namespaced_identifiers_strips_qualified_struct_name -- --nocapture`
+
+Full-suite sweeps:
+
+- `cargo test --workspace --all-targets` first exposed a real regression in this patch:
+  `grammar_tests::test_16_references` (`E0425` on `r#ref`), caused by over-strict
+  local-binding keyword repair.
+- fixed by preserving raw-keyword locals; confirmed via:
+  `cargo test -p fragile-clang --test grammar_tests test_16_references -- --nocapture`.
+- rerunning `cargo test --workspace --all-targets` proceeded into existing
+  long-running integration failures (`test_e2e_simple_hash_table`,
+  `test_e2e_object_pool`, `test_e2e_trie`, `test_e2e_simple_graph`,
+  `test_e2e_tokenizer`, `test_variadic_template_transpile`, `test_e2e_pthread`)
+  and was interrupted after prolonged integration runtime.
+- Python full suite remained green:
+  `python3 -m unittest discover -s tests/python -p 'test_*.py'` ->
+  `Ran 34 tests`, `OK`, `skipped=1`.
+
+### Outcome
+
+Leaf `2.6.d.b.ii.c.c.i` is complete:
+
+- reserved-keyword snapshot alias synthesis is blocked generically,
+- raw-keyword local identifiers remain valid (`r#ref` preserved),
+- focused regressions cover both constraints.
+
+Next leaf is `2.6.d.b.ii.c.c.ii` (strict single-lane build-only replay to capture
+post-fix blocker shift).
