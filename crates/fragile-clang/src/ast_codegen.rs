@@ -44353,31 +44353,16 @@ impl FragileAtomicBoolCompat for atomic_bool {
     }
 
     fn normalize_unit_pointer_param_entries(param_entries: &mut [(String, String, String)]) {
-        let mut const_ptr_candidates: Vec<String> = param_entries
-            .iter()
-            .map(|(_, _, ty)| ty.trim().to_string())
-            .filter(|ty| ty.starts_with("*const ") && ty != "*const ()")
-            .collect();
-        const_ptr_candidates.sort();
-        const_ptr_candidates.dedup();
-        let const_ptr_replacement = if const_ptr_candidates.len() == 1 {
-            Some(const_ptr_candidates[0].clone())
-        } else {
-            None
-        };
-
-        let mut mut_ptr_candidates: Vec<String> = param_entries
-            .iter()
-            .map(|(_, _, ty)| ty.trim().to_string())
-            .filter(|ty| ty.starts_with("*mut ") && ty != "*mut ()")
-            .collect();
-        mut_ptr_candidates.sort();
-        mut_ptr_candidates.dedup();
-        let mut_ptr_replacement = if mut_ptr_candidates.len() == 1 {
-            Some(mut_ptr_candidates[0].clone())
-        } else {
-            None
-        };
+        let const_ptr_replacement = Self::find_unique_non_unit_pointer_candidate(
+            param_entries.iter().map(|(_, _, ty)| ty.trim()),
+            "*const ",
+            "*const ()",
+        );
+        let mut_ptr_replacement = Self::find_unique_non_unit_pointer_candidate(
+            param_entries.iter().map(|(_, _, ty)| ty.trim()),
+            "*mut ",
+            "*mut ()",
+        );
 
         for (_, _, ty) in param_entries.iter_mut() {
             let normalized = ty.trim();
@@ -44391,6 +44376,25 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 }
             }
         }
+    }
+
+    fn find_unique_non_unit_pointer_candidate<'a>(
+        types: impl Iterator<Item = &'a str>,
+        pointer_prefix: &str,
+        unit_placeholder: &str,
+    ) -> Option<String> {
+        let mut unique: Option<&'a str> = None;
+        for ty in types {
+            if !ty.starts_with(pointer_prefix) || ty == unit_placeholder {
+                continue;
+            }
+            match unique {
+                None => unique = Some(ty),
+                Some(existing) if existing == ty => {}
+                Some(_) => return None,
+            }
+        }
+        unique.map(ToOwned::to_owned)
     }
 
     /// Normalize top-level template base names for fuzzy specialization matching.
@@ -46504,31 +46508,16 @@ impl FragileAtomicBoolCompat for atomic_bool {
             param_entries.push((pname, rust_ty));
         }
         {
-            let mut const_ptr_candidates: Vec<String> = param_entries
-                .iter()
-                .map(|(_, ty)| ty.trim().to_string())
-                .filter(|ty| ty.starts_with("*const ") && ty != "*const ()")
-                .collect();
-            const_ptr_candidates.sort();
-            const_ptr_candidates.dedup();
-            let const_ptr_replacement = if const_ptr_candidates.len() == 1 {
-                Some(const_ptr_candidates[0].clone())
-            } else {
-                None
-            };
-
-            let mut mut_ptr_candidates: Vec<String> = param_entries
-                .iter()
-                .map(|(_, ty)| ty.trim().to_string())
-                .filter(|ty| ty.starts_with("*mut ") && ty != "*mut ()")
-                .collect();
-            mut_ptr_candidates.sort();
-            mut_ptr_candidates.dedup();
-            let mut_ptr_replacement = if mut_ptr_candidates.len() == 1 {
-                Some(mut_ptr_candidates[0].clone())
-            } else {
-                None
-            };
+            let const_ptr_replacement = Self::find_unique_non_unit_pointer_candidate(
+                param_entries.iter().map(|(_, ty)| ty.trim()),
+                "*const ",
+                "*const ()",
+            );
+            let mut_ptr_replacement = Self::find_unique_non_unit_pointer_candidate(
+                param_entries.iter().map(|(_, ty)| ty.trim()),
+                "*mut ",
+                "*mut ()",
+            );
 
             for (_, ty) in param_entries.iter_mut() {
                 let normalized = ty.trim();
@@ -106047,6 +106036,28 @@ pub fn probe() {
         ];
         AstCodeGen::normalize_unit_pointer_param_entries(&mut entries);
         assert_eq!(entries[2].2, "*const ()");
+    }
+
+    #[test]
+    fn test_find_unique_non_unit_pointer_candidate_returns_single_concrete_type() {
+        let types = vec!["*const i8", "*const ()", "*const i8", "i32"];
+        let replacement = AstCodeGen::find_unique_non_unit_pointer_candidate(
+            types.into_iter(),
+            "*const ",
+            "*const ()",
+        );
+        assert_eq!(replacement.as_deref(), Some("*const i8"));
+    }
+
+    #[test]
+    fn test_find_unique_non_unit_pointer_candidate_returns_none_for_ambiguous_types() {
+        let types = vec!["*mut i8", "*mut u8", "*mut ()"];
+        let replacement = AstCodeGen::find_unique_non_unit_pointer_candidate(
+            types.into_iter(),
+            "*mut ",
+            "*mut ()",
+        );
+        assert!(replacement.is_none());
     }
 
     #[test]

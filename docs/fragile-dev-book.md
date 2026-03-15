@@ -14324,6 +14324,111 @@ Broader suite checks:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
   - `Ran 34 tests`, `OK`, `skipped=1`
 
+## 2026-03-15: Leaf 2.6.d.b.ii.c.c.iv.d (a-c) template-instantiation pointer-normalization hot path
+
+### Context
+
+After `2.6.d.b.ii.c.c.iv.c`, strict build remained timeout-bound on
+`src/rrr/base/misc.cpp` with replay status `124`, so the next loop iteration
+targeted pre-top-level codegen hotspots again.
+
+### Wrong-approach check
+
+Checked against Section 1.3 and `docs/dev/wrong.md` before coding:
+
+- no target-specific conditionals for `mako`/`rpc`,
+- no fallback semantic stubs,
+- no force-native/source bypasses.
+
+### Telemetry (iv.d.a)
+
+Captured fresh timeout telemetry from
+`/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_c_build_only_20260315_v1` with:
+
+- `FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_a_stage_timing_{120,300}_v1.txt`
+- `FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_a_callshape_profile_{120,300}_v1.txt`
+- replay command: `python3 scripts/mako_rpc_compile_blocker_replay.py --run-root ... --lanes fragilec --max-replays 1 --timeout-seconds {120,300}`
+
+Observed progression:
+
+- export/parse/enrichment complete, then `codegen` starts;
+- profile status moves from `codegen_after_template_collection` (`120`) to
+  `codegen_after_template_instantiation_generation` (`300`);
+- replay remains timeout-bound (`replay_01_status=124`,
+  `replay_01_first_failure_class=build_timeout`).
+
+Selected hotspot target:
+
+- reduce per-instantiation pointer-placeholder normalization churn in
+  function-template instance generation.
+
+### Generic optimization (iv.d.b)
+
+Implemented in `crates/fragile-clang/src/ast_codegen.rs`:
+
+- added linear detector
+  `find_unique_non_unit_pointer_candidate(...)`,
+- switched both
+  `normalize_unit_pointer_param_entries` and
+  `generate_fn_template_instance` from clone/sort/dedup vectors to this
+  linear unique-candidate path.
+
+This preserves semantics while avoiding repeated allocation/sort work in a
+template-instantiation hot path.
+
+Focused regressions:
+
+- `test_find_unique_non_unit_pointer_candidate_returns_single_concrete_type`
+- `test_find_unique_non_unit_pointer_candidate_returns_none_for_ambiguous_types`
+
+Validation:
+
+- `cargo test -p fragile-clang test_find_unique_non_unit_pointer_candidate_ -- --nocapture`
+- `cargo test -p fragile-clang test_normalize_unit_pointer_param_entries_ -- --nocapture`
+- `cargo test -p fragile-clang test_resolve_fn_template_call_name_from_args_ -- --nocapture`
+
+All passed.
+
+### Strict replay + gate (iv.d.c)
+
+Rebuilt release compiler and reran strict build-only lane:
+
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict python3 scripts/mako_rpcbench_harness.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_c_build_only_20260315_v1 --lanes fragilec --build-only --jobs 4 --build-timeout-seconds 600`
+
+Inventory non-increase gate vs prior baseline:
+
+- `python3 scripts/mako_rpc_compile_blocker_inventory.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_c_build_only_20260315_v1 --lanes fragilec --baseline-manifest /tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_c_build_only_20260315_v1/rpc_compile_blocker_inventory_manifest.txt --enforce-nonincreasing`
+
+Focused replay:
+
+- `python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_c_build_only_20260315_v1 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+
+Captured state:
+
+- `lane_fragilec_build_status=124`
+- `lane_fragilec_failure_class=build_timeout`
+- `lane_fragilec_first_failing_compile_class=build_timeout`
+- `lane_fragilec_first_failing_compile_file=src/rrr/base/misc.cpp`
+- `lane_fragilec_class_rank_delta_vs_baseline=0`
+- `lane_fragilec_e0425_delta_vs_baseline=0`
+- `nonincrease_gate_pass=true`
+- replay still timeout-bound (`replay_01_status=124`,
+  `replay_01_first_failure_class=build_timeout`).
+
+### Full-suite sweeps
+
+- workspace capture:
+  - `python3 scripts/ci_command_capture.py --run-root /tmp/fragile_leaf_2_6d_b_ii_c_c_iv_d_workspace_20260315_v1 --name workspace_all_targets --inactivity-timeout-seconds 90 --wall-timeout-seconds 1200 --command cargo test --workspace --all-targets`
+  - `status=124`, `timeout_reason=inactivity_timeout`
+  - first failing ids in captured stdout include:
+    `test_e2e_simple_hash_table`, `test_e2e_trie`, `test_e2e_simple_graph`,
+    `test_e2e_object_pool`, `test_e2e_tokenizer`,
+    `test_variadic_template_transpile`, `test_e2e_pthread`
+- Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+  - `Ran 34 tests`, `OK`, `skipped=1`
+
 ### Outcome
 
 Leaf `2.8.b.iii` is complete: the previous top-ranked build-phase integration failure family (`test_e2e_access_specifiers`) is fixed via a generic codegen correction and locked with focused regression coverage; CI-aligned deterministic replay confirms the failing front has moved forward to the next family.
