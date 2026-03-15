@@ -2770,8 +2770,10 @@ void ASTExporterVisitor::visitLambdaExpr(LambdaExpr *LE) {
     std::vector<const void *> children;
     children.push_back(LE->getBody());
 
+    auto *callOperator = LE->getCallOperator();
+
     encodeEntry(LE, TagLambdaExpr, LE->getSourceRange(), children, LE->getType(),
-                [LE](CborEncoder *enc) {
+                [this, LE, callOperator](CborEncoder *enc) {
                     // Capture default
                     cbor_encode_uint(enc, LE->getCaptureDefault());
 
@@ -2799,7 +2801,39 @@ void ASTExporterVisitor::visitLambdaExpr(LambdaExpr *LE) {
                         cbor_encoder_close_container(&captures, &capEntry);
                     }
                     cbor_encoder_close_container(enc, &captures);
+
+                    // Lambda params: [[name, qual_type_id], ...]
+                    CborEncoder params;
+                    auto paramCount = callOperator ? callOperator->getNumParams() : 0u;
+                    cbor_encoder_create_array(enc, &params, paramCount);
+                    if (callOperator) {
+                        for (const ParmVarDecl *param : callOperator->parameters()) {
+                            CborEncoder paramEntry;
+                            cbor_encoder_create_array(&params, &paramEntry, 2);
+                            cbor_encode_string(&paramEntry, param->getNameAsString());
+                            cbor_encode_uint(&paramEntry,
+                                             typeEncoder.encodeQualType(param->getType()));
+                            cbor_encoder_close_container(&params, &paramEntry);
+                        }
+                    }
+                    cbor_encoder_close_container(enc, &params);
+
+                    // Lambda return type (qualified type id or null)
+                    if (callOperator) {
+                        cbor_encode_uint(enc,
+                                         typeEncoder.encodeQualType(
+                                             callOperator->getReturnType()));
+                    } else {
+                        cbor_encode_null(enc);
+                    }
                 });
+
+    if (callOperator) {
+        typeEncoder.visitQualType(callOperator->getReturnType());
+        for (const ParmVarDecl *param : callOperator->parameters()) {
+            typeEncoder.visitQualType(param->getType());
+        }
+    }
 
     visitStmt(LE->getBody());
 }

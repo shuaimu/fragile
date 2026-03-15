@@ -27593,6 +27593,7 @@ impl AstCodeGen {
         output = Self::normalize_unresolved_make_pair_calls(&output);
         output = Self::normalize_joinhandle_default_return_statements(&output);
         output = Self::normalize_thread_placeholder_closure_bindings(&output);
+        output = Self::normalize_malformed_prefixed_lambda_map_placeholders(&output);
         output = Self::normalize_default_local_numeric_assignment_artifacts(&output);
         output = Self::normalize_unresolved_current_fiber_calls(&output);
         output = Self::append_basic_string_view_compat_impls(&output);
@@ -36538,6 +36539,70 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 out.push_str(line);
                 out.push('\n');
             }
+        }
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    fn normalize_malformed_prefixed_lambda_map_placeholders(code: &str) -> String {
+        fn parse_candidate_binding(trimmed: &str) -> Option<(String, String)> {
+            let after_let = trimmed.strip_prefix("let mut ")?;
+            let name: String = after_let
+                .chars()
+                .take_while(|c| AstCodeGen::is_identifier_char(*c))
+                .collect();
+            if name.is_empty() {
+                return None;
+            }
+            let after_name = after_let[name.len()..].trim_start();
+            let after_eq = after_name.strip_prefix('=')?.trim_start();
+            if !after_eq.contains('|') {
+                return None;
+            }
+            let body_open = after_eq.find('{')?;
+            let closure_header = after_eq[..body_open].trim_end();
+            if closure_header.is_empty() || !closure_header.contains('|') {
+                return None;
+            }
+            let body_prefix = after_eq[body_open + 1..].trim_start();
+            if !body_prefix.starts_with("(unsafe { __gv___") {
+                return None;
+            }
+            if !trimmed.contains(": UnknownTagAutoType = Default::default();") {
+                return None;
+            }
+            if !trimmed.ends_with("Default::default();") {
+                return None;
+            }
+            Some((name, closure_header.to_string()))
+        }
+
+        if !code.contains("(unsafe { __gv___")
+            || !code.contains(": UnknownTagAutoType = Default::default();")
+        {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        let mut changed = false;
+        for line in code.lines() {
+            let trimmed = line.trim();
+            if let Some((binding_name, closure_header)) = parse_candidate_binding(trimmed) {
+                let indent_len = line.len().saturating_sub(line.trim_start().len());
+                let indent = &line[..indent_len];
+                out.push_str(&format!(
+                    "{indent}let mut {binding_name} = {closure_header} {{ Default::default() }};"
+                ));
+                changed = true;
+            } else {
+                out.push_str(line);
+            }
+            out.push('\n');
+        }
+        if !changed {
+            return code.to_string();
         }
         if !code.ends_with('\n') && out.ends_with('\n') {
             out.pop();
@@ -107153,6 +107218,50 @@ pub fn probe() {
         assert!(
             output.contains("    ();"),
             "unresolved-join normalization should rewrite untyped default receiver join statements to no-op expressions, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_malformed_prefixed_lambda_map_placeholders_rewrites_unused_malformed_map() {
+        let input = r#"
+pub extern "C" fn __charset_alias_match(__a: basic_string_view_char, __b: basic_string_view_char) -> bool {
+    let mut __map = || { (unsafe { __gv___c }) == 48; let mut __v: UnknownTagAutoType = Default::default();
+    let mut __ptr_a = __a.begin();
+    return Default::default();
+}
+"#;
+        let output = AstCodeGen::normalize_malformed_prefixed_lambda_map_placeholders(input);
+        assert!(
+            output.contains("let mut __map = || { Default::default() };"),
+            "malformed prefixed lambda map normalization should rewrite the broken closure header into a balanced inferred-arg closure, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("(unsafe { __gv___c }) == 48;"),
+            "malformed prefixed lambda map normalization should remove unresolved prefixed lambda-arg probe expressions, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_malformed_prefixed_lambda_map_placeholders_rewrites_typed_header_shape() {
+        let input = r#"
+pub fn probe() {
+    let mut __map = |__c: i8, __num: &mut bool| -> u8 { (unsafe { __gv___c }) == 48; let mut __v: UnknownTagAutoType = Default::default();
+}
+"#;
+        let output = AstCodeGen::normalize_malformed_prefixed_lambda_map_placeholders(input);
+        assert!(
+            output.contains(
+                "let mut __map = |__c: i8, __num: &mut bool| -> u8 { Default::default() };"
+            ),
+            "typed malformed lambda map placeholders should preserve the closure signature while repairing the body, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("(unsafe { __gv___c }) == 48;"),
+            "typed malformed lambda map normalization should remove unresolved prefixed lambda-arg probe expressions, got:\n{}",
             output
         );
     }

@@ -550,6 +550,100 @@ fn extract_string_array_extra(node: &AstNode, index: usize) -> Vec<String> {
     }
 }
 
+fn extract_lambda_capture_default(node: &AstNode) -> crate::ast::CaptureDefault {
+    match node.get_u64(0).unwrap_or(0) {
+        1 => crate::ast::CaptureDefault::ByCopy,
+        2 => crate::ast::CaptureDefault::ByRef,
+        _ => crate::ast::CaptureDefault::None,
+    }
+}
+
+fn extract_lambda_captures(node: &AstNode) -> Vec<(String, bool)> {
+    let Some(CborValue::Array(captures)) = node.extras.get(1) else {
+        return Vec::new();
+    };
+
+    captures
+        .iter()
+        .filter_map(|entry| {
+            let CborValue::Array(parts) = entry else {
+                return None;
+            };
+            // Entry layout from exporter: [capture_kind, is_implicit, var_name]
+            let kind = parts
+                .first()
+                .and_then(|v| match v {
+                    CborValue::Integer(i) => Some(*i as u64),
+                    _ => None,
+                })
+                .unwrap_or(0);
+            let name = parts
+                .get(2)
+                .and_then(|v| match v {
+                    CborValue::Text(s) => Some(s),
+                    _ => None,
+                })?
+                .trim();
+            if name.is_empty() {
+                return None;
+            }
+            // Clang LambdaCaptureKind::LCK_ByRef == 1.
+            let by_ref = kind == 1;
+            Some((name.to_string(), by_ref))
+        })
+        .collect()
+}
+
+fn extract_lambda_params(ctx: &AstContext, node: &AstNode) -> Vec<(String, CppType)> {
+    let Some(CborValue::Array(params)) = node.extras.get(2) else {
+        return Vec::new();
+    };
+
+    params
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, entry)| {
+            let CborValue::Array(parts) = entry else {
+                return None;
+            };
+            let raw_name = parts
+                .first()
+                .and_then(|v| match v {
+                    CborValue::Text(s) => Some(s.as_str()),
+                    _ => None,
+                })
+                .unwrap_or("");
+            let name = if raw_name.trim().is_empty() {
+                format!("arg{idx}")
+            } else {
+                raw_name.trim().to_string()
+            };
+
+            let ty = parts
+                .get(1)
+                .and_then(|v| match v {
+                    CborValue::Integer(i) => Some(*i as u64),
+                    _ => None,
+                })
+                .and_then(|id| resolve_type(ctx, id))
+                .unwrap_or_else(|| CppType::Named("UnknownTagAutoType".to_string()));
+
+            Some((name, ty))
+        })
+        .collect()
+}
+
+fn extract_lambda_return_type(ctx: &AstContext, node: &AstNode) -> CppType {
+    node.extras
+        .get(3)
+        .and_then(|v| match v {
+            CborValue::Integer(i) => Some(*i as u64),
+            _ => None,
+        })
+        .and_then(|id| resolve_type(ctx, id))
+        .unwrap_or(CppType::Void)
+}
+
 fn function_decl_identity_key(node: &AstNode) -> Option<String> {
     if node.tag != ASTEntryTag::TagFunctionDecl {
         return None;
@@ -1038,10 +1132,10 @@ fn convert_node_with_depth(
         }
 
         ASTEntryTag::TagLambdaExpr => ClangNodeKind::LambdaExpr {
-            params: vec![],
-            return_type: CppType::Void,
-            capture_default: crate::ast::CaptureDefault::None,
-            captures: vec![],
+            params: extract_lambda_params(ctx, node),
+            return_type: extract_lambda_return_type(ctx, node),
+            capture_default: extract_lambda_capture_default(node),
+            captures: extract_lambda_captures(node),
         },
 
         ASTEntryTag::TagTypeTraitExpr => {
@@ -2837,6 +2931,120 @@ mod tests {
         assert!(rendered.contains("-std=gnu++23"));
         assert!(rendered.contains("\\\"value\\\""));
         assert!(rendered.contains("source\\\"name.cpp"));
+    }
+
+    #[test]
+    fn test_convert_to_clang_node_maps_lambda_expr_metadata_from_extras() {
+        let mut ast_nodes = HashMap::new();
+        ast_nodes.insert(
+            1,
+            make_node(
+                1,
+                ASTEntryTag::TagLambdaExpr,
+                vec![Some(2)],
+                vec![
+                    CborValue::Integer(2.into()), // capture default: by reference
+                    CborValue::Array(vec![
+                        CborValue::Array(vec![
+                            CborValue::Integer(1.into()), // LCK_ByRef
+                            CborValue::Bool(false),
+                            CborValue::Text("__c".to_string()),
+                        ]),
+                        CborValue::Array(vec![
+                            CborValue::Integer(0.into()), // LCK_ByCopy
+                            CborValue::Bool(false),
+                            CborValue::Text("__n".to_string()),
+                        ]),
+                    ]),
+                    CborValue::Array(vec![CborValue::Array(vec![
+                        CborValue::Text("__c".to_string()),
+                        CborValue::Integer(104.into()),
+                    ])]),
+                    CborValue::Integer(112.into()),
+                ],
+            ),
+        );
+        ast_nodes.insert(2, make_node(2, ASTEntryTag::TagCompoundStmt, vec![], vec![]));
+
+        let mut type_nodes = HashMap::new();
+        type_nodes.insert(104, make_type_node(104, ASTEntryTag::TagChar, vec![]));
+        type_nodes.insert(112, make_type_node(112, ASTEntryTag::TagBool, vec![]));
+
+        let ctx = AstContext {
+            ast_nodes,
+            type_nodes,
+            top_nodes: vec![1],
+            files: vec![],
+        };
+
+        let converted = convert_to_clang_node(&ctx, 1).expect("lambda conversion should succeed");
+        assert_eq!(converted.children.len(), 1);
+        match converted.kind {
+            ClangNodeKind::LambdaExpr {
+                params,
+                return_type,
+                capture_default,
+                captures,
+            } => {
+                assert_eq!(
+                    params,
+                    vec![("__c".to_string(), CppType::Char { signed: true })]
+                );
+                assert_eq!(return_type, CppType::Bool);
+                assert_eq!(capture_default, crate::ast::CaptureDefault::ByRef);
+                assert_eq!(
+                    captures,
+                    vec![
+                        ("__c".to_string(), true),
+                        ("__n".to_string(), false),
+                    ]
+                );
+            }
+            other => panic!("expected LambdaExpr, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_convert_to_clang_node_lambda_expr_defaults_without_extras() {
+        let mut ast_nodes = HashMap::new();
+        ast_nodes.insert(
+            1,
+            make_node(
+                1,
+                ASTEntryTag::TagLambdaExpr,
+                vec![Some(2)],
+                vec![
+                    CborValue::Integer(0.into()),
+                    CborValue::Array(vec![]),
+                    CborValue::Array(vec![]),
+                    CborValue::Null,
+                ],
+            ),
+        );
+        ast_nodes.insert(2, make_node(2, ASTEntryTag::TagCompoundStmt, vec![], vec![]));
+
+        let ctx = AstContext {
+            ast_nodes,
+            type_nodes: HashMap::new(),
+            top_nodes: vec![1],
+            files: vec![],
+        };
+
+        let converted = convert_to_clang_node(&ctx, 1).expect("lambda conversion should succeed");
+        match converted.kind {
+            ClangNodeKind::LambdaExpr {
+                params,
+                return_type,
+                capture_default,
+                captures,
+            } => {
+                assert!(params.is_empty());
+                assert_eq!(return_type, CppType::Void);
+                assert_eq!(capture_default, crate::ast::CaptureDefault::None);
+                assert!(captures.is_empty());
+            }
+            other => panic!("expected LambdaExpr, got {other:?}"),
+        }
     }
 
     #[test]

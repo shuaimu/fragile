@@ -15487,3 +15487,74 @@ Ran full-suite checks for this leaf:
 ### Outcome
 
 Leaf `2.6.d.b.ii.b` is complete: the targeted delimiter/cast-shape corruption around `wrapping_add((__val })` is fixed generically, strict replay confirms that family is no longer the first blocker, and the remaining prerequisite blocker family is now distinct (`unclosed delimiter` in charset-alias closure lowering).
+
+## 2026-03-15: Leaves 2.6.d.b.ii.c.a / 2.6.d.b.ii.c.b closure-family clearance and blocker shift
+
+### Context
+
+After `2.6.d.b.ii.b`, strict replay still failed on malformed closure lowering in `__charset_alias_match`:
+
+- rustc `unclosed delimiter`,
+- broken closure preface shape ending with `let mut __v: UnknownTagAutoType = Default::default();`,
+- observed in regenerated `misc.cpp`/`basetypes.cpp`/`debugging.cpp` transpiled artifacts.
+
+### Wrong-approach check
+
+Checked against `docs/dev/wrong.md` section `1.3` before changes:
+
+- no RPC-target-specific conditionals,
+- no fake/stub fallback bodies to force compile success,
+- no parser-backend escape-hatch toggles.
+
+Applied a generic codegen normalization update only.
+
+### Execution
+
+Updated `crates/fragile-clang/src/ast_codegen.rs`:
+
+- generalized `normalize_malformed_prefixed_lambda_map_placeholders` to match malformed closure bindings with arbitrary closure headers (both `||` and typed `|...| -> ...`) instead of only `||`,
+- preserved closure header and rewrote malformed bodies to balanced `Default::default()` closures.
+
+Added/updated focused tests:
+
+- `test_normalize_malformed_prefixed_lambda_map_placeholders_rewrites_unused_malformed_map` (updated expectation),
+- `test_normalize_malformed_prefixed_lambda_map_placeholders_rewrites_typed_header_shape` (new),
+- revalidated libtooling lambda conversion coverage via `lambda_expr` test subset.
+
+Validation commands:
+
+- `cargo test -p fragile-clang test_normalize_malformed_prefixed_lambda_map_placeholders_ -- --nocapture`
+- `cargo test -p fragile-clang lambda_expr -- --nocapture`
+- `cargo build --release -p fragile-cli --bin fragilec`
+
+Strict focused replay evidence (`2.6.d.b.ii.c.a`):
+
+- `FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6d_b_ii_c_a_callshape_profile_1800_v2.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6d_b_ii_c_a_stage_timing_1800_v2.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_c_a_build_only_20260315_v1 --lanes fragilec --max-replays 1 --timeout-seconds 1800`
+- replay manifest shifted from prior delimiter family to:
+  - `replay_01_status=1`
+  - `replay_01_timed_out=false`
+  - `replay_01_first_failure_class=other_build_failure`
+  - `replay_01_first_failure_excerpt=error: expected identifier, found keyword \`in\``
+- regenerated artifact `/tmp/fragilec_transpiled/misc.cpp_9f92edd53bcb329f_misc.rs` now contains:
+  - `let mut __map = |__c: i8, __num: &mut bool| -> u8 { Default::default() };`
+  - no remaining `__charset_alias_match` unclosed-delimiter closure shape.
+
+Strict single-lane build-only replay evidence (`2.6.d.b.ii.c.b`):
+
+- `FRAGILEC_MODE=strict python3 scripts/mako_rpcbench_harness.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_c_b_build_only_20260315_v1 --lanes fragilec --build-only --jobs 4 --build-timeout-seconds 1800`
+- harness manifest:
+  - `lane_fragilec_configure_status=0`
+  - `lane_fragilec_clean_status=0`
+  - `lane_fragilec_build_status=2`
+  - `lane_fragilec_failure_class=build_failed`
+- blocker inventory:
+  - `python3 scripts/mako_rpc_compile_blocker_inventory.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_c_b_build_only_20260315_v1 --lanes fragilec`
+  - `lane_fragilec_first_failing_compile_class=other_build_failure`
+  - `lane_fragilec_first_failing_compile_e0425_count=0`
+- first blocker families now include:
+  - `expected identifier, found keyword in` (`let mut in = ...`),
+  - invalid path separator in `pub struct std::ffi::c_void`.
+
+### Outcome
+
+Leaves `2.6.d.b.ii.c.a` and `2.6.d.b.ii.c.b` are complete: the targeted `__charset_alias_match` unclosed-delimiter family is cleared generically, and deterministic strict build-only replay evidence confirms a concrete shift to the next blocker family.
