@@ -15124,3 +15124,161 @@ Broader sweep and Python regression:
 ### Outcome
 
 Leaf `2.8.b.iv.c.iii.c.iii.c.c.c.c.a` is complete: `test_e2e_prime_sieve` is fixed via generic prime-like bool guard recovery, and deterministic replay confirms failure-front progression beyond prime-sieve.
+
+## 2026-03-15: Leaf 2.8.b.iv.c.iii.c.iii.c.c.c.c.c.a next build-phase family fix (test_e2e_matrix_operations)
+
+### Context
+
+After leaf `2.8.b.iv.c.iii.c.iii.c.c.c.c.b`, CI-aligned replay moved the first failing integration id to `test_e2e_matrix_operations`.
+
+Targeted repro:
+
+- `cargo test -p fragile-clang --test integration_test test_e2e_matrix_operations -- --nocapture`
+- runtime mismatch: binary exits `24` (expected `0`).
+
+Generated output inspection for `/tmp/fragile_e2e_tests/e2e_matrix_operations.rs` showed:
+
+- `matrixSum` computes `sum` but ends with `return Default::default();`.
+- Existing `normalize_default_tail_returns_to_matching_result_locals` skipped rewrite due multiple same-typed locals (`sum`, loop indices), and preferred-name list did not include `sum`.
+
+### Wrong-approach check
+
+Checked against `docs/dev/wrong.md` and section `1.3` before edits:
+
+- no test-name-specific branches,
+- no semantic stubs/fallback behavior,
+- no force-native/backend bypass.
+
+Fix is a generic enhancement to existing tail-default local-result recovery.
+
+### Plan
+
+1. Extend preferred typed-result local names to include accumulator-style `sum`.
+2. Add focused regression with loop index locals sharing return type.
+3. Re-run targeted integration test.
+4. Re-run deterministic CI/workspace captures and Python suite.
+
+Scope check: the change is small (well under ~500 LOC including tests/docs).
+
+### Execution
+
+Updated `crates/fragile-clang/src/ast_codegen.rs`:
+
+- `normalize_default_tail_returns_to_matching_result_locals`:
+  - added `"sum"` to preferred result-local selector order.
+
+Added focused regression:
+
+- `test_normalize_default_tail_returns_to_matching_result_locals_prefers_sum_with_loop_indices`
+
+### Validation
+
+Focused checks:
+
+- `cargo test -p fragile-clang test_normalize_default_tail_returns_to_matching_result_locals_ -- --nocapture` (pass)
+- `cargo test -p fragile-clang --test integration_test test_e2e_matrix_operations -- --nocapture` (pass)
+
+Deterministic CI/workspace replays:
+
+- CI run root: `/tmp/fragile_ci_leaf_2_8b_iv_c_iii_c_iii_c_c_c_c_c_a_20260315_v1`
+  - `build_phase_build.status=0`
+  - `build_phase_test.status=124` (`timeout_reason=inactivity_timeout`)
+  - `test_e2e_matrix_operations ... ok`
+  - first current failing id: `test_e2e_ring_buffer`.
+- Workspace run root: `/tmp/fragile_leaf_2_8b_iv_c_iii_c_iii_c_c_c_c_c_a_workspace_20260315_v1`
+  - `workspace_all_targets.status=124` (`timeout_reason=inactivity_timeout`)
+  - `test_e2e_matrix_operations ... ok`
+  - first current failing id: `test_e2e_union_find`.
+
+Python suite:
+
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+- `Ran 34 tests`, `OK`, `skipped=1`.
+
+### Outcome
+
+Leaf `2.8.b.iv.c.iii.c.iii.c.c.c.c.c.a` is complete: `test_e2e_matrix_operations` is fixed via generic accumulator local recovery, and deterministic replay advances the front failure to `test_e2e_ring_buffer`.
+
+## 2026-03-15: Leaf 2.8.b.iv.c.iii.c.iii.c.c.c.c.c.c.a next build-phase family fix (test_e2e_ring_buffer)
+
+### Context
+
+After leaf `2.8.b.iv.c.iii.c.iii.c.c.c.c.c.b`, CI-aligned replay moved the first failing integration id to `test_e2e_ring_buffer`.
+
+Targeted repro:
+
+- `cargo test -p fragile-clang --test integration_test test_e2e_ring_buffer -- --nocapture`
+- rustc compile failure (`E0599`) in generated output:
+  - invalid raw-pointer calls like `data.as_mut_ptr().add(i)` where `data: *mut T`,
+  - and `(*rb).data.as_mut_ptr().add(...)` where `data` field is already `*mut i32`.
+
+Root cause analysis:
+
+- generic pointer-receiver normalization did not collapse no-op `.as_mut_ptr()`/`.as_ptr()` calls on known raw pointers.
+- additional generic cross-function issue: `normalize_stack_array_add_calls` collected stack-array variable names globally across the file, so array names from one function could incorrectly rewrite same-named raw-pointer variables in other functions.
+
+### Wrong-approach check
+
+Checked against `docs/dev/wrong.md` and section `1.3` before edits:
+
+- no ring-buffer-specific codegen branch,
+- no semantic stubs/fallback bodies,
+- no force-native/backend bypass.
+
+Fixes are generic normalizations over pointer-receiver and stack-array-add lowering.
+
+### Plan
+
+1. Extend pointer-receiver normalization to collapse `.as_mut_ptr()`/`.as_ptr()` on known raw-pointer bindings and raw-pointer fields.
+2. Scope stack-array add normalization per function to prevent identifier bleed.
+3. Add focused regressions for both behaviors.
+4. Re-run targeted integration and deterministic CI/workspace/Python sweeps.
+
+### Execution
+
+Updated `crates/fragile-clang/src/ast_codegen.rs`:
+
+- `normalize_pointer_receiver_method_calls`:
+  - added receiver no-arg method collapse helper,
+  - rewrites raw-pointer binding calls:
+    - `ptr.as_mut_ptr()` -> `ptr`
+    - `ptr.as_ptr()` -> `ptr`,
+  - rewrites raw-pointer field receiver calls similarly, including pointee-field paths like `(*rb).data.as_mut_ptr()`.
+
+- `normalize_stack_array_add_calls`:
+  - changed array-name collection from global-file scope to per-function body scope before applying `.add` -> `.as_mut_ptr().add` rewrite.
+
+Added focused regressions:
+
+- `test_normalize_pointer_receiver_method_calls_rewrites_raw_pointer_binding_as_mut_ptr_calls`
+- `test_normalize_pointer_receiver_method_calls_rewrites_raw_pointer_field_as_mut_ptr_calls`
+- `test_normalize_stack_array_add_calls_scopes_array_names_per_function`
+
+### Validation
+
+Focused checks:
+
+- `cargo test -p fragile-clang test_normalize_pointer_receiver_method_calls_ -- --nocapture` (pass)
+- `cargo test -p fragile-clang test_normalize_stack_array_add_calls_ -- --nocapture` (pass)
+- `cargo test -p fragile-clang --test integration_test test_e2e_ring_buffer -- --nocapture` (pass)
+
+Deterministic CI/workspace replays:
+
+- CI run root: `/tmp/fragile_ci_leaf_2_8b_iv_c_iii_c_iii_c_c_c_c_c_c_a_20260315_v1`
+  - `build_phase_build.status=0`
+  - `build_phase_test.status=124` (`timeout_reason=inactivity_timeout`)
+  - `test_e2e_ring_buffer ... ok`
+  - first current failing id: `test_e2e_recursive_algorithms`.
+- Workspace run root: `/tmp/fragile_leaf_2_8b_iv_c_iii_c_iii_c_c_c_c_c_c_a_workspace_20260315_v1`
+  - `workspace_all_targets.status=124` (`timeout_reason=inactivity_timeout`)
+  - `test_e2e_ring_buffer ... ok`
+  - first current failing id: `test_e2e_recursive_algorithms`.
+
+Python suite:
+
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+- `Ran 34 tests`, `OK`, `skipped=1`.
+
+### Outcome
+
+Leaf `2.8.b.iv.c.iii.c.iii.c.c.c.c.c.c.a` is complete: `test_e2e_ring_buffer` is fixed by generic raw-pointer receiver normalization plus function-scoped array-add rewriting, and deterministic replay advances the front failure to `test_e2e_recursive_algorithms`.

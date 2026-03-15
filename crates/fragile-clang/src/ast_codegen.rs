@@ -9532,7 +9532,7 @@ impl AstCodeGen {
                 }
             }
 
-            let preferred_names = ["result", "ret", "retval", "rv", "out", "value"];
+            let preferred_names = ["result", "ret", "retval", "rv", "out", "value", "sum"];
             let selected_name = preferred_names
                 .iter()
                 .find_map(|preferred| {
@@ -19411,26 +19411,6 @@ impl AstCodeGen {
             return code.to_string();
         }
 
-        let mut stack_array_names: HashSet<String> = HashSet::new();
-        for line in code.lines() {
-            let trimmed = line.trim_start();
-            if !trimmed.starts_with("let ") || !trimmed.contains(": [") {
-                continue;
-            }
-            let Some((lhs, rhs)) = trimmed.split_once(':') else {
-                continue;
-            };
-            if !rhs.trim_start().starts_with('[') {
-                continue;
-            }
-            if let Some(name) = Self::parse_let_binding_name(lhs) {
-                stack_array_names.insert(name.trim_start_matches("r#").to_string());
-            }
-        }
-        if stack_array_names.is_empty() {
-            return code.to_string();
-        }
-
         fn replace_ident_add_call(line: &str, ident: &str) -> String {
             let pattern = format!("{}.add(", ident);
             if !line.contains(&pattern) {
@@ -19464,14 +19444,84 @@ impl AstCodeGen {
             }
         }
 
-        let mut out = String::with_capacity(code.len());
-        for line in code.lines() {
-            let mut rewritten = line.to_string();
-            for ident in &stack_array_names {
-                rewritten = replace_ident_add_call(&rewritten, ident);
+        fn collect_stack_array_names(lines: &[&str]) -> HashSet<String> {
+            let mut names = HashSet::new();
+            for line in lines {
+                let trimmed = line.trim_start();
+                if !trimmed.starts_with("let ") || !trimmed.contains(": [") {
+                    continue;
+                }
+                let Some((lhs, rhs)) = trimmed.split_once(':') else {
+                    continue;
+                };
+                if !rhs.trim_start().starts_with('[') {
+                    continue;
+                }
+                if let Some(name) = AstCodeGen::parse_let_binding_name(lhs) {
+                    names.insert(name.trim_start_matches("r#").to_string());
+                }
             }
-            out.push_str(&rewritten);
+            names
+        }
+
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        let mut i = 0usize;
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim_end();
+            let is_fn_start =
+                (trimmed.contains(" fn ") || trimmed.starts_with("fn ")) && trimmed.ends_with('{');
+            if !is_fn_start {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let mut j = i;
+            let mut depth = 0isize;
+            while j < lines.len() {
+                let current = lines[j];
+                depth += current.chars().filter(|c| *c == '{').count() as isize;
+                depth -= current.chars().filter(|c| *c == '}').count() as isize;
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if j >= lines.len() || depth != 0 {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let body_lines: &[&str] = if j > i + 1 { &lines[i + 1..j] } else { &[] };
+            let stack_array_names = collect_stack_array_names(body_lines);
+            out.push_str(lines[i]);
             out.push('\n');
+            for body_line in body_lines {
+                let mut rewritten = (*body_line).to_string();
+                for ident in &stack_array_names {
+                    rewritten = replace_ident_add_call(&rewritten, ident);
+                }
+                out.push_str(&rewritten);
+                out.push('\n');
+            }
+            out.push_str(lines[j]);
+            if j + 1 < lines.len() || code.ends_with('\n') {
+                out.push('\n');
+            }
+            i = j + 1;
         }
         if !code.ends_with('\n') && !out.is_empty() {
             out.pop();
@@ -30923,6 +30973,50 @@ impl FragileAtomicBoolCompat for atomic_bool {
             rewritten
         }
 
+        fn rewrite_receiver_no_arg_method_call_to_value(
+            line: &str,
+            receiver_expr: &str,
+            method: &str,
+            replacement: &str,
+        ) -> String {
+            let call = format!("{}.{}()", receiver_expr, method);
+            if !line.contains(&call) {
+                return line.to_string();
+            }
+            let mut rewritten = line.to_string();
+            let receiver_starts_ident = receiver_expr
+                .chars()
+                .next()
+                .is_some_and(AstCodeGen::is_identifier_char);
+            let mut idx = 0usize;
+            while let Some(rel) = rewritten[idx..].find(&call) {
+                let start = idx + rel;
+                let end = start + call.len();
+                if receiver_starts_ident
+                    && start > 0
+                    && rewritten[..start]
+                        .chars()
+                        .next_back()
+                        .is_some_and(AstCodeGen::is_identifier_char)
+                {
+                    idx = start + 1;
+                    continue;
+                }
+                if end < rewritten.len()
+                    && rewritten[end..]
+                        .chars()
+                        .next()
+                        .is_some_and(AstCodeGen::is_identifier_char)
+                {
+                    idx = end;
+                    continue;
+                }
+                rewritten.replace_range(start..end, replacement);
+                idx = start + replacement.len();
+            }
+            rewritten
+        }
+
         fn rewrite_pointer_pointee_field_calls(
             line: &str,
             pointer_binding_pointees: &HashMap<String, String>,
@@ -30979,9 +31073,6 @@ impl FragileAtomicBoolCompat for atomic_bool {
             return code.to_string();
         }
         let struct_fields = parse_struct_fields(code);
-        if struct_fields.is_empty() {
-            return code.to_string();
-        }
         let pointer_fields = parse_struct_pointer_fields(code);
         let pointer_field_pointees = parse_struct_pointer_field_pointees(code, &struct_fields);
         let impl_targets = collect_impl_target_per_line(&lines);
@@ -31043,10 +31134,68 @@ impl FragileAtomicBoolCompat for atomic_bool {
             out.push('\n');
             for body_line in body_lines {
                 let mut rewritten = rewrite_pointer_binding_calls(body_line, &pointer_bindings);
+                for ident in &pointer_bindings {
+                    rewritten = rewrite_receiver_no_arg_method_call_to_value(
+                        &rewritten,
+                        ident,
+                        "as_mut_ptr",
+                        ident,
+                    );
+                    rewritten = rewrite_receiver_no_arg_method_call_to_value(
+                        &rewritten,
+                        ident,
+                        "as_ptr",
+                        ident,
+                    );
+                }
                 for field in &pointer_self_fields {
                     rewritten = rewrite_pointer_field_calls(&rewritten, &format!("self.{}", field));
                     rewritten =
                         rewrite_pointer_field_calls(&rewritten, &format!("(*self).{}", field));
+                    rewritten = rewrite_receiver_no_arg_method_call_to_value(
+                        &rewritten,
+                        &format!("self.{}", field),
+                        "as_mut_ptr",
+                        &format!("self.{}", field),
+                    );
+                    rewritten = rewrite_receiver_no_arg_method_call_to_value(
+                        &rewritten,
+                        &format!("self.{}", field),
+                        "as_ptr",
+                        &format!("self.{}", field),
+                    );
+                    rewritten = rewrite_receiver_no_arg_method_call_to_value(
+                        &rewritten,
+                        &format!("(*self).{}", field),
+                        "as_mut_ptr",
+                        &format!("(*self).{}", field),
+                    );
+                    rewritten = rewrite_receiver_no_arg_method_call_to_value(
+                        &rewritten,
+                        &format!("(*self).{}", field),
+                        "as_ptr",
+                        &format!("(*self).{}", field),
+                    );
+                }
+                for (ident, pointee) in &pointer_binding_pointees {
+                    let Some(pointer_pointee_fields) = pointer_fields.get(pointee) else {
+                        continue;
+                    };
+                    for field in pointer_pointee_fields {
+                        let receiver = format!("(*{}).{}", ident, field);
+                        rewritten = rewrite_receiver_no_arg_method_call_to_value(
+                            &rewritten,
+                            &receiver,
+                            "as_mut_ptr",
+                            &receiver,
+                        );
+                        rewritten = rewrite_receiver_no_arg_method_call_to_value(
+                            &rewritten,
+                            &receiver,
+                            "as_ptr",
+                            &receiver,
+                        );
+                    }
                 }
                 rewritten = rewrite_pointer_pointee_field_calls(
                     &rewritten,
@@ -95399,6 +95548,31 @@ pub fn probe() {
     }
 
     #[test]
+    fn test_normalize_stack_array_add_calls_scopes_array_names_per_function() {
+        let input = r#"
+pub fn has_array() {
+    let mut data: [i32; 4] = [0; 4];
+    let _ = unsafe { data.add((0) as usize) };
+}
+
+pub fn has_ptr(data: *mut i32) {
+    let _ = unsafe { data.add((0) as usize) };
+}
+"#;
+        let normalized = AstCodeGen::normalize_stack_array_add_calls(input);
+        assert!(
+            normalized.contains("unsafe { data.as_mut_ptr().add((0) as usize) }"),
+            "stack-array add normalization should still rewrite true stack-array `.add` calls, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("pub fn has_ptr(data: *mut i32) {\n    let _ = unsafe { data.add((0) as usize) };"),
+            "stack-array add normalization should not rewrite raw-pointer `.add` calls in other functions that share the same binding name, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
     fn test_normalize_unit_add_pointer_placeholders_rewrites_unit_add_calls() {
         let input = "let _p = unsafe { ().add(()as usize) };";
         let normalized = AstCodeGen::normalize_unit_add_pointer_placeholders(input);
@@ -105979,6 +106153,38 @@ pub fn access_specifier_sum() -> i32 {
     }
 
     #[test]
+    fn test_normalize_default_tail_returns_to_matching_result_locals_prefers_sum_with_loop_indices()
+    {
+        let input = r#"
+pub fn matrixSum(mat: *mut i32, rows: i32, cols: i32) -> i32 {
+    let mut sum: i32 = (0) as i32;
+    {
+        let mut i: i32 = (0) as i32;
+        loop {
+            if !(i < rows * cols) { break; }
+            {
+                sum += unsafe { *mat.add((i) as usize) };
+            }
+            { let __v = i; i += 1; __v };
+        }
+    }
+    return Default::default();
+}
+"#;
+        let output = AstCodeGen::normalize_default_tail_returns_to_matching_result_locals(input);
+        assert!(
+            output.contains("return sum;"),
+            "default-tail return normalization should prefer accumulator-style `sum` locals when loop-index locals share the return type, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("return Default::default();"),
+            "default-tail return normalization should remove degraded default tails in matrix-sum style bodies, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
     fn test_normalize_default_tail_returns_to_matching_result_locals_skips_ambiguous_bodies() {
         let input = r#"
 pub fn choose(flag: bool) -> i32 {
@@ -106417,6 +106623,51 @@ pub fn sum(curr: *mut DLLNode) -> i32 {
         assert!(
             !output.contains("(*curr).data()"),
             "pointer receiver normalization should remove method-call parens on pointer binding field access, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_pointer_receiver_method_calls_rewrites_raw_pointer_binding_as_mut_ptr_calls() {
+        let input = r#"
+pub fn fill(data: *mut i32, i: usize, value: i32) {
+    unsafe { *data.as_mut_ptr().add(i) = value; };
+}
+"#;
+        let output = AstCodeGen::normalize_pointer_receiver_method_calls(input);
+        assert!(
+            output.contains("*data.add(i) = value"),
+            "pointer receiver normalization should collapse raw-pointer binding `.as_mut_ptr()` calls to direct pointer arithmetic, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("data.as_mut_ptr().add(i)"),
+            "pointer receiver normalization should remove `.as_mut_ptr()` on raw-pointer bindings, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_pointer_receiver_method_calls_rewrites_raw_pointer_field_as_mut_ptr_calls() {
+        let input = r#"
+pub struct RingBuffer {
+    pub data: *mut i32,
+    pub tail: i32,
+}
+
+pub fn push(rb: *mut RingBuffer, value: i32) {
+    unsafe { *(*rb).data.as_mut_ptr().add(((*rb).tail) as usize) = value; };
+}
+"#;
+        let output = AstCodeGen::normalize_pointer_receiver_method_calls(input);
+        assert!(
+            output.contains("*(*rb).data.add(((*rb).tail) as usize) = value"),
+            "pointer receiver normalization should collapse raw-pointer pointee-field `.as_mut_ptr()` calls to direct pointer arithmetic, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("(*rb).data.as_mut_ptr().add"),
+            "pointer receiver normalization should remove `.as_mut_ptr()` on raw-pointer pointee fields, got:\n{}",
             output
         );
     }
