@@ -82519,18 +82519,6 @@ fn find_first_type_sanitization_trigger(bytes: &[u8]) -> Option<usize> {
         .position(|b| byte_requires_type_sanitization_dispatch(*b))
 }
 
-fn find_passthrough_run_end(bytes: &[u8], mut idx: usize) -> usize {
-    while idx < bytes.len() {
-        let byte = bytes[idx];
-        if !byte_requires_type_sanitization_dispatch(byte) {
-            idx += 1;
-        } else {
-            break;
-        }
-    }
-    idx
-}
-
 #[cfg(test)]
 fn type_token_is_identifier_clean(ty: &str) -> bool {
     find_first_type_sanitization_trigger(ty.as_bytes()).is_none()
@@ -82538,30 +82526,31 @@ fn type_token_is_identifier_clean(ty: &str) -> bool {
 
 fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
     let bytes = ty.as_bytes();
+    let bytes_len = bytes.len();
 
     // Keep legacy replacement semantics but avoid repeated full-string
     // allocations from chained `replace(...)` calls on hot template paths.
     let mut idx = 0usize;
-    while idx < ty.len() {
+    while idx < bytes_len {
         // Fast-lane contiguous bytes that sanitizer leaves unchanged.
-        let run_end = find_passthrough_run_end(bytes, idx);
-        if run_end > idx {
-            out.push_str(&ty[idx..run_end]);
-            idx = run_end;
-            if idx == bytes.len() {
-                break;
+        if !byte_requires_type_sanitization_dispatch(bytes[idx]) {
+            let run_start = idx;
+            idx += 1;
+            while idx < bytes_len && !byte_requires_type_sanitization_dispatch(bytes[idx]) {
+                idx += 1;
             }
+            out.push_str(&ty[run_start..idx]);
             continue;
         }
 
         let byte = bytes[idx];
         if byte == b'*' {
-            if idx + 5 <= bytes.len() && &bytes[idx..idx + 5] == b"*mut " {
+            if idx + 5 <= bytes_len && &bytes[idx..idx + 5] == b"*mut " {
                 out.push_str("ptr_mut_");
                 idx += 5;
                 continue;
             }
-            if idx + 7 <= bytes.len() && &bytes[idx..idx + 7] == b"*const " {
+            if idx + 7 <= bytes_len && &bytes[idx..idx + 7] == b"*const " {
                 out.push_str("ptr_const_");
                 idx += 7;
                 continue;
@@ -82570,12 +82559,12 @@ fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
             idx += 1;
             continue;
         }
-        if byte == b':' && idx + 1 < bytes.len() && bytes[idx + 1] == b':' {
+        if byte == b':' && idx + 1 < bytes_len && bytes[idx + 1] == b':' {
             out.push('_');
             idx += 2;
             continue;
         }
-        if byte == b'-' && idx + 1 < bytes.len() && bytes[idx + 1] == b'>' {
+        if byte == b'-' && idx + 1 < bytes_len && bytes[idx + 1] == b'>' {
             // Handle function return type arrow before stripping `>`.
             out.push_str("_ret_");
             idx += 2;
@@ -121742,6 +121731,17 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
         assert_eq!(
             out, sample,
             "sanitizer should keep trigger-free passthrough tokens unchanged"
+        );
+    }
+
+    #[test]
+    fn test_append_sanitized_type_for_fn_name_keeps_passthrough_after_leading_trigger() {
+        let sample = "*const Åßç_t'plus+hash#";
+        let mut out = String::new();
+        append_sanitized_type_for_fn_name(&mut out, sample);
+        assert_eq!(
+            out, "ptr_const_Åßç_t'plus+hash#",
+            "sanitizer should rewrite the leading trigger and preserve the following passthrough run"
         );
     }
 

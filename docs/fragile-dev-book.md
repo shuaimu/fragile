@@ -16653,3 +16653,87 @@ Post-change strict root:
 - Python suite:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
   - `Ran 34 tests`, `OK`, `skipped=1`
+
+## 2026-03-15: Leaf 2.6.d.b.ii.c.c.iv.d.d.d.d.c.c.c.c.c.c.c.c.c (a-b) trigger-first sanitizer dispatch fast path
+
+### Context
+
+After `2.6.d.b.ii.c.c.iv.d.d.d.d.c.c.c.c.c.c.c.c.b`, strict build-only replay remained timeout-bound on
+`src/rrr/base/misc.cpp` with non-increase parity. In the sanitizer append hot path, we still invoked the passthrough-run scan helper even when the current byte was an immediate sanitizer trigger.
+
+### Wrong-approach check
+
+Reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before implementation:
+
+- no target-specific (`rpcbench`/`misc.cpp`) conditionals,
+- no fake fallback/stub method bodies,
+- no native-source bypass,
+- no semantic shortcuts that alter sanitizer rewrite behavior.
+
+### Generic hot-path fix
+
+Implemented in `crates/fragile-clang/src/ast_codegen.rs`:
+
+- removed unconditional passthrough-scan helper invocation on each loop iteration,
+- switched to trigger-first dispatch:
+  - if current byte is non-trigger, chunk contiguous non-trigger run inline,
+  - if current byte is trigger, handle existing trigger-token rewrite path directly,
+- cached `bytes_len` once and reused it for bounds checks.
+
+Semantics remain unchanged while reducing redundant helper-call/branch work on trigger-heavy type tokens.
+
+### Focused regressions
+
+Added/validated:
+
+- `test_append_sanitized_type_for_fn_name_keeps_passthrough_after_leading_trigger`
+- `test_sanitize_type_for_fn_name_matches_legacy_chain_replacements`
+- `test_append_sanitized_type_for_fn_name_matches_sanitize_type_for_fn_name`
+- `test_build_fn_template_mangled_name_sanitizes_type_args`
+- `test_build_fn_template_mangled_name_preserves_empty_type_arg_shape`
+
+Commands:
+
+- `cargo test -p fragile-clang test_append_sanitized_type_for_fn_name_keeps_passthrough_after_leading_trigger -- --nocapture`
+- `cargo test -p fragile-clang test_sanitize_type_for_fn_name_ -- --nocapture`
+- `cargo test -p fragile-clang test_build_fn_template_mangled_name_ -- --nocapture`
+- `cargo test -p fragile-clang test_append_sanitized_type_for_fn_name_matches_sanitize_type_for_fn_name -- --nocapture`
+
+### Strict replay + non-increase gate
+
+Post-change strict root:
+`/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_d_d_d_c_c_c_c_c_c_c_c_c_b_build_only_20260315_v1`
+
+- lane status:
+  - `build_only=true`
+  - `lane_fragilec_configure_status=0`
+  - `lane_fragilec_clean_status=0`
+  - `lane_fragilec_build_status=124`
+  - `lane_fragilec_failure_class=build_timeout`
+- inventory non-increase vs baseline
+  `/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_d_d_d_c_c_c_c_c_c_c_c_b_build_only_20260315_v1/rpc_compile_blocker_inventory_manifest.txt`:
+  - `lane_fragilec_first_failing_compile_class=build_timeout`
+  - `lane_fragilec_first_failing_compile_file=src/rrr/base/misc.cpp`
+  - `lane_fragilec_class_rank_delta_vs_baseline=0`
+  - `lane_fragilec_e0425_delta_vs_baseline=0`
+  - `lane_fragilec_nonincrease_gate_pass=true`
+  - `nonincrease_gate_pass=true`
+- focused replay (`--timeout-seconds 300`) remains timeout-bound:
+  - `replay_01_blocker_class=build_timeout`
+  - `replay_01_blocker_file=src/rrr/base/misc.cpp`
+  - `replay_01_status=124`
+  - `replay_01_timed_out=true`
+  - `replay_01_first_failure_class=build_timeout`
+
+### Full-suite sweeps
+
+- workspace capture:
+  - `timeout 300s cargo test --workspace --all-targets` with captured artifacts under `/tmp/fragile_leaf_2_6d_b_ii_c_c_iv_d_d_d_d_c_c_c_c_c_c_c_c_c_workspace_20260315_v4`
+  - `workspace_all_targets.status=124`
+  - first failing ids include:
+    `test_e2e_object_pool`, `test_e2e_trie`, `test_e2e_simple_hash_table`,
+    `test_e2e_tokenizer`, `test_e2e_simple_graph`,
+    `test_variadic_template_transpile`, `test_e2e_pthread`
+- Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+  - `Ran 34 tests`, `OK`, `skipped=1`
