@@ -16486,3 +16486,86 @@ Post-change strict root:
 - Python suite:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
   - `Ran 34 tests`, `OK`, `skipped=1`
+
+## 2026-03-15: Leaf 2.6.d.b.ii.c.c.iv.d.d.d.d.c.c.c.c.c.c.c (a-b) passthrough run broadening for sanitizer append loop
+
+### Context
+
+After `2.6.d.b.ii.c.c.iv.d.d.d.d.c.c.c.c.c.c.b`, strict build-only replay remained timeout-bound on
+`src/rrr/base/misc.cpp` with non-increase parity. In the sanitizer append hot path, passthrough chunking still treated only ASCII bytes as fast-lane spans.
+
+### Wrong-approach check
+
+Reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before implementation:
+
+- no RPC-target-specific conditionals,
+- no semantic fallback stubs/fake method bodies,
+- no native-source bypass,
+- no behavior shortcuts that change sanitizer replacement semantics.
+
+### Generic hot-path fix
+
+Implemented in `crates/fragile-clang/src/ast_codegen.rs`:
+
+- replaced ASCII-only passthrough scan with a generalized non-trigger scan:
+  - `find_ascii_passthrough_run_end` -> `find_passthrough_run_end`,
+  - contiguous runs now include UTF-8/non-ASCII bytes as long as no sanitizer trigger byte is present.
+- kept existing trigger dispatch behavior unchanged (`*mut`, `*const`, `::`, `->`, separators, `&`).
+
+Result: fewer loop iterations/branches on mixed UTF-8 type tokens while preserving legacy sanitized output.
+
+### Focused regressions
+
+Added/validated:
+
+- `test_append_sanitized_type_for_fn_name_preserves_non_ascii_passthrough_run`
+- `test_sanitize_type_for_fn_name_matches_legacy_chain_replacements`
+- `test_append_sanitized_type_for_fn_name_matches_sanitize_type_for_fn_name`
+- `test_build_fn_template_mangled_name_sanitizes_type_args`
+- `test_build_fn_template_mangled_name_preserves_empty_type_arg_shape`
+
+Commands:
+
+- `cargo test -p fragile-clang test_append_sanitized_type_for_fn_name_preserves_non_ascii_passthrough_run -- --nocapture`
+- `cargo test -p fragile-clang test_sanitize_type_for_fn_name_ -- --nocapture`
+- `cargo test -p fragile-clang test_build_fn_template_mangled_name_ -- --nocapture`
+- `cargo test -p fragile-clang test_append_sanitized_type_for_fn_name_matches_sanitize_type_for_fn_name -- --nocapture`
+
+### Strict replay + non-increase gate
+
+Post-change strict root:
+`/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_d_d_d_c_c_c_c_c_c_c_b_build_only_20260315_v1`
+
+- lane status:
+  - `build_only=true`
+  - `lane_fragilec_configure_status=0`
+  - `lane_fragilec_clean_status=0`
+  - `lane_fragilec_build_status=124`
+  - `lane_fragilec_failure_class=build_timeout`
+- inventory non-increase vs baseline
+  `/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_d_d_d_c_c_c_c_c_c_b_build_only_20260315_v1/rpc_compile_blocker_inventory_manifest.txt`:
+  - `lane_fragilec_first_failing_compile_class=build_timeout`
+  - `lane_fragilec_first_failing_compile_file=src/rrr/base/misc.cpp`
+  - `lane_fragilec_class_rank_delta_vs_baseline=0`
+  - `lane_fragilec_e0425_delta_vs_baseline=0`
+  - `lane_fragilec_nonincrease_gate_pass=true`
+  - `nonincrease_gate_pass=true`
+- focused replay (`--timeout-seconds 300`) remains timeout-bound:
+  - `replay_01_blocker_class=build_timeout`
+  - `replay_01_blocker_file=src/rrr/base/misc.cpp`
+  - `replay_01_status=124`
+  - `replay_01_timed_out=true`
+  - `replay_01_first_failure_class=build_timeout`
+
+### Full-suite sweeps
+
+- workspace capture:
+  - `python3 scripts/ci_command_capture.py --run-root /tmp/fragile_leaf_2_6d_b_ii_c_c_iv_d_d_d_d_c_c_c_c_c_c_c_workspace_20260315_v1 --name workspace_all_targets --inactivity-timeout-seconds 90 --wall-timeout-seconds 1200 --command cargo test --workspace --all-targets`
+  - `status=124`, `timeout_reason=inactivity_timeout`
+  - first failing ids include:
+    `test_e2e_object_pool`, `test_e2e_simple_graph`, `test_e2e_trie`,
+    `test_e2e_simple_hash_table`, `test_e2e_tokenizer`,
+    `test_variadic_template_transpile`, `test_e2e_pthread`
+- Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+  - `Ran 34 tests`, `OK`, `skipped=1`

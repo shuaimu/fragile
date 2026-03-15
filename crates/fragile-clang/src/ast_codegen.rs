@@ -82492,20 +82492,36 @@ fn sanitize_type_for_fn_name(ty: &str) -> String {
     out
 }
 
-fn find_first_type_sanitization_trigger(bytes: &[u8]) -> Option<usize> {
-    bytes.iter().position(|b| {
-        matches!(
-            *b,
-            b'*' | b':' | b'-' | b' ' | b'<' | b'>' | b',' | b'[' | b']' | b';' | b'(' | b')'
-                | b'"' | b'&'
-        )
-    })
+fn byte_requires_type_sanitization_dispatch(byte: u8) -> bool {
+    matches!(
+        byte,
+        b'*'
+            | b':'
+            | b'-'
+            | b' '
+            | b'<'
+            | b'>'
+            | b','
+            | b'['
+            | b']'
+            | b';'
+            | b'('
+            | b')'
+            | b'"'
+            | b'&'
+    )
 }
 
-fn find_ascii_identifier_run_end(bytes: &[u8], mut idx: usize) -> usize {
+fn find_first_type_sanitization_trigger(bytes: &[u8]) -> Option<usize> {
+    bytes
+        .iter()
+        .position(|b| byte_requires_type_sanitization_dispatch(*b))
+}
+
+fn find_passthrough_run_end(bytes: &[u8], mut idx: usize) -> usize {
     while idx < bytes.len() {
         let byte = bytes[idx];
-        if byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'#' {
+        if !byte_requires_type_sanitization_dispatch(byte) {
             idx += 1;
         } else {
             break;
@@ -82535,15 +82551,15 @@ fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
     // allocations from chained `replace(...)` calls on hot template paths.
     let mut idx = first_trigger_idx;
     while idx < ty.len() {
-        // Fast-lane contiguous identifier bytes that sanitizer leaves unchanged.
-        let byte = bytes[idx];
-        if byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'#' {
-            let run_end = find_ascii_identifier_run_end(bytes, idx);
+        // Fast-lane contiguous bytes that sanitizer leaves unchanged.
+        let run_end = find_passthrough_run_end(bytes, idx);
+        if run_end > idx {
             out.push_str(&ty[idx..run_end]);
             idx = run_end;
             continue;
         }
 
+        let byte = bytes[idx];
         if byte == b'*' {
             if idx + 5 <= bytes.len() && &bytes[idx..idx + 5] == b"*mut " {
                 out.push_str("ptr_mut_");
@@ -121698,6 +121714,28 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
         assert_eq!(
             out, "ptr_mut_T_ptr_const_U_ptr__V",
             "sanitizer should preserve pointer-prefix rewrites when switching to byte-slice prefix checks"
+        );
+    }
+
+    #[test]
+    fn test_append_sanitized_type_for_fn_name_preserves_ascii_passthrough_punctuation_run() {
+        let sample = "T'life+tag::Node";
+        let mut out = String::new();
+        append_sanitized_type_for_fn_name(&mut out, sample);
+        assert_eq!(
+            out, "T'life+tag_Node",
+            "sanitizer should preserve non-trigger ASCII punctuation spans while rewriting namespace separators"
+        );
+    }
+
+    #[test]
+    fn test_append_sanitized_type_for_fn_name_preserves_non_ascii_passthrough_run() {
+        let sample = "Åßçµ::Node";
+        let mut out = String::new();
+        append_sanitized_type_for_fn_name(&mut out, sample);
+        assert_eq!(
+            out, "Åßçµ_Node",
+            "sanitizer should preserve contiguous non-ASCII passthrough spans while rewriting trigger tokens"
         );
     }
 
