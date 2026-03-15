@@ -14188,3 +14188,70 @@ Deterministic failure inventory extraction from `build_phase_test.log`:
 
 Leaf `2.8.b.i` is complete: CI-aligned command evidence is captured deterministically and `2.8.b` has been decomposed into smaller leaves (`2.8.b.ii`-`2.8.b.iv`) for bounded, non-corner-cutting follow-up.
 
+
+## 2026-03-14: Leaf 2.8.b.ii deterministic CI build-phase replay completion
+
+### Context
+
+Leaf `2.8.b.i` captured CI-aligned build-phase failures but local replay could still run for prolonged periods without a deterministic terminal artifact when integration tails dragged. Leaf `2.8.b.ii` required deterministic completion semantics and a final `build_phase_test` status artifact.
+
+### Wrong-approach check
+
+Checked against `docs/dev/wrong.md` and section `1.3` before changes:
+
+- no parser/codegen/runtime target-specific hacks,
+- no force-native source bypasses,
+- no fake semantic stubs.
+
+This leaf is replay harness behavior + fixture coverage only.
+
+### Plan
+
+1. Add a generic command-capture helper with explicit inactivity/wall timeout semantics.
+2. Persist deterministic replay artifacts (`stdout/stderr/status/manifest`) for CI-aligned local commands.
+3. Cover timeout/failure/success paths with local fixture tests.
+4. Re-run CI-aligned build phase through the helper and capture terminal `build_phase_test` status.
+
+### Execution
+
+Added `scripts/ci_command_capture.py`:
+
+- process-group command execution (`start_new_session=True`),
+- inactivity + wall timeout enforcement,
+- process-group kill on timeout,
+- non-blocking final pipe drain,
+- deterministic artifact emission:
+  - `<name>.stdout.log`
+  - `<name>.stderr.log`
+  - `<name>.status`
+  - `<name>.manifest.txt`
+
+Added fixture coverage in `tests/python/test_ci_command_capture.py`:
+
+- success path,
+- inactivity timeout,
+- wall timeout,
+- command-not-found,
+- inherited-stdio descendant non-blocking regression.
+
+### Validation
+
+Targeted tests:
+
+- `python3 -m unittest tests.python.test_ci_command_capture -v` (`5` tests, all pass).
+
+CI-aligned deterministic replay evidence:
+
+- run root: `/tmp/fragile_ci_leaf_2_8b_ii_20260314_v2`
+- statuses:
+  - `build_phase_build.status=0`
+  - `build_phase_test.status=124`
+- `build_phase_test.manifest.txt` records:
+  - `timed_out=true`
+  - `timeout_reason=wall_timeout`
+- failure inventory remains baseline-red and captured deterministically in `build_phase_test.stdout.log`, with first failing id `test_e2e_access_specifiers` and representative failures including `test_e2e_insertion_sort`, `test_e2e_binary_search_tree`, `test_e2e_pthread`, and `test_variadic_template_transpile`.
+
+### Outcome
+
+Leaf `2.8.b.ii` is complete: CI build-phase replay now always finalizes with a terminal status artifact and timeout classification, removing indefinite local hangs from the replay loop and enabling bounded failure-family work in `2.8.b.iii`.
+
