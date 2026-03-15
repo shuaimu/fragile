@@ -1205,7 +1205,7 @@ pub struct AstCodeGen {
     fn_template_param_dependency_cache: HashMap<String, bool>,
     /// Cache of function-template inference shape metadata used by
     /// `infer_fn_template_type_args` in hot call-site matching paths.
-    fn_template_inference_shape_cache: HashMap<String, Arc<FnTemplateInferenceShape>>,
+    fn_template_inference_shape_cache: RefCell<HashMap<String, Arc<FnTemplateInferenceShape>>>,
     /// Cache of whether function-template resolution for a template key can
     /// depend on call-argument literal bounds (non-type array-ref candidates).
     fn_template_requires_call_arg_bounds_cache: HashMap<String, bool>,
@@ -1423,7 +1423,7 @@ impl AstCodeGen {
             pending_template_instantiations: HashSet::new(),
             fn_template_definitions: HashMap::new(),
             fn_template_param_dependency_cache: HashMap::new(),
-            fn_template_inference_shape_cache: HashMap::new(),
+            fn_template_inference_shape_cache: RefCell::new(HashMap::new()),
             fn_template_requires_call_arg_bounds_cache: HashMap::new(),
             fn_template_concrete_match_shape_cache: HashMap::new(),
             fn_template_call_resolution_cache: HashMap::new(),
@@ -41777,7 +41777,9 @@ impl FragileAtomicBoolCompat for atomic_bool {
 
     fn set_fn_template_definition(&mut self, key: String, info: FnTemplateInfo) {
         self.fn_template_param_dependency_cache.remove(&key);
-        self.fn_template_inference_shape_cache.remove(&key);
+        self.fn_template_inference_shape_cache
+            .borrow_mut()
+            .remove(&key);
         self.fn_template_requires_call_arg_bounds_cache.remove(&key);
         self.fn_template_call_resolution_cache.clear();
         self.fn_template_candidate_keys_cache.borrow_mut().clear();
@@ -41962,22 +41964,22 @@ impl FragileAtomicBoolCompat for atomic_bool {
         Some(concrete_shape)
     }
 
-    fn fn_template_inference_shape(
-        &mut self,
-        template_key: &str,
-    ) -> Option<Arc<FnTemplateInferenceShape>> {
-        if !self
+    fn fn_template_inference_shape(&self, template_key: &str) -> Option<Arc<FnTemplateInferenceShape>> {
+        let needs_shape_compute = !self
             .fn_template_inference_shape_cache
-            .contains_key(template_key)
-        {
+            .borrow()
+            .contains_key(template_key);
+        if needs_shape_compute {
             let shape = Arc::new({
                 let template_info = self.fn_template_definitions.get(template_key)?;
                 build_fn_template_inference_shape(template_info)
             });
             self.fn_template_inference_shape_cache
+                .borrow_mut()
                 .insert(template_key.to_string(), shape);
         }
         self.fn_template_inference_shape_cache
+            .borrow()
             .get(template_key)
             .cloned()
     }
@@ -42951,10 +42953,9 @@ impl FragileAtomicBoolCompat for atomic_bool {
         }
 
         for template_key in candidate_keys_with_defs.iter() {
-            let inference_shape = self
-                .fn_template_inference_shape_cache
-                .get(template_key)
-                .map(std::sync::Arc::as_ref);
+            // Warm inference-shape cache on cold resolver paths so repeated
+            // call-shape matching does not rebuild template inference metadata.
+            let inference_shape = self.fn_template_inference_shape(template_key);
             let Some(template_info) = self.fn_template_definitions.get(template_key) else {
                 continue;
             };
@@ -118290,13 +118291,14 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
             "computed inference shape should record first parameter position"
         );
         assert!(
-        codegen
-            .fn_template_inference_shape_cache
-            .contains_key("cache::shape"),
+            codegen
+                .fn_template_inference_shape_cache
+                .borrow()
+                .contains_key("cache::shape"),
             "shape lookup should populate inference-shape cache"
         );
 
-        codegen.fn_template_inference_shape_cache.insert(
+        codegen.fn_template_inference_shape_cache.borrow_mut().insert(
             "cache::shape".to_string(),
             std::sync::Arc::new(FnTemplateInferenceShape {
                 template_param_first_param_positions: vec![Some(7)],
@@ -119141,6 +119143,7 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
         assert!(
             !codegen
                 .fn_template_inference_shape_cache
+                .borrow()
                 .contains_key("cache::swap"),
             "replacing template definition should invalidate cached inference shape"
         );
@@ -120459,6 +120462,77 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
     }
 
     #[test]
+    fn test_resolve_fn_template_call_name_from_args_warms_inference_shape_cache_on_cold_path()
+    {
+        let int_ty = CppType::Int { signed: true };
+        let fn_ty = CppType::Function {
+            return_type: Box::new(int_ty.clone()),
+            params: vec![int_ty.clone()],
+            is_variadic: false,
+        };
+        let call_callee = make_node(
+            ClangNodeKind::DeclRefExpr {
+                name: "swap".to_string(),
+                ty: fn_ty,
+                namespace_path: vec![],
+            },
+            vec![],
+        );
+        let call_args = vec![make_node(
+            ClangNodeKind::IntegerLiteral {
+                value: 7,
+                cpp_type: Some(int_ty.clone()),
+            },
+            vec![],
+        )];
+
+        let mut codegen = AstCodeGen::new();
+        codegen
+            .fn_template_keys_by_leaf
+            .insert("swap".to_string(), vec!["swap".to_string()]);
+        let template_info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Named("T".to_string()),
+            params: vec![("value".to_string(), CppType::Named("T".to_string()))],
+            body: None,
+            is_noexcept: false,
+        };
+        codegen
+            .fn_template_definitions
+            .insert("swap".to_string(), template_info.clone());
+        codegen.pending_fn_instantiations.insert(
+            "swap_i32".to_string(),
+            (
+                "swap".to_string(),
+                vec!["i32".to_string()],
+                template_info,
+            ),
+        );
+
+        assert!(
+            !codegen
+                .fn_template_inference_shape_cache
+                .borrow()
+                .contains_key("swap"),
+            "test precondition expects cold inference-shape cache entry"
+        );
+
+        let resolved = codegen.resolve_fn_template_call_name_from_args(&call_callee, &call_args);
+        assert_eq!(
+            resolved.as_deref(),
+            Some("swap_i32"),
+            "resolver should still resolve the template call on cold cache paths"
+        );
+        assert!(
+            codegen
+                .fn_template_inference_shape_cache
+                .borrow()
+                .contains_key("swap"),
+            "resolver candidate matching should warm inference-shape cache entries on cold paths"
+        );
+    }
+
+    #[test]
     fn test_resolve_fn_template_call_name_from_args_reuses_prewarmed_inference_shape_cache(
     ) {
         let int_ty = CppType::Int { signed: true };
@@ -120500,7 +120574,7 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
         codegen
             .fn_template_definitions
             .insert("swap".to_string(), template_info.clone());
-        codegen.fn_template_inference_shape_cache.insert(
+        codegen.fn_template_inference_shape_cache.borrow_mut().insert(
             "swap".to_string(),
             std::sync::Arc::new(FnTemplateInferenceShape {
                 template_param_first_param_positions: vec![Some(0)],

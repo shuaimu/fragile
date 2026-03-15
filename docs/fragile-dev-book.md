@@ -15781,3 +15781,98 @@ front blocker.
 - Python suite:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
   - `Ran 34 tests`, `OK`, `skipped=1`
+
+## 2026-03-15: Leaf 2.6.d.b.ii.c.c.iv (a-c) timeout telemetry + resolver cache warm-path
+
+### Context
+
+After `2.6.d.b.ii.c.c.iii`, strict build remained timeout-bound on
+`src/rrr/base/misc.cpp` (`lane_fragilec_build_status=124`), so the next loop
+iteration required telemetry-first hotspot ranking before another generic
+hot-path change.
+
+### Wrong-approach check
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+
+- no target-specific (`mako`/`rpc`) conditionals,
+- no force-native/source bypasses,
+- no fake method bodies or semantic stubs,
+- no rollback-pattern expansion.
+
+### Telemetry capture (iv.a)
+
+Captured strict replay telemetry on the current blocker root
+`/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iii_build_only_20260315_v2`:
+
+- `FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_a_stage_timing_120_v2.txt`
+- `FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_a_callshape_profile_120_v2.txt`
+- same paths with `_300_v2`, replay timeout `300`
+- command: `python3 scripts/mako_rpc_compile_blocker_replay.py --run-root ... --lanes fragilec --max-replays 1 --timeout-seconds {120,300}`
+
+Findings:
+
+- stage timing completes export/parse/enrichment in both windows, then enters
+  `codegen`;
+- callshape profile progresses to
+  `codegen_after_template_collection` (`120`) and
+  `codegen_after_template_instantiation_generation` (`300`);
+- replay remains timeout-bound (`replay_01_status=124`,
+  `replay_01_first_failure_class=build_timeout`,
+  blocker `src/rrr/base/misc.cpp`).
+
+Selected iteration target: reduce cold-path function-template resolver churn by
+ensuring inference-shape metadata is warmed/reused in resolver candidate loops.
+
+### Generic fix + focused regression (iv.b)
+
+Implemented in `crates/fragile-clang/src/ast_codegen.rs`:
+
+- changed `fn_template_inference_shape_cache` to
+  `RefCell<HashMap<String, Arc<FnTemplateInferenceShape>>>`,
+- updated `fn_template_inference_shape` to work through `&self`,
+- warmed inference-shape cache in
+  `resolve_fn_template_call_name_from_args` candidate matching.
+
+Added/updated focused tests:
+
+- `test_resolve_fn_template_call_name_from_args_warms_inference_shape_cache_on_cold_path`
+- cache mutation assertions updated for borrow-based cache access in existing
+  inference/invalidation tests.
+
+Validation:
+
+- `cargo test -p fragile-clang test_resolve_fn_template_call_name_from_args_ -- --nocapture`
+  (`11 passed`, `0 failed`).
+
+### Strict replay + non-increase gate (iv.c)
+
+Post-change strict replay root:
+`/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_c_build_only_20260315_v1`
+
+- build-only lane:
+  - `lane_fragilec_configure_status=0`
+  - `lane_fragilec_clean_status=0`
+  - `lane_fragilec_build_status=124`
+  - `lane_fragilec_failure_class=build_timeout`
+- inventory non-increase vs baseline
+  `/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iii_build_only_20260315_v2/rpc_compile_blocker_inventory_manifest.txt`:
+  - `lane_fragilec_class_rank_delta_vs_baseline=0`
+  - `lane_fragilec_e0425_delta_vs_baseline=0`
+  - `nonincrease_gate_pass=true`
+- focused replay (`--timeout-seconds 300`) remains timeout-bound on
+  `src/rrr/base/misc.cpp` (`replay_01_status=124`,
+  `replay_01_first_failure_class=build_timeout`).
+
+### Full-suite sweeps
+
+- workspace capture:
+  - `python3 scripts/ci_command_capture.py --run-root /tmp/fragile_leaf_2_6d_b_ii_c_c_iv_workspace_20260315_v1 --name workspace_all_targets --inactivity-timeout-seconds 90 --wall-timeout-seconds 1200 --command cargo test --workspace --all-targets`
+  - `status=124`, `timeout_reason=inactivity_timeout`
+  - first failing ids in captured stdout include:
+    `test_e2e_simple_hash_table`, `test_e2e_object_pool`,
+    `test_e2e_simple_graph`, `test_e2e_tokenizer`, `test_e2e_trie`,
+    `test_variadic_template_transpile`, `test_e2e_pthread`
+- Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+  - `Ran 34 tests`, `OK`, `skipped=1`
