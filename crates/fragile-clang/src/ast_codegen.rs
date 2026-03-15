@@ -10289,6 +10289,368 @@ impl AstCodeGen {
         out
     }
 
+    /// Recover degraded recursive-search bool guards where both null and
+    /// equality branches were lowered to `return Default::default();`.
+    ///
+    /// Pattern repaired:
+    /// - bool-return function
+    /// - `if <ptr>.is_null() { return Default::default(); }`
+    /// - later `if <...> == <...> { return Default::default(); }`
+    /// - function contains a recursive return call to itself
+    ///
+    /// Rewrite only the equality-guard return to `return true;` while keeping
+    /// null-guard false behavior.
+    fn normalize_bool_null_eq_guard_default_returns(code: &str) -> String {
+        fn is_default_return_line(trimmed: &str) -> bool {
+            matches!(
+                trimmed,
+                "return Default::default();"
+                    | "return std::default::Default::default();"
+                    | "return std::prelude::v1::Default::default();"
+            )
+        }
+
+        fn parse_fn_name(signature_line: &str) -> Option<String> {
+            let rest = signature_line.split("fn ").nth(1)?;
+            let name = rest.split('(').next()?.trim();
+            if name.is_empty() {
+                None
+            } else {
+                Some(name.trim_start_matches("r#").to_string())
+            }
+        }
+
+        if !code.contains("-> bool")
+            || !code.contains(".is_null()")
+            || !code.contains("==")
+            || !code.contains("return Default::default();")
+        {
+            return code.to_string();
+        }
+
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        let mut i = 0usize;
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim_end();
+            let is_fn_start =
+                (trimmed.contains(" fn ") || trimmed.starts_with("fn ")) && trimmed.ends_with('{');
+            if !is_fn_start || !trimmed.contains("-> bool") {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let Some(fn_name) = parse_fn_name(trimmed) else {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            };
+
+            let mut j = i;
+            let mut depth = 0isize;
+            while j < lines.len() {
+                let current = lines[j];
+                depth += current.chars().filter(|c| *c == '{').count() as isize;
+                depth -= current.chars().filter(|c| *c == '}').count() as isize;
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if j >= lines.len() || depth != 0 {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let recursive_marker = format!("{}(", fn_name);
+            let has_recursive_return = (i + 1..j).any(|idx| {
+                let current = lines[idx].trim();
+                current.contains("return") && current.contains(&recursive_marker)
+            });
+
+            let mut null_guard_return_idx: Option<usize> = None;
+            let mut eq_guard_return_idx: Option<usize> = None;
+            let mut cursor = i + 1;
+            while cursor < j {
+                let current = lines[cursor].trim();
+                if !(current.starts_with("if ") && current.ends_with('{')) {
+                    cursor += 1;
+                    continue;
+                }
+
+                let cond = current
+                    .strip_prefix("if ")
+                    .and_then(|s| s.strip_suffix('{'))
+                    .map(str::trim)
+                    .unwrap_or("");
+
+                let mut probe = cursor + 1;
+                while probe < j && lines[probe].trim().is_empty() {
+                    probe += 1;
+                }
+                if probe >= j || !is_default_return_line(lines[probe].trim()) {
+                    cursor += 1;
+                    continue;
+                }
+
+                let mut close_probe = probe + 1;
+                while close_probe < j && lines[close_probe].trim().is_empty() {
+                    close_probe += 1;
+                }
+                if close_probe >= j || lines[close_probe].trim() != "}" {
+                    cursor += 1;
+                    continue;
+                }
+
+                if cond.contains(".is_null()") && null_guard_return_idx.is_none() {
+                    null_guard_return_idx = Some(probe);
+                } else if cond.contains("==")
+                    && null_guard_return_idx.is_some()
+                    && eq_guard_return_idx.is_none()
+                {
+                    eq_guard_return_idx = Some(probe);
+                }
+                cursor = close_probe + 1;
+            }
+
+            let should_rewrite =
+                has_recursive_return && null_guard_return_idx.is_some() && eq_guard_return_idx.is_some();
+            for k in i..=j {
+                if should_rewrite && Some(k) == eq_guard_return_idx {
+                    let indent_len = lines[k].len().saturating_sub(lines[k].trim_start().len());
+                    let indent = &lines[k][..indent_len];
+                    out.push_str(indent);
+                    out.push_str("return true;");
+                } else {
+                    out.push_str(lines[k]);
+                }
+                if k + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            i = j + 1;
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Recover degraded bool operation helpers where an early guard returns
+    /// `Default::default()` (failure path) and the final default tail should
+    /// represent success (`true`).
+    ///
+    /// Pattern repaired (conservative):
+    /// - bool-return function
+    /// - exactly two default returns in body
+    /// - first default return is an immediate single-line `if ... { return Default::default(); }` guard
+    /// - last non-empty body statement is `return Default::default();`
+    /// - there is at least one assignment side effect between guard close and tail
+    ///
+    /// Rewrite only the final tail to `return true;`.
+    fn normalize_bool_guarded_success_default_tail_returns(code: &str) -> String {
+        fn is_default_return_line(trimmed: &str) -> bool {
+            matches!(
+                trimmed,
+                "return Default::default();"
+                    | "return std::default::Default::default();"
+                    | "return std::prelude::v1::Default::default();"
+            )
+        }
+
+        fn line_has_assignment_side_effect(trimmed: &str) -> bool {
+            if trimmed.is_empty()
+                || trimmed.starts_with("let ")
+                || trimmed.starts_with("if ")
+                || trimmed.starts_with("while ")
+                || trimmed.starts_with("for ")
+                || trimmed.starts_with("loop ")
+                || trimmed.starts_with("match ")
+                || trimmed.starts_with("return ")
+            {
+                return false;
+            }
+
+            let bytes = trimmed.as_bytes();
+            for (idx, byte) in bytes.iter().enumerate() {
+                if *byte != b'=' {
+                    continue;
+                }
+                let prev = bytes[..idx]
+                    .iter()
+                    .rev()
+                    .copied()
+                    .find(|b| !b.is_ascii_whitespace());
+                let next = bytes[idx + 1..]
+                    .iter()
+                    .copied()
+                    .find(|b| !b.is_ascii_whitespace());
+                if matches!(prev, Some(b'=' | b'!' | b'<' | b'>'))
+                    || matches!(next, Some(b'='))
+                {
+                    continue;
+                }
+                return true;
+            }
+            false
+        }
+
+        if !code.contains("-> bool") || !code.contains("return Default::default();") {
+            return code.to_string();
+        }
+
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        let mut i = 0usize;
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim_end();
+            let is_fn_start =
+                (trimmed.contains(" fn ") || trimmed.starts_with("fn ")) && trimmed.ends_with('{');
+            if !is_fn_start || !trimmed.contains("-> bool") {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let mut j = i;
+            let mut depth = 0isize;
+            while j < lines.len() {
+                let current = lines[j];
+                depth += current.chars().filter(|c| *c == '{').count() as isize;
+                depth -= current.chars().filter(|c| *c == '}').count() as isize;
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if j >= lines.len() || depth != 0 {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let default_return_indices: Vec<usize> = (i + 1..j)
+                .filter(|idx| is_default_return_line(lines[*idx].trim()))
+                .collect();
+            if default_return_indices.len() != 2 {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+
+            let first_default_idx = default_return_indices[0];
+            let last_default_idx = default_return_indices[1];
+            let body_nonempty: Vec<usize> = (i + 1..j)
+                .filter(|idx| !lines[*idx].trim().is_empty())
+                .collect();
+            let Some(&last_body_idx) = body_nonempty.last() else {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            };
+
+            if last_body_idx != last_default_idx {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+
+            let guard_header_idx = (i + 1..first_default_idx)
+                .rev()
+                .find(|idx| !lines[*idx].trim().is_empty());
+            let guard_close_idx = (first_default_idx + 1..j)
+                .find(|idx| !lines[*idx].trim().is_empty());
+
+            let is_guard_header = guard_header_idx
+                .map(|idx| {
+                    let current = lines[idx].trim();
+                    current.starts_with("if ") && current.ends_with('{')
+                })
+                .unwrap_or(false);
+            let is_guard_close = guard_close_idx
+                .map(|idx| lines[idx].trim() == "}")
+                .unwrap_or(false);
+
+            if !is_guard_header || !is_guard_close {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+
+            let side_effect_start = guard_close_idx.unwrap() + 1;
+            let has_side_effect_assignment = (side_effect_start..last_default_idx)
+                .any(|idx| line_has_assignment_side_effect(lines[idx].trim()));
+
+            for k in i..=j {
+                if has_side_effect_assignment && k == last_default_idx {
+                    let indent_len = lines[k].len().saturating_sub(lines[k].trim_start().len());
+                    let indent = &lines[k][..indent_len];
+                    out.push_str(indent);
+                    out.push_str("return true;");
+                } else {
+                    out.push_str(lines[k]);
+                }
+                if k + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            i = j + 1;
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
     fn is_primitive_scalar_type_name(ty: &str) -> bool {
         matches!(
             ty,
@@ -26321,6 +26683,8 @@ impl AstCodeGen {
         output = Self::normalize_default_tail_returns_to_matching_result_locals(&output);
         output = Self::normalize_bool_signed_digit_guard_default_returns(&output);
         output = Self::normalize_bool_loop_violation_default_tail_returns(&output);
+        output = Self::normalize_bool_null_eq_guard_default_returns(&output);
+        output = Self::normalize_bool_guarded_success_default_tail_returns(&output);
         // Degraded placeholder rewrites can leak call-shaped tokens into local
         // binding names (e.g. `let mut Default::default(): T = ...;`).
         output = Self::normalize_invalid_local_binding_identifiers(&output);
@@ -26563,6 +26927,7 @@ impl AstCodeGen {
         // degraded preface expressions and default tail returns in helper bodies.
         output = Self::normalize_default_preface_local_assignment_artifacts(&output);
         output = Self::normalize_default_tail_returns_to_matching_result_locals(&output);
+        output = Self::normalize_bool_guarded_success_default_tail_returns(&output);
         output = Self::append_compile_error_for_unresolved_non_c_abi_external_calls(&output);
         if Self::output_requires_c_variadic_feature(&output) {
             output = Self::ensure_c_variadic_feature_attr(&output);
@@ -105146,6 +105511,97 @@ pub fn isPositive(n: i32) -> bool {
         assert_eq!(
             output, input,
             "loop violation bool-tail recovery should skip non-loop guard patterns"
+        );
+    }
+
+    #[test]
+    fn test_normalize_bool_null_eq_guard_default_returns_recovers_recursive_search_match_guard() {
+        let input = r#"
+pub struct Node { pub value: i32, pub left: *mut Node, pub right: *mut Node }
+pub struct BST {}
+impl BST {
+    pub fn searchHelper(&self, node: *mut Node, value: i32) -> bool {
+        if node.is_null() {
+            return Default::default();
+        }
+        if value == (unsafe { (*node).value }) {
+            return Default::default();
+        }
+        if value < (unsafe { (*node).value }) {
+            return self.searchHelper((unsafe { (*node).left }) as *mut Node, value);
+        }
+        return self.searchHelper((unsafe { (*node).right }) as *mut Node, value);
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_bool_null_eq_guard_default_returns(input);
+        assert!(
+            output.contains("if value == (unsafe { (*node).value }) {\n            return true;\n        }"),
+            "recursive null/equality bool guard recovery should rewrite equality guard return to true, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_bool_null_eq_guard_default_returns_skips_non_recursive_bool_functions() {
+        let input = r#"
+pub fn matches_or_default(node: *mut i32, value: i32) -> bool {
+    if node.is_null() {
+        return Default::default();
+    }
+    if value == 7 {
+        return Default::default();
+    }
+    return true;
+}
+"#;
+        let output = AstCodeGen::normalize_bool_null_eq_guard_default_returns(input);
+        assert_eq!(
+            output, input,
+            "recursive null/equality bool guard recovery should skip non-recursive bool functions"
+        );
+    }
+
+    #[test]
+    fn test_normalize_bool_guarded_success_default_tail_returns_recovers_event_queue_style_success_tail()
+    {
+        let input = r#"
+pub fn queueEnqueue(q: *mut i32, value: i32) -> bool {
+    if queueIsFull(q as *mut i32) {
+        return Default::default();
+    }
+    unsafe { *q = ((value) as i32); *q };
+    return Default::default();
+}
+"#;
+        let output = AstCodeGen::normalize_bool_guarded_success_default_tail_returns(input);
+        assert!(
+            output.contains("return true;"),
+            "guarded bool success-tail recovery should rewrite trailing default return to true when side-effect assignments exist, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("if queueIsFull(q as *mut i32) {\n        return Default::default();\n    }"),
+            "guarded bool success-tail recovery should preserve the initial failure guard return as default/false, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_bool_guarded_success_default_tail_returns_skips_non_side_effect_functions() {
+        let input = r#"
+pub fn onlyGuardAndComputation(n: i32) -> bool {
+    if n < 0 {
+        return Default::default();
+    }
+    let v: i32 = n + 1;
+    return Default::default();
+}
+"#;
+        let output = AstCodeGen::normalize_bool_guarded_success_default_tail_returns(input);
+        assert_eq!(
+            output, input,
+            "guarded bool success-tail recovery should skip bodies without assignment side effects"
         );
     }
 

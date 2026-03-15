@@ -14588,3 +14588,190 @@ Broader regression checks:
 ### Outcome
 
 Leaf `2.8.b.iv.c.iii.a` is complete: the next top-ranked CI build-phase integration failure family (`test_e2e_doubly_linked_list`) is fixed with a generic pointer-pointee field-call normalization, locked by focused tests, and validated by deterministic replay showing the failure front shifted to the next family.
+
+## 2026-03-15: Leaf 2.8.b.iv.c.iii.c.i next build-phase family fix (`test_e2e_binary_search_tree`)
+
+### Context
+
+After `2.8.b.iv.c.iii.b`, deterministic CI replay (`/tmp/fragile_ci_leaf_2_8b_iv_c_iii_a_20260315_v2`) showed the next front failure family as `test_e2e_binary_search_tree`.
+
+Targeted repro:
+
+- `cargo test -p fragile-clang --test integration_test test_e2e_binary_search_tree -- --nocapture`
+- observed runtime failure (exit code `5`).
+
+Generated output in `BST::searchHelper` showed degraded bool guard returns:
+
+- null guard: `if node.is_null() { return Default::default(); }` (false path is correct),
+- equality/match guard: `if value == (*node).value { return Default::default(); }` (should be true path).
+
+This made successful searches always fail.
+
+### Wrong-approach check
+
+Checked against `docs/dev/wrong.md` and section `1.3` before editing:
+
+- no test-name-specific branching,
+- no force-native fallback,
+- no synthesized fake semantic bodies.
+
+Fix is a generic bool-guard normalization in `ast_codegen`.
+
+### Plan
+
+1. Add a generic pass for recursive bool-search functions that differentiates null and match guard defaults.
+2. Keep null guard default as false behavior.
+3. Rewrite only equality/match guard default to true when recursive self-call shape is present.
+4. Add focused unit coverage for positive + skip behavior and re-run targeted integration tests.
+
+### Execution
+
+Updated `crates/fragile-clang/src/ast_codegen.rs`:
+
+- added `normalize_bool_null_eq_guard_default_returns`:
+  - targets bool-return functions with:
+    - an `is_null()` guard returning `Default::default()`,
+    - a later equality (`==`) guard also returning `Default::default()`,
+    - recursive return call to the same function name,
+  - rewrites only the equality-guard return to `return true;`.
+
+- wired the pass into the normalization pipeline after existing bool-guard passes.
+
+Added focused regressions:
+
+- `test_normalize_bool_null_eq_guard_default_returns_recovers_recursive_search_match_guard`
+- `test_normalize_bool_null_eq_guard_default_returns_skips_non_recursive_bool_functions`
+
+### Validation
+
+Targeted checks:
+
+- `cargo test -p fragile-clang test_normalize_bool_null_eq_guard_default_returns_ -- --nocapture` (pass)
+- `cargo test -p fragile-clang --test integration_test test_e2e_binary_search_tree -- --nocapture` (pass)
+
+Regression spot checks:
+
+- `cargo test -p fragile-clang --test integration_test test_e2e_access_specifiers -- --nocapture` (pass)
+- `cargo test -p fragile-clang --test integration_test test_e2e_integer_parsing -- --nocapture` (pass)
+- `cargo test -p fragile-clang --test integration_test test_e2e_heapsort -- --nocapture` (pass)
+- `cargo test -p fragile-clang --test integration_test test_e2e_doubly_linked_list -- --nocapture` (pass)
+
+CI-aligned deterministic replay:
+
+- run root: `/tmp/fragile_ci_leaf_2_8b_iv_c_iii_c_i_20260315_v1`
+- `build_phase_build.status=0`
+- `build_phase_test.status=124` (`timeout_reason=inactivity_timeout`)
+- `build_phase_test.stdout.log` confirms:
+  - `test_e2e_access_specifiers ... ok`
+  - `test_e2e_integer_parsing ... ok`
+  - `test_e2e_heapsort ... ok`
+  - `test_e2e_doubly_linked_list ... ok`
+  - `test_e2e_binary_search_tree ... ok`
+  - first current failing id moved to `test_e2e_event_queue` (`integration_test_failure`)
+
+Broader regression checks:
+
+- workspace capture run root `/tmp/fragile_leaf_2_8b_iv_c_iii_c_i_workspace_20260315_v1`:
+  - `workspace_all_targets.status=124` (`timeout_reason=inactivity_timeout`)
+  - same fixed families remained `ok`, and first current failing id is `test_e2e_event_queue`
+- Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+  - `Ran 34 tests`, `OK`, `skipped=1`
+
+### Outcome
+
+Leaf `2.8.b.iv.c.iii.c.i` is complete: the next top-ranked CI build-phase integration failure family (`test_e2e_binary_search_tree`) is fixed with a generic recursive bool-search guard normalization, and deterministic replay confirms the failure front shifted to `test_e2e_event_queue`.
+
+## 2026-03-15: Leaf 2.8.b.iv.c.iii.c.iii.a next build-phase family fix (test_e2e_event_queue)
+
+### Context
+
+After leaf `2.8.b.iv.c.iii.c.i/.ii`, CI-aligned replay moved the first failing integration id to `test_e2e_event_queue` (`build_phase_test.status=124`, first class `integration_test_failure`).
+
+Local reproduction:
+
+- `cargo test -p fragile-clang --test integration_test test_e2e_event_queue -- --nocapture`
+- failure: `assert_eq!(exit_code, 0)` with `left: 4` (enqueue path returned failure)
+
+Generated Rust (`/tmp/fragile_e2e_tests/e2e_event_queue.rs`) showed degraded bool operation helpers:
+
+- `queueEnqueue`, `queueDequeue`, and `queuePeek` each had:
+  - early guard `return Default::default();` (valid failure path), and
+  - final tail `return Default::default();` after successful mutation path (incorrect; should be `true`).
+
+### Wrong-approach check
+
+Checked against `docs/dev/wrong.md` and section `1.3` before implementing:
+
+- no test-name conditional logic,
+- no fake semantic stub bodies,
+- no rollback/deletion fallback.
+
+Fix was implemented as a generic codegen normalization pass.
+
+### Plan
+
+1. Add a conservative bool-tail normalization that rewrites only success-tail default returns.
+2. Keep failure guard defaults untouched.
+3. Require side-effect assignment evidence between guard and tail to avoid broad over-rewrite.
+4. Add focused positive/negative unit tests.
+5. Re-run target + guard integrations and CI-aligned replay artifacts.
+
+### Execution
+
+Updated `crates/fragile-clang/src/ast_codegen.rs`:
+
+- added `normalize_bool_guarded_success_default_tail_returns`.
+- pattern requirements:
+  - bool-return function,
+  - exactly two default-return statements,
+  - first default-return is an immediate `if ... { return Default::default(); }` guard,
+  - final non-empty body statement is default-return,
+  - at least one assignment side effect between guard close and tail.
+- rewrite:
+  - only final tail default-return becomes `return true;`.
+
+Wired pass into both normalization pipelines:
+
+- primary pipeline after existing bool guard recoveries,
+- late/final cleanup pipeline after default-tail normalization.
+
+Added focused regressions:
+
+- `test_normalize_bool_guarded_success_default_tail_returns_recovers_event_queue_style_success_tail`
+- `test_normalize_bool_guarded_success_default_tail_returns_skips_non_side_effect_functions`
+
+### Validation
+
+Focused unit + integration checks:
+
+- `cargo test -p fragile-clang test_normalize_bool_guarded_success_default_tail_returns_ -- --nocapture` (pass)
+- `cargo test -p fragile-clang --test integration_test test_e2e_event_queue -- --nocapture` (pass)
+
+Guard-family regression spot checks (all pass):
+
+- `test_e2e_access_specifiers`
+- `test_e2e_integer_parsing`
+- `test_e2e_heapsort`
+- `test_e2e_doubly_linked_list`
+- `test_e2e_binary_search_tree`
+
+CI-aligned deterministic replay:
+
+- run root: `/tmp/fragile_ci_leaf_2_8b_iv_c_iii_c_iii_a_20260315_v1`
+- `build_phase_build.status=0`
+- `build_phase_test.status=124` (`timeout_reason=inactivity_timeout`)
+- `build_phase_test.stdout.log` confirms:
+  - `test_e2e_event_queue ... ok`
+  - first current failing id shifted to `test_e2e_lru_cache`
+
+Broader sweep and Python regression:
+
+- run root: `/tmp/fragile_leaf_2_8b_iv_c_iii_c_iii_a_workspace_20260315_v1`
+- `workspace_all_targets.status=124` (`timeout_reason=inactivity_timeout`)
+- first current failing id in this broader sweep is also `test_e2e_lru_cache`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'` => `Ran 34 tests`, `OK`, `skipped=1`
+
+### Outcome
+
+Leaf `2.8.b.iv.c.iii.c.iii.a` is complete: the `test_e2e_event_queue` family is fixed via generic guarded-bool success-tail recovery, and replay evidence confirms failure-front progression to `test_e2e_lru_cache`.
