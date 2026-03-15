@@ -82512,6 +82512,7 @@ fn byte_requires_type_sanitization_dispatch(byte: u8) -> bool {
     )
 }
 
+#[cfg(test)]
 fn find_first_type_sanitization_trigger(bytes: &[u8]) -> Option<usize> {
     bytes
         .iter()
@@ -82537,25 +82538,19 @@ fn type_token_is_identifier_clean(ty: &str) -> bool {
 
 fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
     let bytes = ty.as_bytes();
-    let Some(first_trigger_idx) = find_first_type_sanitization_trigger(bytes) else {
-        out.push_str(ty);
-        return;
-    };
-
-    // Prefix before the first trigger byte is unchanged by sanitizer rules.
-    if first_trigger_idx > 0 {
-        out.push_str(&ty[..first_trigger_idx]);
-    }
 
     // Keep legacy replacement semantics but avoid repeated full-string
     // allocations from chained `replace(...)` calls on hot template paths.
-    let mut idx = first_trigger_idx;
+    let mut idx = 0usize;
     while idx < ty.len() {
         // Fast-lane contiguous bytes that sanitizer leaves unchanged.
         let run_end = find_passthrough_run_end(bytes, idx);
         if run_end > idx {
             out.push_str(&ty[idx..run_end]);
             idx = run_end;
+            if idx == bytes.len() {
+                break;
+            }
             continue;
         }
 
@@ -121736,6 +121731,17 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
         assert_eq!(
             out, "Åßçµ_Node",
             "sanitizer should preserve contiguous non-ASCII passthrough spans while rewriting trigger tokens"
+        );
+    }
+
+    #[test]
+    fn test_append_sanitized_type_for_fn_name_preserves_clean_passthrough_token() {
+        let sample = "Åßç_t'plus+hash#";
+        let mut out = String::new();
+        append_sanitized_type_for_fn_name(&mut out, sample);
+        assert_eq!(
+            out, sample,
+            "sanitizer should keep trigger-free passthrough tokens unchanged"
         );
     }
 
