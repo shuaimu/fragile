@@ -82506,42 +82506,65 @@ fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
 
     // Keep legacy replacement semantics but avoid repeated full-string
     // allocations from chained `replace(...)` calls on hot template paths.
+    let bytes = ty.as_bytes();
     let mut idx = 0usize;
     while idx < ty.len() {
-        let rest = &ty[idx..];
-        if rest.starts_with("*mut ") {
-            out.push_str("ptr_mut_");
-            idx += "*mut ".len();
+        let byte = bytes[idx];
+        if byte == b'*' {
+            let rest = &ty[idx..];
+            if rest.starts_with("*mut ") {
+                out.push_str("ptr_mut_");
+                idx += "*mut ".len();
+                continue;
+            }
+            if rest.starts_with("*const ") {
+                out.push_str("ptr_const_");
+                idx += "*const ".len();
+                continue;
+            }
+            out.push_str("ptr_");
+            idx += 1;
             continue;
         }
-        if rest.starts_with("*const ") {
-            out.push_str("ptr_const_");
-            idx += "*const ".len();
-            continue;
-        }
-        if rest.starts_with("::") {
+        if byte == b':' && idx + 1 < bytes.len() && bytes[idx + 1] == b':' {
             out.push('_');
-            idx += "::".len();
+            idx += 2;
             continue;
         }
-        if rest.starts_with("->") {
+        if byte == b'-' && idx + 1 < bytes.len() && bytes[idx + 1] == b'>' {
             // Handle function return type arrow before stripping `>`.
             out.push_str("_ret_");
-            idx += "->".len();
+            idx += 2;
             continue;
         }
+        match byte {
+            b' ' | b'<' | b',' | b'[' | b']' | b';' | b'(' | b')' | b'"' => {
+                out.push('_');
+                idx += 1;
+                continue;
+            }
+            b'>' => {
+                idx += 1;
+                continue;
+            }
+            b'&' => {
+                out.push_str("ref_");
+                idx += 1;
+                continue;
+            }
+            _ if byte.is_ascii() => {
+                out.push(byte as char);
+                idx += 1;
+                continue;
+            }
+            _ => {}
+        }
 
-        let ch = rest
+        let ch = ty[idx..]
             .chars()
             .next()
             .expect("sanitize_type_for_fn_name: idx should always point to a valid char boundary");
-        match ch {
-            '*' => out.push_str("ptr_"),
-            ' ' | '<' | ',' | '[' | ']' | ';' | '(' | ')' | '"' => out.push('_'),
-            '>' => {}
-            '&' => out.push_str("ref_"),
-            _ => out.push(ch),
-        }
+        out.push(ch);
         idx += ch.len_utf8();
     }
 }
@@ -121600,6 +121623,16 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
                 "direct-append sanitizer should preserve standalone sanitizer output for `{sample}`"
             );
         }
+    }
+
+    #[test]
+    fn test_sanitize_type_for_fn_name_preserves_non_ascii_chars() {
+        let sample = "std::Typß";
+        assert_eq!(
+            sanitize_type_for_fn_name(sample),
+            "std_Typß",
+            "non-ASCII chars should remain intact while namespace separators are normalized"
+        );
     }
 
     #[test]
