@@ -10249,6 +10249,14 @@ impl AstCodeGen {
                 while probe < last_body_idx && lines[probe].trim().is_empty() {
                     probe += 1;
                 }
+                let mut has_inner_block = false;
+                if probe < last_body_idx && lines[probe].trim() == "{" {
+                    has_inner_block = true;
+                    probe += 1;
+                    while probe < last_body_idx && lines[probe].trim().is_empty() {
+                        probe += 1;
+                    }
+                }
                 if probe >= last_body_idx || !is_default_return_line(lines[probe].trim()) {
                     cursor += 1;
                     continue;
@@ -10257,6 +10265,16 @@ impl AstCodeGen {
                 let mut close_probe = probe + 1;
                 while close_probe < last_body_idx && lines[close_probe].trim().is_empty() {
                     close_probe += 1;
+                }
+                if has_inner_block {
+                    if close_probe >= last_body_idx || lines[close_probe].trim() != "}" {
+                        cursor += 1;
+                        continue;
+                    }
+                    close_probe += 1;
+                    while close_probe < last_body_idx && lines[close_probe].trim().is_empty() {
+                        close_probe += 1;
+                    }
                 }
                 if close_probe >= last_body_idx || lines[close_probe].trim() != "}" {
                     cursor += 1;
@@ -105808,6 +105826,40 @@ pub fn isSorted(arr: *mut i32, n: i32) -> bool {
         assert!(
             output.contains("return true;"),
             "loop violation bool-tail recovery should rewrite final default tail to true for sorted-predicate style guards, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_bool_loop_violation_default_tail_returns_recovers_nested_guard_block_tail() {
+        let input = r#"
+pub fn isSorted(arr: *mut i32, n: i32) -> bool {
+    {
+        let mut i: i32 = 0;
+        loop {
+            if !(i < n - 1) { break; }
+            {
+                if (unsafe { *arr.add((i) as usize) }) > (unsafe { *arr.add((i + 1) as usize) }) {
+                    {
+                        return Default::default();
+                    }
+                }
+            }
+            { let __v = i; i += 1; __v };
+        }
+    }
+    return Default::default();
+}
+"#;
+        let output = AstCodeGen::normalize_bool_loop_violation_default_tail_returns(input);
+        assert!(
+            output.contains("return true;"),
+            "loop violation bool-tail recovery should rewrite final default tail to true even when guard return is wrapped in an inner block, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("return Default::default();"),
+            "loop violation bool-tail recovery should preserve the violation guard default return, got:\n{}",
             output
         );
     }

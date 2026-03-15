@@ -14947,3 +14947,88 @@ Broader sweep and Python regression:
 ### Outcome
 
 Leaf `2.8.b.iv.c.iii.c.iii.c.c.a` is complete: `test_e2e_assertion_library` is fixed by generic bool guard-chain success-tail recovery, and deterministic replay confirms failure-front progression to `test_e2e_merge_sort`.
+
+## 2026-03-15: Leaf 2.8.b.iv.c.iii.c.iii.c.c.c.a next build-phase family fix (test_e2e_merge_sort)
+
+### Context
+
+After leaf `2.8.b.iv.c.iii.c.iii.c.c.b`, CI-aligned replay moved the first failing integration id to `test_e2e_merge_sort`.
+
+Targeted repro:
+
+- `cargo test -p fragile-clang --test integration_test test_e2e_merge_sort -- --nocapture`
+- runtime mismatch: binary exits `1` (expected `0`).
+
+Generated output inspection for `/tmp/fragile_e2e_tests/e2e_merge_sort.rs` showed `isSorted` lowered to:
+
+- loop violation guard with nested return block:
+  - `if (...) > (...) { { return Default::default(); } }`
+- final tail:
+  - `return Default::default();`
+
+The existing `normalize_bool_loop_violation_default_tail_returns` handled direct guard-return forms but not nested guard-return blocks, so it missed this shape.
+
+### Wrong-approach check
+
+Checked against `docs/dev/wrong.md` and section `1.3` before edits:
+
+- no benchmark/test-name-specific branch logic,
+- no semantic stub/fallback bodies,
+- no force-native bypass.
+
+Fix is a generic normalization improvement for degraded bool loop-guard return shapes.
+
+### Plan
+
+1. Extend loop-violation bool-tail recovery to accept one nested guard block around default-return.
+2. Add focused unit regression that captures nested guard-return form.
+3. Re-run targeted merge-sort integration test.
+4. Re-run deterministic CI/workspace captures and Python suite.
+
+### Execution
+
+Updated `crates/fragile-clang/src/ast_codegen.rs`:
+
+- enhanced `normalize_bool_loop_violation_default_tail_returns`:
+  - after matching a violation `if ... {`,
+  - allows an optional inner `{ ... }` block before the default-return,
+  - preserves guard default-return semantics,
+  - still rewrites only the final tail default-return to `return true;`.
+
+Added focused regression:
+
+- `test_normalize_bool_loop_violation_default_tail_returns_recovers_nested_guard_block_tail`
+
+Also revalidated existing pass behaviors:
+
+- `test_normalize_bool_loop_violation_default_tail_returns_recovers_sorted_predicate_tail`
+- `test_normalize_bool_loop_violation_default_tail_returns_skips_non_loop_guards`
+
+### Validation
+
+Focused checks:
+
+- `cargo test -p fragile-clang test_normalize_bool_loop_violation_default_tail_returns_ -- --nocapture` (pass)
+- `cargo test -p fragile-clang --test integration_test test_e2e_merge_sort -- --nocapture` (pass)
+
+Deterministic CI-aligned replay:
+
+- run root: `/tmp/fragile_ci_leaf_2_8b_iv_c_iii_c_iii_c_c_c_a_20260315_v1`
+- `build_phase_build.status=0`
+- `build_phase_test.status=124` (`timeout_reason=inactivity_timeout`)
+- `build_phase_test.stdout.log` confirms:
+  - `test_e2e_merge_sort ... ok`
+  - first current failing id shifted to `test_e2e_prime_sieve`.
+
+Broader sweep and Python regression:
+
+- run root: `/tmp/fragile_leaf_2_8b_iv_c_iii_c_iii_c_c_c_a_workspace_20260315_v1`
+  - `workspace_all_targets.status=124` (`timeout_reason=inactivity_timeout`)
+  - first current failing id `test_e2e_prime_sieve`.
+- Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+  - `Ran 34 tests`, `OK`, `skipped=1`.
+
+### Outcome
+
+Leaf `2.8.b.iv.c.iii.c.iii.c.c.c.a` is complete: `test_e2e_merge_sort` is fixed via generic nested-guard loop-violation bool-tail recovery, and deterministic replay confirms failure-front progression to `test_e2e_prime_sieve`.
