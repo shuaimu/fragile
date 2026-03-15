@@ -15282,3 +15282,68 @@ Python suite:
 ### Outcome
 
 Leaf `2.8.b.iv.c.iii.c.iii.c.c.c.c.c.c.a` is complete: `test_e2e_ring_buffer` is fixed by generic raw-pointer receiver normalization plus function-scoped array-add rewriting, and deterministic replay advances the front failure to `test_e2e_recursive_algorithms`.
+
+## 2026-03-15: Leaf 2.8.b.iv.c.iii.c.iii.c.c.c.c.c.c.c.a next build-phase family fix (test_e2e_recursive_algorithms)
+
+### Context
+
+After leaf `2.8.b.iv.c.iii.c.iii.c.c.c.c.c.c.b`, CI/workspace deterministic replays moved the first failing integration id to `test_e2e_recursive_algorithms`.
+
+Targeted repro:
+
+- `cargo test -p fragile-clang --test integration_test test_e2e_recursive_algorithms -- --nocapture`
+- Failure observed in generated recursive algorithm output where `return base;` in the exponent base-case degraded into `return Default::default();`.
+
+### Root cause
+
+The post-normalization pass `normalize_nonprimitive_local_return_casts` collected non-primitive local identifiers globally across the whole file, then rewrote return-cast lines by identifier match.
+
+This allowed cross-function name collisions (for example `base`) to poison unrelated functions, causing primitive-return branches to be rewritten as default returns.
+
+### Wrong-approach check
+
+Checked against `docs/dev/wrong.md` and section `1.3` before edits:
+
+- no target-specific branch for recursive algorithms,
+- no semantic stubs/fake bodies,
+- no parser-backend/runtime bypass.
+
+Fix is generic pass scoping correctness in codegen normalization.
+
+### Execution
+
+Updated `crates/fragile-clang/src/ast_codegen.rs`:
+
+- `normalize_nonprimitive_local_return_casts` now scopes non-primitive local collection and rewrite application per function body instead of file-global identifier sets.
+
+Added focused regression:
+
+- `test_normalize_nonprimitive_local_return_casts_scopes_nonprimitive_locals_per_function`
+
+### Validation
+
+Focused checks:
+
+- `cargo test -p fragile-clang test_normalize_nonprimitive_local_return_casts_scopes_nonprimitive_locals_per_function -- --nocapture` (pass)
+- `cargo test -p fragile-clang --test integration_test test_e2e_recursive_algorithms -- --nocapture` (pass)
+
+Deterministic CI/workspace replays:
+
+- CI run root: `/tmp/fragile_ci_leaf_2_8b_iv_c_iii_c_iii_c_c_c_c_c_c_c_a_20260315_v1`
+  - `build_phase_build.status=0`
+  - `build_phase_test.status=124` (`timeout_reason=inactivity_timeout`)
+  - `test_e2e_recursive_algorithms ... ok`
+  - first current failing id: `test_e2e_object_pool`.
+- Workspace run root: `/tmp/fragile_leaf_2_8b_iv_c_iii_c_iii_c_c_c_c_c_c_c_a_workspace_20260315_v1`
+  - `workspace_all_targets.status=124` (`timeout_reason=inactivity_timeout`)
+  - `test_e2e_recursive_algorithms ... ok`
+  - first current failing id: `test_e2e_object_pool`.
+
+Python suite:
+
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+- `Ran 34 tests`, `OK`, `skipped=1`.
+
+### Outcome
+
+Leaf `2.8.b.iv.c.iii.c.iii.c.c.c.c.c.c.c.a` is complete: the recursive-algorithms regression is fixed via generic per-function scoping in return-cast normalization, and deterministic replay advances the front failure to `test_e2e_object_pool`.

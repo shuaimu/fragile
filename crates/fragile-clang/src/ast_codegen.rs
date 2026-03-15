@@ -32799,63 +32799,110 @@ impl FragileAtomicBoolCompat for atomic_bool {
             )
         }
 
-        let mut typed_nonprimitive_locals: HashSet<String> = HashSet::new();
-        for line in code.lines() {
-            let trimmed = line.trim();
-            if !(trimmed.starts_with("let ") && trimmed.contains(':') && trimmed.contains('=')) {
-                continue;
-            }
-            let after_let = trimmed
-                .strip_prefix("let mut ")
-                .or_else(|| trimmed.strip_prefix("let "));
-            let Some(after_let) = after_let else {
-                continue;
-            };
-            let name: String = after_let
-                .chars()
-                .take_while(|c| AstCodeGen::is_identifier_char(*c))
-                .collect();
-            if name.is_empty() {
-                continue;
-            }
-            let Some((_, rhs)) = trimmed.split_once(':') else {
-                continue;
-            };
-            let ty = rhs.split('=').next().unwrap_or(rhs).trim();
-            if ty.is_empty()
-                || is_primitive_type_name(ty)
-                || ty.starts_with('*')
-                || ty.starts_with('&')
-            {
-                continue;
-            }
-            typed_nonprimitive_locals.insert(name);
-        }
-
-        if typed_nonprimitive_locals.is_empty() && !code.contains("return (super::to_string(") {
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
             return code.to_string();
         }
 
         let mut out = String::with_capacity(code.len());
-        for line in code.lines() {
-            let mut rewritten = line.to_string();
-            let trimmed = line.trim();
-            if let Some(inner) = trimmed.strip_prefix("return (") {
-                if let Some(cast_pos) = inner.find(") as ") {
-                    let expr = inner[..cast_pos].trim();
-                    if typed_nonprimitive_locals.contains(expr)
-                        || expr.contains("super::to_string(")
-                        || expr.contains("std::to_string(")
-                    {
-                        let indent_len = line.len().saturating_sub(line.trim_start().len());
-                        rewritten = format!("{}return Default::default();", &line[..indent_len]);
+        let mut i = 0usize;
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim_end();
+            let is_fn_start =
+                (trimmed.contains(" fn ") || trimmed.starts_with("fn ")) && trimmed.ends_with('{');
+            if !is_fn_start {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let mut j = i;
+            let mut depth = 0isize;
+            while j < lines.len() {
+                let current = lines[j];
+                depth += current.chars().filter(|c| *c == '{').count() as isize;
+                depth -= current.chars().filter(|c| *c == '}').count() as isize;
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if j >= lines.len() || depth != 0 {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let mut typed_nonprimitive_locals: HashSet<String> = HashSet::new();
+            for body_line in &lines[i + 1..j] {
+                let trimmed = body_line.trim();
+                if !(trimmed.starts_with("let ") && trimmed.contains(':') && trimmed.contains('=')) {
+                    continue;
+                }
+                let after_let = trimmed
+                    .strip_prefix("let mut ")
+                    .or_else(|| trimmed.strip_prefix("let "));
+                let Some(after_let) = after_let else {
+                    continue;
+                };
+                let name: String = after_let
+                    .chars()
+                    .take_while(|c| AstCodeGen::is_identifier_char(*c))
+                    .collect();
+                if name.is_empty() {
+                    continue;
+                }
+                let Some((_, rhs)) = trimmed.split_once(':') else {
+                    continue;
+                };
+                let ty = rhs.split('=').next().unwrap_or(rhs).trim();
+                if ty.is_empty()
+                    || is_primitive_type_name(ty)
+                    || ty.starts_with('*')
+                    || ty.starts_with('&')
+                {
+                    continue;
+                }
+                typed_nonprimitive_locals.insert(name);
+            }
+
+            out.push_str(lines[i]);
+            out.push('\n');
+            for k in i + 1..j {
+                let body_line = lines[k];
+                let mut rewritten = body_line.to_string();
+                let trimmed_body = body_line.trim();
+                if let Some(inner) = trimmed_body.strip_prefix("return (") {
+                    if let Some(cast_pos) = inner.find(") as ") {
+                        let expr = inner[..cast_pos].trim();
+                        if typed_nonprimitive_locals.contains(expr)
+                            || expr.contains("super::to_string(")
+                            || expr.contains("std::to_string(")
+                        {
+                            let indent_len =
+                                body_line.len().saturating_sub(body_line.trim_start().len());
+                            rewritten =
+                                format!("{}return Default::default();", &body_line[..indent_len]);
+                        }
                     }
                 }
+                out.push_str(&rewritten);
+                out.push('\n');
             }
-            out.push_str(&rewritten);
-            out.push('\n');
+            out.push_str(lines[j]);
+            if j + 1 < lines.len() || code.ends_with('\n') {
+                out.push('\n');
+            }
+            i = j + 1;
         }
-        if !code.ends_with('\n') && !out.is_empty() {
+        if !code.ends_with('\n') && out.ends_with('\n') {
             out.pop();
         }
         out
@@ -105312,6 +105359,35 @@ pub extern "C" fn make_scoped_rcu_region() -> scoped_rcu_base {
         assert!(
             !output.contains("(*std::ptr::null_mut::<SiloRuntime>()).rcu_"),
             "default-deref artifact normalization should not rewrite resolved singleton accessors, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_nonprimitive_local_return_casts_scopes_nonprimitive_locals_per_function() {
+        let input = r#"
+pub extern "C" fn helper() -> i32 {
+    let mut base: helper_state = Default::default();
+    return (base) as i32;
+}
+pub extern "C" fn power(base: i32, exp: i32) -> i32 {
+    if exp == 1 {
+        return (base) as i32;
+    }
+    return (base * 2) as i32;
+}
+"#;
+        let output = AstCodeGen::normalize_nonprimitive_local_return_casts(input);
+        assert!(
+            output.contains(
+                "pub extern \"C\" fn helper() -> i32 {\n    let mut base: helper_state = Default::default();\n    return Default::default();\n}",
+            ),
+            "nonprimitive return-cast normalization should still rewrite same-function nonprimitive local casts, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("if exp == 1 {\n        return (base) as i32;\n    }"),
+            "nonprimitive return-cast normalization must not let nonprimitive local names from other functions poison primitive param returns, got:\n{}",
             output
         );
     }
