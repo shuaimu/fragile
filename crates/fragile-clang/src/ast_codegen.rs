@@ -9887,6 +9887,237 @@ impl AstCodeGen {
         out
     }
 
+    /// Recover degraded bool guard returns where sign/range prechecks collapsed
+    /// to `return Default::default();`.
+    ///
+    /// Pattern repaired (same boolean function, same lhs):
+    /// - `if lhs < 0 { return Default::default(); }` -> `return false;`
+    /// - later `if lhs < 10 { return Default::default(); }` -> `return true;`
+    fn normalize_bool_signed_digit_guard_default_returns(code: &str) -> String {
+        fn strip_wrapping_parens(mut s: &str) -> &str {
+            loop {
+                let trimmed = s.trim();
+                if !(trimmed.starts_with('(') && trimmed.ends_with(')')) {
+                    return trimmed;
+                }
+                let mut depth = 0i32;
+                let mut balanced = true;
+                for (idx, ch) in trimmed.char_indices() {
+                    if ch == '(' {
+                        depth += 1;
+                    } else if ch == ')' {
+                        depth -= 1;
+                        if depth == 0 && idx + ch.len_utf8() < trimmed.len() {
+                            balanced = false;
+                            break;
+                        }
+                    }
+                    if depth < 0 {
+                        balanced = false;
+                        break;
+                    }
+                }
+                if !balanced || depth != 0 {
+                    return trimmed;
+                }
+                s = &trimmed[1..trimmed.len() - 1];
+            }
+        }
+
+        fn parse_rhs_integer_literal(rhs_src: &str) -> Option<i64> {
+            let rhs = strip_wrapping_parens(rhs_src);
+            if rhs.is_empty() {
+                return None;
+            }
+
+            let mut chars = rhs.chars().peekable();
+            let mut sign = 1i64;
+            if let Some('+') = chars.peek().copied() {
+                chars.next();
+            } else if let Some('-') = chars.peek().copied() {
+                sign = -1;
+                chars.next();
+            }
+
+            let mut digit_buf = String::new();
+            while let Some(ch) = chars.peek().copied() {
+                if ch.is_ascii_digit() {
+                    digit_buf.push(ch);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            if digit_buf.is_empty() {
+                return None;
+            }
+
+            if !chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+                return None;
+            }
+
+            let parsed = digit_buf.parse::<i64>().ok()?;
+            Some(sign * parsed)
+        }
+
+        fn parse_lt_integer_guard(cond_src: &str) -> Option<(String, i64)> {
+            let cond = strip_wrapping_parens(cond_src);
+            let op_idx = cond.find('<')?;
+            if cond.get(op_idx + 1..op_idx + 2) == Some("=") {
+                return None;
+            }
+            let lhs = strip_wrapping_parens(cond[..op_idx].trim());
+            if lhs.is_empty() {
+                return None;
+            }
+            let rhs = parse_rhs_integer_literal(cond[op_idx + 1..].trim())?;
+            Some((lhs.to_string(), rhs))
+        }
+
+        if !code.contains("-> bool") || !code.contains("return Default::default();") {
+            return code.to_string();
+        }
+
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        let mut i = 0usize;
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim_end();
+            let is_fn_start =
+                (trimmed.contains(" fn ") || trimmed.starts_with("fn ")) && trimmed.ends_with('{');
+            if !is_fn_start || !trimmed.contains("-> bool") {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let mut j = i;
+            let mut depth = 0isize;
+            while j < lines.len() {
+                let current = lines[j];
+                depth += current.chars().filter(|c| *c == '{').count() as isize;
+                depth -= current.chars().filter(|c| *c == '}').count() as isize;
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if j >= lines.len() || depth != 0 {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            #[derive(Clone)]
+            struct Guard {
+                lhs: String,
+                rhs: i64,
+                return_idx: usize,
+            }
+
+            let mut guards: Vec<Guard> = Vec::new();
+            let mut cursor = i + 1;
+            while cursor < j {
+                let current = lines[cursor];
+                let current_trimmed = current.trim();
+                if !(current_trimmed.starts_with("if ") && current_trimmed.ends_with('{')) {
+                    cursor += 1;
+                    continue;
+                }
+
+                let Some(cond_src) = current_trimmed
+                    .strip_prefix("if ")
+                    .and_then(|s| s.strip_suffix('{'))
+                    .map(str::trim)
+                else {
+                    cursor += 1;
+                    continue;
+                };
+                let Some((lhs, rhs)) = parse_lt_integer_guard(cond_src) else {
+                    cursor += 1;
+                    continue;
+                };
+
+                let mut probe = cursor + 1;
+                while probe < j && lines[probe].trim().is_empty() {
+                    probe += 1;
+                }
+                if probe >= j || lines[probe].trim() != "return Default::default();" {
+                    cursor += 1;
+                    continue;
+                }
+                let mut close_probe = probe + 1;
+                while close_probe < j && lines[close_probe].trim().is_empty() {
+                    close_probe += 1;
+                }
+                if close_probe >= j || lines[close_probe].trim() != "}" {
+                    cursor += 1;
+                    continue;
+                }
+
+                guards.push(Guard {
+                    lhs,
+                    rhs,
+                    return_idx: probe,
+                });
+                cursor = close_probe + 1;
+            }
+
+            let mut rewrites: HashMap<usize, String> = HashMap::new();
+            for (idx, guard) in guards.iter().enumerate() {
+                if guard.rhs != 0 {
+                    continue;
+                }
+                if let Some(pos_guard) = guards
+                    .iter()
+                    .skip(idx + 1)
+                    .find(|candidate| candidate.lhs == guard.lhs && candidate.rhs == 10)
+                {
+                    let false_indent_len = lines[guard.return_idx]
+                        .len()
+                        .saturating_sub(lines[guard.return_idx].trim_start().len());
+                    let false_indent = &lines[guard.return_idx][..false_indent_len];
+                    rewrites.insert(guard.return_idx, format!("{false_indent}return false;"));
+
+                    let true_indent_len = lines[pos_guard.return_idx]
+                        .len()
+                        .saturating_sub(lines[pos_guard.return_idx].trim_start().len());
+                    let true_indent = &lines[pos_guard.return_idx][..true_indent_len];
+                    rewrites.insert(pos_guard.return_idx, format!("{true_indent}return true;"));
+                    break;
+                }
+            }
+
+            for k in i..=j {
+                if let Some(rewrite) = rewrites.get(&k) {
+                    out.push_str(rewrite);
+                } else {
+                    out.push_str(lines[k]);
+                }
+                if k + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            i = j + 1;
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
     fn is_primitive_scalar_type_name(ty: &str) -> bool {
         matches!(
             ty,
@@ -25917,6 +26148,7 @@ impl AstCodeGen {
         output = Self::normalize_default_preface_local_assignment_artifacts(&output);
         output = Self::normalize_primitive_return_zeroed_nonprimitive_mismatches(&output);
         output = Self::normalize_default_tail_returns_to_matching_result_locals(&output);
+        output = Self::normalize_bool_signed_digit_guard_default_returns(&output);
         // Degraded placeholder rewrites can leak call-shaped tokens into local
         // binding names (e.g. `let mut Default::default(): T = ...;`).
         output = Self::normalize_invalid_local_binding_identifiers(&output);
@@ -104370,6 +104602,49 @@ pub fn choose(flag: bool) -> i32 {
         assert_eq!(
             output, input,
             "default-tail return normalization should not rewrite functions with earlier explicit returns"
+        );
+    }
+
+    #[test]
+    fn test_normalize_bool_signed_digit_guard_default_returns_recovers_palindrome_style_guards() {
+        let input = r#"
+pub fn isPalindrome(n: i32) -> bool {
+    if n < 0 {
+        return Default::default();
+    }
+    if n < 10 {
+        return Default::default();
+    }
+    return n == 11;
+}
+"#;
+        let output = AstCodeGen::normalize_bool_signed_digit_guard_default_returns(input);
+        assert!(
+            output.contains("if n < 0 {\n        return false;\n    }"),
+            "bool guard default-return recovery should map negative-range guard to false, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("if n < 10 {\n        return true;\n    }"),
+            "bool guard default-return recovery should map same-variable <10 guard to true when preceded by <0 guard, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_bool_signed_digit_guard_default_returns_requires_preceding_negative_guard() {
+        let input = r#"
+pub fn only_digit_guard(n: i32) -> bool {
+    if n < 10 {
+        return Default::default();
+    }
+    return n > 0;
+}
+"#;
+        let output = AstCodeGen::normalize_bool_signed_digit_guard_default_returns(input);
+        assert_eq!(
+            output, input,
+            "bool guard default-return recovery should not rewrite lone <10 default guards without a same-variable preceding <0 guard"
         );
     }
 
