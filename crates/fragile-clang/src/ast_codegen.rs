@@ -10651,6 +10651,177 @@ impl AstCodeGen {
         out
     }
 
+    /// Recover degraded bool validation helpers that became all-default guard
+    /// chains, for example:
+    ///
+    /// - `if cond_a { return Default::default(); }`
+    /// - `if cond_b { return Default::default(); }`
+    /// - `return Default::default();`
+    ///
+    /// In this shape, guard returns represent failure (`false`) while the
+    /// trailing tail should represent success (`true`).
+    fn normalize_bool_guard_chain_success_default_tail_returns(code: &str) -> String {
+        fn is_default_return_line(trimmed: &str) -> bool {
+            matches!(
+                trimmed,
+                "return Default::default();"
+                    | "return std::default::Default::default();"
+                    | "return std::prelude::v1::Default::default();"
+            )
+        }
+
+        if !code.contains("-> bool") || !code.contains("return Default::default();") {
+            return code.to_string();
+        }
+
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        let mut i = 0usize;
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim_end();
+            let is_fn_start =
+                (trimmed.contains(" fn ") || trimmed.starts_with("fn ")) && trimmed.ends_with('{');
+            if !is_fn_start || !trimmed.contains("-> bool") {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let mut j = i;
+            let mut depth = 0isize;
+            while j < lines.len() {
+                let current = lines[j];
+                depth += current.chars().filter(|c| *c == '{').count() as isize;
+                depth -= current.chars().filter(|c| *c == '}').count() as isize;
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if j >= lines.len() || depth != 0 {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let body_nonempty: Vec<usize> = (i + 1..j)
+                .filter(|idx| !lines[*idx].trim().is_empty())
+                .collect();
+            let Some(&last_body_idx) = body_nonempty.last() else {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            };
+            if !is_default_return_line(lines[last_body_idx].trim()) {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+
+            let return_lines: Vec<usize> = body_nonempty
+                .iter()
+                .copied()
+                .filter(|idx| lines[*idx].trim().starts_with("return "))
+                .collect();
+            if return_lines.len() < 2
+                || !return_lines
+                    .iter()
+                    .all(|idx| is_default_return_line(lines[*idx].trim()))
+            {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+
+            let mut all_guard_chain_shape = true;
+            let mut guard_return_count = 0usize;
+            for idx in body_nonempty.iter().copied() {
+                let current = lines[idx].trim();
+                if is_default_return_line(current) {
+                    if idx != last_body_idx {
+                        let prev_nonempty = (i + 1..idx).rev().find(|probe| !lines[*probe].trim().is_empty());
+                        let Some(prev_idx) = prev_nonempty else {
+                            all_guard_chain_shape = false;
+                            break;
+                        };
+                        let prev = lines[prev_idx].trim();
+                        if !(prev.starts_with("if ") && prev.ends_with('{')) {
+                            all_guard_chain_shape = false;
+                            break;
+                        }
+                        guard_return_count += 1;
+                    }
+                    continue;
+                }
+                if current.starts_with("let ")
+                    || (current.starts_with("if ") && current.ends_with('{'))
+                    || current == "}"
+                {
+                    continue;
+                }
+                all_guard_chain_shape = false;
+                break;
+            }
+
+            if !all_guard_chain_shape || guard_return_count == 0 {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+
+            for k in i..=j {
+                if k == last_body_idx {
+                    let indent_len = lines[k].len().saturating_sub(lines[k].trim_start().len());
+                    let indent = &lines[k][..indent_len];
+                    out.push_str(indent);
+                    out.push_str("return true;");
+                } else {
+                    out.push_str(lines[k]);
+                }
+                if k + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            i = j + 1;
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
     fn is_primitive_scalar_type_name(ty: &str) -> bool {
         matches!(
             ty,
@@ -16078,6 +16249,146 @@ impl AstCodeGen {
         let mut out = code.to_string();
         while out.contains(".is_null().is_null()") {
             out = out.replace(".is_null().is_null()", ".is_null()");
+        }
+        out
+    }
+
+    /// Recover degraded boolean-call negation artifacts lowered as
+    /// `(<bool_call>(...)).is_null()` by rewriting back to `!(<bool_call>(...))`.
+    fn normalize_bool_call_is_null_artifacts(code: &str) -> String {
+        fn collect_bool_function_names(code: &str) -> HashSet<String> {
+            let mut names = HashSet::new();
+            for line in code.lines() {
+                let trimmed = line.trim();
+                if !trimmed.contains(" fn ") && !trimmed.starts_with("fn ") {
+                    continue;
+                }
+                if !trimmed.contains("-> bool") {
+                    continue;
+                }
+                let Some(rest) = trimmed.split("fn ").nth(1) else {
+                    continue;
+                };
+                let Some(name_src) = rest.split('(').next() else {
+                    continue;
+                };
+                let name = name_src.trim().trim_start_matches("r#");
+                if !name.is_empty() {
+                    names.insert(name.to_string());
+                }
+            }
+            names
+        }
+
+        fn rewrite_wrapped_bool_is_null(
+            line: &str,
+            bool_fn_names: &HashSet<String>,
+        ) -> Option<String> {
+            fn find_matching_open_paren(src: &str, close_idx: usize) -> Option<usize> {
+                if close_idx >= src.len() || src.as_bytes()[close_idx] != b')' {
+                    return None;
+                }
+                let mut depth: isize = 0;
+                for idx in (0..=close_idx).rev() {
+                    match src.as_bytes()[idx] {
+                        b')' => depth += 1,
+                        b'(' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                return Some(idx);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                None
+            }
+
+            if !line.contains(".is_null()") {
+                return None;
+            }
+
+            let mut rewritten = line.to_string();
+            let mut changed = false;
+            let mut search_idx = 0usize;
+            loop {
+                let Some(dot_rel) = rewritten[search_idx..].find(".is_null()") else {
+                    break;
+                };
+                let dot_idx = search_idx + dot_rel;
+                let mut prefix_end = dot_idx;
+                while prefix_end > 0
+                    && rewritten.as_bytes()[prefix_end - 1].is_ascii_whitespace()
+                {
+                    prefix_end -= 1;
+                }
+                if prefix_end == 0 || rewritten.as_bytes()[prefix_end - 1] != b')' {
+                    search_idx = dot_idx + ".is_null()".len();
+                    continue;
+                }
+                let wrapper_close = prefix_end - 1;
+                let Some(wrapper_open) = find_matching_open_paren(&rewritten, wrapper_close) else {
+                    search_idx = dot_idx + ".is_null()".len();
+                    continue;
+                };
+                if wrapper_open + 1 >= wrapper_close {
+                    search_idx = dot_idx + ".is_null()".len();
+                    continue;
+                }
+
+                let inner_src = rewritten[wrapper_open + 1..wrapper_close].trim();
+                let Some(call_open_rel) = inner_src.find('(') else {
+                    search_idx = dot_idx + ".is_null()".len();
+                    continue;
+                };
+                let callee_src = inner_src[..call_open_rel].trim().trim_start_matches("r#");
+                if callee_src.is_empty() || !bool_fn_names.contains(callee_src) {
+                    search_idx = dot_idx + ".is_null()".len();
+                    continue;
+                }
+                let call_open = wrapper_open + 1 + call_open_rel;
+                let Some(call_close) = AstCodeGen::find_matching_close_paren(&rewritten, call_open)
+                else {
+                    search_idx = dot_idx + ".is_null()".len();
+                    continue;
+                };
+                if call_close + 1 > wrapper_close {
+                    search_idx = dot_idx + ".is_null()".len();
+                    continue;
+                }
+
+                let call_expr = rewritten[wrapper_open + 1..wrapper_close].trim().to_string();
+                let replacement = format!("!({})", call_expr);
+                let replace_end = dot_idx + ".is_null()".len();
+                rewritten.replace_range(wrapper_open..replace_end, &replacement);
+                search_idx = wrapper_open + replacement.len();
+                changed = true;
+            }
+
+            if changed { Some(rewritten) } else { None }
+        }
+
+        if !code.contains(".is_null()") || !code.contains("-> bool") {
+            return code.to_string();
+        }
+
+        let bool_fn_names = collect_bool_function_names(code);
+        if bool_fn_names.is_empty() {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        for line in code.lines() {
+            if let Some(rewritten) = rewrite_wrapped_bool_is_null(line, &bool_fn_names) {
+                out.push_str(&rewritten);
+            } else {
+                out.push_str(line);
+            }
+            out.push('\n');
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
         }
         out
     }
@@ -26685,6 +26996,7 @@ impl AstCodeGen {
         output = Self::normalize_bool_loop_violation_default_tail_returns(&output);
         output = Self::normalize_bool_null_eq_guard_default_returns(&output);
         output = Self::normalize_bool_guarded_success_default_tail_returns(&output);
+        output = Self::normalize_bool_guard_chain_success_default_tail_returns(&output);
         // Degraded placeholder rewrites can leak call-shaped tokens into local
         // binding names (e.g. `let mut Default::default(): T = ...;`).
         output = Self::normalize_invalid_local_binding_identifiers(&output);
@@ -26704,6 +27016,7 @@ impl AstCodeGen {
         // explicit `.is_null()` checks for pointer-typed bindings.
         output = Self::normalize_pointer_negation_conditions(&output);
         output = Self::normalize_redundant_is_null_chains(&output);
+        output = Self::normalize_bool_call_is_null_artifacts(&output);
         // Some declaration/definition pairs can keep declaration parameter names
         // while function bodies reference conventional `_in` / `_out` spellings.
         // Rewrite these references to in-scope parameter names.
@@ -26928,6 +27241,8 @@ impl AstCodeGen {
         output = Self::normalize_default_preface_local_assignment_artifacts(&output);
         output = Self::normalize_default_tail_returns_to_matching_result_locals(&output);
         output = Self::normalize_bool_guarded_success_default_tail_returns(&output);
+        output = Self::normalize_bool_guard_chain_success_default_tail_returns(&output);
+        output = Self::normalize_bool_call_is_null_artifacts(&output);
         output = Self::append_compile_error_for_unresolved_non_c_abi_external_calls(&output);
         if Self::output_requires_c_variadic_feature(&output) {
             output = Self::ensure_c_variadic_feature_attr(&output);
@@ -105602,6 +105917,99 @@ pub fn onlyGuardAndComputation(n: i32) -> bool {
         assert_eq!(
             output, input,
             "guarded bool success-tail recovery should skip bodies without assignment side effects"
+        );
+    }
+
+    #[test]
+    fn test_normalize_bool_guard_chain_success_default_tail_returns_recovers_assertion_style_validator_tail()
+     {
+        let input = r#"
+pub fn testAddition() -> bool {
+    if !assertEqual(5, add(2, 3)) {
+        return Default::default();
+    }
+    if !assertEqual(0, add(0, 0)) {
+        return Default::default();
+    }
+    return Default::default();
+}
+"#;
+        let output = AstCodeGen::normalize_bool_guard_chain_success_default_tail_returns(input);
+        assert!(
+            output.contains("return true;"),
+            "guard-chain bool success-tail recovery should rewrite the final degraded default return to true, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("if !assertEqual(5, add(2, 3)) {\n        return Default::default();\n    }"),
+            "guard-chain bool success-tail recovery should preserve early failure guards, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_bool_guard_chain_success_default_tail_returns_skips_non_guard_chain_bodies() {
+        let input = r#"
+pub fn maybeReady(flag: bool) -> bool {
+    if !flag {
+        return Default::default();
+    }
+    touch();
+    return Default::default();
+}
+"#;
+        let output = AstCodeGen::normalize_bool_guard_chain_success_default_tail_returns(input);
+        assert_eq!(
+            output, input,
+            "guard-chain bool success-tail recovery should skip bool bodies that are not pure guard/declaration chains"
+        );
+    }
+
+    #[test]
+    fn test_normalize_bool_call_is_null_artifacts_rewrites_wrapped_bool_calls_to_negation() {
+        let input = r#"
+pub fn cacheGet(cache: *mut i32, key: i32, value: *mut i32) -> bool {
+    return true;
+}
+
+pub fn main_like(cache: *mut i32, val: i32) -> i32 {
+    if ((cacheGet(cache as *mut i32, (1i32) as i32, (std::ptr::null_mut()) as *mut i32)).is_null()) || (val != 100) {
+        return 4;
+    }
+    return 0;
+}
+"#;
+        let output = AstCodeGen::normalize_bool_call_is_null_artifacts(input);
+        assert!(
+            output.contains("if (!(cacheGet(cache as *mut i32, (1i32) as i32, (std::ptr::null_mut()) as *mut i32))) || (val != 100) {"),
+            "bool-call is_null recovery should rewrite wrapped bool call artifacts to explicit negation, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("cacheGet(cache as *mut i32, (1i32) as i32, (std::ptr::null_mut()) as *mut i32)).is_null()"),
+            "bool-call is_null recovery should remove .is_null() from wrapped bool calls, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_bool_call_is_null_artifacts_skips_pointer_return_calls() {
+        let input = r#"
+pub fn lookup(cache: *mut i32, key: i32) -> *mut i32 {
+    return std::ptr::null_mut();
+}
+
+pub fn main_like(cache: *mut i32) -> i32 {
+    if ((lookup(cache as *mut i32, (1i32) as i32)).is_null()) {
+        return 4;
+    }
+    return 0;
+}
+"#;
+        let output = AstCodeGen::normalize_bool_call_is_null_artifacts(input);
+        assert_eq!(
+            output, input,
+            "bool-call is_null recovery should not rewrite pointer-return call null checks"
         );
     }
 

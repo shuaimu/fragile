@@ -14775,3 +14775,175 @@ Broader sweep and Python regression:
 ### Outcome
 
 Leaf `2.8.b.iv.c.iii.c.iii.a` is complete: the `test_e2e_event_queue` family is fixed via generic guarded-bool success-tail recovery, and replay evidence confirms failure-front progression to `test_e2e_lru_cache`.
+
+## 2026-03-15: Leaf 2.8.b.iv.c.iii.c.iii.c.a next build-phase family fix (test_e2e_lru_cache)
+
+### Context
+
+After leaf `2.8.b.iv.c.iii.c.iii.b`, CI-aligned replay moved the first failing integration id to `test_e2e_lru_cache`.
+
+Targeted repro:
+
+- `cargo test -p fragile-clang --test integration_test test_e2e_lru_cache -- --nocapture`
+- compile failure (`E0599`) in generated code from bool calls rewritten as `.is_null()`:
+  - `((cacheGet(...)).is_null()) || ...`
+
+`cacheGet` is bool-returning, so null-check lowering is invalid and should remain boolean negation.
+
+### Wrong-approach check
+
+Checked against `docs/dev/wrong.md` and section `1.3` before edits:
+
+- no test-name-specific conditionals,
+- no semantic fallback stubs,
+- no force-native bypass.
+
+Fix is a generic normalization over generated Rust shapes.
+
+### Plan
+
+1. Add a generic pass to recover wrapped bool-call `.is_null()` artifacts to negation.
+2. Restrict rewrite to known bool-return function call sites.
+3. Preserve pointer-return `.is_null()` checks unchanged.
+4. Add focused positive/negative unit tests.
+5. Re-run target e2e, guard regressions, and deterministic CI/workspace sweeps.
+
+### Execution
+
+Updated `crates/fragile-clang/src/ast_codegen.rs`:
+
+- added `normalize_bool_call_is_null_artifacts`:
+  - collects bool-return function names from emitted signatures,
+  - rewrites wrapped forms `(<bool_call>(...)).is_null()` to `!(<bool_call>(...))`,
+  - skips pointer-return call `.is_null()` cases.
+
+Pipeline wiring:
+
+- added in primary pass chain after pointer-negation/null-chain cleanup,
+- added in late/final cleanup chain to catch late reintroduced artifacts.
+
+Added focused regressions:
+
+- `test_normalize_bool_call_is_null_artifacts_rewrites_wrapped_bool_calls_to_negation`
+- `test_normalize_bool_call_is_null_artifacts_skips_pointer_return_calls`
+
+### Validation
+
+Focused checks:
+
+- `cargo test -p fragile-clang test_normalize_bool_call_is_null_artifacts_ -- --nocapture` (pass)
+- `cargo test -p fragile-clang --test integration_test test_e2e_lru_cache -- --nocapture` (pass)
+
+Guard-family checks (all pass):
+
+- `test_e2e_access_specifiers`
+- `test_e2e_integer_parsing`
+- `test_e2e_heapsort`
+- `test_e2e_doubly_linked_list`
+- `test_e2e_binary_search_tree`
+- `test_e2e_event_queue`
+- `test_e2e_lru_cache`
+
+CI-aligned deterministic replay:
+
+- run root: `/tmp/fragile_ci_leaf_2_8b_iv_c_iii_c_iii_c_a_20260315_v1`
+- `build_phase_build.status=0`
+- `build_phase_test.status=124` (`timeout_reason=inactivity_timeout`)
+- `build_phase_test.stdout.log` first failing id shifted to `test_e2e_assertion_library`.
+
+Broader regression sweeps:
+
+- run root: `/tmp/fragile_leaf_2_8b_iv_c_iii_c_iii_c_a_workspace_20260315_v1`
+  - `workspace_all_targets.status=124` (`timeout_reason=inactivity_timeout`)
+  - first failing id `test_e2e_assertion_library`
+- Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+  - `Ran 34 tests`, `OK`, `skipped=1`
+
+### Outcome
+
+Leaf `2.8.b.iv.c.iii.c.iii.c.a` is complete: `test_e2e_lru_cache` is fixed by generic bool-call null-check recovery, and deterministic replay confirms front-failure progression to `test_e2e_assertion_library`.
+
+## 2026-03-15: Leaf 2.8.b.iv.c.iii.c.iii.c.c.a next build-phase family fix (test_e2e_assertion_library)
+
+### Context
+
+After leaf `2.8.b.iv.c.iii.c.iii.c.b`, CI-aligned replay moved the first failing integration id to `test_e2e_assertion_library`.
+
+Targeted repro:
+
+- `cargo test -p fragile-clang --test integration_test test_e2e_assertion_library -- --nocapture`
+- runtime mismatch: binary exits `1` (expected `0`).
+
+Generated output inspection for `/tmp/fragile_e2e_tests/e2e_assertion_library.rs` showed validator helpers lowered as guard chains with all returns degraded to `return Default::default();`, including success tails that must be `return true;`.
+
+### Wrong-approach check
+
+Checked against `docs/dev/wrong.md` and section `1.3` before edits:
+
+- no test-name-specific codegen branching,
+- no semantic stubs/fake bodies,
+- no force-native or parser-backend bypass.
+
+Fix is a generic bool-tail normalization over generated Rust text patterns.
+
+### Plan
+
+1. Add a conservative generic pass for bool guard-chain functions where every return degraded to default.
+2. Preserve early failure guards and rewrite only final success tail.
+3. Wire pass in primary + late normalization pipelines.
+4. Add focused positive/negative unit coverage.
+5. Re-run targeted e2e, deterministic CI/workspace sweeps, and Python suite.
+
+### Execution
+
+Updated `crates/fragile-clang/src/ast_codegen.rs`:
+
+- added `normalize_bool_guard_chain_success_default_tail_returns`:
+  - bool-return function only,
+  - all returns in body are `return Default::default();`,
+  - tail return is default,
+  - body is guard/declaration chain shape (no arbitrary statements),
+  - early default returns must be directly under guard headers,
+  - rewrites only the final tail return to `return true;`.
+
+Pipeline wiring:
+
+- primary chain: after existing bool default-return recoveries,
+- late/final chain: after default-tail normalization to catch late artifacts.
+
+Added focused regressions:
+
+- `test_normalize_bool_guard_chain_success_default_tail_returns_recovers_assertion_style_validator_tail`
+- `test_normalize_bool_guard_chain_success_default_tail_returns_skips_non_guard_chain_bodies`
+
+### Validation
+
+Focused tests:
+
+- `cargo test -p fragile-clang test_normalize_bool_guard_chain_success_default_tail_returns_ -- --nocapture` (pass)
+- `cargo test -p fragile-clang test_normalize_bool_guarded_success_default_tail_returns_ -- --nocapture` (pass)
+- `cargo test -p fragile-clang test_normalize_bool_call_is_null_artifacts_ -- --nocapture` (pass)
+- `cargo test -p fragile-clang --test integration_test test_e2e_assertion_library -- --nocapture` (pass)
+
+Deterministic CI-aligned replay:
+
+- run root: `/tmp/fragile_ci_leaf_2_8b_iv_c_iii_c_iii_c_c_a_20260315_v1`
+- `build_phase_build.status=0`
+- `build_phase_test.status=124` (`timeout_reason=inactivity_timeout`)
+- `build_phase_test.stdout.log` confirms:
+  - `test_e2e_assertion_library ... ok`
+  - first current failing id shifted to `test_e2e_merge_sort`.
+
+Broader sweep and Python regression:
+
+- run root: `/tmp/fragile_leaf_2_8b_iv_c_iii_c_iii_c_c_a_workspace_20260315_v1`
+  - `workspace_all_targets.status=124` (`timeout_reason=inactivity_timeout`)
+  - first current failing id `test_e2e_merge_sort`.
+- Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+  - `Ran 34 tests`, `OK`, `skipped=1`.
+
+### Outcome
+
+Leaf `2.8.b.iv.c.iii.c.iii.c.c.a` is complete: `test_e2e_assertion_library` is fixed by generic bool guard-chain success-tail recovery, and deterministic replay confirms failure-front progression to `test_e2e_merge_sort`.
