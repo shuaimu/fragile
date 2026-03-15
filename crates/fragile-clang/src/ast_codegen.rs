@@ -7930,7 +7930,42 @@ impl AstCodeGen {
         }
 
         fn parse_declared_item_name(trimmed: &str) -> Option<String> {
+            fn strip_outer_attribute_prefix(text: &str) -> Option<&str> {
+                let prefix_len = if text.starts_with("#![") {
+                    3
+                } else if text.starts_with("#[") {
+                    2
+                } else {
+                    return None;
+                };
+                let bytes = text.as_bytes();
+                let mut idx = prefix_len;
+                let mut depth: i32 = 1;
+                while idx < bytes.len() {
+                    match bytes[idx] {
+                        b'[' => depth += 1,
+                        b']' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                idx += 1;
+                                return Some(&text[idx..]);
+                            }
+                        }
+                        _ => {}
+                    }
+                    idx += 1;
+                }
+                None
+            }
+
             let mut rest = trimmed;
+            loop {
+                rest = rest.trim_start();
+                let Some(stripped) = strip_outer_attribute_prefix(rest) else {
+                    break;
+                };
+                rest = stripped;
+            }
             if let Some(stripped) = rest.strip_prefix("pub(crate) ") {
                 rest = stripped;
             } else if let Some(stripped) = rest.strip_prefix("pub(super) ") {
@@ -12509,8 +12544,51 @@ impl AstCodeGen {
 
     fn normalize_invalid_item_declaration_namespaced_identifiers(code: &str) -> String {
         fn parse_item_name_span(line: &str) -> Option<(usize, usize)> {
+            fn skip_ascii_whitespace(line: &str, mut cursor: usize) -> usize {
+                while cursor < line.len() && line.as_bytes()[cursor].is_ascii_whitespace() {
+                    cursor += 1;
+                }
+                cursor
+            }
+
+            fn consume_outer_attribute(line: &str, cursor: usize) -> Option<usize> {
+                let rest = &line[cursor..];
+                let prefix_len = if rest.starts_with("#![") {
+                    3
+                } else if rest.starts_with("#[") {
+                    2
+                } else {
+                    return None;
+                };
+                let bytes = line.as_bytes();
+                let mut idx = cursor + prefix_len;
+                let mut depth: i32 = 1;
+                while idx < bytes.len() {
+                    match bytes[idx] {
+                        b'[' => depth += 1,
+                        b']' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                return Some(idx + 1);
+                            }
+                        }
+                        _ => {}
+                    }
+                    idx += 1;
+                }
+                None
+            }
+
             let indent_len = line.len().saturating_sub(line.trim_start().len());
             let mut cursor = indent_len;
+            loop {
+                cursor = skip_ascii_whitespace(line, cursor);
+                let Some(next_cursor) = consume_outer_attribute(line, cursor) else {
+                    break;
+                };
+                cursor = next_cursor;
+            }
+            cursor = skip_ascii_whitespace(line, cursor);
 
             for vis in ["pub(crate) ", "pub(super) ", "pub(self) ", "pub "] {
                 if line[cursor..].starts_with(vis) {
@@ -104494,6 +104572,32 @@ pub fn passthrough(raw: *mut ctype_char_) -> *mut ctype_char_ {
     }
 
     #[test]
+    fn test_normalize_c_void_alias_identifier_references_skips_collisions_with_inline_attributes() {
+        let input = r#"
+pub use std::ffi::c_void as ctype_char_;
+#[repr(C)] pub struct ctype_char_ {
+    pub next: *mut ctype_char_,
+}
+"#;
+        let output = AstCodeGen::normalize_c_void_alias_identifier_references(input);
+        assert!(
+            output.contains("#[repr(C)] pub struct ctype_char_ {"),
+            "inline attributed item declarations should be recognized as collision anchors, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub next: *mut ctype_char_,"),
+            "colliding aliases referenced by inline attributed declarations must stay untouched, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("#[repr(C)] pub struct std::ffi::c_void {"),
+            "alias rewrite must not corrupt inline attributed declarations into qualified paths, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
     fn test_normalize_unused_c_void_use_aliases_removes_unreferenced_alias() {
         let input = r#"
 /// c_void alias
@@ -107606,6 +107710,27 @@ pub struct std::ffi::c_void {
         assert!(
             !output.contains("pub struct std::ffi::c_void {"),
             "qualified struct declaration identifiers are invalid and must be normalized, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_invalid_item_declaration_namespaced_identifiers_strips_qualified_struct_name_with_inline_attributes()
+    {
+        let input = r#"
+#[repr(C)] pub struct std::ffi::c_void {
+    pub _opaque: [u8; 1],
+}
+"#;
+        let output = AstCodeGen::normalize_invalid_item_declaration_namespaced_identifiers(input);
+        assert!(
+            output.contains("#[repr(C)] pub struct c_void {"),
+            "inline attributed declarations should normalize qualified item names to leaf identifiers, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("#[repr(C)] pub struct std::ffi::c_void {"),
+            "qualified namespaced declaration should not survive inline attributed normalization, got:\n{}",
             output
         );
     }

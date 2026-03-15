@@ -15706,3 +15706,78 @@ Leaf `2.6.d.b.ii.c.c.ii` is complete with deterministic replay/inventory
 artifacts. Strict build remains timeout-bound on `misc.cpp`; next leaf is
 `2.6.d.b.ii.c.c.iii` to fix the next syntax/blocker family generically when
 build is still nonzero.
+
+## 2026-03-15: Leaf 2.6.d.b.ii.c.c.iii c_void declaration-collision hardening
+
+### Context
+
+After `2.6.d.b.ii.c.c.ii`, strict build still failed and the active blocker
+family included prior syntax corruption around c_void alias/definition rewrites
+(for example `pub struct std::ffi::c_void`).
+
+### Wrong-approach check
+
+Reviewed `1.3 Wrong Approaches` before changes:
+
+- no RPC-target-specific conditionals,
+- no force-native/source bypasses,
+- no semantic fallback stubs.
+
+### Fix
+
+Hardened two generic declaration parsers in
+`crates/fragile-clang/src/ast_codegen.rs` to consume leading inline outer
+attributes (`#[...]` / `#![...]`) before item-header parsing:
+
+1. `normalize_c_void_alias_identifier_references::parse_declared_item_name`
+2. `normalize_invalid_item_declaration_namespaced_identifiers::parse_item_name_span`
+
+Why this matters:
+
+- collision detection for alias rewrites now still recognizes declarations like
+  `#[repr(C)] pub struct ctype_char_ { ... }`,
+- namespaced declaration cleanup now also normalizes attributed declarations
+  (`#[repr(C)] pub struct std::ffi::c_void { ... }` -> `#[repr(C)] pub struct c_void { ... }`).
+
+### Focused regressions
+
+- `test_normalize_c_void_alias_identifier_references_skips_collisions_with_inline_attributes`
+- `test_normalize_invalid_item_declaration_namespaced_identifiers_strips_qualified_struct_name_with_inline_attributes`
+
+Validated with:
+
+- `cargo test -p fragile-clang test_normalize_c_void_alias_identifier_references_skips_collisions_with_inline_attributes -- --nocapture`
+- `cargo test -p fragile-clang test_normalize_invalid_item_declaration_namespaced_identifiers_strips_qualified_struct_name_with_inline_attributes -- --nocapture`
+
+### Replay evidence
+
+Rebuilt release compiler and reran strict build-only lane:
+
+- `cargo build --release -p fragile-cli --bin fragilec`
+- `FRAGILEC_MODE=strict python3 scripts/mako_rpcbench_harness.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iii_build_only_20260315_v2 --lanes fragilec --build-only --jobs 4 --build-timeout-seconds 600`
+- `python3 scripts/mako_rpc_compile_blocker_inventory.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iii_build_only_20260315_v2 --lanes fragilec`
+- `python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iii_build_only_20260315_v2 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+
+Captured deterministic state:
+
+- `lane_fragilec_build_status=124`
+- `lane_fragilec_failure_class=build_timeout`
+- `lane_fragilec_first_failing_compile_class=build_timeout`
+- `lane_fragilec_first_failing_compile_file=src/rrr/base/misc.cpp`
+- `replay_01_first_failure_class=build_timeout`
+
+No syntax-first replay excerpt remained; timeout on `misc.cpp` is the current
+front blocker.
+
+### Full-suite sweeps
+
+- workspace capture:
+  - `python3 scripts/ci_command_capture.py --run-root /tmp/fragile_leaf_2_6d_b_ii_c_c_iii_workspace_20260315_v1 --name workspace_all_targets --inactivity-timeout-seconds 90 --wall-timeout-seconds 1200 --command cargo test --workspace --all-targets`
+  - `status=124`, `timeout_reason=inactivity_timeout`
+  - first failing ids in captured stdout include:
+    `test_e2e_simple_hash_table`, `test_e2e_object_pool`, `test_e2e_trie`,
+    `test_e2e_tokenizer`, `test_e2e_simple_graph`,
+    `test_variadic_template_transpile`, `test_e2e_pthread`
+- Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+  - `Ran 34 tests`, `OK`, `skipped=1`
