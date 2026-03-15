@@ -15409,3 +15409,81 @@ Post-leaf full-suite checks in this cycle:
 - `2.6.d.b.ii.a` (this precheck) marked done,
 - `2.6.d.b.ii.b` added for generic delimiter/cast-shape blocker-family fix,
 - `2.6.d.b.ii.c` keeps the original strict full-lane runtime replay gate once build status reaches `0`.
+
+## 2026-03-15: Leaf 2.6.d.b.ii.b generic wrapping_add delimiter/cast-shape blocker fix
+
+### Context
+
+Leaf `2.6.d.b.ii.a` identified deterministic strict build blockers in transpiled RPC prerequisites:
+
+- malformed atomic helper fragments like `__mem.wrapping_add((__val }) as usize)`,
+- rustc parse failures (`mismatched closing delimiter`, `unexpected closing delimiter`) in `misc.cpp`/`basetypes.cpp`.
+
+This leaf targeted that blocker family only, with generic codegen fixes plus strict replay evidence.
+
+### Wrong-approach check
+
+Checked against `docs/dev/wrong.md` section `1.3` before edits:
+
+- no RPC target-name conditionals,
+- no semantic fallback stubs/fake bodies,
+- no backend escape-hatch toggles.
+
+Fixes were constrained to generic normalization passes in `ast_codegen.rs`.
+
+### Execution
+
+Implemented three generic changes in `crates/fragile-clang/src/ast_codegen.rs`:
+
+- `normalize_pointer_augmented_assignments`: stop rhs scanner from absorbing surrounding block closers (`}`) into rewritten `wrapping_add` operands (for shapes like `unsafe { *__mem += __val };`).
+- `normalize_wrapping_add_argument_casts`: sanitize unmatched arg braces and relocate displaced closers outside the call when needed.
+- Added a final end-of-pipeline `normalize_wrapping_add_argument_casts` invocation because late pointer/assignment normalizers can reintroduce malformed wrapping-add call-shapes.
+
+Added focused regressions:
+
+- `test_normalize_pointer_augmented_assignments_keeps_unsafe_block_closer_outside_rhs`
+- `test_normalize_wrapping_add_argument_casts_relocates_displaced_block_brace`
+
+Targeted validation:
+
+- `cargo test -p fragile-clang test_normalize_pointer_augmented_assignments_keeps_unsafe_block_closer_outside_rhs -- --nocapture`
+- `cargo test -p fragile-clang test_normalize_wrapping_add_argument_casts_ -- --nocapture`
+
+Strict replay evidence:
+
+- rebuilt release compiler: `cargo build --release -p fragile-cli --bin fragilec`
+- cleared stale transpiled TU cache for affected files under `/tmp/fragilec_transpiled/`
+- ran strict single-lane build-only replay:
+  - `FRAGILEC_MODE=strict python3 scripts/mako_rpcbench_harness.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_b_build_only_20260315_v5 --lanes fragilec --build-only --jobs 4 --build-timeout-seconds 1800`
+
+### Findings
+
+- Replay manifest (`/tmp/fragile_rpc_leaf_2_6d_b_ii_b_build_only_20260315_v5/benchmark_harness_manifest.txt`):
+  - `lane_fragilec_configure_status=0`
+  - `lane_fragilec_clean_status=0`
+  - `lane_fragilec_build_status=124`
+  - `lane_fragilec_failure_class=build_timeout`
+  - `lane_fragilec_test_rpc_status=-1`
+- The prior malformed fragment family is cleared in regenerated transpiled output:
+  - `/tmp/fragilec_transpiled/misc.cpp_7a02b1dba0e4c27f_misc.rs` now emits `unsafe { *__mem = __mem.wrapping_add((__val) as usize)};`
+  - no remaining `wrapping_add((__val })` match in that regenerated artifact.
+- First blockers shifted to a different family (unclosed delimiters in `__charset_alias_match` closure paths), seen in strict `build.stderr` for regenerated files:
+  - `/tmp/fragilec_transpiled/basetypes.cpp_5e4631d1ddee3386_basetypes.rs`
+  - `/tmp/fragilec_transpiled/debugging.cpp_350f36dc193b7a13_debugging.rs`
+  - `/tmp/fragilec_transpiled/misc.cpp_fc3e18119915e1fa_misc.rs`
+
+### Regression sweeps
+
+Ran full-suite checks for this leaf:
+
+- Workspace sweep (deterministic capture):
+  - `python3 scripts/ci_command_capture.py --run-root /tmp/fragile_leaf_2_6d_b_ii_b_workspace_20260315_v1 --name workspace_all_targets --inactivity-timeout-seconds 90 --wall-timeout-seconds 1200 --command cargo test --workspace --all-targets`
+  - manifest: `status=124`, `timeout_reason=inactivity_timeout`
+  - first failing ids in captured log include `test_e2e_simple_hash_table`, `test_e2e_object_pool`, `test_e2e_simple_graph`, `test_e2e_trie`, `test_variadic_template_transpile`, `test_e2e_pthread`.
+- Python full suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+  - `Ran 34 tests`, `OK`, `skipped=1`.
+
+### Outcome
+
+Leaf `2.6.d.b.ii.b` is complete: the targeted delimiter/cast-shape corruption around `wrapping_add((__val })` is fixed generically, strict replay confirms that family is no longer the first blocker, and the remaining prerequisite blocker family is now distinct (`unclosed delimiter` in charset-alias closure lowering).

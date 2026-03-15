@@ -17562,6 +17562,45 @@ impl AstCodeGen {
             }
         }
 
+        fn normalize_wrapping_add_arg_shape(arg: &str) -> (String, usize) {
+            // Degraded token recovery can leak unmatched `}` into wrapping_add
+            // argument expressions (`(__val }) as usize`), which breaks parsing.
+            // Strip only unmatched closing braces from the argument while
+            // tracking how many closers were displaced so callers can relocate
+            // them after the call when a surrounding block still needs closing.
+            let mut brace_depth = 0isize;
+            let mut displaced_closing_braces = 0usize;
+            let mut out = String::with_capacity(arg.len());
+            for ch in arg.chars() {
+                match ch {
+                    '{' => {
+                        brace_depth += 1;
+                        out.push(ch);
+                    }
+                    '}' => {
+                        if brace_depth > 0 {
+                            brace_depth -= 1;
+                            out.push(ch);
+                        } else {
+                            displaced_closing_braces += 1;
+                        }
+                    }
+                    _ => out.push(ch),
+                }
+            }
+            (out.trim().to_string(), displaced_closing_braces)
+        }
+
+        fn wrapping_add_arg_lane_from_receiver_type(ty: &str) -> String {
+            let trimmed = ty.trim();
+            // Pointer receiver wrapping_add offsets are lane-typed as usize.
+            if trimmed.starts_with('*') || trimmed.starts_with('&') {
+                "usize".to_string()
+            } else {
+                trimmed.to_string()
+            }
+        }
+
         fn rewrite_wrapping_add_calls(line: &str, known_types: &HashMap<String, String>) -> String {
             let mut rewritten = line.to_string();
             let mut search_idx = 0usize;
@@ -17578,18 +17617,22 @@ impl AstCodeGen {
                     continue;
                 }
 
-                let mut new_arg = arg.to_string();
+                let (normalized_arg, displaced_closing_braces) =
+                    normalize_wrapping_add_arg_shape(arg);
+                let mut new_arg = normalized_arg.clone();
                 if let Some(ty) = receiver.and_then(|ident| known_types.get(&ident).cloned()) {
+                    let lane_ty = wrapping_add_arg_lane_from_receiver_type(&ty);
                     if new_arg.contains(" as _") {
-                        new_arg = new_arg.replace(" as _", &format!(" as {}", ty));
+                        new_arg = new_arg.replace(" as _", &format!(" as {}", lane_ty));
                     }
                     if !new_arg.contains(" as ") {
-                        new_arg = format!("({}) as {}", arg, ty);
+                        new_arg = format!("({}) as {}", normalized_arg, lane_ty);
                     }
                 } else {
-                    let already_cast = arg.contains(" as ") || arg.ends_with("as _");
+                    let already_cast =
+                        normalized_arg.contains(" as ") || normalized_arg.ends_with("as _");
                     if !already_cast {
-                        new_arg = format!("({}) as _", arg);
+                        new_arg = format!("({}) as _", normalized_arg);
                     }
                 }
 
@@ -17597,7 +17640,26 @@ impl AstCodeGen {
                     search_idx = arg_end + 1;
                     continue;
                 }
-                let replacement = format!(".wrapping_add({})", new_arg);
+                let mut replacement = format!(".wrapping_add({})", new_arg);
+                if displaced_closing_braces > 0 {
+                    let suffix = &rewritten[arg_end + 1..];
+                    let suffix_closing_braces = suffix.chars().filter(|c| *c == '}').count();
+                    let missing_closing_braces =
+                        displaced_closing_braces.saturating_sub(suffix_closing_braces);
+                    if missing_closing_braces > 0 {
+                        let open_braces_before_call =
+                            rewritten[..call_start].chars().filter(|c| *c == '{').count();
+                        let close_braces_before_call =
+                            rewritten[..call_start].chars().filter(|c| *c == '}').count();
+                        let available_open_braces =
+                            open_braces_before_call.saturating_sub(close_braces_before_call);
+                        let relocatable_braces =
+                            missing_closing_braces.min(available_open_braces);
+                        if relocatable_braces > 0 {
+                            replacement.push_str(&"}".repeat(relocatable_braces));
+                        }
+                    }
+                }
                 rewritten.replace_range(call_start..=arg_end, &replacement);
                 search_idx = call_start + replacement.len();
             }
@@ -27547,6 +27609,9 @@ impl AstCodeGen {
         output = Self::normalize_bool_guard_chain_success_default_tail_returns(&output);
         output = Self::normalize_bool_prime_like_guard_default_returns(&output);
         output = Self::normalize_bool_call_is_null_artifacts(&output);
+        // Late pointer/assignment rewrites can still surface malformed
+        // `wrapping_add((arg })` call args; run one final cast-shape cleanup.
+        output = Self::normalize_wrapping_add_argument_casts(&output);
         output = Self::append_compile_error_for_unresolved_non_c_abi_external_calls(&output);
         if Self::output_requires_c_variadic_feature(&output) {
             output = Self::ensure_c_variadic_feature_attr(&output);
@@ -31343,6 +31408,12 @@ impl FragileAtomicBoolCompat for atomic_bool {
                         '}' => {
                             if c_depth > 0 {
                                 c_depth -= 1;
+                            } else if p_depth == 0 && b_depth == 0 {
+                                // Do not absorb surrounding block terminators
+                                // (for example from `unsafe { ptr += x };`) into
+                                // the rhs expression; they belong after the
+                                // rewritten assignment.
+                                break;
                             }
                         }
                         ';' if p_depth == 0 && b_depth == 0 && c_depth == 0 => break,
@@ -94617,6 +94688,83 @@ pub fn probe(len: i32) {
         assert!(
             normalized.contains("let z = total.wrapping_add((len as u64));"),
             "wrapping-add normalization should keep concrete casts unchanged, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_wrapping_add_argument_casts_uses_usize_for_pointer_receivers() {
+        let input = r#"
+pub fn probe(mut __mem: *mut i32, __val: i32) {
+    unsafe { *__mem = __mem.wrapping_add(__val); }
+}
+"#;
+        let normalized = AstCodeGen::normalize_wrapping_add_argument_casts(input);
+        assert!(
+            normalized.contains("unsafe { *__mem = __mem.wrapping_add((__val) as usize); }"),
+            "wrapping-add normalization should cast pointer-receiver offsets into usize lanes, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_wrapping_add_argument_casts_drops_unmatched_brace_in_arg() {
+        let input = r#"
+pub fn probe(mut __mem: *mut i32, __val: i32) {
+    unsafe { *__mem = __mem.wrapping_add((__val }) as usize); }
+}
+"#;
+        let normalized = AstCodeGen::normalize_wrapping_add_argument_casts(input);
+        assert!(
+            !normalized.contains("__val })"),
+            "wrapping-add normalization should remove unmatched closing braces from args, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("__mem.wrapping_add((__val ) as usize);"),
+            "wrapping-add normalization should preserve cast expression after brace cleanup, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_wrapping_add_argument_casts_relocates_displaced_block_brace() {
+        let input = r#"
+pub extern "C" fn __exchange_and_add_single(mut __mem: *mut i32, __val: i32) -> i32 {
+    let mut __result: i32 = unsafe { *__mem };
+    unsafe { *__mem = __mem.wrapping_add((__val }) as usize);
+    return (__result) as i32;
+}
+"#;
+        let normalized = AstCodeGen::normalize_wrapping_add_argument_casts(input);
+        assert!(
+            !normalized.contains("__val })"),
+            "wrapping-add normalization should remove unmatched closing braces from args, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("unsafe { *__mem = __mem.wrapping_add((__val ) as usize)};"),
+            "wrapping-add normalization should relocate displaced block closers outside call args, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_pointer_augmented_assignments_keeps_unsafe_block_closer_outside_rhs() {
+        let input = r#"
+pub fn probe(mut __mem: *mut i32, __val: i32) {
+    unsafe { *__mem += __val };
+}
+"#;
+        let normalized = AstCodeGen::normalize_pointer_augmented_assignments(input);
+        assert!(
+            normalized.contains("unsafe { *__mem = __mem.wrapping_add((__val) as usize)};"),
+            "pointer augmented assignment normalization should keep unsafe-block closers outside rhs operands, got:\n{}",
+            normalized
+        );
+        assert!(
+            !normalized.contains("__val })"),
+            "pointer augmented assignment normalization should not leak block closers into wrapping_add args, got:\n{}",
             normalized
         );
     }
