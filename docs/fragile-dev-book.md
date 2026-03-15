@@ -14324,6 +14324,103 @@ Broader suite checks:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
   - `Ran 34 tests`, `OK`, `skipped=1`
 
+## 2026-03-15: Leaf 2.6.d.b.ii.c.c.iv.d.d (a-c) template-instantiation substitution/dedup hot path
+
+Checked against wrong-approach guidance before changes:
+
+- No target-specific (`mako`/`rpc`) conditionals were added.
+- No force-native escape hatch or selective native TU bypass was introduced.
+- No fake fallback method bodies were synthesized.
+- Change is generic and localized to shared template-instantiation codegen paths.
+
+### Telemetry recap (d.d.a)
+
+Baseline strict replay root:
+`/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_c_build_only_20260315_v1`
+
+Captured with:
+
+- `python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_c_build_only_20260315_v1 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+- `python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_c_build_only_20260315_v1 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+
+with telemetry env outputs:
+
+- `/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_d_a_stage_timing_120_v1.txt`
+- `/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_d_a_stage_timing_300_v1.txt`
+- `/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_d_a_callshape_profile_120_v1.txt`
+- `/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_d_a_callshape_profile_300_v1.txt`
+
+Observed:
+
+- stage progression still reaches `codegen` after export/parse/enrichment.
+- profile status:
+  - `120s`: `codegen_after_template_collection`
+  - `300s`: `codegen_after_template_instantiation_generation` (`input_bytes=565070`)
+- replay remains timeout-bound:
+  - `replay_01_status=124`
+  - `replay_01_first_failure_class=build_timeout`
+  - blocker file `src/rrr/base/misc.cpp`
+
+Selected hotspot: remove repeated per-parameter substitution/dedup work in
+function-template instance generation.
+
+### Implementation summary (d.d.b)
+
+Changed `crates/fragile-clang/src/ast_codegen.rs`:
+
+- added `next_deduplicated_param_name(...)` helper to deduplicate parameter names
+  with single hash lookup and caller-controlled underscore fallback behavior.
+- in `generate_fn_template_instance(...)`:
+  - cache substituted parameter types once during early validation.
+  - reuse cached substituted types in parameter emission and ref-tracking loops,
+    avoiding repeated `substitute_template_type` calls.
+  - use `next_deduplicated_param_name` for deterministic, low-overhead naming.
+- reused the same helper in variadic-template parameter generation path.
+
+Focused regressions added:
+
+- `test_next_deduplicated_param_name_handles_empty_and_duplicate_slots`
+- `test_generate_fn_template_instantiation_deduplicates_duplicate_param_names`
+
+Focused validation:
+
+- `cargo test -p fragile-clang test_next_deduplicated_param_name_handles_empty_and_duplicate_slots -- --nocapture`
+- `cargo test -p fragile-clang test_generate_fn_template_instantiation_deduplicates_duplicate_param_names -- --nocapture`
+- `cargo test -p fragile-clang test_generate_fn_template_instantiations_ -- --nocapture`
+
+### Strict replay + non-increase gate (d.d.c)
+
+Post-change strict replay root:
+`/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_d_c_build_only_20260315_v1`
+
+- build-only lane:
+  - `lane_fragilec_configure_status=0`
+  - `lane_fragilec_clean_status=0`
+  - `lane_fragilec_build_status=124`
+  - `lane_fragilec_failure_class=build_timeout`
+- inventory non-increase vs baseline
+  `/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_c_build_only_20260315_v1/rpc_compile_blocker_inventory_manifest.txt`:
+  - `lane_fragilec_class_rank_delta_vs_baseline=0`
+  - `lane_fragilec_e0425_delta_vs_baseline=0`
+  - `nonincrease_gate_pass=true`
+- focused replay (`--timeout-seconds 300`) remains timeout-bound on
+  `src/rrr/base/misc.cpp`:
+  - `replay_01_status=124`
+  - `replay_01_first_failure_class=build_timeout`
+
+### Full-suite sweeps
+
+- workspace capture:
+  - `python3 scripts/ci_command_capture.py --run-root /tmp/fragile_leaf_2_6d_b_ii_c_c_iv_d_d_workspace_20260315_v1 --name workspace_all_targets --inactivity-timeout-seconds 90 --wall-timeout-seconds 1200 --command cargo test --workspace --all-targets`
+  - `status=124`, `timeout_reason=inactivity_timeout`
+  - first failing ids in captured stdout include:
+    `test_e2e_object_pool`, `test_e2e_trie`, `test_e2e_simple_hash_table`,
+    `test_e2e_simple_graph`, `test_e2e_tokenizer`,
+    `test_variadic_template_transpile`, `test_e2e_pthread`
+- Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+  - `Ran 34 tests`, `OK`, `skipped=1`
+
 ## 2026-03-15: Leaf 2.6.d.b.ii.c.c.iv.d (a-c) template-instantiation pointer-normalization hot path
 
 ### Context

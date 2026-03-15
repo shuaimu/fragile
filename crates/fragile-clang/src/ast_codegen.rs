@@ -44397,6 +44397,26 @@ impl FragileAtomicBoolCompat for atomic_bool {
         unique.map(ToOwned::to_owned)
     }
 
+    fn next_deduplicated_param_name(
+        raw_name: &str,
+        fallback_index: usize,
+        param_name_counts: &mut HashMap<String, usize>,
+        treat_underscore_as_empty: bool,
+    ) -> String {
+        let mut base_name = sanitize_identifier(raw_name);
+        if base_name.is_empty() || (treat_underscore_as_empty && base_name == "_") {
+            base_name = format!("_arg{}", fallback_index);
+        }
+        let count = param_name_counts.entry(base_name.clone()).or_insert(0);
+        let param_name = if *count == 0 {
+            base_name
+        } else {
+            format!("{}_{}", base_name, *count)
+        };
+        *count += 1;
+        param_name
+    }
+
     /// Normalize top-level template base names for fuzzy specialization matching.
     /// Example: `Masstree::tcursor` and `tcursor` normalize to the same base.
     fn normalize_template_base_name(base: &str) -> String {
@@ -46416,35 +46436,38 @@ impl FragileAtomicBoolCompat for atomic_bool {
         }
 
         // Skip functions with variadic template parameters (C++ parameter packs)
-        // These contain patterns like `_Tp &&...` or `_Args...` which can't be expressed in Rust
-        // Also skip functions with unresolved template parameters or C-style function pointer syntax
+        // These contain patterns like `_Tp &&...` or `_Args...` which can't be expressed in Rust.
+        // Cache the substituted parameter types once so downstream param emission and
+        // ref-tracking paths can reuse them without repeating substitution work.
+        let mut substituted_param_types: Vec<String> = Vec::with_capacity(template_info.params.len());
         for (idx, (_, param_ty)) in template_info.params.iter().enumerate() {
-            let mut param_str = self.substitute_template_type(param_ty, &subst_map);
-            if Self::has_unresolved_template_placeholder(&param_str) {
+            let mut substituted_param_type = self.substitute_template_type(param_ty, &subst_map);
+            if Self::has_unresolved_template_placeholder(&substituted_param_type) {
                 if let Some(fallback) = fallback_inst_type(idx) {
-                    param_str = fallback;
+                    substituted_param_type = fallback;
                 }
             }
-            if param_str.contains("&&...")
-                || param_str.contains("...")
-                || param_str.contains("_Tp")
-                || param_str.contains("_Args")
-                || param_str.contains("type_parameter_")
-                || param_str.contains("(*)")
-                || param_str.contains("_CharT")  // Skip unresolved template params
-                || param_str.contains("__va_list_tag")  // Skip variadic internal types
-                || param_str.contains("int (")  // Skip C-style function pointer: int (*)(...)
-                || param_str.contains("void (")  // Skip C-style function pointer: void (*)(...)
-                || param_str.contains("T[")  // Skip unresolved template array param like T[N]
-                || param_str.contains(" N]")
-                || param_str.contains("typename ")
-                || (param_str.contains('<') && param_str.contains('>'))
-                || Self::has_unresolved_template_placeholder(&param_str)
+            if substituted_param_type.contains("&&...")
+                || substituted_param_type.contains("...")
+                || substituted_param_type.contains("_Tp")
+                || substituted_param_type.contains("_Args")
+                || substituted_param_type.contains("type_parameter_")
+                || substituted_param_type.contains("(*)")
+                || substituted_param_type.contains("_CharT")  // Skip unresolved template params
+                || substituted_param_type.contains("__va_list_tag")  // Skip variadic internal types
+                || substituted_param_type.contains("int (")  // Skip C-style function pointer: int (*)(...)
+                || substituted_param_type.contains("void (")  // Skip C-style function pointer: void (*)(...)
+                || substituted_param_type.contains("T[")  // Skip unresolved template array param like T[N]
+                || substituted_param_type.contains(" N]")
+                || substituted_param_type.contains("typename ")
+                || (substituted_param_type.contains('<') && substituted_param_type.contains('>'))
+                || Self::has_unresolved_template_placeholder(&substituted_param_type)
             // Skip unresolved array size
             {
                 // C-style function pointer syntax like void (*)(void *) can't be parsed by Rust
                 return;
             }
+            substituted_param_types.push(substituted_param_type);
         }
 
         // Skip functions with decltype return types or unresolved template parameters
@@ -46485,27 +46508,21 @@ impl FragileAtomicBoolCompat for atomic_bool {
         }
 
         // Generate parameter list
-        let mut param_entries: Vec<(String, String)> = Vec::new();
+        let mut param_entries: Vec<(String, String)> = Vec::with_capacity(template_info.params.len());
         let mut param_name_counts: HashMap<String, usize> = HashMap::new();
-        for (idx, (param_name, param_ty)) in template_info.params.iter().enumerate() {
-            let mut rust_ty = self.substitute_template_type(param_ty, &subst_map);
-            if Self::has_unresolved_template_placeholder(&rust_ty) {
-                if let Some(fallback) = fallback_inst_type(idx) {
-                    rust_ty = fallback;
-                }
-            }
-            let mut pname = sanitize_identifier(param_name);
-            if pname.is_empty() {
-                pname = format!("_arg{}", param_entries.len());
-            }
-            let count = param_name_counts.entry(pname.clone()).or_insert(0);
-            if *count > 0 {
-                pname = format!("{}_{}", pname, *count);
-            }
-            *param_name_counts
-                .get_mut(&sanitize_identifier(param_name))
-                .unwrap_or(&mut 0) += 1;
-            param_entries.push((pname, rust_ty));
+        for ((idx, (param_name, _)), rust_ty) in template_info
+            .params
+            .iter()
+            .enumerate()
+            .zip(substituted_param_types.iter())
+        {
+            let param_name = Self::next_deduplicated_param_name(
+                param_name,
+                idx,
+                &mut param_name_counts,
+                false,
+            );
+            param_entries.push((param_name, rust_ty.clone()));
         }
         {
             let const_ptr_replacement = Self::find_unique_non_unit_pointer_candidate(
@@ -46633,11 +46650,13 @@ impl FragileAtomicBoolCompat for atomic_bool {
             // forms in Rust, so reads use dereference semantics. If substitution lowered
             // a reference param to a by-value primitive (for example const int& -> i32),
             // do not track it as a ref var.
-            for (param_name, param_ty) in &template_info.params {
-                let substituted_rust_ty = self.substitute_template_type(param_ty, &subst_map);
+            for ((param_name, param_ty), substituted_rust_ty) in template_info
+                .params
+                .iter()
+                .zip(substituted_param_types.iter())
+            {
                 if matches!(param_ty, CppType::Reference { .. })
-                    && (substituted_rust_ty.starts_with('*')
-                        || substituted_rust_ty.starts_with('&'))
+                    && (substituted_rust_ty.starts_with('*') || substituted_rust_ty.starts_with('&'))
                 {
                     self.ref_vars.insert(param_name.clone());
                 }
@@ -47007,18 +47026,12 @@ impl FragileAtomicBoolCompat for atomic_bool {
         let mut param_name_counts: HashMap<String, usize> = HashMap::new();
         for (param_name, param_ty) in &params {
             let rust_ty = param_ty.to_rust_type_str();
-            let mut pname = sanitize_identifier(param_name);
-            if pname.is_empty() || pname == "_" {
-                pname = format!("_arg{}", param_entries.len());
-            }
-            // Handle duplicate parameter names (common in variadic expansion)
-            let count = param_name_counts.entry(pname.clone()).or_insert(0);
-            if *count > 0 {
-                pname = format!("{}_{}", pname, *count);
-            }
-            *param_name_counts
-                .get_mut(&sanitize_identifier(param_name))
-                .unwrap() += 1;
+            let pname = Self::next_deduplicated_param_name(
+                param_name,
+                param_entries.len(),
+                &mut param_name_counts,
+                true,
+            );
             param_entries.push((pname, rust_ty));
         }
 
@@ -106061,6 +106074,23 @@ pub fn probe() {
     }
 
     #[test]
+    fn test_next_deduplicated_param_name_handles_empty_and_duplicate_slots() {
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        let first = AstCodeGen::next_deduplicated_param_name("value", 0, &mut counts, false);
+        let second = AstCodeGen::next_deduplicated_param_name("value", 1, &mut counts, false);
+        let empty = AstCodeGen::next_deduplicated_param_name("", 2, &mut counts, false);
+        let empty_dup = AstCodeGen::next_deduplicated_param_name("", 2, &mut counts, false);
+        let underscore =
+            AstCodeGen::next_deduplicated_param_name("_", 3, &mut counts, true);
+
+        assert_eq!(first, "value");
+        assert_eq!(second, "value_1");
+        assert_eq!(empty, "_unnamed");
+        assert_eq!(empty_dup, "_unnamed_1");
+        assert_eq!(underscore, "_arg3");
+    }
+
+    #[test]
     fn test_type_alias_uses_namespace_target_for_conflicted_leaf_names() {
         let mut codegen = AstCodeGen::new();
         codegen.namespace_type_alias_targets.insert(
@@ -117857,6 +117887,56 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
         assert_eq!(
             codegen.arr_vars, saved_arr_vars,
             "function-template generation should restore array-var tracking"
+        );
+    }
+
+    #[test]
+    fn test_generate_fn_template_instantiation_deduplicates_duplicate_param_names() {
+        let templ_ty = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        let mut codegen = AstCodeGen::new();
+        codegen.pending_fn_instantiations.insert(
+            "pick_left_i32".to_string(),
+            (
+                "pick_left".to_string(),
+                vec!["i32".to_string()],
+                FnTemplateInfo {
+                    template_params: vec!["T".to_string()],
+                    return_type: templ_ty.clone(),
+                    params: vec![
+                        ("x".to_string(), templ_ty.clone()),
+                        ("x".to_string(), templ_ty.clone()),
+                    ],
+                    body: Some(make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::DeclRefExpr {
+                                    name: "x".to_string(),
+                                    ty: templ_ty,
+                                    namespace_path: vec![],
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )),
+                    is_noexcept: false,
+                },
+            ),
+        );
+
+        codegen.generate_fn_template_instantiations();
+
+        assert!(
+            codegen
+                .output
+                .contains("pub fn pick_left_i32(x: i32, x_1: i32) -> i32 {"),
+            "function-template instantiation should deduplicate duplicate parameter names deterministically, got:\n{}",
+            codegen.output
         );
     }
 
