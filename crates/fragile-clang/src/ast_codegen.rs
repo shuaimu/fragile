@@ -82536,24 +82536,23 @@ fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
     let mut idx = first_trigger_idx;
     while idx < ty.len() {
         // Fast-lane contiguous identifier bytes that sanitizer leaves unchanged.
-        let run_end = find_ascii_identifier_run_end(bytes, idx);
-        if run_end > idx {
+        let byte = bytes[idx];
+        if byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'#' {
+            let run_end = find_ascii_identifier_run_end(bytes, idx);
             out.push_str(&ty[idx..run_end]);
             idx = run_end;
             continue;
         }
 
-        let byte = bytes[idx];
         if byte == b'*' {
-            let rest = &ty[idx..];
-            if rest.starts_with("*mut ") {
+            if idx + 5 <= bytes.len() && &bytes[idx..idx + 5] == b"*mut " {
                 out.push_str("ptr_mut_");
-                idx += "*mut ".len();
+                idx += 5;
                 continue;
             }
-            if rest.starts_with("*const ") {
+            if idx + 7 <= bytes.len() && &bytes[idx..idx + 7] == b"*const " {
                 out.push_str("ptr_const_");
-                idx += "*const ".len();
+                idx += 7;
                 continue;
             }
             out.push_str("ptr_");
@@ -121688,6 +121687,17 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
         assert_eq!(
             out, "VeryLongIdentifier123_NextPartptr_const_AnotherLongType99",
             "sanitizer should preserve long clean identifier runs while rewriting trigger tokens"
+        );
+    }
+
+    #[test]
+    fn test_append_sanitized_type_for_fn_name_handles_pointer_prefix_edges() {
+        let sample = "*mut T *const U * V";
+        let mut out = String::new();
+        append_sanitized_type_for_fn_name(&mut out, sample);
+        assert_eq!(
+            out, "ptr_mut_T_ptr_const_U_ptr__V",
+            "sanitizer should preserve pointer-prefix rewrites when switching to byte-slice prefix checks"
         );
     }
 
