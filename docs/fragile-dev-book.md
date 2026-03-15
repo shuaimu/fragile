@@ -15635,3 +15635,74 @@ Leaf `2.6.d.b.ii.c.c.i` is complete:
 
 Next leaf is `2.6.d.b.ii.c.c.ii` (strict single-lane build-only replay to capture
 post-fix blocker shift).
+
+## 2026-03-15: Leaf 2.6.d.b.ii.c.c.ii strict build-only replay evidence refresh
+
+### Context
+
+After completing `2.6.d.b.ii.c.c.i` (keyword snapshot alias hardening), the next
+required leaf was to rerun strict single-lane `fragilec` build-only replay and
+capture deterministic blocker-shift evidence.
+
+### Wrong-approach check
+
+Checked against section `1.3` and `docs/dev/wrong.md` before execution:
+
+- no target-specific conditionals,
+- no force-native source bypass,
+- no semantic fallback stubs to fake compilation success.
+
+### Execution
+
+Ran strict build-only replay:
+
+- `FRAGILEC_MODE=strict python3 scripts/mako_rpcbench_harness.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_ii_build_only_20260315_v3 --lanes fragilec --build-only --jobs 4 --build-timeout-seconds 600`
+
+Collected blocker inventory:
+
+- `python3 scripts/mako_rpc_compile_blocker_inventory.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_ii_build_only_20260315_v3 --lanes fragilec`
+
+### Findings
+
+Harness manifest (`benchmark_harness_manifest.txt`) captured:
+
+- `lane_fragilec_configure_status=0`
+- `lane_fragilec_clean_status=0`
+- `lane_fragilec_build_status=124`
+- `lane_fragilec_failure_class=build_timeout`
+- `lane_fragilec_test_rpc_status=-1`
+
+Inventory manifest (`rpc_compile_blocker_inventory_manifest.txt`) captured:
+
+- `lane_fragilec_first_failing_compile_class=build_timeout`
+- `lane_fragilec_first_failing_compile_file=src/rrr/base/misc.cpp`
+- `lane_fragilec_first_failing_compile_e0425_count=0`
+
+Interpretation:
+
+- strict replay did not reach build success (`status!=0`),
+- blocker family shifted from the previous syntax-class (`other_build_failure`
+  after leaf `2.6.d.b.ii.c.c.i`) back to timeout-bound compilation at
+  `src/rrr/base/misc.cpp` under this replay window.
+
+### Regression sweeps
+
+Executed full-suite checks for this leaf:
+
+- workspace capture:
+  - `python3 scripts/ci_command_capture.py --run-root /tmp/fragile_leaf_2_6d_b_ii_c_c_ii_workspace_20260315_v1 --name workspace_all_targets --inactivity-timeout-seconds 90 --wall-timeout-seconds 1200 --command cargo test --workspace --all-targets`
+  - `status=124`, `timeout_reason=inactivity_timeout`.
+  - first failing ids visible in captured stdout include:
+    `test_e2e_simple_graph`, `test_e2e_trie`, `test_e2e_simple_hash_table`,
+    `test_e2e_object_pool`, `test_e2e_tokenizer`,
+    `test_variadic_template_transpile`, `test_e2e_pthread`.
+- Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+  - `Ran 34 tests`, `OK`, `skipped=1`.
+
+### Outcome
+
+Leaf `2.6.d.b.ii.c.c.ii` is complete with deterministic replay/inventory
+artifacts. Strict build remains timeout-bound on `misc.cpp`; next leaf is
+`2.6.d.b.ii.c.c.iii` to fix the next syntax/blocker family generically when
+build is still nonzero.
