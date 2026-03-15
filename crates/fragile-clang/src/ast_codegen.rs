@@ -82492,23 +82492,57 @@ fn sanitize_type_for_fn_name(ty: &str) -> String {
     out
 }
 
+fn find_first_type_sanitization_trigger(bytes: &[u8]) -> Option<usize> {
+    bytes.iter().position(|b| {
+        matches!(
+            *b,
+            b'*' | b':' | b'-' | b' ' | b'<' | b'>' | b',' | b'[' | b']' | b';' | b'(' | b')'
+                | b'"' | b'&'
+        )
+    })
+}
+
+fn find_ascii_identifier_run_end(bytes: &[u8], mut idx: usize) -> usize {
+    while idx < bytes.len() {
+        let byte = bytes[idx];
+        if byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'#' {
+            idx += 1;
+        } else {
+            break;
+        }
+    }
+    idx
+}
+
+#[cfg(test)]
 fn type_token_is_identifier_clean(ty: &str) -> bool {
-    ty.as_bytes()
-        .iter()
-        .all(|b| matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_'))
+    find_first_type_sanitization_trigger(ty.as_bytes()).is_none()
 }
 
 fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
-    if type_token_is_identifier_clean(ty) {
+    let bytes = ty.as_bytes();
+    let Some(first_trigger_idx) = find_first_type_sanitization_trigger(bytes) else {
         out.push_str(ty);
         return;
+    };
+
+    // Prefix before the first trigger byte is unchanged by sanitizer rules.
+    if first_trigger_idx > 0 {
+        out.push_str(&ty[..first_trigger_idx]);
     }
 
     // Keep legacy replacement semantics but avoid repeated full-string
     // allocations from chained `replace(...)` calls on hot template paths.
-    let bytes = ty.as_bytes();
-    let mut idx = 0usize;
+    let mut idx = first_trigger_idx;
     while idx < ty.len() {
+        // Fast-lane contiguous identifier bytes that sanitizer leaves unchanged.
+        let run_end = find_ascii_identifier_run_end(bytes, idx);
+        if run_end > idx {
+            out.push_str(&ty[idx..run_end]);
+            idx = run_end;
+            continue;
+        }
+
         let byte = bytes[idx];
         if byte == b'*' {
             let rest = &ty[idx..];
@@ -121632,6 +121666,28 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
             sanitize_type_for_fn_name(sample),
             "std_Typß",
             "non-ASCII chars should remain intact while namespace separators are normalized"
+        );
+    }
+
+    #[test]
+    fn test_append_sanitized_type_for_fn_name_preserves_non_ascii_clean_prefix() {
+        let sample = "Typß::Node";
+        let mut out = String::new();
+        append_sanitized_type_for_fn_name(&mut out, sample);
+        assert_eq!(
+            out, "Typß_Node",
+            "sanitizer should append clean non-ASCII prefix untouched and rewrite namespace separators"
+        );
+    }
+
+    #[test]
+    fn test_append_sanitized_type_for_fn_name_handles_long_identifier_runs() {
+        let sample = "VeryLongIdentifier123::NextPart*const AnotherLongType99";
+        let mut out = String::new();
+        append_sanitized_type_for_fn_name(&mut out, sample);
+        assert_eq!(
+            out, "VeryLongIdentifier123_NextPartptr_const_AnotherLongType99",
+            "sanitizer should preserve long clean identifier runs while rewriting trigger tokens"
         );
     }
 

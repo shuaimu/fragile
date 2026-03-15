@@ -16324,3 +16324,84 @@ Post-change strict root:
 - Python suite:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
   - `Ran 34 tests`, `OK`, `skipped=1`
+
+## 2026-03-15: Leaf 2.6.d.b.ii.c.c.iv.d.d.d.d.c.c.c.c (a-b) identifier-run sanitizer fast lane
+
+### Context
+
+After `2.6.d.b.ii.c.c.iv.d.d.d.d.c.c.c.b`, strict fragilec build-only replay remained timeout-bound on `src/rrr/base/misc.cpp` with non-increase gate parity versus the previous baseline. The sanitizer path used by function-template mangled-name construction had already removed intermediate owned strings, but still processed unchanged identifier spans byte-by-byte in the append loop.
+
+### Wrong-approach check
+
+Reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before implementation:
+
+- no target-specific conditionals,
+- no native bypass or force-native path,
+- no semantic stubs/fallback method bodies,
+- no benchmark-specific shortcuts.
+
+### Generic hot-path fix
+
+Implemented in `crates/fragile-clang/src/ast_codegen.rs`:
+
+- added `find_ascii_identifier_run_end`;
+- updated `append_sanitized_type_for_fn_name` to fast-append contiguous ASCII identifier runs (`[A-Za-z0-9_#]+`) in one chunk;
+- kept existing trigger-token rewrites and UTF-8 fallback semantics intact.
+
+This reduces per-byte branching on long unchanged type-name segments while preserving sanitizer output behavior.
+
+### Focused regressions
+
+Added/validated:
+
+- `test_append_sanitized_type_for_fn_name_handles_long_identifier_runs`
+- `test_sanitize_type_for_fn_name_matches_legacy_chain_replacements`
+- `test_append_sanitized_type_for_fn_name_matches_sanitize_type_for_fn_name`
+- `test_build_fn_template_mangled_name_sanitizes_type_args`
+- `test_build_fn_template_mangled_name_preserves_empty_type_arg_shape`
+
+Commands:
+
+- `cargo test -p fragile-clang test_append_sanitized_type_for_fn_name_handles_long_identifier_runs -- --nocapture`
+- `cargo test -p fragile-clang test_sanitize_type_for_fn_name_ -- --nocapture`
+- `cargo test -p fragile-clang test_build_fn_template_mangled_name_ -- --nocapture`
+- `cargo test -p fragile-clang test_append_sanitized_type_for_fn_name_matches_sanitize_type_for_fn_name -- --nocapture`
+
+### Strict replay + non-increase gate
+
+Post-change strict root:
+`/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_d_d_d_c_c_c_c_b_build_only_20260315_v1`
+
+- lane status:
+  - `build_only=true`
+  - `lane_fragilec_configure_status=0`
+  - `lane_fragilec_clean_status=0`
+  - `lane_fragilec_build_status=124`
+  - `lane_fragilec_failure_class=build_timeout`
+- inventory non-increase vs baseline
+  `/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_d_d_d_c_c_c_b_build_only_20260315_v1/rpc_compile_blocker_inventory_manifest.txt`:
+  - `lane_fragilec_first_failing_compile_class=build_timeout`
+  - `lane_fragilec_first_failing_compile_file=src/rrr/base/misc.cpp`
+  - `lane_fragilec_class_rank_delta_vs_baseline=0`
+  - `lane_fragilec_e0425_delta_vs_baseline=0`
+  - `lane_fragilec_nonincrease_gate_pass=true`
+  - `nonincrease_gate_pass=true`
+- focused replay (`--timeout-seconds 300`) remains timeout-bound:
+  - `replay_01_blocker_class=build_timeout`
+  - `replay_01_blocker_file=src/rrr/base/misc.cpp`
+  - `replay_01_status=124`
+  - `replay_01_timed_out=true`
+  - `replay_01_first_failure_class=build_timeout`
+
+### Full-suite sweeps
+
+- workspace capture:
+  - `python3 scripts/ci_command_capture.py --run-root /tmp/fragile_leaf_2_6d_b_ii_c_c_iv_d_d_d_d_c_c_c_c_workspace_20260315_v1 --name workspace_all_targets --inactivity-timeout-seconds 90 --wall-timeout-seconds 1200 --command cargo test --workspace --all-targets`
+  - `status=124`, `timeout_reason=inactivity_timeout`
+  - first failing ids include:
+    `test_e2e_simple_hash_table`, `test_e2e_simple_graph`, `test_e2e_object_pool`,
+    `test_e2e_tokenizer`, `test_e2e_trie`,
+    `test_variadic_template_transpile`, `test_e2e_pthread`
+- Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+  - `Ran 34 tests`, `OK`, `skipped=1`
