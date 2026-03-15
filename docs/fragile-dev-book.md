@@ -16078,3 +16078,84 @@ Post-change strict replay root:
 - Python suite:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
   - `Ran 34 tests`, `OK`, `skipped=1`
+
+## 2026-03-15: Leaf 2.6.d.b.ii.c.c.iv.d.d.d.d (a-b) one-pass type-sanitizer hot path
+
+### Context
+
+After `2.6.d.b.ii.c.c.iv.d.d.d.c`, strict build remained timeout-bound on
+`src/rrr/base/misc.cpp` with unchanged blocker class/rank deltas. The prior
+cycle had already reduced simple type-arg mangling churn via borrowed fast-path
+(`sanitize_type_for_fn_name_if_needed`), so the next generic target was the
+remaining complex-type sanitation path.
+
+### Wrong-approach check
+
+Reviewed Section `1.3` and `docs/dev/wrong.md` before edits:
+
+- no RPC/mako-specific conditionals,
+- no force-native/source bypass,
+- no fake semantic stubs/fallback method bodies,
+- no benchmark-target special casing.
+
+### Generic hot-path fix
+
+Implemented in `crates/fragile-clang/src/ast_codegen.rs`:
+
+- replaced chained `replace(...)` allocations in
+  `sanitize_type_for_fn_name` with a one-pass scanner,
+- preserved legacy replacement semantics (`*mut`, `*const`, `*`, `::`, `->`,
+  spaces/angle brackets, `>`, commas, `&`, brackets/parens/quotes),
+- kept the existing borrow fast-path (`sanitize_type_for_fn_name_if_needed`) so
+  simple identifier-clean type args still avoid owned allocations entirely.
+
+This keeps behavior stable while reducing allocation churn on complex template
+arg mangling in function-template codegen hot loops.
+
+### Focused regressions
+
+Added/validated focused coverage:
+
+- `test_sanitize_type_for_fn_name_matches_legacy_chain_replacements`
+- `test_sanitize_type_for_fn_name_if_needed_borrows_simple_types_and_sanitizes_complex_types`
+- `test_build_fn_template_mangled_name_sanitizes_type_args`
+- `test_build_fn_template_mangled_name_preserves_empty_type_arg_shape`
+
+Commands:
+
+- `cargo test -p fragile-clang test_sanitize_type_for_fn_name_ -- --nocapture`
+- `cargo test -p fragile-clang test_build_fn_template_mangled_name_ -- --nocapture`
+
+### Strict replay + gates
+
+Post-change strict root:
+`/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_d_d_d_b_build_only_20260315_v1`
+
+- build-only lane:
+  - `lane_fragilec_configure_status=0`
+  - `lane_fragilec_clean_status=0`
+  - `lane_fragilec_build_status=124`
+  - `lane_fragilec_failure_class=build_timeout`
+- inventory non-increase vs baseline
+  `/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_d_d_c_build_only_20260315_v1/rpc_compile_blocker_inventory_manifest.txt`:
+  - `lane_fragilec_class_rank_delta_vs_baseline=0`
+  - `lane_fragilec_e0425_delta_vs_baseline=0`
+  - `nonincrease_gate_pass=true`
+- focused replay (`--timeout-seconds 300`) remains timeout-bound on
+  `src/rrr/base/misc.cpp`:
+  - `replay_01_status=124`
+  - `replay_01_timed_out=true`
+  - `replay_01_first_failure_class=build_timeout`
+
+### Full-suite sweeps
+
+- workspace capture:
+  - `python3 scripts/ci_command_capture.py --run-root /tmp/fragile_leaf_2_6d_b_ii_c_c_iv_d_d_d_d_workspace_20260315_v1 --name workspace_all_targets --inactivity-timeout-seconds 90 --wall-timeout-seconds 1200 --command cargo test --workspace --all-targets`
+  - `status=124`, `timeout_reason=inactivity_timeout`
+  - first failing ids include:
+    `test_e2e_object_pool`, `test_e2e_trie`, `test_e2e_simple_graph`,
+    `test_e2e_simple_hash_table`, `test_e2e_tokenizer`,
+    `test_variadic_template_transpile`, `test_e2e_pthread`
+- Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+  - `Ran 34 tests`, `OK`, `skipped=1`

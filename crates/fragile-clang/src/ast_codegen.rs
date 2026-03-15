@@ -42624,7 +42624,8 @@ impl FragileAtomicBoolCompat for atomic_bool {
             if idx > 0 {
                 mangled_name.push('_');
             }
-            mangled_name.push_str(&sanitize_type_for_fn_name(arg));
+            let mangled_arg = sanitize_type_for_fn_name_if_needed(arg);
+            mangled_name.push_str(mangled_arg.as_ref());
         }
         mangled_name
     }
@@ -82487,16 +82488,59 @@ fn infer_fn_template_type_args_with_shape(
 /// Sanitize a type name for use in function names (e.g., template instantiation mangling).
 /// Converts "*mut i32" to "ptr_mut_i32", "i32" stays "i32", etc.
 fn sanitize_type_for_fn_name(ty: &str) -> String {
-    ty.replace("*mut ", "ptr_mut_")
-        .replace("*const ", "ptr_const_")
-        .replace('*', "ptr_")
-        .replace("::", "_")
-        .replace("->", "_ret_") // Handle function return type arrow before stripping '>'
-        .replace([' ', '<'], "_")
-        .replace('>', "")
-        .replace(',', "_")
-        .replace('&', "ref_")
-        .replace(['[', ']', ';', '(', ')', '"'], "_") // Handle quotes in extern "C" linkage specifiers
+    // Keep legacy replacement semantics but avoid repeated full-string
+    // allocations from chained `replace(...)` calls on hot template paths.
+    let mut out = String::with_capacity(ty.len());
+    let mut idx = 0usize;
+    while idx < ty.len() {
+        let rest = &ty[idx..];
+        if rest.starts_with("*mut ") {
+            out.push_str("ptr_mut_");
+            idx += "*mut ".len();
+            continue;
+        }
+        if rest.starts_with("*const ") {
+            out.push_str("ptr_const_");
+            idx += "*const ".len();
+            continue;
+        }
+        if rest.starts_with("::") {
+            out.push('_');
+            idx += "::".len();
+            continue;
+        }
+        if rest.starts_with("->") {
+            // Handle function return type arrow before stripping `>`.
+            out.push_str("_ret_");
+            idx += "->".len();
+            continue;
+        }
+
+        let ch = rest
+            .chars()
+            .next()
+            .expect("sanitize_type_for_fn_name: idx should always point to a valid char boundary");
+        match ch {
+            '*' => out.push_str("ptr_"),
+            ' ' | '<' | ',' | '[' | ']' | ';' | '(' | ')' | '"' => out.push('_'),
+            '>' => {}
+            '&' => out.push_str("ref_"),
+            _ => out.push(ch),
+        }
+        idx += ch.len_utf8();
+    }
+    out
+}
+
+fn sanitize_type_for_fn_name_if_needed(ty: &str) -> Cow<'_, str> {
+    let needs_sanitization = ty.chars().any(|ch| {
+        !matches!(ch, 'a'..='z' | 'A'..='Z' | '0'..='9' | '_')
+    });
+    if needs_sanitization {
+        Cow::Owned(sanitize_type_for_fn_name(ty))
+    } else {
+        Cow::Borrowed(ty)
+    }
 }
 
 /// Expression-position associated calls on generic paths require turbofish.
@@ -121472,6 +121516,57 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
             mangled, "fallback_make_",
             "mangled-name builder should preserve empty-type-arg suffix shape used by deferred template instantiation paths"
         );
+    }
+
+    #[test]
+    fn test_sanitize_type_for_fn_name_if_needed_borrows_simple_types_and_sanitizes_complex_types() {
+        let borrowed = sanitize_type_for_fn_name_if_needed("i32");
+        assert!(
+            matches!(borrowed, Cow::Borrowed("i32")),
+            "simple type lanes should avoid owned sanitation allocations"
+        );
+
+        let sanitized = sanitize_type_for_fn_name_if_needed("*const i8");
+        assert_eq!(sanitized.as_ref(), "ptr_const_i8");
+        assert!(
+            matches!(sanitized, Cow::Owned(_)),
+            "complex type lanes requiring sanitation should still allocate sanitized output"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_type_for_fn_name_matches_legacy_chain_replacements() {
+        fn legacy_sanitize_type_for_fn_name(ty: &str) -> String {
+            ty.replace("*mut ", "ptr_mut_")
+                .replace("*const ", "ptr_const_")
+                .replace('*', "ptr_")
+                .replace("::", "_")
+                .replace("->", "_ret_")
+                .replace([' ', '<'], "_")
+                .replace('>', "")
+                .replace(',', "_")
+                .replace('&', "ref_")
+                .replace(['[', ']', ';', '(', ')', '"'], "_")
+        }
+
+        let samples = [
+            "i32",
+            "*const i8",
+            "&mut std::string::String",
+            "**const i8",
+            "extern \"C\" fn(*const i8) -> &mut Foo<[u8; 4]>",
+            "std::vector<std::pair<i32, i64>>",
+            "fn(*mut A::B) -> C::D",
+            "[u8; 16]",
+        ];
+
+        for sample in samples {
+            assert_eq!(
+                sanitize_type_for_fn_name(sample),
+                legacy_sanitize_type_for_fn_name(sample),
+                "single-pass sanitizer must preserve legacy output for `{sample}`"
+            );
+        }
     }
 
     #[test]
