@@ -42624,8 +42624,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
             if idx > 0 {
                 mangled_name.push('_');
             }
-            let mangled_arg = sanitize_type_for_fn_name_if_needed(arg);
-            mangled_name.push_str(mangled_arg.as_ref());
+            append_sanitized_type_for_fn_name(&mut mangled_name, arg);
         }
         mangled_name
     }
@@ -82488,9 +82487,25 @@ fn infer_fn_template_type_args_with_shape(
 /// Sanitize a type name for use in function names (e.g., template instantiation mangling).
 /// Converts "*mut i32" to "ptr_mut_i32", "i32" stays "i32", etc.
 fn sanitize_type_for_fn_name(ty: &str) -> String {
+    let mut out = String::with_capacity(ty.len());
+    append_sanitized_type_for_fn_name(&mut out, ty);
+    out
+}
+
+fn type_token_is_identifier_clean(ty: &str) -> bool {
+    ty.as_bytes()
+        .iter()
+        .all(|b| matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_'))
+}
+
+fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
+    if type_token_is_identifier_clean(ty) {
+        out.push_str(ty);
+        return;
+    }
+
     // Keep legacy replacement semantics but avoid repeated full-string
     // allocations from chained `replace(...)` calls on hot template paths.
-    let mut out = String::with_capacity(ty.len());
     let mut idx = 0usize;
     while idx < ty.len() {
         let rest = &ty[idx..];
@@ -82529,14 +82544,11 @@ fn sanitize_type_for_fn_name(ty: &str) -> String {
         }
         idx += ch.len_utf8();
     }
-    out
 }
 
+#[cfg(test)]
 fn sanitize_type_for_fn_name_if_needed(ty: &str) -> Cow<'_, str> {
-    let needs_sanitization = ty.chars().any(|ch| {
-        !matches!(ch, 'a'..='z' | 'A'..='Z' | '0'..='9' | '_')
-    });
-    if needs_sanitization {
+    if !type_token_is_identifier_clean(ty) {
         Cow::Owned(sanitize_type_for_fn_name(ty))
     } else {
         Cow::Borrowed(ty)
@@ -121565,6 +121577,27 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
                 sanitize_type_for_fn_name(sample),
                 legacy_sanitize_type_for_fn_name(sample),
                 "single-pass sanitizer must preserve legacy output for `{sample}`"
+            );
+        }
+    }
+
+    #[test]
+    fn test_append_sanitized_type_for_fn_name_matches_sanitize_type_for_fn_name() {
+        let samples = [
+            "i32",
+            "*const i8",
+            "&mut std::string::String",
+            "extern \"C\" fn(*const i8) -> &mut Foo<[u8; 4]>",
+            "fn(*mut A::B) -> C::D",
+        ];
+
+        for sample in samples {
+            let mut out = String::new();
+            append_sanitized_type_for_fn_name(&mut out, sample);
+            assert_eq!(
+                out,
+                sanitize_type_for_fn_name(sample),
+                "direct-append sanitizer should preserve standalone sanitizer output for `{sample}`"
             );
         }
     }
