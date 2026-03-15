@@ -29492,6 +29492,82 @@ impl FragileAtomicBoolCompat for atomic_bool {
             )
         }
 
+        fn parse_raw_pointer_pointee_type(ty: &str) -> Option<String> {
+            let ty = ty.trim().trim_end_matches(',').trim();
+            let pointee = ty
+                .strip_prefix("*mut ")
+                .or_else(|| ty.strip_prefix("*const "))?
+                .trim();
+            if pointee.is_empty() {
+                return None;
+            }
+            let token = pointee
+                .split(['<', ' ', ',', '{', '['])
+                .next()
+                .unwrap_or("")
+                .trim();
+            if token.is_empty() {
+                None
+            } else {
+                Some(token.trim_start_matches("r#").to_string())
+            }
+        }
+
+        fn parse_struct_fields(code: &str) -> HashMap<String, HashSet<String>> {
+            let lines: Vec<&str> = code.lines().collect();
+            let mut out = HashMap::new();
+            let mut i = 0usize;
+            while i < lines.len() {
+                let trimmed = lines[i].trim_start();
+                let Some(rest) = trimmed
+                    .strip_prefix("pub struct ")
+                    .or_else(|| trimmed.strip_prefix("struct "))
+                else {
+                    i += 1;
+                    continue;
+                };
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| AstCodeGen::is_identifier_char(*c) || *c == '#')
+                    .collect();
+                if name.is_empty() || !trimmed.ends_with('{') {
+                    i += 1;
+                    continue;
+                }
+                let mut fields = HashSet::new();
+                let mut depth = 1isize;
+                let mut j = i + 1;
+                while j < lines.len() && depth > 0 {
+                    let current = lines[j];
+                    let current_trim = current.trim();
+                    if depth == 1 {
+                        let mut field_src = current_trim;
+                        if let Some(rest) = field_src.strip_prefix("pub(") {
+                            if let Some(close_idx) = rest.find(')') {
+                                field_src = rest[close_idx + 1..].trim_start();
+                            }
+                        } else if let Some(rest) = field_src.strip_prefix("pub ") {
+                            field_src = rest.trim_start();
+                        }
+                        if let Some((lhs, _rhs)) = field_src.split_once(':') {
+                            let field = lhs.trim().trim_start_matches("r#");
+                            if !field.is_empty() {
+                                fields.insert(field.to_string());
+                            }
+                        }
+                    }
+                    depth += current.chars().filter(|c| *c == '{').count() as isize;
+                    depth -= current.chars().filter(|c| *c == '}').count() as isize;
+                    j += 1;
+                }
+                if !fields.is_empty() {
+                    out.insert(name.trim_start_matches("r#").to_string(), fields);
+                }
+                i = j;
+            }
+            out
+        }
+
         fn parse_struct_pointer_fields(code: &str) -> HashMap<String, HashSet<String>> {
             let lines: Vec<&str> = code.lines().collect();
             let mut out = HashMap::new();
@@ -29544,6 +29620,70 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 }
                 if !fields.is_empty() {
                     out.insert(name.trim_start_matches("r#").to_string(), fields);
+                }
+                i = j;
+            }
+            out
+        }
+
+        fn parse_struct_pointer_field_pointees(
+            code: &str,
+            struct_fields: &HashMap<String, HashSet<String>>,
+        ) -> HashMap<String, HashMap<String, String>> {
+            let lines: Vec<&str> = code.lines().collect();
+            let mut out: HashMap<String, HashMap<String, String>> = HashMap::new();
+            let mut i = 0usize;
+            while i < lines.len() {
+                let trimmed = lines[i].trim_start();
+                let Some(rest) = trimmed
+                    .strip_prefix("pub struct ")
+                    .or_else(|| trimmed.strip_prefix("struct "))
+                else {
+                    i += 1;
+                    continue;
+                };
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| AstCodeGen::is_identifier_char(*c) || *c == '#')
+                    .collect();
+                if name.is_empty() || !trimmed.ends_with('{') {
+                    i += 1;
+                    continue;
+                }
+                let mut field_pointees: HashMap<String, String> = HashMap::new();
+                let mut depth = 1isize;
+                let mut j = i + 1;
+                while j < lines.len() && depth > 0 {
+                    let current = lines[j];
+                    let current_trim = current.trim();
+                    if depth == 1 {
+                        let mut field_src = current_trim;
+                        if let Some(rest) = field_src.strip_prefix("pub(") {
+                            if let Some(close_idx) = rest.find(')') {
+                                field_src = rest[close_idx + 1..].trim_start();
+                            }
+                        } else if let Some(rest) = field_src.strip_prefix("pub ") {
+                            field_src = rest.trim_start();
+                        }
+                        if let Some((lhs, rhs)) = field_src.split_once(':') {
+                            let field = lhs.trim().trim_start_matches("r#");
+                            if field.is_empty() {
+                                j += 1;
+                                continue;
+                            }
+                            if let Some(pointee) = parse_raw_pointer_pointee_type(rhs) {
+                                if struct_fields.contains_key(&pointee) {
+                                    field_pointees.insert(field.to_string(), pointee);
+                                }
+                            }
+                        }
+                    }
+                    depth += current.chars().filter(|c| *c == '{').count() as isize;
+                    depth -= current.chars().filter(|c| *c == '}').count() as isize;
+                    j += 1;
+                }
+                if !field_pointees.is_empty() {
+                    out.insert(name.trim_start_matches("r#").to_string(), field_pointees);
                 }
                 i = j;
             }
@@ -29666,6 +29806,81 @@ impl FragileAtomicBoolCompat for atomic_bool {
             out
         }
 
+        fn collect_pointer_binding_pointees(
+            signature_line: &str,
+            body_lines: &[&str],
+            struct_fields: &HashMap<String, HashSet<String>>,
+        ) -> HashMap<String, String> {
+            let mut out = HashMap::new();
+            let mut non_pointer_locals: HashSet<String> = HashSet::new();
+            let Some(open_idx) = signature_line.find('(') else {
+                return out;
+            };
+            let Some(close_idx) = AstCodeGen::find_matching_close_paren(signature_line, open_idx)
+            else {
+                return out;
+            };
+            for param in AstCodeGen::split_top_level_list(
+                &signature_line[open_idx + 1..close_idx],
+                ',',
+            ) {
+                let Some((lhs, rhs)) = param.split_once(':') else {
+                    continue;
+                };
+                let mut name = lhs.trim();
+                if let Some(stripped) = name.strip_prefix("mut ") {
+                    name = stripped.trim();
+                }
+                let name = name.trim_start_matches("r#");
+                if name.is_empty() {
+                    continue;
+                }
+                let Some(pointee) = parse_raw_pointer_pointee_type(rhs) else {
+                    continue;
+                };
+                if struct_fields.contains_key(&pointee) {
+                    out.insert(name.to_string(), pointee);
+                }
+            }
+            for line in body_lines {
+                let trimmed = line.trim_start();
+                let Some(after_let) = trimmed.strip_prefix("let ") else {
+                    continue;
+                };
+                let mut rest = after_let.trim_start();
+                if let Some(stripped) = rest.strip_prefix("mut ") {
+                    rest = stripped.trim_start();
+                }
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| AstCodeGen::is_identifier_char(*c) || *c == '#')
+                    .collect();
+                let Some(colon_idx) = rest.find(':') else {
+                    continue;
+                };
+                let ty = rest[colon_idx + 1..]
+                    .split('=')
+                    .next()
+                    .unwrap_or("")
+                    .trim();
+                let ident = name.trim_start_matches("r#");
+                if ident.is_empty() {
+                    continue;
+                }
+                if let Some(pointee) = parse_raw_pointer_pointee_type(ty) {
+                    if struct_fields.contains_key(&pointee) {
+                        out.insert(ident.to_string(), pointee);
+                    }
+                } else {
+                    non_pointer_locals.insert(ident.to_string());
+                }
+            }
+            for ident in non_pointer_locals {
+                out.remove(&ident);
+            }
+            out
+        }
+
         fn rewrite_pointer_binding_calls(line: &str, pointer_bindings: &HashSet<String>) -> String {
             if pointer_bindings.is_empty() || !line.contains('.') || !line.contains('(') {
                 return line.to_string();
@@ -29774,11 +29989,67 @@ impl FragileAtomicBoolCompat for atomic_bool {
             rewritten
         }
 
+        fn rewrite_pointer_pointee_field_calls(
+            line: &str,
+            pointer_binding_pointees: &HashMap<String, String>,
+            pointer_self_field_pointees: &HashMap<String, String>,
+            struct_fields: &HashMap<String, HashSet<String>>,
+        ) -> String {
+            if line.is_empty() || !line.contains(").") || !line.contains("()") {
+                return line.to_string();
+            }
+            let mut rewritten = line.to_string();
+
+            for (ident, pointee) in pointer_binding_pointees {
+                let Some(fields) = struct_fields.get(pointee) else {
+                    continue;
+                };
+                for field in fields {
+                    let call_pattern = format!("(*{}).{}()", ident, field);
+                    if rewritten.contains(&call_pattern) {
+                        rewritten = rewritten.replace(
+                            &call_pattern,
+                            &format!("(*{}).{}", ident, field),
+                        );
+                    }
+                }
+            }
+
+            for (self_field, pointee) in pointer_self_field_pointees {
+                let Some(fields) = struct_fields.get(pointee) else {
+                    continue;
+                };
+                for field in fields {
+                    let direct_pattern = format!("(*self.{}).{}()", self_field, field);
+                    if rewritten.contains(&direct_pattern) {
+                        rewritten = rewritten.replace(
+                            &direct_pattern,
+                            &format!("(*self.{}).{}", self_field, field),
+                        );
+                    }
+                    let deref_self_pattern = format!("(*(*self).{}).{}()", self_field, field);
+                    if rewritten.contains(&deref_self_pattern) {
+                        rewritten = rewritten.replace(
+                            &deref_self_pattern,
+                            &format!("(*(*self).{}).{}", self_field, field),
+                        );
+                    }
+                }
+            }
+
+            rewritten
+        }
+
         let lines: Vec<&str> = code.lines().collect();
         if lines.is_empty() {
             return code.to_string();
         }
+        let struct_fields = parse_struct_fields(code);
+        if struct_fields.is_empty() {
+            return code.to_string();
+        }
         let pointer_fields = parse_struct_pointer_fields(code);
+        let pointer_field_pointees = parse_struct_pointer_field_pointees(code, &struct_fields);
         let impl_targets = collect_impl_target_per_line(&lines);
 
         let mut out = String::with_capacity(code.len());
@@ -29818,6 +30089,8 @@ impl FragileAtomicBoolCompat for atomic_bool {
 
             let body_lines: &[&str] = if j > i + 1 { &lines[i + 1..j] } else { &[] };
             let pointer_bindings = collect_pointer_bindings(trimmed, body_lines);
+            let pointer_binding_pointees =
+                collect_pointer_binding_pointees(trimmed, body_lines, &struct_fields);
             let mut pointer_self_fields: Vec<String> = impl_targets
                 .get(i)
                 .and_then(|t| t.as_ref())
@@ -29825,6 +30098,12 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 .map(|set| set.iter().cloned().collect())
                 .unwrap_or_default();
             pointer_self_fields.sort_by(|a, b| b.len().cmp(&a.len()).then(a.cmp(b)));
+            let pointer_self_field_pointees: HashMap<String, String> = impl_targets
+                .get(i)
+                .and_then(|t| t.as_ref())
+                .and_then(|target| pointer_field_pointees.get(target))
+                .cloned()
+                .unwrap_or_default();
 
             out.push_str(lines[i]);
             out.push('\n');
@@ -29835,6 +30114,12 @@ impl FragileAtomicBoolCompat for atomic_bool {
                     rewritten =
                         rewrite_pointer_field_calls(&rewritten, &format!("(*self).{}", field));
                 }
+                rewritten = rewrite_pointer_pointee_field_calls(
+                    &rewritten,
+                    &pointer_binding_pointees,
+                    &pointer_self_field_pointees,
+                    &struct_fields,
+                );
                 out.push_str(&rewritten);
                 out.push('\n');
             }
@@ -104861,6 +105146,67 @@ pub fn isPositive(n: i32) -> bool {
         assert_eq!(
             output, input,
             "loop violation bool-tail recovery should skip non-loop guard patterns"
+        );
+    }
+
+    #[test]
+    fn test_normalize_pointer_receiver_method_calls_rewrites_deref_field_method_calls_for_self_pointer_fields(
+    ) {
+        let input = r#"
+pub struct DLLNode {
+    pub data: i32,
+    pub next: *mut DLLNode,
+}
+
+pub struct DoublyLinkedList {
+    pub head: *mut DLLNode,
+}
+
+impl DoublyLinkedList {
+    pub fn front(&self) -> i32 {
+        return if (self.head).is_null() == false { unsafe { (*self.head).data() } } else { -1 };
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_pointer_receiver_method_calls(input);
+        assert!(
+            output.contains("(*self.head).data }"),
+            "pointer receiver normalization should rewrite zero-arg pointer-pointee field calls to field access, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("(*self.head).data()"),
+            "pointer receiver normalization should remove method-call parens for pointee fields, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_pointer_receiver_method_calls_rewrites_deref_field_method_calls_for_pointer_bindings()
+    {
+        let input = r#"
+pub struct DLLNode {
+    pub data: i32,
+    pub next: *mut DLLNode,
+}
+
+pub fn sum(curr: *mut DLLNode) -> i32 {
+    if (curr).is_null() == false {
+        return unsafe { (*curr).data() };
+    }
+    return 0;
+}
+"#;
+        let output = AstCodeGen::normalize_pointer_receiver_method_calls(input);
+        assert!(
+            output.contains("(*curr).data };"),
+            "pointer receiver normalization should rewrite pointer binding pointee field calls to field access, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("(*curr).data()"),
+            "pointer receiver normalization should remove method-call parens on pointer binding field access, got:\n{}",
+            output
         );
     }
 

@@ -14500,3 +14500,91 @@ Broader regression checks:
 ### Outcome
 
 Leaf `2.8.b.iv.c.i` is complete: the next top-ranked CI build-phase integration failure family (`test_e2e_heapsort`) is fixed with a generic normalization, locked by focused tests, and validated by deterministic replay showing the failure front shifted to the next family.
+
+## 2026-03-15: Leaf 2.8.b.iv.c.iii.a next build-phase family fix (`test_e2e_doubly_linked_list`)
+
+### Context
+
+After `2.8.b.iv.c.ii`, deterministic CI replay (`/tmp/fragile_ci_leaf_2_8b_iv_c_i_20260315_v1`) showed the next front failure id as `test_e2e_doubly_linked_list`.
+
+Targeted repro:
+
+- `cargo test -p fragile-clang --test integration_test test_e2e_doubly_linked_list -- --nocapture`
+- observed failure: expected exit code `0`, got rustc compile error (`E0599`).
+
+Generated output in `front()`/`back()` showed degraded pointer-pointee field access emitted as method calls:
+
+- `unsafe { (*self.head).data() }`
+- `unsafe { (*self.tail).data() }`
+
+where `DLLNode::data` is a field, not a method.
+
+### Wrong-approach check
+
+Checked against `docs/dev/wrong.md` and section `1.3` before editing:
+
+- no test-id-specific transpiler branching,
+- no force-native bypasses,
+- no fake fallback bodies.
+
+Fix is a generic pointer-receiver normalization improvement in `ast_codegen`.
+
+### Plan
+
+1. Extend pointer receiver normalization with pointee-struct field awareness.
+2. Rewrite only degraded zero-arg pointee field calls (`(*ptr).field()`) to field access when the pointee type actually defines `field`.
+3. Add focused regressions for both `self` pointer fields and local pointer bindings.
+4. Re-run targeted integration and CI-aligned replay artifacts.
+
+### Execution
+
+Updated `crates/fragile-clang/src/ast_codegen.rs`:
+
+- enhanced `normalize_pointer_receiver_method_calls` with:
+  - struct field inventory extraction,
+  - raw-pointer pointee type extraction,
+  - impl-target pointer-field pointee mapping,
+  - pointer-binding pointee mapping,
+  - a new rewrite stage that converts degraded zero-arg pointee field method calls to field access when validated against known pointee fields.
+
+Added focused regressions:
+
+- `test_normalize_pointer_receiver_method_calls_rewrites_deref_field_method_calls_for_self_pointer_fields`
+- `test_normalize_pointer_receiver_method_calls_rewrites_deref_field_method_calls_for_pointer_bindings`
+
+### Validation
+
+Targeted checks:
+
+- `cargo test -p fragile-clang test_normalize_pointer_receiver_method_calls_ -- --nocapture` (pass)
+- `cargo test -p fragile-clang --test integration_test test_e2e_doubly_linked_list -- --nocapture` (pass)
+
+CI-aligned deterministic replay:
+
+- run root: `/tmp/fragile_ci_leaf_2_8b_iv_c_iii_a_20260315_v2`
+- `build_phase_build.status=0`
+- `build_phase_test.status=124` (`timeout_reason=inactivity_timeout`)
+- `build_phase_test.stdout.log` confirms:
+  - `test_e2e_access_specifiers ... ok`
+  - `test_e2e_integer_parsing ... ok`
+  - `test_e2e_heapsort ... ok`
+  - `test_e2e_doubly_linked_list ... ok`
+  - first current failing id moved to `test_e2e_binary_search_tree` (`integration_test_failure`)
+
+Broader regression checks:
+
+- workspace capture run root `/tmp/fragile_leaf_2_8b_iv_c_iii_a_workspace_20260315_v1`:
+  - `workspace_all_targets.status=124` (`timeout_reason=inactivity_timeout`)
+  - captured stdout confirms:
+    - `test_e2e_access_specifiers ... ok`
+    - `test_e2e_integer_parsing ... ok`
+    - `test_e2e_heapsort ... ok`
+    - `test_e2e_doubly_linked_list ... ok`
+  - first current failing id in this sweep is `test_e2e_binary_search_tree` (`integration_test_failure`)
+- Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+  - `Ran 34 tests`, `OK`, `skipped=1`
+
+### Outcome
+
+Leaf `2.8.b.iv.c.iii.a` is complete: the next top-ranked CI build-phase integration failure family (`test_e2e_doubly_linked_list`) is fixed with a generic pointer-pointee field-call normalization, locked by focused tests, and validated by deterministic replay showing the failure front shifted to the next family.
