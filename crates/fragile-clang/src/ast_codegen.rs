@@ -9495,8 +9495,22 @@ impl AstCodeGen {
                 continue;
             }
 
+            let mut trailing_default_return_indices: Vec<usize> = vec![last_body_idx];
+            for idx in body_indices.iter().rev().skip(1) {
+                if is_default_return_line(lines[*idx].trim()) {
+                    trailing_default_return_indices.push(*idx);
+                } else {
+                    break;
+                }
+            }
+            trailing_default_return_indices.reverse();
+            let first_tail_default_idx = trailing_default_return_indices
+                .first()
+                .copied()
+                .unwrap_or(last_body_idx);
+
             let has_earlier_return = body_indices.iter().any(|idx| {
-                *idx != last_body_idx && lines[*idx].trim_start().starts_with("return ")
+                *idx < first_tail_default_idx && lines[*idx].trim_start().starts_with("return ")
             });
             if has_earlier_return {
                 for k in i..=j {
@@ -9537,7 +9551,14 @@ impl AstCodeGen {
 
             if let Some(name) = selected_name {
                 for k in i..=j {
-                    if k == last_body_idx {
+                    let is_duplicate_default_tail = k != first_tail_default_idx
+                        && trailing_default_return_indices
+                            .iter()
+                            .any(|idx| *idx == k);
+                    if is_duplicate_default_tail {
+                        continue;
+                    }
+                    if k == first_tail_default_idx {
                         let indent_len =
                             lines[k].len().saturating_sub(lines[k].trim_start().len());
                         let indent = &lines[k][..indent_len];
@@ -104306,6 +104327,30 @@ pub fn get_and_advance(ptr_ptr: *mut *const i8) -> i8 {
         assert!(
             !output.contains("return Default::default();"),
             "default-tail return normalization should remove degraded default tail return in this pattern, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_default_tail_returns_to_matching_result_locals_rewrites_duplicate_default_tail_artifacts()
+     {
+        let input = r#"
+pub fn access_specifier_sum() -> i32 {
+    let mut result: i32 = 10;
+    result += 20;
+    return Default::default();
+    return Default::default();
+}
+"#;
+        let output = AstCodeGen::normalize_default_tail_returns_to_matching_result_locals(input);
+        assert!(
+            output.contains("return result;"),
+            "default-tail return normalization should recover duplicated trailing default returns by reusing the typed result local, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("return Default::default();"),
+            "default-tail return normalization should remove duplicated degraded default tail returns in this pattern, got:\n{}",
             output
         );
     }

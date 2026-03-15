@@ -14255,3 +14255,75 @@ CI-aligned deterministic replay evidence:
 
 Leaf `2.8.b.ii` is complete: CI build-phase replay now always finalizes with a terminal status artifact and timeout classification, removing indefinite local hangs from the replay loop and enabling bounded failure-family work in `2.8.b.iii`.
 
+## 2026-03-14: Leaf 2.8.b.iii top-ranked integration failure family fix (`test_e2e_access_specifiers`)
+
+### Context
+
+Leaf `2.8.b.i` identified `test_e2e_access_specifiers` as the first failing build-phase integration id. Targeted repro showed generated `cpp_main` computed `result` but ended with duplicated degraded tails:
+
+- `return Default::default();`
+- `return Default::default();`
+
+This forced exit code `0` instead of the expected computed value (`60`).
+
+### Wrong-approach check
+
+Checked against `docs/dev/wrong.md` and section `1.3` before changes:
+
+- no target-specific conditionals for `access_specifiers`,
+- no force-native bypasses,
+- no fake semantic fallback stubs.
+
+Fix is a generic return-tail normalization improvement in shared codegen.
+
+### Plan
+
+1. Extend default-tail normalization so duplicated trailing default-return artifacts can be recovered safely.
+2. Keep existing guardrails for true earlier-return control flow (do not rewrite ambiguous functions).
+3. Add focused regression coverage for duplicate-tail recovery.
+4. Re-run targeted integration and CI-aligned build-phase replay evidence.
+
+### Execution
+
+Updated `crates/fragile-clang/src/ast_codegen.rs`:
+
+- In `normalize_default_tail_returns_to_matching_result_locals`:
+  - detect contiguous trailing runs of default-return lines,
+  - rewrite the first trailing default return to `return <typed_result_local>;`,
+  - drop duplicate trailing default-return lines,
+  - continue to skip rewrite when explicit `return` statements exist before the trailing default-return run.
+
+Added focused regression:
+
+- `test_normalize_default_tail_returns_to_matching_result_locals_rewrites_duplicate_default_tail_artifacts`
+
+### Validation
+
+Targeted regressions passed:
+
+- `cargo test -p fragile-clang test_normalize_default_tail_returns_to_matching_result_locals_ -- --nocapture`
+- `cargo test -p fragile-clang --test integration_test test_e2e_access_specifiers -- --nocapture`
+  - `test_e2e_access_specifiers ... ok`
+
+CI-aligned deterministic build-phase replay:
+
+- run root: `/tmp/fragile_ci_leaf_2_8b_iii_20260315_v1`
+- `build_phase_build.status=0`
+- `build_phase_test.status=124`
+- `build_phase_test.manifest.txt`: `timeout_reason=inactivity_timeout`
+- `build_phase_test.stdout.log` now shows:
+  - `test_e2e_access_specifiers ... ok`
+  - first current failing id shifted to `test_e2e_integer_parsing` (failure class still `integration_test_failure`)
+
+Broader suite checks:
+
+- workspace capture run root `/tmp/fragile_leaf_2_8b_iii_workspace_20260315_v1`:
+  - `workspace_all_targets.status=124` (`timeout_reason=inactivity_timeout`)
+  - `test_e2e_access_specifiers ... ok` present in captured stdout
+- Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+  - `Ran 34 tests`, `OK`, `skipped=1`
+
+### Outcome
+
+Leaf `2.8.b.iii` is complete: the previous top-ranked build-phase integration failure family (`test_e2e_access_specifiers`) is fixed via a generic codegen correction and locked with focused regression coverage; CI-aligned deterministic replay confirms the failing front has moved forward to the next family.
