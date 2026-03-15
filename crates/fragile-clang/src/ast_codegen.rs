@@ -10118,6 +10118,177 @@ impl AstCodeGen {
         out
     }
 
+    /// Recover degraded loop-based bool predicate tails where violation guards
+    /// already return `Default::default()` (false) and the final default tail
+    /// should represent the success path (`true`).
+    ///
+    /// Pattern repaired:
+    /// - bool-return function
+    /// - contains `loop { ... }`
+    /// - contains an `if` violation guard with `>`/`!=` and body
+    ///   `return Default::default();`
+    /// - final non-empty statement is `return Default::default();`
+    ///
+    /// Rewrite only the final tail to `return true;`.
+    fn normalize_bool_loop_violation_default_tail_returns(code: &str) -> String {
+        fn is_default_return_line(trimmed: &str) -> bool {
+            matches!(
+                trimmed,
+                "return Default::default();"
+                    | "return std::default::Default::default();"
+                    | "return std::prelude::v1::Default::default();"
+            )
+        }
+
+        if !code.contains("-> bool")
+            || !code.contains("return Default::default();")
+            || !code.contains("loop {")
+        {
+            return code.to_string();
+        }
+
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        let mut i = 0usize;
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim_end();
+            let is_fn_start =
+                (trimmed.contains(" fn ") || trimmed.starts_with("fn ")) && trimmed.ends_with('{');
+            if !is_fn_start || !trimmed.contains("-> bool") {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let mut j = i;
+            let mut depth = 0isize;
+            while j < lines.len() {
+                let current = lines[j];
+                depth += current.chars().filter(|c| *c == '{').count() as isize;
+                depth -= current.chars().filter(|c| *c == '}').count() as isize;
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if j >= lines.len() || depth != 0 {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let body_indices: Vec<usize> = (i + 1..j)
+                .filter(|idx| !lines[*idx].trim().is_empty())
+                .collect();
+            let Some(&last_body_idx) = body_indices.last() else {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            };
+
+            if !is_default_return_line(lines[last_body_idx].trim()) {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+
+            let has_loop = (i + 1..j).any(|idx| lines[idx].contains("loop {"));
+            if !has_loop {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+
+            let mut has_violation_guard = false;
+            let mut cursor = i + 1;
+            while cursor < last_body_idx {
+                let current = lines[cursor].trim();
+                if !(current.starts_with("if ") && current.ends_with('{')) {
+                    cursor += 1;
+                    continue;
+                }
+
+                let cond = current
+                    .strip_prefix("if ")
+                    .and_then(|s| s.strip_suffix('{'))
+                    .map(str::trim)
+                    .unwrap_or("");
+                let is_violation_cond = cond.contains('>') || cond.contains("!=");
+                if !is_violation_cond {
+                    cursor += 1;
+                    continue;
+                }
+
+                let mut probe = cursor + 1;
+                while probe < last_body_idx && lines[probe].trim().is_empty() {
+                    probe += 1;
+                }
+                if probe >= last_body_idx || !is_default_return_line(lines[probe].trim()) {
+                    cursor += 1;
+                    continue;
+                }
+
+                let mut close_probe = probe + 1;
+                while close_probe < last_body_idx && lines[close_probe].trim().is_empty() {
+                    close_probe += 1;
+                }
+                if close_probe >= last_body_idx || lines[close_probe].trim() != "}" {
+                    cursor += 1;
+                    continue;
+                }
+
+                has_violation_guard = true;
+                break;
+            }
+
+            for k in i..=j {
+                if has_violation_guard && k == last_body_idx {
+                    let indent_len = lines[k].len().saturating_sub(lines[k].trim_start().len());
+                    let indent = &lines[k][..indent_len];
+                    out.push_str(indent);
+                    out.push_str("return true;");
+                } else {
+                    out.push_str(lines[k]);
+                }
+                if k + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            i = j + 1;
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
     fn is_primitive_scalar_type_name(ty: &str) -> bool {
         matches!(
             ty,
@@ -26149,6 +26320,7 @@ impl AstCodeGen {
         output = Self::normalize_primitive_return_zeroed_nonprimitive_mismatches(&output);
         output = Self::normalize_default_tail_returns_to_matching_result_locals(&output);
         output = Self::normalize_bool_signed_digit_guard_default_returns(&output);
+        output = Self::normalize_bool_loop_violation_default_tail_returns(&output);
         // Degraded placeholder rewrites can leak call-shaped tokens into local
         // binding names (e.g. `let mut Default::default(): T = ...;`).
         output = Self::normalize_invalid_local_binding_identifiers(&output);
@@ -104645,6 +104817,50 @@ pub fn only_digit_guard(n: i32) -> bool {
         assert_eq!(
             output, input,
             "bool guard default-return recovery should not rewrite lone <10 default guards without a same-variable preceding <0 guard"
+        );
+    }
+
+    #[test]
+    fn test_normalize_bool_loop_violation_default_tail_returns_recovers_sorted_predicate_tail() {
+        let input = r#"
+pub fn isSorted(arr: *mut i32, n: i32) -> bool {
+    {
+        let mut i: i32 = 0;
+        loop {
+            if !(i < n - 1) { break; }
+            {
+                if (unsafe { *arr.add((i) as usize) }) > (unsafe { *arr.add((i + 1) as usize) }) {
+                    return Default::default();
+                }
+            }
+            { let __v = i; i += 1; __v };
+        }
+    }
+    return Default::default();
+}
+"#;
+        let output = AstCodeGen::normalize_bool_loop_violation_default_tail_returns(input);
+        assert!(
+            output.contains("return true;"),
+            "loop violation bool-tail recovery should rewrite final default tail to true for sorted-predicate style guards, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_bool_loop_violation_default_tail_returns_skips_non_loop_guards() {
+        let input = r#"
+pub fn isPositive(n: i32) -> bool {
+    if n > 0 {
+        return Default::default();
+    }
+    return Default::default();
+}
+"#;
+        let output = AstCodeGen::normalize_bool_loop_violation_default_tail_returns(input);
+        assert_eq!(
+            output, input,
+            "loop violation bool-tail recovery should skip non-loop guard patterns"
         );
     }
 
