@@ -15347,3 +15347,65 @@ Python suite:
 ### Outcome
 
 Leaf `2.8.b.iv.c.iii.c.iii.c.c.c.c.c.c.c.a` is complete: the recursive-algorithms regression is fixed via generic per-function scoping in return-cast normalization, and deterministic replay advances the front failure to `test_e2e_object_pool`.
+
+## 2026-03-15: Leaf 2.6.d.b.ii.a strict prerequisite reconfirmation for full-lane runtime replay
+
+### Context
+
+The first pending leaf by plan order was `2.6.d.b.ii`, which is explicitly gated on `2.6.c` reaching strict build success (`lane_fragilec_build_status=0`) before runtime replay markers can be evaluated.
+
+The prior precheck (`2.6.d.b.i`) still timed out at 900s while compiling `src/rrr/base/misc.cpp`, so we reran a higher-budget deterministic prerequisite probe to avoid guessing.
+
+### Wrong-approach check
+
+Checked against `docs/dev/wrong.md` and section `1.3` before running:
+
+- no RPC-target-specific bypasses,
+- no fake semantic stubs,
+- no force-native or parser-backend escape hatch.
+
+This leaf is evidence-only gating for an existing strict-plan prerequisite.
+
+### Execution
+
+Ran strict build-only replay with extended timeout:
+
+- `FRAGILEC_MODE=strict python3 scripts/mako_rpcbench_harness.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_precheck_20260315_v1 --lanes fragilec --build-only --jobs 4 --build-timeout-seconds 1800`
+
+Captured deterministic artifacts:
+
+- `/tmp/fragile_rpc_leaf_2_6d_b_ii_precheck_20260315_v1/benchmark_harness_manifest.txt`
+- `/tmp/fragile_rpc_leaf_2_6d_b_ii_precheck_20260315_v1/lane_fragilec/build.{stdout,stderr,status}`
+
+### Findings
+
+- Prerequisite still unmet:
+  - `lane_fragilec_configure_status=0`
+  - `lane_fragilec_clean_status=0`
+  - `lane_fragilec_build_status=124`
+  - `lane_fragilec_failure_class=build_timeout`
+  - `lane_fragilec_test_rpc_status=-1`
+- Build stderr now includes deterministic compile blockers before timeout:
+  - `mismatched closing delimiter` / `unexpected closing delimiter` in transpiled `misc.cpp` and `basetypes.cpp`,
+  - malformed emitted fragment around atomic helper path: `__mem.wrapping_add((__val }) as usize)`.
+
+### Regression sweeps
+
+Post-leaf full-suite checks in this cycle:
+
+- Workspace sweep (deterministic capture):
+  - `python3 scripts/ci_command_capture.py --run-root /tmp/fragile_leaf_2_6d_b_ii_a_workspace_20260315_v1 --name workspace_all_targets --inactivity-timeout-seconds 30 --wall-timeout-seconds 420 --command cargo test --workspace --all-targets`
+  - manifest: `status=124`, `timeout_reason=inactivity_timeout`
+  - first failing id in captured log: `test_e2e_object_pool`
+  - `test_e2e_recursive_algorithms ... ok`.
+- Python full suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+  - `Ran 34 tests`, `OK`, `skipped=1`.
+
+### Outcome
+
+`2.6.d.b.ii` remains blocked by unmet `2.6.c` prerequisite. Plan was expanded under `TODO.md` to keep this leaf actionable:
+
+- `2.6.d.b.ii.a` (this precheck) marked done,
+- `2.6.d.b.ii.b` added for generic delimiter/cast-shape blocker-family fix,
+- `2.6.d.b.ii.c` keeps the original strict full-lane runtime replay gate once build status reaches `0`.
