@@ -6,10 +6,12 @@
 - [1.1 2026 Program Goal: Mode 1 Seamless Interop](#11-2026-program-goal-mode-1-seamless-interop)
 - [1.2 Mako as Primary Validation Target](#12-mako-as-primary-validation-target)
 - [1.3 Wrong Approaches (Do Not Do)](#13-wrong-approaches-do-not-do)
+- [1.4 2026-03 Design Update: STL-Opaque Parser and Backend Deprecation](#14-2026-03-design-update-stl-opaque-parser-and-backend-deprecation)
 - [2. End-to-End Architecture](#2-end-to-end-architecture)
 - [2.3 C++ `_v` trait globals and export linkage](#23-c-_v-trait-globals-and-export-linkage)
 - [2.4 Mode 1 call-stitching architecture (target state)](#24-mode-1-call-stitching-architecture-target-state)
 - [2.5 `misc.cpp` compile-cost investigation baseline](#25-misccpp-compile-cost-investigation-baseline)
+- [2.6 STL-opaque parser architecture (target state)](#26-stl-opaque-parser-architecture-target-state)
 - [3. Internal Data Models](#3-internal-data-models)
 - [4. C++ Declaration to Rust Item Mapping](#4-c-declaration-to-rust-item-mapping)
 - [5. C++ Type to Rust Type Mapping](#5-c-type-to-rust-type-mapping)
@@ -105,6 +107,21 @@ Authoritative anti-pattern policy and examples are documented in:
 
 - `docs/dev/wrong.md`
 
+## 1.4 2026-03 Design Update: STL-Opaque Parser and Backend Deprecation
+
+Active design direction (2026-03):
+
+- Fragile should not parse deeply into STL internals.
+- Parser output must keep STL usage as explicit placeholders.
+- Codegen must map STL placeholders to pre-generated STL implementation surfaces.
+- STL source-to-source strict translation is not part of the active design.
+
+Backend deprecation status:
+
+- `LibTooling` parser flow is deprecated for new architecture work.
+- `libclang` parser flow is deprecated for new architecture work.
+- Historical LibTooling/libclang content in this book is retained for reference only during migration.
+
 ## 2. End-to-End Architecture
 
 Primary entry points are in `crates/fragile-clang/src/lib.rs`:
@@ -112,22 +129,22 @@ Primary entry points are in `crates/fragile-clang/src/lib.rs`:
 - `transpile_cpp_to_rust`
 - `transpile_cpp_to_rust_with_options`
 
-The pipeline is:
+The target pipeline is:
 
-1. Export stage:
-- Use `LibToolingParser` to produce exporter `AstContext`.
-- Include path/define/language flags are assembled from `TranspileOptions`.
+1. Parser stage:
+- Use custom Fragile parser modules (non-LibTooling active path) to produce normalized parser output.
+- Detect STL boundaries and emit STL placeholder nodes instead of deep STL subtrees.
 
-2. Parse stage:
-- Convert exporter AST nodes into internal `ClangNode` tree via `translation_unit_from_libtooling_context` and `convert_to_clang_node`.
-- Promote missed declaration roots when exporter top-level links are incomplete.
-- Deduplicate repeated function roots.
+2. Lowering stage:
+- Lower non-STL parser output into internal transpiler nodes.
+- Preserve STL placeholders with canonical mapping metadata.
 
 3. Enrichment stage:
-- Inject extra method/specialization metadata into codegen (`set_libtooling_bodies`, specialization field/method signatures).
+- Inject generic metadata needed for codegen (for example resolved signatures and mapping keys), without backend-specific target hacks.
 
 4. Codegen stage:
-- `AstCodeGen::generate` emits Rust text directly from internal AST.
+- `AstCodeGen::generate` emits Rust text from lowered IR.
+- STL placeholders are resolved via pre-generated STL implementation surfaces.
 
 Tracing support:
 
@@ -135,9 +152,13 @@ Tracing support:
 
 Backend note:
 
-- `ParserBackend` contains legacy variants, but transpilation is centered on LibTooling flow.
+- `ParserBackend::Libtooling` and `ParserBackend::Libclang` are deprecated.
+- Legacy backends remain reference/fallback paths only during migration.
+- New parser work should target the STL-opaque architecture above.
 
-### 2.1 Mako `btree.cc` failure pattern and generic mitigation
+### 2.1 (Legacy, Deprecated) Mako `btree.cc` failure pattern and generic mitigation
+
+This section documents historical LibTooling behavior retained for reference during migration.
 
 A recurring failure pattern on large C++ codebases (including `mako/src/core/btree.cc`) is:
 
@@ -324,6 +345,30 @@ Design decision:
   conditionals, no semantic stubs), and require strict blocker non-increase
   gates plus full-suite sweeps after each optimization.
 - This follows the anti-pattern policy in Section 1.3 and `docs/dev/wrong.md`.
+
+Legacy note:
+
+- This baseline was captured on the deprecated LibTooling-centered pipeline and
+  should be treated as migration reference data, not target-state architecture.
+
+### 2.6 STL-opaque parser architecture (target state)
+
+STL handling contract:
+
+- Parser must treat `std::*` usage as opaque placeholders, not deep parse trees.
+- Placeholders must carry canonical mapping metadata (container family, type
+  parameters, and operation selector shape).
+- Codegen must map placeholders to pre-generated STL implementation surfaces.
+
+Failure policy:
+
+- Unknown STL placeholder shapes must fail with deterministic diagnostics.
+- No semantic fallback stubs/fake bodies are allowed to mask missing mappings.
+
+Migration policy:
+
+- Deprecated `LibTooling`/`libclang` paths may remain temporarily for reference,
+  but new behavior should be implemented only on the STL-opaque parser path.
 
 ## 3. Internal Data Models
 
