@@ -9,6 +9,7 @@
 - [2. End-to-End Architecture](#2-end-to-end-architecture)
 - [2.3 C++ `_v` trait globals and export linkage](#23-c-_v-trait-globals-and-export-linkage)
 - [2.4 Mode 1 call-stitching architecture (target state)](#24-mode-1-call-stitching-architecture-target-state)
+- [2.5 `misc.cpp` compile-cost investigation baseline](#25-misccpp-compile-cost-investigation-baseline)
 - [3. Internal Data Models](#3-internal-data-models)
 - [4. C++ Declaration to Rust Item Mapping](#4-c-declaration-to-rust-item-mapping)
 - [5. C++ Type to Rust Type Mapping](#5-c-type-to-rust-type-mapping)
@@ -296,6 +297,33 @@ Practical implication:
 
 - Declaration-only wrappers (`extern "C"` + shim) remain as a compatibility fallback, not the default internal mechanism.
 - Internal project calls should converge to direct Rust calls as symbol-index coverage improves.
+
+### 2.5 `misc.cpp` compile-cost investigation baseline
+
+A dedicated strict compile-cost report was added for the long-running
+`vendor/mako/src/rrr/base/misc.cpp` timeout lane:
+
+- report: `docs/misc_cpp_compile_cost_report_2026_03_16.md`
+- purpose: explain why strict `fragilec` build-only runs remain timeout-bound and
+  prioritize generic next optimizations.
+
+Key baseline findings from deterministic artifacts:
+
+- Pre-codegen cost is already high in strict replay windows (120s and 300s):
+  parse dominates, enrichment is second, export is small.
+- Checkpoint progress reaches `codegen_after_template_collection` at 120s and
+  `codegen_after_template_instantiation_generation` at 300s, but does not reach
+  top-level generation completion in the sampled windows.
+- Replay/inventory stability remains unchanged across recent iterations:
+  `lane_fragilec_build_status=124`, first blocker class `build_timeout`, blocker
+  file `src/rrr/base/misc.cpp`, and non-increase gate pass.
+
+Design decision:
+
+- Keep optimization work generic and checkpoint-driven (no target-name
+  conditionals, no semantic stubs), and require strict blocker non-increase
+  gates plus full-suite sweeps after each optimization.
+- This follows the anti-pattern policy in Section 1.3 and `docs/dev/wrong.md`.
 
 ## 3. Internal Data Models
 
