@@ -82587,6 +82587,73 @@ fn find_type_sanitization_run_end(
     action: u8,
 ) -> usize {
     let len = bytes.len();
+    while idx + 16 <= len {
+        let b0 = bytes[idx];
+        if action_table[b0 as usize] != action {
+            return idx;
+        }
+        let b1 = bytes[idx + 1];
+        if action_table[b1 as usize] != action {
+            return idx + 1;
+        }
+        let b2 = bytes[idx + 2];
+        if action_table[b2 as usize] != action {
+            return idx + 2;
+        }
+        let b3 = bytes[idx + 3];
+        if action_table[b3 as usize] != action {
+            return idx + 3;
+        }
+        let b4 = bytes[idx + 4];
+        if action_table[b4 as usize] != action {
+            return idx + 4;
+        }
+        let b5 = bytes[idx + 5];
+        if action_table[b5 as usize] != action {
+            return idx + 5;
+        }
+        let b6 = bytes[idx + 6];
+        if action_table[b6 as usize] != action {
+            return idx + 6;
+        }
+        let b7 = bytes[idx + 7];
+        if action_table[b7 as usize] != action {
+            return idx + 7;
+        }
+        let b8 = bytes[idx + 8];
+        if action_table[b8 as usize] != action {
+            return idx + 8;
+        }
+        let b9 = bytes[idx + 9];
+        if action_table[b9 as usize] != action {
+            return idx + 9;
+        }
+        let b10 = bytes[idx + 10];
+        if action_table[b10 as usize] != action {
+            return idx + 10;
+        }
+        let b11 = bytes[idx + 11];
+        if action_table[b11 as usize] != action {
+            return idx + 11;
+        }
+        let b12 = bytes[idx + 12];
+        if action_table[b12 as usize] != action {
+            return idx + 12;
+        }
+        let b13 = bytes[idx + 13];
+        if action_table[b13 as usize] != action {
+            return idx + 13;
+        }
+        let b14 = bytes[idx + 14];
+        if action_table[b14 as usize] != action {
+            return idx + 14;
+        }
+        let b15 = bytes[idx + 15];
+        if action_table[b15 as usize] != action {
+            return idx + 15;
+        }
+        idx += 16;
+    }
     while idx + 8 <= len {
         let b0 = bytes[idx];
         if action_table[b0 as usize] != action {
@@ -122594,6 +122661,32 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
             find_type_sanitization_run_end(drops, action_table, 0, SANITIZE_ACTION_DROP),
             16,
             "run-end scanner should span full drop-action run"
+        );
+    }
+
+    #[test]
+    fn test_find_type_sanitization_run_end_handles_sixteen_byte_window_boundaries() {
+        let action_table = &TYPE_SANITIZATION_ACTION_TABLE;
+        let underscores = b"                                alpha";
+        assert_eq!(
+            find_type_sanitization_run_end(
+                underscores,
+                action_table,
+                0,
+                SANITIZE_ACTION_UNDERSCORE
+            ),
+            32,
+            "run-end scanner should span two 16-byte underscore windows from start"
+        );
+        assert_eq!(
+            find_type_sanitization_run_end(
+                underscores,
+                action_table,
+                16,
+                SANITIZE_ACTION_UNDERSCORE
+            ),
+            32,
+            "run-end scanner should handle starts at 16-byte boundary"
         );
     }
 
