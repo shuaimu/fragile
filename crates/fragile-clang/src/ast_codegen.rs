@@ -82596,6 +82596,16 @@ const UNDERSCORE_SANITIZATION_RUN_CHUNK: &str =
     "________________________________________________________________";
 const REF_SANITIZATION_RUN_CHUNK_REPEAT: usize = 8;
 const REF_SANITIZATION_RUN_CHUNK: &str = "ref_ref_ref_ref_ref_ref_ref_ref_";
+const REF_SANITIZATION_RUN_TAIL: [&str; REF_SANITIZATION_RUN_CHUNK_REPEAT] = [
+    "",
+    "ref_",
+    "ref_ref_",
+    "ref_ref_ref_",
+    "ref_ref_ref_ref_",
+    "ref_ref_ref_ref_ref_",
+    "ref_ref_ref_ref_ref_ref_",
+    "ref_ref_ref_ref_ref_ref_ref_",
+];
 
 #[inline(always)]
 fn append_underscore_sanitization_run(out: &mut String, mut count: usize) {
@@ -82616,9 +82626,7 @@ fn append_ref_sanitization_run(out: &mut String, mut count: usize) {
         out.push_str(REF_SANITIZATION_RUN_CHUNK);
         count -= REF_SANITIZATION_RUN_CHUNK_REPEAT;
     }
-    for _ in 0..count {
-        out.push_str("ref_");
-    }
+    out.push_str(REF_SANITIZATION_RUN_TAIL[count]);
 }
 
 fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
@@ -122013,6 +122021,30 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
             out,
             format!("A{}B", "ref_".repeat(10)),
             "sanitizer should preserve long contiguous ref rewrite runs"
+        );
+    }
+
+    #[test]
+    fn test_append_sanitized_type_for_fn_name_preserves_ref_tail_run() {
+        let sample = "A&&&&&&&B";
+        let mut out = String::new();
+        append_sanitized_type_for_fn_name(&mut out, sample);
+        assert_eq!(
+            out,
+            format!("A{}B", "ref_".repeat(7)),
+            "sanitizer should preserve ref-tail runs when count is below chunk boundary"
+        );
+    }
+
+    #[test]
+    fn test_append_sanitized_type_for_fn_name_preserves_ref_chunk_boundary_run() {
+        let sample = "A&&&&&&&&B";
+        let mut out = String::new();
+        append_sanitized_type_for_fn_name(&mut out, sample);
+        assert_eq!(
+            out,
+            format!("A{}B", "ref_".repeat(8)),
+            "sanitizer should preserve ref runs exactly at chunk boundary"
         );
     }
 
