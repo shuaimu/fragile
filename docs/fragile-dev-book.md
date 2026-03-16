@@ -17461,3 +17461,59 @@ Post-change strict root:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
   - `python_unittest.status=0`
   - `Ran 34 tests in 31.395s`, `OK (skipped=1)`
+
+## 2026-03-16: Strict RPC Build-Timeout Loop Iteration (Leaf 2.6.c...)
+
+Context:
+- Continued the strict `misc.cpp` timeout loop under active RPC bring-up (`2.6.c` chain).
+- Targeted a small generic hot-path optimization (<500 LOC) and revalidated strict replay/non-increase gates.
+
+Wrong-approach check:
+- No target-specific hacks were added.
+- No force-native bypass was used.
+- No fake semantic stubs/fallback bodies were introduced.
+
+Design change (generic):
+- File: `crates/fragile-clang/src/ast_codegen.rs`
+- Added `has_fn_template_candidates_for_call(...)` and used it to fast-reject non-template callsites in `resolve_fn_template_call_name_from_args(...)` before expensive call-shape key construction and cache probing.
+- This avoids unnecessary resolver work on non-template calls and blocks stale cache entries from incorrectly resolving unrelated non-template callsites.
+
+Focused regression coverage added:
+- `test_resolve_fn_template_call_name_from_args_ignores_stale_cached_resolution_when_no_template_candidates_exist`
+
+Focused validation commands:
+- `cargo test -p fragile-clang test_resolve_fn_template_call_name_from_args_ -- --nocapture`
+- `cargo test -p fragile-clang test_collect_fn_template_candidate_keys_ -- --nocapture`
+
+Strict replay artifacts (deterministic):
+- Release build:
+  - `cargo build --release -p fragile-cli --bin fragilec`
+- Timeout replay (120s):
+  - `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c_c_c_c_c_c_c_c_c_c_c_c_a_callshape_profile_120_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c_c_c_c_c_c_c_c_c_c_c_c_a_stage_timing_120_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+  - Callshape status: `codegen_after_template_collection`.
+- Timeout replay (300s):
+  - `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c_c_c_c_c_c_c_c_c_c_c_c_a_callshape_profile_300_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6c_current_c_c_c_c_c_c_c_c_c_c_c_c_a_stage_timing_300_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6c_i_build_only_20260313 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+  - Replay manifest: `replay_01_status=124`, `replay_01_first_failure_class=build_timeout`, blocker file `src/rrr/base/misc.cpp`.
+  - Callshape status: `codegen_after_template_instantiation_generation`, `input_bytes=565665`.
+
+Strict build-only + nonincrease gate:
+- Build-only replay:
+  - `FRAGILEC_MODE=strict python3 scripts/mako_rpcbench_harness.py --run-root /tmp/fragile_rpc_leaf_2_6c_current_c_c_c_c_c_c_c_c_c_c_c_c_b_build_only_20260316_v1 --lanes fragilec --build-only --jobs 4 --build-timeout-seconds 180`
+  - `benchmark_harness_manifest.txt`: `lane_fragilec_configure_status=0`, `lane_fragilec_clean_status=0`, `lane_fragilec_build_status=124`, `lane_fragilec_failure_class=build_timeout`.
+- Nonincrease gate:
+  - `python3 scripts/mako_rpc_compile_blocker_inventory.py --run-root /tmp/fragile_rpc_leaf_2_6c_current_c_c_c_c_c_c_c_c_c_c_c_c_b_build_only_20260316_v1 --lanes fragilec --baseline-manifest /tmp/fragile_rpc_leaf_2_6c_iii_build_only_20260313/rpc_compile_blocker_inventory_manifest.txt --enforce-nonincreasing`
+  - `rpc_compile_blocker_inventory_manifest.txt`: `nonincrease_gate_pass=true`, class and `E0425` deltas remain non-worsening (`0`).
+
+Full-suite sweep (step-4):
+- `cargo test --workspace --all-targets`:
+  - `fragile-clang` lib: `924 passed, 0 failed`.
+  - `fragile-clang` integration test binary remains baseline-red with 7 known failures:
+    - `test_e2e_object_pool`
+    - `test_e2e_pthread`
+    - `test_e2e_simple_graph`
+    - `test_e2e_simple_hash_table`
+    - `test_e2e_tokenizer`
+    - `test_e2e_trie`
+    - `test_variadic_template_transpile`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`:
+  - `Ran 34 tests`, `OK`, `skipped=1`.

@@ -41629,6 +41629,34 @@ impl FragileAtomicBoolCompat for atomic_bool {
         full_name
     }
 
+    fn has_fn_template_candidates_for_call(
+        &self,
+        fn_name: &str,
+        namespace_path: &[String],
+    ) -> bool {
+        if self.fn_template_keys_by_leaf.contains_key(fn_name) {
+            return true;
+        }
+        if self.fn_template_definitions.contains_key(fn_name) {
+            return true;
+        }
+        if !namespace_path.is_empty() {
+            let namespaced = Self::namespaced_leaf_name(namespace_path, fn_name);
+            if self.fn_template_definitions.contains_key(&namespaced) {
+                return true;
+            }
+        }
+        // Fallback for test paths that intentionally bypass or clear
+        // `collect_template_info` and therefore do not prewarm leaf indexes.
+        if self.fn_template_keys_by_leaf.is_empty() {
+            return self.fn_template_definitions.keys().any(|key| {
+                key.rsplit_once("::")
+                    .is_some_and(|(_, leaf_name)| leaf_name == fn_name)
+            });
+        }
+        false
+    }
+
     fn collect_fn_template_candidate_keys(
         &self,
         fn_name: &str,
@@ -42784,6 +42812,12 @@ impl FragileAtomicBoolCompat for atomic_bool {
         else {
             return None;
         };
+
+        // Fast-reject non-template callsites before building expensive
+        // normalized call-shape keys and probing call-resolution caches.
+        if !self.has_fn_template_candidates_for_call(fn_name, namespace_path) {
+            return None;
+        }
 
         let sanitized_fn_name = Self::sanitize_identifier_if_needed(fn_name);
         let instantiated_param_types_normalized: Vec<String> = params
@@ -120632,6 +120666,72 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
             pending.1,
             vec!["2".to_string()],
             "non-type template param should infer from string-literal bound including NUL"
+        );
+    }
+
+    #[test]
+    fn test_resolve_fn_template_call_name_from_args_ignores_stale_cached_resolution_when_no_template_candidates_exist(
+    ) {
+        let int_ty = CppType::Int { signed: true };
+        let fn_ty = CppType::Function {
+            return_type: Box::new(int_ty.clone()),
+            params: vec![int_ty.clone()],
+            is_variadic: false,
+        };
+        let call_callee = make_node(
+            ClangNodeKind::DeclRefExpr {
+                name: "plain".to_string(),
+                ty: fn_ty,
+                namespace_path: vec![],
+            },
+            vec![],
+        );
+        let call_args = vec![make_node(
+            ClangNodeKind::IntegerLiteral {
+                value: 7,
+                cpp_type: Some(int_ty.clone()),
+            },
+            vec![],
+        )];
+
+        let mut codegen = AstCodeGen::new();
+        let template_info = FnTemplateInfo {
+            template_params: vec!["T".to_string()],
+            return_type: CppType::Named("T".to_string()),
+            params: vec![("value".to_string(), CppType::Named("T".to_string()))],
+            body: None,
+            is_noexcept: false,
+        };
+        codegen
+            .fn_template_definitions
+            .insert("swap".to_string(), template_info.clone());
+        codegen.pending_fn_instantiations.insert(
+            "plain_i64".to_string(),
+            (
+                "swap".to_string(),
+                vec!["i64".to_string()],
+                template_info,
+            ),
+        );
+
+        let resolution_key = AstCodeGen::fn_template_call_resolution_key(
+            "plain",
+            &[],
+            &["i32".to_string()],
+            "i32",
+            &call_args,
+            false,
+        );
+        codegen.fn_template_call_resolution_cache.insert(
+            resolution_key,
+            Some(("swap".to_string(), vec!["i64".to_string()])),
+        );
+
+        let resolved = codegen.resolve_fn_template_call_name_from_args(&call_callee, &call_args);
+        assert_eq!(
+            resolved,
+            None,
+            "resolver should ignore stale call-resolution cache entries for callsites with no definition-backed template candidates"
         );
     }
 
