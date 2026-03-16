@@ -17518,6 +17518,63 @@ Full-suite sweep (step-4):
 - `python3 -m unittest discover -s tests/python -p 'test_*.py'`:
   - `Ran 34 tests`, `OK`, `skipped=1`.
 
+## 2026-03-16: Strict RPC Build-Timeout Loop Iteration (Leaf 2.6.d...v.b.iii.b)
+
+Context:
+- Executed the first pending leaf `2.6.d.b.ii.c.c.v.b.iii.b` from `TODO.md`.
+- Scope is bounded operational replay/gating work (no new parser/codegen change in this leaf).
+
+Wrong-approach check:
+- Reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before running the iteration.
+- No target-specific conditionals/hacks were introduced.
+- No force-native bypass was used.
+- No fake semantic fallback/stub bodies were introduced.
+
+Deterministic replay artifacts:
+- Release build:
+  - `cargo build --release -p fragile-cli --bin fragilec`
+- Strict build-only replay:
+  - `FRAGILEC_MODE=strict python3 scripts/mako_rpcbench_harness.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_v_b_iii_b_build_only_20260316_v2 --lanes fragilec --build-only --jobs 4 --build-timeout-seconds 600`
+  - `benchmark_harness_manifest.txt`:
+    - `build_only=true`
+    - `lane_fragilec_configure_status=0`
+    - `lane_fragilec_clean_status=0`
+    - `lane_fragilec_build_status=124`
+    - `lane_fragilec_failure_class=build_timeout`
+    - `no_regression_verdict=not_executed`
+- Inventory non-increase gate vs prior baseline:
+  - `python3 scripts/mako_rpc_compile_blocker_inventory.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_v_b_iii_b_build_only_20260316_v2 --lanes fragilec --baseline-manifest /tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_v_b_ii_build_only_20260316_v1/rpc_compile_blocker_inventory_manifest.txt --enforce-nonincreasing`
+  - `rpc_compile_blocker_inventory_manifest.txt`:
+    - `lane_fragilec_first_failing_compile_class=build_timeout`
+    - `lane_fragilec_first_failing_compile_file=src/rrr/base/misc.cpp`
+    - `lane_fragilec_class_rank_delta_vs_baseline=0`
+    - `lane_fragilec_e0425_delta_vs_baseline=0`
+    - `lane_fragilec_nonincrease_gate_pass=true`
+    - `nonincrease_gate_pass=true`
+- Top blocker replay capture:
+  - `python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_v_b_iii_b_build_only_20260316_v2 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+  - `rpc_compile_blocker_replay_manifest.txt`:
+    - `replay_01_blocker_class=build_timeout`
+    - `replay_01_blocker_file=src/rrr/base/misc.cpp`
+    - `replay_01_status=124`
+    - `replay_01_timed_out=true`
+    - `replay_01_first_failure_class=build_timeout`
+
+Full-suite sweep (step 4):
+- `cargo test --workspace --all-targets`:
+  - captured via `python3 scripts/ci_command_capture.py --run-root /tmp/fragile_leaf_2_6d_b_ii_c_c_v_b_iii_b_workspace_20260316_v1 --name workspace_all_targets --inactivity-timeout-seconds 90 --wall-timeout-seconds 1200 --command cargo test --workspace --all-targets`
+  - `workspace_all_targets.status=124`, `timeout_reason=inactivity_timeout`
+  - first failing ids include:
+    - `test_e2e_simple_hash_table`
+    - `test_e2e_object_pool`
+    - `test_e2e_simple_graph`
+    - `test_e2e_tokenizer`
+    - `test_e2e_trie`
+    - `test_variadic_template_transpile`
+    - `test_e2e_pthread`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`:
+  - `Ran 34 tests`, `OK`, `skipped=1`.
+
 ## 2026-03-16: Strict RPC Build-Timeout Loop Iteration (Leaf 2.6.d...c.c.c.c.c.a)
 
 Context:
