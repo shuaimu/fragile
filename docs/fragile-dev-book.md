@@ -17945,3 +17945,48 @@ Full-suite sweep (step 4):
 - Python suite:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
   - observed: `PY_STATUS=0`, `Ran 34 tests`, `OK`, `skipped=1`.
+
+## 2026-03-16: Strict RPC Build-Timeout Loop Iteration (Leaf 2.6.d...c.c.c.c.c.c.a/.b)
+
+Context:
+- Continued the strict `src/rrr/base/misc.cpp` timeout loop under `2.6.d.b.ii.c.c.v.b.iii.c.c.c.c.c.c`.
+- Decomposed the repeat controller into bounded leaves (`.a/.b/.c`) and executed `.a` then `.b`.
+
+Wrong-approach check:
+- Re-read `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before implementation/replay.
+- No target-specific conditionals, no force-native bypasses, and no synthetic semantic fallback stubs were introduced.
+
+Design change (generic hot-path):
+- File: `crates/fragile-clang/src/ast_codegen.rs`
+- Updated `find_next_sanitization_trigger(...)` by adding a 32-byte unrolled `PASS` fast path ahead of existing 16-byte/8-byte/4-byte/tail scans.
+- Semantics are unchanged; this only reduces per-byte branch/dispatch overhead on long pass spans.
+
+Focused regressions:
+- Added `test_find_next_sanitization_trigger_handles_thirty_two_byte_window_boundaries`.
+- Revalidated related behavior:
+  - `cargo test -p fragile-clang test_find_next_sanitization_trigger_handles_ -- --nocapture`
+  - `cargo test -p fragile-clang test_append_sanitized_type_for_fn_name_ -- --nocapture`
+  - `cargo test -p fragile-clang test_type_sanitization_action_table_matches_legacy_for_all_bytes -- --nocapture`
+  - `cargo test -p fragile-clang test_build_fn_template_mangled_name_ -- --nocapture`
+
+Strict replay/inventory/replay (leaf `.b`):
+- Release build:
+  - `cargo build --release -p fragile-cli --bin fragilec`
+- Strict build-only harness:
+  - `FRAGILEC_MODE=strict python3 scripts/mako_rpcbench_harness.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_v_b_iii_c_c_c_c_c_c_b_build_only_20260316_v1 --lanes fragilec --build-only --jobs 4 --build-timeout-seconds 600`
+  - observed: `HARNESS_STATUS=1`, `lane_fragilec_build_status=124`, `lane_fragilec_test_rpc_status=-1`, `lane_fragilec_failure_class=build_timeout`
+- Non-increase inventory gate vs prior baseline:
+  - `python3 scripts/mako_rpc_compile_blocker_inventory.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_v_b_iii_c_c_c_c_c_c_b_build_only_20260316_v1 --lanes fragilec --baseline-manifest /tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_v_b_iii_c_c_c_c_c_b_build_only_20260316_v1/rpc_compile_blocker_inventory_manifest.txt --enforce-nonincreasing`
+  - observed: `INVENTORY_STATUS=0`, `lane_fragilec_first_failing_compile_class=build_timeout`, `lane_fragilec_first_failing_compile_file=src/rrr/base/misc.cpp`, `lane_fragilec_class_rank_delta_vs_baseline=0`, `lane_fragilec_e0425_delta_vs_baseline=0`, `lane_fragilec_nonincrease_gate_pass=true`, `nonincrease_gate_pass=true`
+- Blocker replay:
+  - `python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_v_b_iii_c_c_c_c_c_c_b_build_only_20260316_v1 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+  - observed: `REPLAY_STATUS=0`, `replay_01_blocker_class=build_timeout`, `replay_01_blocker_file=src/rrr/base/misc.cpp`, `replay_01_status=124`, `replay_01_timed_out=true`, `replay_01_first_failure_class=build_timeout`
+
+Full-suite sweep (step 4):
+- Workspace capture:
+  - `python3 scripts/ci_command_capture.py --run-root /tmp/fragile_leaf_2_6d_b_ii_c_c_v_b_iii_c_c_c_c_c_c_b_workspace_20260316_v1 --name workspace_all_targets --inactivity-timeout-seconds 90 --wall-timeout-seconds 1200 --command cargo test --workspace --all-targets`
+  - observed: `WS_CAPTURE_STATUS=124`, `workspace_all_targets.status=124`, `timeout_reason=inactivity_timeout`
+  - first failing ids: `test_e2e_object_pool`, `test_e2e_simple_hash_table`, `test_e2e_simple_graph`, `test_e2e_trie`, `test_e2e_tokenizer`, `test_variadic_template_transpile`, `test_e2e_pthread`.
+- Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+  - observed: `PY_STATUS=0`, `Ran 34 tests`, `OK`, `skipped=1`.
