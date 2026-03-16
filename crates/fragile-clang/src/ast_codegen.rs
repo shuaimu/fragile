@@ -82569,34 +82569,25 @@ fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
 
         match action {
             SANITIZE_ACTION_STAR => {
-                let next = idx + 1;
-                if next < bytes_len {
-                    match bytes[next] {
-                        b'm'
-                            if idx + 5 <= bytes_len
-                                && bytes[idx + 2] == b'u'
-                                && bytes[idx + 3] == b't'
-                                && bytes[idx + 4] == b' ' =>
-                        {
-                            out.push_str("ptr_mut_");
-                            idx += 5;
-                        }
-                        b'c'
-                            if idx + 7 <= bytes_len
-                                && bytes[idx + 2] == b'o'
-                                && bytes[idx + 3] == b'n'
-                                && bytes[idx + 4] == b's'
-                                && bytes[idx + 5] == b't'
-                                && bytes[idx + 6] == b' ' =>
-                        {
-                            out.push_str("ptr_const_");
-                            idx += 7;
-                        }
-                        _ => {
-                            out.push_str("ptr_");
-                            idx += 1;
-                        }
-                    }
+                let remaining = bytes_len - idx;
+                if remaining >= 5
+                    && bytes[idx + 1] == b'm'
+                    && bytes[idx + 2] == b'u'
+                    && bytes[idx + 3] == b't'
+                    && bytes[idx + 4] == b' '
+                {
+                    out.push_str("ptr_mut_");
+                    idx += 5;
+                } else if remaining >= 7
+                    && bytes[idx + 1] == b'c'
+                    && bytes[idx + 2] == b'o'
+                    && bytes[idx + 3] == b'n'
+                    && bytes[idx + 4] == b's'
+                    && bytes[idx + 5] == b't'
+                    && bytes[idx + 6] == b' '
+                {
+                    out.push_str("ptr_const_");
+                    idx += 7;
                 } else {
                     out.push_str("ptr_");
                     idx += 1;
@@ -121744,6 +121735,17 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
         assert_eq!(
             out, "ptr_m_ptr_mu_ptr_con_ptr_constX",
             "sanitizer should only rewrite full '*mut ' and '*const ' prefixes while preserving partial pointer tokens"
+        );
+    }
+
+    #[test]
+    fn test_append_sanitized_type_for_fn_name_handles_pointer_prefixes_near_buffer_end() {
+        let sample = "*c *co *con *cons *const ";
+        let mut out = String::new();
+        append_sanitized_type_for_fn_name(&mut out, sample);
+        assert_eq!(
+            out, "ptr_c_ptr_co_ptr_con_ptr_cons_ptr_const_",
+            "sanitizer should preserve partial '*const' prefixes near buffer end and only rewrite the full '*const ' token"
         );
     }
 
