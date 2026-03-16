@@ -16915,3 +16915,94 @@ Post-change strict root:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
   - `python_unittest.status=0`
   - `Ran 34 tests in 31.361s`, `OK (skipped=1)`
+
+## 2026-03-16: Leaf 2.6.d.b.ii.c.c.iv.d.d.d.d.c.c.c.c.c.c.c.c.c.c.c.c (a-b) action-table sanitizer dispatch
+
+### Context
+
+After `2.6.d.b.ii.c.c.iv.d.d.d.d.c.c.c.c.c.c.c.c.c.c.c.b`, strict build-only replay remained timeout-bound on
+`src/rrr/base/misc.cpp` with non-increase parity. Sanitizer trigger handling in
+`append_sanitized_type_for_fn_name` still used per-byte byte-pattern branching after dispatch.
+
+### Wrong-approach check
+
+Reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before implementation:
+
+- no target-specific (`rpcbench`/`test_rpc`) conditionals,
+- no fake semantic stubs/fallback method bodies,
+- no native-source bypass,
+- no sanitizer behavior shortcuts.
+
+### Generic hot-path fix
+
+Implemented in `crates/fragile-clang/src/ast_codegen.rs`:
+
+- replaced trigger dispatch representation with a compact precomputed action table:
+  - `build_type_sanitization_action_table`
+  - `TYPE_SANITIZATION_ACTION_TABLE`
+  - `type_sanitization_action(byte)`
+- moved append-loop dispatch in `append_sanitized_type_for_fn_name` to action-code handling:
+  - `PASS` contiguous passthrough chunk scan,
+  - `STAR` / `COLON` / `MINUS` / `UNDERSCORE` / `DROP` / `REF` handlers,
+- preserved all existing rewrite semantics (`*mut`, `*const`, `::`, `->`, separators, `>`, `&`),
+- narrowed `byte_requires_type_sanitization_dispatch` to `#[cfg(test)]` since runtime now uses
+  action-code dispatch directly.
+
+### Focused regressions
+
+Added:
+
+- `test_type_sanitization_action_table_matches_legacy_for_all_bytes`
+
+Validated focused coverage:
+
+- `cargo test -p fragile-clang test_type_sanitization_action_table_matches_legacy_for_all_bytes -- --nocapture`
+- `cargo test -p fragile-clang test_byte_requires_type_sanitization_dispatch_matches_legacy_for_all_bytes -- --nocapture`
+- `cargo test -p fragile-clang test_append_sanitized_type_for_fn_name_matches_sanitize_type_for_fn_name -- --nocapture`
+- `cargo test -p fragile-clang test_sanitize_type_for_fn_name_ -- --nocapture`
+- `cargo test -p fragile-clang test_build_fn_template_mangled_name_ -- --nocapture`
+
+### Strict replay + non-increase gate
+
+Post-change strict root:
+`/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_d_d_d_c_c_c_c_c_c_c_c_c_c_c_b_build_only_20260316_v1`
+
+- lane status (`benchmark_harness_manifest.txt`):
+  - `build_only=true`
+  - `lane_fragilec_configure_status=0`
+  - `lane_fragilec_clean_status=0`
+  - `lane_fragilec_build_status=124`
+  - `lane_fragilec_test_rpc_status=-1`
+  - `lane_fragilec_failure_class=build_timeout`
+- script statuses:
+  - `HARNESS_STATUS=1`
+  - `INVENTORY_STATUS=0`
+  - `REPLAY_STATUS=0`
+- inventory non-increase vs baseline
+  `/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_d_d_d_c_c_c_c_c_c_c_c_c_c_b_build_only_20260316_v1/rpc_compile_blocker_inventory_manifest.txt`:
+  - `lane_fragilec_first_failing_compile_class=build_timeout`
+  - `lane_fragilec_first_failing_compile_file=src/rrr/base/misc.cpp`
+  - `lane_fragilec_class_rank_delta_vs_baseline=0`
+  - `lane_fragilec_e0425_delta_vs_baseline=0`
+  - `lane_fragilec_nonincrease_gate_pass=true`
+  - `nonincrease_gate_pass=true`
+- focused replay remains timeout-bound:
+  - `replay_01_status=124`
+  - `replay_01_timed_out=true`
+  - `replay_01_first_failure_class=build_timeout`
+  - `replay_01_blocker_file=src/rrr/base/misc.cpp`
+
+### Full-suite sweeps
+
+- workspace capture:
+  - `timeout 300s cargo test --workspace --all-targets` under
+    `/tmp/fragile_leaf_2_6d_b_ii_c_c_iv_d_d_d_d_c_c_c_c_c_c_c_c_c_c_c_workspace_20260316_v1`
+  - `workspace_all_targets.status=124`
+  - first failing ids include:
+    `test_e2e_object_pool`, `test_e2e_simple_hash_table`, `test_e2e_trie`,
+    `test_e2e_tokenizer`, `test_e2e_simple_graph`, `test_variadic_template_transpile`,
+    `test_e2e_pthread`
+- Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+  - `python_unittest.status=0`
+  - `Ran 34 tests in 31.302s`, `OK (skipped=1)`

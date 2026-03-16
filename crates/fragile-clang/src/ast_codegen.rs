@@ -82492,30 +82492,44 @@ fn sanitize_type_for_fn_name(ty: &str) -> String {
     out
 }
 
-const fn build_type_sanitization_dispatch_table() -> [bool; 256] {
-    let mut table = [false; 256];
-    table[b'*' as usize] = true;
-    table[b':' as usize] = true;
-    table[b'-' as usize] = true;
-    table[b' ' as usize] = true;
-    table[b'<' as usize] = true;
-    table[b'>' as usize] = true;
-    table[b',' as usize] = true;
-    table[b'[' as usize] = true;
-    table[b']' as usize] = true;
-    table[b';' as usize] = true;
-    table[b'(' as usize] = true;
-    table[b')' as usize] = true;
-    table[b'"' as usize] = true;
-    table[b'&' as usize] = true;
+const SANITIZE_ACTION_PASS: u8 = 0;
+const SANITIZE_ACTION_STAR: u8 = 1;
+const SANITIZE_ACTION_COLON: u8 = 2;
+const SANITIZE_ACTION_MINUS: u8 = 3;
+const SANITIZE_ACTION_UNDERSCORE: u8 = 4;
+const SANITIZE_ACTION_DROP: u8 = 5;
+const SANITIZE_ACTION_REF: u8 = 6;
+
+const fn build_type_sanitization_action_table() -> [u8; 256] {
+    let mut table = [SANITIZE_ACTION_PASS; 256];
+    table[b'*' as usize] = SANITIZE_ACTION_STAR;
+    table[b':' as usize] = SANITIZE_ACTION_COLON;
+    table[b'-' as usize] = SANITIZE_ACTION_MINUS;
+    table[b' ' as usize] = SANITIZE_ACTION_UNDERSCORE;
+    table[b'<' as usize] = SANITIZE_ACTION_UNDERSCORE;
+    table[b',' as usize] = SANITIZE_ACTION_UNDERSCORE;
+    table[b'[' as usize] = SANITIZE_ACTION_UNDERSCORE;
+    table[b']' as usize] = SANITIZE_ACTION_UNDERSCORE;
+    table[b';' as usize] = SANITIZE_ACTION_UNDERSCORE;
+    table[b'(' as usize] = SANITIZE_ACTION_UNDERSCORE;
+    table[b')' as usize] = SANITIZE_ACTION_UNDERSCORE;
+    table[b'"' as usize] = SANITIZE_ACTION_UNDERSCORE;
+    table[b'>' as usize] = SANITIZE_ACTION_DROP;
+    table[b'&' as usize] = SANITIZE_ACTION_REF;
     table
 }
 
-const TYPE_SANITIZATION_DISPATCH_TABLE: [bool; 256] = build_type_sanitization_dispatch_table();
+const TYPE_SANITIZATION_ACTION_TABLE: [u8; 256] = build_type_sanitization_action_table();
 
 #[inline(always)]
+fn type_sanitization_action(byte: u8) -> u8 {
+    TYPE_SANITIZATION_ACTION_TABLE[byte as usize]
+}
+
+#[inline(always)]
+#[cfg(test)]
 fn byte_requires_type_sanitization_dispatch(byte: u8) -> bool {
-    TYPE_SANITIZATION_DISPATCH_TABLE[byte as usize]
+    type_sanitization_action(byte) != SANITIZE_ACTION_PASS
 }
 
 #[cfg(test)]
@@ -82539,19 +82553,18 @@ fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
     let mut idx = 0usize;
     while idx < bytes_len {
         // Fast-lane contiguous bytes that sanitizer leaves unchanged.
-        if !byte_requires_type_sanitization_dispatch(bytes[idx]) {
+        if type_sanitization_action(bytes[idx]) == SANITIZE_ACTION_PASS {
             let run_start = idx;
             idx += 1;
-            while idx < bytes_len && !byte_requires_type_sanitization_dispatch(bytes[idx]) {
+            while idx < bytes_len && type_sanitization_action(bytes[idx]) == SANITIZE_ACTION_PASS {
                 idx += 1;
             }
             out.push_str(&ty[run_start..idx]);
             continue;
         }
 
-        let byte = bytes[idx];
-        match byte {
-            b'*' => {
+        match type_sanitization_action(bytes[idx]) {
+            SANITIZE_ACTION_STAR => {
                 if idx + 5 <= bytes_len && &bytes[idx..idx + 5] == b"*mut " {
                     out.push_str("ptr_mut_");
                     idx += 5;
@@ -82563,7 +82576,7 @@ fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
                     idx += 1;
                 }
             }
-            b':' => {
+            SANITIZE_ACTION_COLON => {
                 if idx + 1 < bytes_len && bytes[idx + 1] == b':' {
                     out.push('_');
                     idx += 2;
@@ -82572,7 +82585,7 @@ fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
                     idx += 1;
                 }
             }
-            b'-' => {
+            SANITIZE_ACTION_MINUS => {
                 if idx + 1 < bytes_len && bytes[idx + 1] == b'>' {
                     // Handle function return type arrow before stripping `>`.
                     out.push_str("_ret_");
@@ -82582,21 +82595,18 @@ fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
                     idx += 1;
                 }
             }
-            b' ' | b'<' | b',' | b'[' | b']' | b';' | b'(' | b')' | b'"' => {
+            SANITIZE_ACTION_UNDERSCORE => {
                 out.push('_');
                 idx += 1;
             }
-            b'>' => {
+            SANITIZE_ACTION_DROP => {
                 idx += 1;
             }
-            b'&' => {
+            SANITIZE_ACTION_REF => {
                 out.push_str("ref_");
                 idx += 1;
             }
-            _ => {
-                out.push(byte as char);
-                idx += 1;
-            }
+            _ => unreachable!("non-trigger action should not reach trigger dispatch"),
         }
     }
 }
@@ -121782,6 +121792,31 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
                 byte_requires_type_sanitization_dispatch(byte),
                 legacy(byte),
                 "dispatch trigger mismatch for byte value {byte}",
+            );
+        }
+    }
+
+    #[test]
+    fn test_type_sanitization_action_table_matches_legacy_for_all_bytes() {
+        fn legacy_action(byte: u8) -> u8 {
+            match byte {
+                b'*' => SANITIZE_ACTION_STAR,
+                b':' => SANITIZE_ACTION_COLON,
+                b'-' => SANITIZE_ACTION_MINUS,
+                b' ' | b'<' | b',' | b'[' | b']' | b';' | b'(' | b')' | b'"' => {
+                    SANITIZE_ACTION_UNDERSCORE
+                }
+                b'>' => SANITIZE_ACTION_DROP,
+                b'&' => SANITIZE_ACTION_REF,
+                _ => SANITIZE_ACTION_PASS,
+            }
+        }
+
+        for byte in 0u8..=u8::MAX {
+            assert_eq!(
+                type_sanitization_action(byte),
+                legacy_action(byte),
+                "action code mismatch for byte value {byte}",
             );
         }
     }
