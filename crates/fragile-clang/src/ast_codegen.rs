@@ -82522,6 +82522,7 @@ const fn build_type_sanitization_action_table() -> [u8; 256] {
 const TYPE_SANITIZATION_ACTION_TABLE: [u8; 256] = build_type_sanitization_action_table();
 
 #[inline(always)]
+#[cfg(test)]
 fn type_sanitization_action(byte: u8) -> u8 {
     TYPE_SANITIZATION_ACTION_TABLE[byte as usize]
 }
@@ -82547,23 +82548,24 @@ fn type_token_is_identifier_clean(ty: &str) -> bool {
 fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
     let bytes = ty.as_bytes();
     let bytes_len = bytes.len();
+    let action_table = &TYPE_SANITIZATION_ACTION_TABLE;
 
     // Keep legacy replacement semantics but avoid repeated full-string
     // allocations from chained `replace(...)` calls on hot template paths.
     let mut idx = 0usize;
     while idx < bytes_len {
         // Fast-lane contiguous bytes that sanitizer leaves unchanged.
-        if type_sanitization_action(bytes[idx]) == SANITIZE_ACTION_PASS {
+        if action_table[bytes[idx] as usize] == SANITIZE_ACTION_PASS {
             let run_start = idx;
             idx += 1;
-            while idx < bytes_len && type_sanitization_action(bytes[idx]) == SANITIZE_ACTION_PASS {
+            while idx < bytes_len && action_table[bytes[idx] as usize] == SANITIZE_ACTION_PASS {
                 idx += 1;
             }
             out.push_str(&ty[run_start..idx]);
             continue;
         }
 
-        match type_sanitization_action(bytes[idx]) {
+        match action_table[bytes[idx] as usize] {
             SANITIZE_ACTION_STAR => {
                 if idx + 5 <= bytes_len && &bytes[idx..idx + 5] == b"*mut " {
                     out.push_str("ptr_mut_");
@@ -121762,6 +121764,17 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
         assert_eq!(
             out, "A:B-C_D_ret_E",
             "sanitizer should preserve single ':'/'-' bytes while still rewriting '::' and '->'"
+        );
+    }
+
+    #[test]
+    fn test_append_sanitized_type_for_fn_name_handles_dense_trigger_sequence() {
+        let sample = "*mut A::B->C&&D";
+        let mut out = String::new();
+        append_sanitized_type_for_fn_name(&mut out, sample);
+        assert_eq!(
+            out, "ptr_mut_A_B_ret_Cref_ref_D",
+            "sanitizer should preserve legacy rewrites when triggers appear in dense sequence"
         );
     }
 
