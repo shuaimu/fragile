@@ -82587,6 +82587,137 @@ fn find_type_sanitization_run_end(
     action: u8,
 ) -> usize {
     let len = bytes.len();
+    while idx + 32 <= len {
+        let b0 = bytes[idx];
+        if action_table[b0 as usize] != action {
+            return idx;
+        }
+        let b1 = bytes[idx + 1];
+        if action_table[b1 as usize] != action {
+            return idx + 1;
+        }
+        let b2 = bytes[idx + 2];
+        if action_table[b2 as usize] != action {
+            return idx + 2;
+        }
+        let b3 = bytes[idx + 3];
+        if action_table[b3 as usize] != action {
+            return idx + 3;
+        }
+        let b4 = bytes[idx + 4];
+        if action_table[b4 as usize] != action {
+            return idx + 4;
+        }
+        let b5 = bytes[idx + 5];
+        if action_table[b5 as usize] != action {
+            return idx + 5;
+        }
+        let b6 = bytes[idx + 6];
+        if action_table[b6 as usize] != action {
+            return idx + 6;
+        }
+        let b7 = bytes[idx + 7];
+        if action_table[b7 as usize] != action {
+            return idx + 7;
+        }
+        let b8 = bytes[idx + 8];
+        if action_table[b8 as usize] != action {
+            return idx + 8;
+        }
+        let b9 = bytes[idx + 9];
+        if action_table[b9 as usize] != action {
+            return idx + 9;
+        }
+        let b10 = bytes[idx + 10];
+        if action_table[b10 as usize] != action {
+            return idx + 10;
+        }
+        let b11 = bytes[idx + 11];
+        if action_table[b11 as usize] != action {
+            return idx + 11;
+        }
+        let b12 = bytes[idx + 12];
+        if action_table[b12 as usize] != action {
+            return idx + 12;
+        }
+        let b13 = bytes[idx + 13];
+        if action_table[b13 as usize] != action {
+            return idx + 13;
+        }
+        let b14 = bytes[idx + 14];
+        if action_table[b14 as usize] != action {
+            return idx + 14;
+        }
+        let b15 = bytes[idx + 15];
+        if action_table[b15 as usize] != action {
+            return idx + 15;
+        }
+        let b16 = bytes[idx + 16];
+        if action_table[b16 as usize] != action {
+            return idx + 16;
+        }
+        let b17 = bytes[idx + 17];
+        if action_table[b17 as usize] != action {
+            return idx + 17;
+        }
+        let b18 = bytes[idx + 18];
+        if action_table[b18 as usize] != action {
+            return idx + 18;
+        }
+        let b19 = bytes[idx + 19];
+        if action_table[b19 as usize] != action {
+            return idx + 19;
+        }
+        let b20 = bytes[idx + 20];
+        if action_table[b20 as usize] != action {
+            return idx + 20;
+        }
+        let b21 = bytes[idx + 21];
+        if action_table[b21 as usize] != action {
+            return idx + 21;
+        }
+        let b22 = bytes[idx + 22];
+        if action_table[b22 as usize] != action {
+            return idx + 22;
+        }
+        let b23 = bytes[idx + 23];
+        if action_table[b23 as usize] != action {
+            return idx + 23;
+        }
+        let b24 = bytes[idx + 24];
+        if action_table[b24 as usize] != action {
+            return idx + 24;
+        }
+        let b25 = bytes[idx + 25];
+        if action_table[b25 as usize] != action {
+            return idx + 25;
+        }
+        let b26 = bytes[idx + 26];
+        if action_table[b26 as usize] != action {
+            return idx + 26;
+        }
+        let b27 = bytes[idx + 27];
+        if action_table[b27 as usize] != action {
+            return idx + 27;
+        }
+        let b28 = bytes[idx + 28];
+        if action_table[b28 as usize] != action {
+            return idx + 28;
+        }
+        let b29 = bytes[idx + 29];
+        if action_table[b29 as usize] != action {
+            return idx + 29;
+        }
+        let b30 = bytes[idx + 30];
+        if action_table[b30 as usize] != action {
+            return idx + 30;
+        }
+        let b31 = bytes[idx + 31];
+        if action_table[b31 as usize] != action {
+            return idx + 31;
+        }
+        idx += 32;
+    }
     while idx + 16 <= len {
         let b0 = bytes[idx];
         if action_table[b0 as usize] != action {
@@ -122687,6 +122818,33 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
             ),
             32,
             "run-end scanner should handle starts at 16-byte boundary"
+        );
+    }
+
+    #[test]
+    fn test_find_type_sanitization_run_end_handles_thirty_two_byte_window_boundaries() {
+        let action_table = &TYPE_SANITIZATION_ACTION_TABLE;
+        let underscores =
+            b"                                                                alpha";
+        assert_eq!(
+            find_type_sanitization_run_end(
+                underscores,
+                action_table,
+                0,
+                SANITIZE_ACTION_UNDERSCORE
+            ),
+            64,
+            "run-end scanner should span two 32-byte underscore windows from start"
+        );
+        assert_eq!(
+            find_type_sanitization_run_end(
+                underscores,
+                action_table,
+                32,
+                SANITIZE_ACTION_UNDERSCORE
+            ),
+            64,
+            "run-end scanner should handle starts at 32-byte boundary"
         );
     }
 
