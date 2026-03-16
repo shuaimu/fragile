@@ -82570,28 +82570,33 @@ fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
         match action {
             SANITIZE_ACTION_STAR => {
                 let remaining = bytes_len - idx;
-                if remaining >= 5
-                    && bytes[idx + 1] == b'm'
-                    && bytes[idx + 2] == b'u'
-                    && bytes[idx + 3] == b't'
-                    && bytes[idx + 4] == b' '
-                {
-                    out.push_str("ptr_mut_");
-                    idx += 5;
-                } else if remaining >= 7
-                    && bytes[idx + 1] == b'c'
-                    && bytes[idx + 2] == b'o'
-                    && bytes[idx + 3] == b'n'
-                    && bytes[idx + 4] == b's'
-                    && bytes[idx + 5] == b't'
-                    && bytes[idx + 6] == b' '
-                {
-                    out.push_str("ptr_const_");
-                    idx += 7;
-                } else {
-                    out.push_str("ptr_");
-                    idx += 1;
+                if remaining >= 2 {
+                    let next = bytes[idx + 1];
+                    if next == b'm'
+                        && remaining >= 5
+                        && bytes[idx + 2] == b'u'
+                        && bytes[idx + 3] == b't'
+                        && bytes[idx + 4] == b' '
+                    {
+                        out.push_str("ptr_mut_");
+                        idx += 5;
+                        continue;
+                    }
+                    if next == b'c'
+                        && remaining >= 7
+                        && bytes[idx + 2] == b'o'
+                        && bytes[idx + 3] == b'n'
+                        && bytes[idx + 4] == b's'
+                        && bytes[idx + 5] == b't'
+                        && bytes[idx + 6] == b' '
+                    {
+                        out.push_str("ptr_const_");
+                        idx += 7;
+                        continue;
+                    }
                 }
+                out.push_str("ptr_");
+                idx += 1;
             }
             SANITIZE_ACTION_COLON => {
                 if idx + 1 < bytes_len && bytes[idx + 1] == b':' {
@@ -121746,6 +121751,17 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
         assert_eq!(
             out, "ptr_c_ptr_co_ptr_con_ptr_cons_ptr_const_",
             "sanitizer should preserve partial '*const' prefixes near buffer end and only rewrite the full '*const ' token"
+        );
+    }
+
+    #[test]
+    fn test_append_sanitized_type_for_fn_name_handles_single_star_suffix() {
+        let sample = "Type*";
+        let mut out = String::new();
+        append_sanitized_type_for_fn_name(&mut out, sample);
+        assert_eq!(
+            out, "Typeptr_",
+            "sanitizer should rewrite trailing '*' into ptr_ without requiring lookahead bytes"
         );
     }
 
