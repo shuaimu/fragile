@@ -82569,18 +82569,34 @@ fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
 
         match action {
             SANITIZE_ACTION_STAR => {
-                if idx + 5 <= bytes_len
-                    && bytes[idx + 1] == b'm'
-                    && &bytes[idx + 2..idx + 5] == b"ut "
-                {
-                    out.push_str("ptr_mut_");
-                    idx += 5;
-                } else if idx + 7 <= bytes_len
-                    && bytes[idx + 1] == b'c'
-                    && &bytes[idx + 2..idx + 7] == b"onst "
-                {
-                    out.push_str("ptr_const_");
-                    idx += 7;
+                let next = idx + 1;
+                if next < bytes_len {
+                    match bytes[next] {
+                        b'm'
+                            if idx + 5 <= bytes_len
+                                && bytes[idx + 2] == b'u'
+                                && bytes[idx + 3] == b't'
+                                && bytes[idx + 4] == b' ' =>
+                        {
+                            out.push_str("ptr_mut_");
+                            idx += 5;
+                        }
+                        b'c'
+                            if idx + 7 <= bytes_len
+                                && bytes[idx + 2] == b'o'
+                                && bytes[idx + 3] == b'n'
+                                && bytes[idx + 4] == b's'
+                                && bytes[idx + 5] == b't'
+                                && bytes[idx + 6] == b' ' =>
+                        {
+                            out.push_str("ptr_const_");
+                            idx += 7;
+                        }
+                        _ => {
+                            out.push_str("ptr_");
+                            idx += 1;
+                        }
+                    }
                 } else {
                     out.push_str("ptr_");
                     idx += 1;
@@ -121717,6 +121733,17 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
         assert_eq!(
             out, "ptr_mut_T_ptr_const_U_ptr__V",
             "sanitizer should preserve pointer-prefix rewrites when switching to byte-slice prefix checks"
+        );
+    }
+
+    #[test]
+    fn test_append_sanitized_type_for_fn_name_preserves_partial_pointer_prefix_tokens() {
+        let sample = "*m *mu *con *constX";
+        let mut out = String::new();
+        append_sanitized_type_for_fn_name(&mut out, sample);
+        assert_eq!(
+            out, "ptr_m_ptr_mu_ptr_con_ptr_constX",
+            "sanitizer should only rewrite full '*mut ' and '*const ' prefixes while preserving partial pointer tokens"
         );
     }
 
