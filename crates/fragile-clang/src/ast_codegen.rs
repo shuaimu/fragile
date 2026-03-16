@@ -83248,6 +83248,49 @@ fn find_next_sanitization_trigger(
     mut idx: usize,
 ) -> usize {
     let len = bytes.len();
+    while idx + 256 <= len {
+        if let Some(trigger_idx) =
+            find_next_sanitization_trigger_in_pass_window_32(bytes, action_table, idx)
+        {
+            return trigger_idx;
+        }
+        if let Some(trigger_idx) =
+            find_next_sanitization_trigger_in_pass_window_32(bytes, action_table, idx + 32)
+        {
+            return trigger_idx;
+        }
+        if let Some(trigger_idx) =
+            find_next_sanitization_trigger_in_pass_window_32(bytes, action_table, idx + 64)
+        {
+            return trigger_idx;
+        }
+        if let Some(trigger_idx) =
+            find_next_sanitization_trigger_in_pass_window_32(bytes, action_table, idx + 96)
+        {
+            return trigger_idx;
+        }
+        if let Some(trigger_idx) =
+            find_next_sanitization_trigger_in_pass_window_32(bytes, action_table, idx + 128)
+        {
+            return trigger_idx;
+        }
+        if let Some(trigger_idx) =
+            find_next_sanitization_trigger_in_pass_window_32(bytes, action_table, idx + 160)
+        {
+            return trigger_idx;
+        }
+        if let Some(trigger_idx) =
+            find_next_sanitization_trigger_in_pass_window_32(bytes, action_table, idx + 192)
+        {
+            return trigger_idx;
+        }
+        if let Some(trigger_idx) =
+            find_next_sanitization_trigger_in_pass_window_32(bytes, action_table, idx + 224)
+        {
+            return trigger_idx;
+        }
+        idx += 256;
+    }
     while idx + 128 <= len {
         if let Some(trigger_idx) =
             find_next_sanitization_trigger_in_pass_window_32(bytes, action_table, idx)
@@ -123112,6 +123155,29 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
         );
         assert_eq!(
             find_next_sanitization_trigger(&bytes, action_table, 130),
+            bytes.len(),
+            "scanner should return len when starting after trigger bytes"
+        );
+    }
+
+    #[test]
+    fn test_find_next_sanitization_trigger_handles_two_hundred_fifty_six_byte_window_boundaries() {
+        let action_table = &TYPE_SANITIZATION_ACTION_TABLE;
+        let mut bytes =
+            b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/".repeat(4);
+        bytes.extend_from_slice(b"->tail");
+        assert_eq!(
+            find_next_sanitization_trigger(&bytes, action_table, 0),
+            256,
+            "scanner should find trigger after crossing one 256-byte pass window"
+        );
+        assert_eq!(
+            find_next_sanitization_trigger(&bytes, action_table, 128),
+            256,
+            "scanner should find trigger when scan starts in middle of 256-byte window"
+        );
+        assert_eq!(
+            find_next_sanitization_trigger(&bytes, action_table, 258),
             bytes.len(),
             "scanner should return len when starting after trigger bytes"
         );
