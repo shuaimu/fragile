@@ -82599,6 +82599,41 @@ fn find_next_sanitization_trigger(
     mut idx: usize,
 ) -> usize {
     let len = bytes.len();
+    while idx + 8 <= len {
+        let b0 = bytes[idx];
+        if action_table[b0 as usize] != SANITIZE_ACTION_PASS {
+            return idx;
+        }
+        let b1 = bytes[idx + 1];
+        if action_table[b1 as usize] != SANITIZE_ACTION_PASS {
+            return idx + 1;
+        }
+        let b2 = bytes[idx + 2];
+        if action_table[b2 as usize] != SANITIZE_ACTION_PASS {
+            return idx + 2;
+        }
+        let b3 = bytes[idx + 3];
+        if action_table[b3 as usize] != SANITIZE_ACTION_PASS {
+            return idx + 3;
+        }
+        let b4 = bytes[idx + 4];
+        if action_table[b4 as usize] != SANITIZE_ACTION_PASS {
+            return idx + 4;
+        }
+        let b5 = bytes[idx + 5];
+        if action_table[b5 as usize] != SANITIZE_ACTION_PASS {
+            return idx + 5;
+        }
+        let b6 = bytes[idx + 6];
+        if action_table[b6 as usize] != SANITIZE_ACTION_PASS {
+            return idx + 6;
+        }
+        let b7 = bytes[idx + 7];
+        if action_table[b7 as usize] != SANITIZE_ACTION_PASS {
+            return idx + 7;
+        }
+        idx += 8;
+    }
     while idx + 4 <= len {
         let b0 = bytes[idx];
         if action_table[b0 as usize] != SANITIZE_ACTION_PASS {
@@ -122209,6 +122244,27 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
             find_next_sanitization_trigger(bytes, action_table, 9),
             bytes.len(),
             "scanner should return len when no triggers remain in trailing tail path"
+        );
+    }
+
+    #[test]
+    fn test_find_next_sanitization_trigger_handles_eight_byte_window_boundaries() {
+        let action_table = &TYPE_SANITIZATION_ACTION_TABLE;
+        let bytes = b"abcdefghijklmnop->tail";
+        assert_eq!(
+            find_next_sanitization_trigger(bytes, action_table, 0),
+            16,
+            "scanner should find trigger after crossing two 8-byte pass windows"
+        );
+        assert_eq!(
+            find_next_sanitization_trigger(bytes, action_table, 8),
+            16,
+            "scanner should find trigger when scan starts at the second 8-byte boundary"
+        );
+        assert_eq!(
+            find_next_sanitization_trigger(bytes, action_table, 18),
+            bytes.len(),
+            "scanner should return len when starting after trigger bytes"
         );
     }
 
