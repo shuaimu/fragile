@@ -82593,10 +82593,24 @@ fn find_type_sanitization_run_end(
 }
 
 #[inline(always)]
+fn find_next_sanitization_trigger(
+    bytes: &[u8],
+    action_table: &[u8; 256],
+    mut idx: usize,
+) -> usize {
+    while idx < bytes.len() {
+        if action_table[bytes[idx] as usize] != SANITIZE_ACTION_PASS {
+            return idx;
+        }
+        idx += 1;
+    }
+    bytes.len()
+}
+
+#[inline(always)]
 fn find_first_sanitization_trigger(bytes: &[u8], action_table: &[u8; 256]) -> Option<usize> {
-    bytes
-        .iter()
-        .position(|b| action_table[*b as usize] != SANITIZE_ACTION_PASS)
+    let idx = find_next_sanitization_trigger(bytes, action_table, 0);
+    (idx < bytes.len()).then_some(idx)
 }
 
 const UNDERSCORE_SANITIZATION_RUN_CHUNK: &str =
@@ -82658,12 +82672,7 @@ fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
         // Fast-lane contiguous bytes that sanitizer leaves unchanged.
         if action == SANITIZE_ACTION_PASS {
             let run_start = idx;
-            idx = find_type_sanitization_run_end(
-                bytes,
-                action_table,
-                idx + 1,
-                SANITIZE_ACTION_PASS,
-            );
+            idx = find_next_sanitization_trigger(bytes, action_table, idx + 1);
             out.push_str(&ty[run_start..idx]);
             continue;
         }
@@ -121991,6 +122000,17 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
             out,
             format!("prefix_{sample}"),
             "sanitizer fast path should append clean trigger-free tokens without altering existing output"
+        );
+    }
+
+    #[test]
+    fn test_append_sanitized_type_for_fn_name_preserves_long_clean_prefix_before_trigger() {
+        let sample = "VeryLongIdentifier1234567890->Tail";
+        let mut out = String::new();
+        append_sanitized_type_for_fn_name(&mut out, sample);
+        assert_eq!(
+            out, "VeryLongIdentifier1234567890_ret_Tail",
+            "sanitizer should preserve long clean prefixes and only rewrite from the first trigger byte onward"
         );
     }
 
