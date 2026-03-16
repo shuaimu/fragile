@@ -82492,24 +82492,30 @@ fn sanitize_type_for_fn_name(ty: &str) -> String {
     out
 }
 
+const fn build_type_sanitization_dispatch_table() -> [bool; 256] {
+    let mut table = [false; 256];
+    table[b'*' as usize] = true;
+    table[b':' as usize] = true;
+    table[b'-' as usize] = true;
+    table[b' ' as usize] = true;
+    table[b'<' as usize] = true;
+    table[b'>' as usize] = true;
+    table[b',' as usize] = true;
+    table[b'[' as usize] = true;
+    table[b']' as usize] = true;
+    table[b';' as usize] = true;
+    table[b'(' as usize] = true;
+    table[b')' as usize] = true;
+    table[b'"' as usize] = true;
+    table[b'&' as usize] = true;
+    table
+}
+
+const TYPE_SANITIZATION_DISPATCH_TABLE: [bool; 256] = build_type_sanitization_dispatch_table();
+
+#[inline(always)]
 fn byte_requires_type_sanitization_dispatch(byte: u8) -> bool {
-    matches!(
-        byte,
-        b'*'
-            | b':'
-            | b'-'
-            | b' '
-            | b'<'
-            | b'>'
-            | b','
-            | b'['
-            | b']'
-            | b';'
-            | b'('
-            | b')'
-            | b'"'
-            | b'&'
-    )
+    TYPE_SANITIZATION_DISPATCH_TABLE[byte as usize]
 }
 
 #[cfg(test)]
@@ -121747,6 +121753,37 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
             out, "A:B-C_D_ret_E",
             "sanitizer should preserve single ':'/'-' bytes while still rewriting '::' and '->'"
         );
+    }
+
+    #[test]
+    fn test_byte_requires_type_sanitization_dispatch_matches_legacy_for_all_bytes() {
+        fn legacy(byte: u8) -> bool {
+            matches!(
+                byte,
+                b'*'
+                    | b':'
+                    | b'-'
+                    | b' '
+                    | b'<'
+                    | b'>'
+                    | b','
+                    | b'['
+                    | b']'
+                    | b';'
+                    | b'('
+                    | b')'
+                    | b'"'
+                    | b'&'
+            )
+        }
+
+        for byte in 0u8..=u8::MAX {
+            assert_eq!(
+                byte_requires_type_sanitization_dispatch(byte),
+                legacy(byte),
+                "dispatch trigger mismatch for byte value {byte}",
+            );
+        }
     }
 
     #[test]
