@@ -82579,10 +82579,24 @@ fn type_token_is_identifier_clean(ty: &str) -> bool {
     find_first_type_sanitization_trigger(ty.as_bytes()).is_none()
 }
 
+#[inline(always)]
+fn find_type_sanitization_run_end(
+    bytes: &[u8],
+    action_table: &[u8; 256],
+    mut idx: usize,
+    action: u8,
+) -> usize {
+    while idx < bytes.len() && action_table[bytes[idx] as usize] == action {
+        idx += 1;
+    }
+    idx
+}
+
 fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
     let bytes = ty.as_bytes();
     let bytes_len = bytes.len();
     let action_table = &TYPE_SANITIZATION_ACTION_TABLE;
+    out.reserve(ty.len());
 
     // Keep legacy replacement semantics but avoid repeated full-string
     // allocations from chained `replace(...)` calls on hot template paths.
@@ -82593,10 +82607,12 @@ fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
         // Fast-lane contiguous bytes that sanitizer leaves unchanged.
         if action == SANITIZE_ACTION_PASS {
             let run_start = idx;
-            idx += 1;
-            while idx < bytes_len && action_table[bytes[idx] as usize] == SANITIZE_ACTION_PASS {
-                idx += 1;
-            }
+            idx = find_type_sanitization_run_end(
+                bytes,
+                action_table,
+                idx + 1,
+                SANITIZE_ACTION_PASS,
+            );
             out.push_str(&ty[run_start..idx]);
             continue;
         }
@@ -82652,15 +82668,36 @@ fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
                 }
             }
             SANITIZE_ACTION_UNDERSCORE => {
-                out.push('_');
-                idx += 1;
+                let run_end = find_type_sanitization_run_end(
+                    bytes,
+                    action_table,
+                    idx + 1,
+                    SANITIZE_ACTION_UNDERSCORE,
+                );
+                for _ in idx..run_end {
+                    out.push('_');
+                }
+                idx = run_end;
             }
             SANITIZE_ACTION_DROP => {
-                idx += 1;
+                idx = find_type_sanitization_run_end(
+                    bytes,
+                    action_table,
+                    idx + 1,
+                    SANITIZE_ACTION_DROP,
+                );
             }
             SANITIZE_ACTION_REF => {
-                out.push_str("ref_");
-                idx += 1;
+                let run_end = find_type_sanitization_run_end(
+                    bytes,
+                    action_table,
+                    idx + 1,
+                    SANITIZE_ACTION_REF,
+                );
+                for _ in idx..run_end {
+                    out.push_str("ref_");
+                }
+                idx = run_end;
             }
             _ => unreachable!("non-trigger action should not reach trigger dispatch"),
         }
@@ -121917,6 +121954,17 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
         assert_eq!(
             out, "A:B-C_D_ret_E",
             "sanitizer should preserve single ':'/'-' bytes while still rewriting '::' and '->'"
+        );
+    }
+
+    #[test]
+    fn test_append_sanitized_type_for_fn_name_preserves_dense_underscore_and_drop_runs() {
+        let sample = "A<<  B>>>";
+        let mut out = String::new();
+        append_sanitized_type_for_fn_name(&mut out, sample);
+        assert_eq!(
+            out, "A____B",
+            "sanitizer should preserve per-byte '_' rewrites for dense separator runs and drop all trailing '>' bytes"
         );
     }
 

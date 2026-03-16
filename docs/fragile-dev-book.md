@@ -17517,3 +17517,62 @@ Full-suite sweep (step-4):
     - `test_variadic_template_transpile`
 - `python3 -m unittest discover -s tests/python -p 'test_*.py'`:
   - `Ran 34 tests`, `OK`, `skipped=1`.
+
+## 2026-03-16: Strict RPC Build-Timeout Loop Iteration (Leaf 2.6.d...c.c.c.c.c.a)
+
+Context:
+- Continued the strict `misc.cpp` timeout loop under active RPC bring-up (`2.6.d` chain).
+- The selected loop leaf (`2.6.d...c.c.c.c.c`) is an unbounded repeat task, so it was decomposed into bounded sub-leaves before execution.
+
+Wrong-approach check:
+- Reviewed `1.3 Wrong Approaches (Do Not Do)` before implementation.
+- No target-name conditionals/hacks were added.
+- No force-native bypass was used.
+- No fake semantic fallback/stub bodies were introduced.
+
+Design change (generic, bounded):
+- File: `crates/fragile-clang/src/ast_codegen.rs`
+- Hot-path update in `append_sanitized_type_for_fn_name`:
+  - added `find_type_sanitization_run_end(...)` to coalesce contiguous sanitizer-action runs;
+  - switched `PASS` action scanning to run-end helper;
+  - coalesced dense `UNDERSCORE`, `DROP`, and `REF` runs in single dispatch paths;
+  - added `out.reserve(ty.len())` to reduce append-buffer realloc churn on repeated calls.
+- This preserves existing sanitizer output semantics while reducing per-byte match/branch overhead on dense trigger spans.
+
+Focused regressions:
+- Added `test_append_sanitized_type_for_fn_name_preserves_dense_underscore_and_drop_runs`.
+- Revalidated sanitizer/mangling coverage:
+  - `cargo test -p fragile-clang test_append_sanitized_type_for_fn_name_preserves_dense_underscore_and_drop_runs -- --nocapture`
+  - `cargo test -p fragile-clang test_append_sanitized_type_for_fn_name_ -- --nocapture`
+  - `cargo test -p fragile-clang test_type_sanitization_action_table_matches_legacy_for_all_bytes -- --nocapture`
+  - `cargo test -p fragile-clang test_build_fn_template_mangled_name_ -- --nocapture`
+
+Strict replay artifacts:
+- Release build:
+  - `cargo build --release -p fragile-cli --bin fragilec`
+- Timeout replay (120s):
+  - `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_d_d_d_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_a_callshape_profile_120_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_d_d_d_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_a_stage_timing_120_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_d_d_d_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_b_build_only_20260316_v1 --lanes fragilec --max-replays 1 --timeout-seconds 120`
+  - callshape profile: `status=codegen_after_template_collection`, `input_bytes=0`.
+- Timeout replay (300s):
+  - `FRAGILEC_MODE=strict FRAGILEC_PROBLEMATIC_CALLSHAPE_PROFILE_PATH=/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_d_d_d_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_a_callshape_profile_300_v1.txt FRAGILEC_TRANSPILE_STAGE_TIMING_PATH=/tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_d_d_d_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_a_stage_timing_300_v1.txt python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_iv_d_d_d_d_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_c_b_build_only_20260316_v1 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+  - replay manifest remains timeout-bound:
+    - `replay_01_status=124`
+    - `replay_01_timed_out=true`
+    - `replay_01_first_failure_class=build_timeout`
+    - `replay_01_blocker_file=src/rrr/base/misc.cpp`
+  - callshape profile: `status=codegen_after_template_instantiation_generation`, `input_bytes=570594`.
+
+Full-suite sweep (step 4):
+- `cargo test --workspace --all-targets`:
+  - `fragile-clang` lib completed green (`925 passed, 0 failed`).
+  - integration phase reproduced the known baseline failing ids:
+    - `test_e2e_simple_hash_table`
+    - `test_e2e_object_pool`
+    - `test_e2e_simple_graph`
+    - `test_e2e_trie`
+    - `test_e2e_tokenizer`
+    - `test_variadic_template_transpile`
+    - `test_e2e_pthread`
+  - run was interrupted manually after prolonged no-progress in long-running libcxx-tail integration execution.
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`:
+  - `Ran 34 tests`, `OK`, `skipped=1`.
