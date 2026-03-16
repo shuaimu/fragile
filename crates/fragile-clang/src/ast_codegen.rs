@@ -82592,6 +82592,35 @@ fn find_type_sanitization_run_end(
     idx
 }
 
+const UNDERSCORE_SANITIZATION_RUN_CHUNK: &str =
+    "________________________________________________________________";
+const REF_SANITIZATION_RUN_CHUNK_REPEAT: usize = 8;
+const REF_SANITIZATION_RUN_CHUNK: &str = "ref_ref_ref_ref_ref_ref_ref_ref_";
+
+#[inline(always)]
+fn append_underscore_sanitization_run(out: &mut String, mut count: usize) {
+    out.reserve(count);
+    while count >= UNDERSCORE_SANITIZATION_RUN_CHUNK.len() {
+        out.push_str(UNDERSCORE_SANITIZATION_RUN_CHUNK);
+        count -= UNDERSCORE_SANITIZATION_RUN_CHUNK.len();
+    }
+    if count > 0 {
+        out.push_str(&UNDERSCORE_SANITIZATION_RUN_CHUNK[..count]);
+    }
+}
+
+#[inline(always)]
+fn append_ref_sanitization_run(out: &mut String, mut count: usize) {
+    out.reserve(count * "ref_".len());
+    while count >= REF_SANITIZATION_RUN_CHUNK_REPEAT {
+        out.push_str(REF_SANITIZATION_RUN_CHUNK);
+        count -= REF_SANITIZATION_RUN_CHUNK_REPEAT;
+    }
+    for _ in 0..count {
+        out.push_str("ref_");
+    }
+}
+
 fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
     let bytes = ty.as_bytes();
     let bytes_len = bytes.len();
@@ -82674,9 +82703,7 @@ fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
                     idx + 1,
                     SANITIZE_ACTION_UNDERSCORE,
                 );
-                for _ in idx..run_end {
-                    out.push('_');
-                }
+                append_underscore_sanitization_run(out, run_end - idx);
                 idx = run_end;
             }
             SANITIZE_ACTION_DROP => {
@@ -82694,9 +82721,7 @@ fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
                     idx + 1,
                     SANITIZE_ACTION_REF,
                 );
-                for _ in idx..run_end {
-                    out.push_str("ref_");
-                }
+                append_ref_sanitization_run(out, run_end - idx);
                 idx = run_end;
             }
             _ => unreachable!("non-trigger action should not reach trigger dispatch"),
@@ -121965,6 +121990,29 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
         assert_eq!(
             out, "A____B",
             "sanitizer should preserve per-byte '_' rewrites for dense separator runs and drop all trailing '>' bytes"
+        );
+    }
+
+    #[test]
+    fn test_append_sanitized_type_for_fn_name_preserves_long_underscore_run() {
+        let sample = "A            B";
+        let mut out = String::new();
+        append_sanitized_type_for_fn_name(&mut out, sample);
+        assert_eq!(
+            out, "A____________B",
+            "sanitizer should preserve long contiguous underscore rewrite runs"
+        );
+    }
+
+    #[test]
+    fn test_append_sanitized_type_for_fn_name_preserves_long_ref_run() {
+        let sample = "A&&&&&&&&&&B";
+        let mut out = String::new();
+        append_sanitized_type_for_fn_name(&mut out, sample);
+        assert_eq!(
+            out,
+            format!("A{}B", "ref_".repeat(10)),
+            "sanitizer should preserve long contiguous ref rewrite runs"
         );
     }
 
