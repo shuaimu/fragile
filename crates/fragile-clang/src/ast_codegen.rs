@@ -83248,6 +83248,20 @@ fn find_next_sanitization_trigger(
     mut idx: usize,
 ) -> usize {
     let len = bytes.len();
+    while idx + 16384 <= len {
+        let mut chunk_offset = 0usize;
+        while chunk_offset < 16384 {
+            if let Some(trigger_idx) = find_next_sanitization_trigger_in_pass_window_32(
+                bytes,
+                action_table,
+                idx + chunk_offset,
+            ) {
+                return trigger_idx;
+            }
+            chunk_offset += 32;
+        }
+        idx += 16384;
+    }
     while idx + 8192 <= len {
         let mut chunk_offset = 0usize;
         while chunk_offset < 8192 {
@@ -123436,6 +123450,30 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
         );
         assert_eq!(
             find_next_sanitization_trigger(&bytes, action_table, 8194),
+            bytes.len(),
+            "scanner should return len when starting after trigger bytes"
+        );
+    }
+
+    #[test]
+    fn test_find_next_sanitization_trigger_handles_sixteen_thousand_three_hundred_eighty_four_byte_window_boundaries(
+    ) {
+        let action_table = &TYPE_SANITIZATION_ACTION_TABLE;
+        let mut bytes =
+            b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/".repeat(256);
+        bytes.extend_from_slice(b"->tail");
+        assert_eq!(
+            find_next_sanitization_trigger(&bytes, action_table, 0),
+            16384,
+            "scanner should find trigger after crossing one 16384-byte pass window"
+        );
+        assert_eq!(
+            find_next_sanitization_trigger(&bytes, action_table, 8192),
+            16384,
+            "scanner should find trigger when scan starts in middle of 16384-byte window"
+        );
+        assert_eq!(
+            find_next_sanitization_trigger(&bytes, action_table, 16386),
             bytes.len(),
             "scanner should return len when starting after trigger bytes"
         );
