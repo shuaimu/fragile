@@ -82554,8 +82554,10 @@ fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
     // allocations from chained `replace(...)` calls on hot template paths.
     let mut idx = 0usize;
     while idx < bytes_len {
+        let action = action_table[bytes[idx] as usize];
+
         // Fast-lane contiguous bytes that sanitizer leaves unchanged.
-        if action_table[bytes[idx] as usize] == SANITIZE_ACTION_PASS {
+        if action == SANITIZE_ACTION_PASS {
             let run_start = idx;
             idx += 1;
             while idx < bytes_len && action_table[bytes[idx] as usize] == SANITIZE_ACTION_PASS {
@@ -82565,12 +82567,18 @@ fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
             continue;
         }
 
-        match action_table[bytes[idx] as usize] {
+        match action {
             SANITIZE_ACTION_STAR => {
-                if idx + 5 <= bytes_len && &bytes[idx..idx + 5] == b"*mut " {
+                if idx + 5 <= bytes_len
+                    && bytes[idx + 1] == b'm'
+                    && &bytes[idx + 2..idx + 5] == b"ut "
+                {
                     out.push_str("ptr_mut_");
                     idx += 5;
-                } else if idx + 7 <= bytes_len && &bytes[idx..idx + 7] == b"*const " {
+                } else if idx + 7 <= bytes_len
+                    && bytes[idx + 1] == b'c'
+                    && &bytes[idx + 2..idx + 7] == b"onst "
+                {
                     out.push_str("ptr_const_");
                     idx += 7;
                 } else {
@@ -121775,6 +121783,16 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
         assert_eq!(
             out, "ptr_mut_A_B_ret_Cref_ref_D",
             "sanitizer should preserve legacy rewrites when triggers appear in dense sequence"
+        );
+    }
+
+    #[test]
+    fn test_append_sanitized_type_for_fn_name_appends_into_existing_output_buffer() {
+        let mut out = String::from("prefix_");
+        append_sanitized_type_for_fn_name(&mut out, "*const A::B");
+        assert_eq!(
+            out, "prefix_ptr_const_A_B",
+            "sanitizer append helper must preserve prior output content while appending rewritten type tokens"
         );
     }
 
