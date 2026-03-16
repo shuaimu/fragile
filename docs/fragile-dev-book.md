@@ -17518,6 +17518,78 @@ Full-suite sweep (step-4):
 - `python3 -m unittest discover -s tests/python -p 'test_*.py'`:
   - `Ran 34 tests`, `OK`, `skipped=1`.
 
+## 2026-03-16: Strict RPC Build-Timeout Loop Iteration (Leaf 2.6.d...v.b.iii.c.{a,b})
+
+Context:
+- The selected first pending leaf (`2.6.d.b.ii.c.c.v.b.iii.c`) was an unbounded repeat item, so it was decomposed into bounded leaves `.a/.b/.c` in `TODO.md`.
+- This iteration executed `.a` (generic hot-path change + focused regressions) and `.b` (strict build-only replay/inventory/replay gates).
+
+Wrong-approach check:
+- Reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before implementation.
+- No target-specific conditionals/hacks were introduced.
+- No force-native bypass was used.
+- No fake semantic fallback/stub bodies were introduced.
+
+Design change (generic, bounded):
+- File: `crates/fragile-clang/src/ast_codegen.rs`
+- Added `find_first_sanitization_trigger(...)` and used it in `append_sanitized_type_for_fn_name(...)` to fast-path trigger-free type tokens.
+  - If no sanitizer trigger bytes exist, append the whole token directly and return.
+  - If triggers exist, append the clean prefix once, then continue existing trigger-dispatch logic.
+- This preserves sanitizer semantics while reducing per-byte dispatch overhead on clean template type args.
+
+Focused regression coverage:
+- Added: `test_append_sanitized_type_for_fn_name_fast_path_preserves_long_clean_token`.
+- Validation commands:
+  - `cargo test -p fragile-clang test_append_sanitized_type_for_fn_name_ -- --nocapture`
+  - `cargo test -p fragile-clang test_type_sanitization_action_table_matches_legacy_for_all_bytes -- --nocapture`
+  - `cargo test -p fragile-clang test_build_fn_template_mangled_name_ -- --nocapture`
+
+Strict replay artifacts (`.b`):
+- Release build:
+  - `cargo build --release -p fragile-cli --bin fragilec`
+- Strict build-only replay:
+  - `FRAGILEC_MODE=strict python3 scripts/mako_rpcbench_harness.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_v_b_iii_c_b_build_only_20260316_v1 --lanes fragilec --build-only --jobs 4 --build-timeout-seconds 600`
+  - `HARNESS_STATUS=1`
+  - `benchmark_harness_manifest.txt`:
+    - `build_only=true`
+    - `lane_fragilec_configure_status=0`
+    - `lane_fragilec_clean_status=0`
+    - `lane_fragilec_build_status=124`
+    - `lane_fragilec_test_rpc_status=-1`
+    - `lane_fragilec_failure_class=build_timeout`
+- Non-increase gate versus prior `.iii.b` baseline:
+  - `python3 scripts/mako_rpc_compile_blocker_inventory.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_v_b_iii_c_b_build_only_20260316_v1 --lanes fragilec --baseline-manifest /tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_v_b_iii_b_build_only_20260316_v2/rpc_compile_blocker_inventory_manifest.txt --enforce-nonincreasing`
+  - `rpc_compile_blocker_inventory_manifest.txt`:
+    - `lane_fragilec_first_failing_compile_class=build_timeout`
+    - `lane_fragilec_first_failing_compile_file=src/rrr/base/misc.cpp`
+    - `lane_fragilec_class_rank_delta_vs_baseline=0`
+    - `lane_fragilec_e0425_delta_vs_baseline=0`
+    - `lane_fragilec_nonincrease_gate_pass=true`
+    - `nonincrease_gate_pass=true`
+- Blocker replay:
+  - `python3 scripts/mako_rpc_compile_blocker_replay.py --run-root /tmp/fragile_rpc_leaf_2_6d_b_ii_c_c_v_b_iii_c_b_build_only_20260316_v1 --lanes fragilec --max-replays 1 --timeout-seconds 300`
+  - `rpc_compile_blocker_replay_manifest.txt`:
+    - `replay_01_blocker_class=build_timeout`
+    - `replay_01_blocker_file=src/rrr/base/misc.cpp`
+    - `replay_01_status=124`
+    - `replay_01_timed_out=true`
+    - `replay_01_first_failure_class=build_timeout`
+
+Full-suite sweep (step 4):
+- `cargo test --workspace --all-targets` captured via:
+  - `python3 scripts/ci_command_capture.py --run-root /tmp/fragile_leaf_2_6d_b_ii_c_c_v_b_iii_c_b_workspace_20260316_v1 --name workspace_all_targets --inactivity-timeout-seconds 90 --wall-timeout-seconds 1200 --command cargo test --workspace --all-targets`
+  - `workspace_all_targets.status=124`, `timeout_reason=inactivity_timeout`
+  - first failing ids include:
+    - `test_e2e_object_pool`
+    - `test_e2e_simple_hash_table`
+    - `test_e2e_trie`
+    - `test_e2e_simple_graph`
+    - `test_e2e_tokenizer`
+    - `test_variadic_template_transpile`
+    - `test_e2e_pthread`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`:
+  - `Ran 34 tests`, `OK`, `skipped=1`.
+
 ## 2026-03-16: Strict RPC Build-Timeout Loop Iteration (Leaf 2.6.d...v.b.iii.b)
 
 Context:

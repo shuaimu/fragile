@@ -82592,6 +82592,13 @@ fn find_type_sanitization_run_end(
     idx
 }
 
+#[inline(always)]
+fn find_first_sanitization_trigger(bytes: &[u8], action_table: &[u8; 256]) -> Option<usize> {
+    bytes
+        .iter()
+        .position(|b| action_table[*b as usize] != SANITIZE_ACTION_PASS)
+}
+
 const UNDERSCORE_SANITIZATION_RUN_CHUNK: &str =
     "________________________________________________________________";
 const REF_SANITIZATION_RUN_CHUNK_REPEAT: usize = 8;
@@ -82635,9 +82642,16 @@ fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
     let action_table = &TYPE_SANITIZATION_ACTION_TABLE;
     out.reserve(ty.len());
 
+    let Some(mut idx) = find_first_sanitization_trigger(bytes, action_table) else {
+        out.push_str(ty);
+        return;
+    };
+    if idx > 0 {
+        out.push_str(&ty[..idx]);
+    }
+
     // Keep legacy replacement semantics but avoid repeated full-string
     // allocations from chained `replace(...)` calls on hot template paths.
-    let mut idx = 0usize;
     while idx < bytes_len {
         let action = action_table[bytes[idx] as usize];
 
@@ -121965,6 +121979,18 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
         assert_eq!(
             out, sample,
             "sanitizer should keep trigger-free passthrough tokens unchanged"
+        );
+    }
+
+    #[test]
+    fn test_append_sanitized_type_for_fn_name_fast_path_preserves_long_clean_token() {
+        let sample = "VeryLongIdentifier999_withAscii'punct+hash#";
+        let mut out = String::from("prefix_");
+        append_sanitized_type_for_fn_name(&mut out, sample);
+        assert_eq!(
+            out,
+            format!("prefix_{sample}"),
+            "sanitizer fast path should append clean trigger-free tokens without altering existing output"
         );
     }
 
