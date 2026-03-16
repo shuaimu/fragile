@@ -82598,13 +82598,33 @@ fn find_next_sanitization_trigger(
     action_table: &[u8; 256],
     mut idx: usize,
 ) -> usize {
-    while idx < bytes.len() {
+    let len = bytes.len();
+    while idx + 4 <= len {
+        let b0 = bytes[idx];
+        if action_table[b0 as usize] != SANITIZE_ACTION_PASS {
+            return idx;
+        }
+        let b1 = bytes[idx + 1];
+        if action_table[b1 as usize] != SANITIZE_ACTION_PASS {
+            return idx + 1;
+        }
+        let b2 = bytes[idx + 2];
+        if action_table[b2 as usize] != SANITIZE_ACTION_PASS {
+            return idx + 2;
+        }
+        let b3 = bytes[idx + 3];
+        if action_table[b3 as usize] != SANITIZE_ACTION_PASS {
+            return idx + 3;
+        }
+        idx += 4;
+    }
+    while idx < len {
         if action_table[bytes[idx] as usize] != SANITIZE_ACTION_PASS {
             return idx;
         }
         idx += 1;
     }
-    bytes.len()
+    len
 }
 
 #[inline(always)]
@@ -122169,6 +122189,27 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
                 "action code mismatch for byte value {byte}",
             );
         }
+    }
+
+    #[test]
+    fn test_find_next_sanitization_trigger_handles_unrolled_and_tail_paths() {
+        let action_table = &TYPE_SANITIZATION_ACTION_TABLE;
+        let bytes = b"abcdefg->tail";
+        assert_eq!(
+            find_next_sanitization_trigger(bytes, action_table, 0),
+            7,
+            "scanner should find trigger after passing through multiple unrolled chunks"
+        );
+        assert_eq!(
+            find_next_sanitization_trigger(bytes, action_table, 8),
+            8,
+            "scanner should find immediate trigger when starting at trigger index"
+        );
+        assert_eq!(
+            find_next_sanitization_trigger(bytes, action_table, 9),
+            bytes.len(),
+            "scanner should return len when no triggers remain in trailing tail path"
+        );
     }
 
     #[test]
