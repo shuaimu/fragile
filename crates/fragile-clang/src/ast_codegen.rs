@@ -82544,61 +82544,54 @@ fn append_sanitized_type_for_fn_name(out: &mut String, ty: &str) {
         }
 
         let byte = bytes[idx];
-        if byte == b'*' {
-            if idx + 5 <= bytes_len && &bytes[idx..idx + 5] == b"*mut " {
-                out.push_str("ptr_mut_");
-                idx += 5;
-                continue;
-            }
-            if idx + 7 <= bytes_len && &bytes[idx..idx + 7] == b"*const " {
-                out.push_str("ptr_const_");
-                idx += 7;
-                continue;
-            }
-            out.push_str("ptr_");
-            idx += 1;
-            continue;
-        }
-        if byte == b':' && idx + 1 < bytes_len && bytes[idx + 1] == b':' {
-            out.push('_');
-            idx += 2;
-            continue;
-        }
-        if byte == b'-' && idx + 1 < bytes_len && bytes[idx + 1] == b'>' {
-            // Handle function return type arrow before stripping `>`.
-            out.push_str("_ret_");
-            idx += 2;
-            continue;
-        }
         match byte {
+            b'*' => {
+                if idx + 5 <= bytes_len && &bytes[idx..idx + 5] == b"*mut " {
+                    out.push_str("ptr_mut_");
+                    idx += 5;
+                } else if idx + 7 <= bytes_len && &bytes[idx..idx + 7] == b"*const " {
+                    out.push_str("ptr_const_");
+                    idx += 7;
+                } else {
+                    out.push_str("ptr_");
+                    idx += 1;
+                }
+            }
+            b':' => {
+                if idx + 1 < bytes_len && bytes[idx + 1] == b':' {
+                    out.push('_');
+                    idx += 2;
+                } else {
+                    out.push(':');
+                    idx += 1;
+                }
+            }
+            b'-' => {
+                if idx + 1 < bytes_len && bytes[idx + 1] == b'>' {
+                    // Handle function return type arrow before stripping `>`.
+                    out.push_str("_ret_");
+                    idx += 2;
+                } else {
+                    out.push('-');
+                    idx += 1;
+                }
+            }
             b' ' | b'<' | b',' | b'[' | b']' | b';' | b'(' | b')' | b'"' => {
                 out.push('_');
                 idx += 1;
-                continue;
             }
             b'>' => {
                 idx += 1;
-                continue;
             }
             b'&' => {
                 out.push_str("ref_");
                 idx += 1;
-                continue;
             }
-            _ if byte.is_ascii() => {
+            _ => {
                 out.push(byte as char);
                 idx += 1;
-                continue;
             }
-            _ => {}
         }
-
-        let ch = ty[idx..]
-            .chars()
-            .next()
-            .expect("sanitize_type_for_fn_name: idx should always point to a valid char boundary");
-        out.push(ch);
-        idx += ch.len_utf8();
     }
 }
 
@@ -121742,6 +121735,17 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
         assert_eq!(
             out, "ptr_const_Åßç_t'plus+hash#",
             "sanitizer should rewrite the leading trigger and preserve the following passthrough run"
+        );
+    }
+
+    #[test]
+    fn test_append_sanitized_type_for_fn_name_preserves_single_colon_and_minus_triggers() {
+        let sample = "A:B-C::D->E";
+        let mut out = String::new();
+        append_sanitized_type_for_fn_name(&mut out, sample);
+        assert_eq!(
+            out, "A:B-C_D_ret_E",
+            "sanitizer should preserve single ':'/'-' bytes while still rewriting '::' and '->'"
         );
     }
 
