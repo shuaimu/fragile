@@ -177,6 +177,108 @@ fn flatten_clang_ast_node(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CanonicalStlFamily {
+    Vector,
+    Map,
+    UnorderedMap,
+    String,
+    Optional,
+    Variant,
+    Tuple,
+    SharedPtr,
+    UniquePtr,
+}
+
+impl CanonicalStlFamily {
+    fn from_symbol_leaf(leaf: &str) -> Option<Self> {
+        match leaf {
+            "vector" => Some(Self::Vector),
+            "map" => Some(Self::Map),
+            "unordered_map" => Some(Self::UnorderedMap),
+            "basic_string" | "string" => Some(Self::String),
+            "optional" => Some(Self::Optional),
+            "variant" => Some(Self::Variant),
+            "tuple" => Some(Self::Tuple),
+            "shared_ptr" => Some(Self::SharedPtr),
+            "unique_ptr" => Some(Self::UniquePtr),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Vector => "vector",
+            Self::Map => "map",
+            Self::UnorderedMap => "unordered_map",
+            Self::String => "string",
+            Self::Optional => "optional",
+            Self::Variant => "variant",
+            Self::Tuple => "tuple",
+            Self::SharedPtr => "shared_ptr",
+            Self::UniquePtr => "unique_ptr",
+        }
+    }
+}
+
+fn is_std_namespace_passthrough(segment: &str) -> bool {
+    segment.starts_with("__") || segment == "pmr" || segment == "experimental"
+}
+
+fn detect_direct_std_stl_family_in_token(token: &str) -> Option<CanonicalStlFamily> {
+    let path = token.trim_matches(':');
+    if path.is_empty() || !path.contains("std::") {
+        return None;
+    }
+
+    let segments = path
+        .split("::")
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    if segments.len() < 2 {
+        return None;
+    }
+
+    for (index, segment) in segments.iter().enumerate() {
+        if *segment != "std" {
+            continue;
+        }
+
+        let mut symbol_index = index + 1;
+        while symbol_index < segments.len() && is_std_namespace_passthrough(segments[symbol_index])
+        {
+            symbol_index += 1;
+        }
+        if symbol_index >= segments.len() {
+            continue;
+        }
+        if let Some(family) = CanonicalStlFamily::from_symbol_leaf(segments[symbol_index]) {
+            return Some(family);
+        }
+    }
+
+    None
+}
+
+fn detect_direct_std_stl_family_in_spelling(spelling: &str) -> Option<CanonicalStlFamily> {
+    spelling
+        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == ':'))
+        .find_map(detect_direct_std_stl_family_in_token)
+}
+
+/// Detects canonical STL family names from direct `std::` spellings in node
+/// names or C++ type spellings.
+pub fn detect_direct_std_stl_family(
+    name: Option<&str>,
+    cpp_type: Option<&str>,
+) -> Option<&'static str> {
+    name
+        .into_iter()
+        .chain(cpp_type)
+        .find_map(|spelling| detect_direct_std_stl_family_in_spelling(spelling))
+        .map(CanonicalStlFamily::as_str)
+}
+
 fn map_parser_node_kind(kind: &ClangNodeKind) -> String {
     let variant = clang_kind_variant(kind);
     let parser_kind = match variant.as_str() {
@@ -402,7 +504,9 @@ fn cpp_type_to_string(ty: &CppType) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{FragileParserClangBackend, FRAGILE_PARSER_CLANG_BACKEND_ID};
+    use super::{
+        detect_direct_std_stl_family, FragileParserClangBackend, FRAGILE_PARSER_CLANG_BACKEND_ID,
+    };
     use fragile_parser_core::{
         IncludeDirective, IncludeDirectiveKind, ParseRequest, ParserBackend, ParserLanguage,
         PARSER_OUTPUT_SCHEMA_VERSION_V1,
@@ -451,6 +555,71 @@ mod tests {
     fn backend_id_matches_contract_constant() {
         let backend = FragileParserClangBackend;
         assert_eq!(backend.backend_id(), FRAGILE_PARSER_CLANG_BACKEND_ID);
+    }
+
+    #[test]
+    fn detect_direct_std_stl_family_matches_known_std_shapes() {
+        let cases = [
+            (Some("std::vector<int>"), None, Some("vector")),
+            (Some("std::map<int, int>"), None, Some("map")),
+            (
+                Some("std::__1::unordered_map<int, int>"),
+                None,
+                Some("unordered_map"),
+            ),
+            (Some("std::basic_string<char>"), None, Some("string")),
+            (Some("std::string"), None, Some("string")),
+            (Some("std::optional<int>"), None, Some("optional")),
+            (Some("std::variant<int, double>"), None, Some("variant")),
+            (Some("std::tuple<int, double>"), None, Some("tuple")),
+            (
+                Some("std::shared_ptr<MyType>"),
+                None,
+                Some("shared_ptr"),
+            ),
+            (
+                Some("std::unique_ptr<MyType>"),
+                None,
+                Some("unique_ptr"),
+            ),
+            (
+                Some("alias"),
+                Some("const std::pmr::vector<int>&"),
+                Some("vector"),
+            ),
+        ];
+
+        for (name, cpp_type, expected) in cases {
+            assert_eq!(
+                detect_direct_std_stl_family(name, cpp_type),
+                expected,
+                "unexpected direct std STL family detection for name={:?}, cpp_type={:?}",
+                name,
+                cpp_type
+            );
+        }
+    }
+
+    #[test]
+    fn detect_direct_std_stl_family_rejects_non_std_or_non_target_symbols() {
+        let cases = [
+            (Some("mystd::vector<int>"), None),
+            (Some("std::allocator<int>"), None),
+            (Some("my::tuple<int, int>"), None),
+            (Some("vector<int>"), None),
+            (Some("std::filesystem::path"), None),
+            (Some("LocalType"), Some("LocalType*")),
+        ];
+
+        for (name, cpp_type) in cases {
+            assert_eq!(
+                detect_direct_std_stl_family(name, cpp_type),
+                None,
+                "expected no direct std STL family for name={:?}, cpp_type={:?}",
+                name,
+                cpp_type
+            );
+        }
     }
 
     #[test]

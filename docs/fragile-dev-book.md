@@ -19091,3 +19091,39 @@ Validation:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
 - Full workspace suite:
   - `cargo test --workspace --all-targets`
+
+## 2026-03-17: M3.1.a Direct Canonical `std::` STL Symbol Detection
+
+Context:
+- Next unresolved P0 task was `M3.1` (canonical STL symbol detection).
+- `M3.1` was too broad for one <1000 LOC leaf, so it was decomposed into:
+  - `M3.1.a` direct `std::` symbol detection utility
+  - `M3.1.b` typedef/type-alias normalization
+  - `M3.1.c` using-chain resolution
+  - `M3.1.d` alias-heavy regression fixtures
+- Executed first leaf: `M3.1.a`.
+
+Wrong-approach check:
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- Kept implementation generic with no target-specific branches, no semantic
+  stubs, and no bypass shortcuts.
+
+Design update:
+- Added direct canonical STL family detector in `fragile-parser-clang`:
+  - `detect_direct_std_stl_family(name, cpp_type) -> Option<&'static str>`
+- Detector currently recognizes direct `std::` spellings for:
+  - `vector`, `map`, `unordered_map`, `string`/`basic_string`,
+    `optional`, `variant`, `tuple`, `shared_ptr`, `unique_ptr`
+- Supports direct inline/passthrough namespace variants such as:
+  - `std::__1::...`
+  - `std::pmr::...`
+  - `std::experimental::...`
+- Rejects non-`std` and non-target spellings deterministically.
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-parser-clang`
+- Full Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+- Full workspace suite:
+  - `cargo test --workspace --all-targets`
