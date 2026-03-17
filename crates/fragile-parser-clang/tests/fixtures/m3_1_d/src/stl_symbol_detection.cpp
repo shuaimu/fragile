@@ -34,3 +34,10 @@ namespace transit {
 using namespace using_chain;
 using TransitVec = ImportedVec;
 } // namespace transit
+
+void consume_symbols() {
+    std::vector<int> direct_vec;
+    using_chain::ImportedVec imported_vec;
+    using_chain::ImportedMap imported_map;
+    transit::TransitVec transit_vec;
+}

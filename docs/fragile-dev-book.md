@@ -19234,3 +19234,54 @@ Validation:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
 - Full workspace suite:
   - `cargo test --workspace --all-targets`
+
+## 2026-03-17: M3.2.a STL Boundary Placeholder Node-Kind Emission
+
+Context:
+- Next unresolved P0 leaf after `M3.1.d` was `M3.2.a`.
+- Goal: emit canonical STL placeholder node kinds at parser boundaries using
+  direct + alias/using-aware STL symbol detection.
+
+Wrong-approach check:
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before
+  implementation.
+- No target-specific conditionals, no force-native bypasses, and no synthetic
+  semantic fallback bodies were introduced.
+- Ambiguous STL matches remain unresolved (no guessed family fallback).
+
+Design update:
+- Extended parser-clang lowering in
+  `crates/fragile-parser-clang/src/lib.rs`:
+  - build `StlResolutionContext` once from translation-unit nodes
+  - thread namespace scope path through flatten recursion
+  - resolve per-node canonical STL family using:
+    - direct `std::...` detection
+    - alias symbol-table targets
+    - using declaration/directive visible-candidate expansion
+  - map resolved family to canonical placeholder `node_kind` via
+    `map_parser_node_kind_with_stl_boundary`, with fallback to default mapping
+    when unresolved
+- Canonical placeholder node kinds emitted:
+  - `stl_vector_placeholder`
+  - `stl_map_placeholder`
+  - `stl_unordered_map_placeholder`
+  - `stl_string_placeholder`
+  - `stl_optional_placeholder`
+  - `stl_variant_placeholder`
+  - `stl_tuple_placeholder`
+  - `stl_shared_ptr_placeholder`
+  - `stl_unique_ptr_placeholder`
+- Extended deterministic fixture coverage:
+  - `crates/fragile-parser-clang/tests/fixtures/m3_1_d/src/stl_symbol_detection.cpp`
+  - `crates/fragile-parser-clang/tests/stl_symbol_detection_fixture_tests.rs`
+  - new assertions verify placeholder-node-kind emission for direct and
+    alias/using-transit STL boundary variables.
+- Deep subtree pruning is intentionally deferred to follow-up leaf `M3.2.b`.
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-parser-clang`
+- Full Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+- Full workspace suite:
+  - `cargo test --workspace --all-targets`

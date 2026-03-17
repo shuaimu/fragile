@@ -135,6 +135,7 @@ where
 }
 
 fn convert_clang_ast_to_parser_output(request: &ParseRequest, ast: ClangAst) -> ParserOutputV1 {
+    let stl_resolution_context = build_stl_resolution_context(&ast.translation_unit);
     ParserOutputV1 {
         schema_version: PARSER_OUTPUT_SCHEMA_VERSION_V1.to_string(),
         translation_unit: ParserTranslationUnit {
@@ -145,35 +146,75 @@ fn convert_clang_ast_to_parser_output(request: &ParseRequest, ast: ClangAst) -> 
             defines: request.defines.clone(),
             include_directives: request.include_directives.clone(),
         },
-        nodes: flatten_clang_ast_nodes(&ast.translation_unit),
+        nodes: flatten_clang_ast_nodes(&ast.translation_unit, &stl_resolution_context),
         diagnostics: Vec::new(),
     }
 }
 
-fn flatten_clang_ast_nodes(root: &ClangNode) -> Vec<ParserNode> {
+fn flatten_clang_ast_nodes(root: &ClangNode, stl_context: &StlResolutionContext) -> Vec<ParserNode> {
     let mut nodes = Vec::new();
     let mut next_node_id = 0usize;
-    flatten_clang_ast_node(root, None, &mut next_node_id, &mut nodes);
+    flatten_clang_ast_node(
+        root,
+        None,
+        &mut Vec::new(),
+        stl_context,
+        &mut next_node_id,
+        &mut nodes,
+    );
     nodes
 }
 
 fn flatten_clang_ast_node(
     node: &ClangNode,
     parent_id: Option<&str>,
+    scope_path: &mut Vec<String>,
+    stl_context: &StlResolutionContext,
     next_node_id: &mut usize,
     out: &mut Vec<ParserNode>,
 ) {
     let node_id = format!("n{}", *next_node_id);
     *next_node_id += 1;
+    let node_name = extract_node_name(node);
+    let node_cpp_type = extract_cpp_type(&node.kind);
+    let stl_family = resolve_stl_family_for_node(
+        scope_path,
+        node_name.as_deref(),
+        node_cpp_type.as_deref(),
+        stl_context,
+    );
     out.push(ParserNode {
         node_id: node_id.clone(),
         parent_id: parent_id.map(str::to_string),
-        node_kind: map_parser_node_kind(&node.kind),
-        name: extract_node_name(node),
-        cpp_type: extract_cpp_type(&node.kind),
+        node_kind: map_parser_node_kind_with_stl_boundary(&node.kind, stl_family),
+        name: node_name,
+        cpp_type: node_cpp_type,
     });
+
+    let mut pushed_namespace = false;
+    if let ClangNodeKind::NamespaceDecl {
+        name: Some(name), ..
+    } = &node.kind
+    {
+        if !name.trim().is_empty() {
+            scope_path.push(name.clone());
+            pushed_namespace = true;
+        }
+    }
+
     for child in &node.children {
-        flatten_clang_ast_node(child, Some(node_id.as_str()), next_node_id, out);
+        flatten_clang_ast_node(
+            child,
+            Some(node_id.as_str()),
+            scope_path,
+            stl_context,
+            next_node_id,
+            out,
+        );
+    }
+
+    if pushed_namespace {
+        scope_path.pop();
     }
 }
 
@@ -232,6 +273,65 @@ impl CanonicalStlFamily {
             Self::SharedPtr => "std::shared_ptr",
             Self::UniquePtr => "std::unique_ptr",
         }
+    }
+
+    fn from_canonical_symbol(symbol: &str) -> Option<Self> {
+        match symbol {
+            "std::vector" => Some(Self::Vector),
+            "std::map" => Some(Self::Map),
+            "std::unordered_map" => Some(Self::UnorderedMap),
+            "std::string" => Some(Self::String),
+            "std::optional" => Some(Self::Optional),
+            "std::variant" => Some(Self::Variant),
+            "std::tuple" => Some(Self::Tuple),
+            "std::shared_ptr" => Some(Self::SharedPtr),
+            "std::unique_ptr" => Some(Self::UniquePtr),
+            _ => None,
+        }
+    }
+
+    fn placeholder_node_kind(self) -> &'static str {
+        match self {
+            Self::Vector => "stl_vector_placeholder",
+            Self::Map => "stl_map_placeholder",
+            Self::UnorderedMap => "stl_unordered_map_placeholder",
+            Self::String => "stl_string_placeholder",
+            Self::Optional => "stl_optional_placeholder",
+            Self::Variant => "stl_variant_placeholder",
+            Self::Tuple => "stl_tuple_placeholder",
+            Self::SharedPtr => "stl_shared_ptr_placeholder",
+            Self::UniquePtr => "stl_unique_ptr_placeholder",
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct StlResolutionContext {
+    resolved_alias_targets: BTreeMap<String, CanonicalStlFamily>,
+    using_declaration_records: Vec<UsingDeclarationRecord>,
+    using_directive_records: Vec<UsingDirectiveRecord>,
+}
+
+fn build_stl_resolution_context(root: &ClangNode) -> StlResolutionContext {
+    let mut using_declaration_records = Vec::new();
+    let mut using_directive_records = Vec::new();
+    collect_using_resolution_records(
+        root,
+        &mut Vec::new(),
+        &mut using_declaration_records,
+        &mut using_directive_records,
+    );
+    let resolved_alias_targets = extract_stl_type_alias_symbol_table(root)
+        .into_iter()
+        .filter_map(|(alias_name, canonical_symbol)| {
+            CanonicalStlFamily::from_canonical_symbol(&canonical_symbol)
+                .map(|family| (alias_name, family))
+        })
+        .collect::<BTreeMap<_, _>>();
+    StlResolutionContext {
+        resolved_alias_targets,
+        using_declaration_records,
+        using_directive_records,
     }
 }
 
@@ -712,6 +812,59 @@ pub fn extract_stl_type_alias_symbol_table(root: &ClangNode) -> BTreeMap<String,
         .collect()
 }
 
+fn collect_stl_family_matches_for_spelling(
+    scope_path: &[String],
+    spelling: &str,
+    stl_context: &StlResolutionContext,
+    out: &mut HashSet<CanonicalStlFamily>,
+) {
+    if let Some(family) = detect_direct_std_stl_family_in_spelling(spelling) {
+        out.insert(family);
+    }
+
+    let visible_using_namespace_paths =
+        collect_visible_using_namespace_paths(scope_path, &stl_context.using_directive_records);
+    for token in extract_alias_reference_tokens(spelling) {
+        for candidate in candidate_alias_names_for_token_with_using_resolution(
+            scope_path,
+            &token,
+            &stl_context.using_declaration_records,
+            &visible_using_namespace_paths,
+        ) {
+            if let Some(family) = detect_direct_std_stl_family_in_spelling(&candidate) {
+                out.insert(family);
+            }
+            if let Some(family) = stl_context.resolved_alias_targets.get(&candidate).copied() {
+                out.insert(family);
+            }
+        }
+    }
+}
+
+fn resolve_stl_family_for_node(
+    scope_path: &[String],
+    name: Option<&str>,
+    cpp_type: Option<&str>,
+    stl_context: &StlResolutionContext,
+) -> Option<CanonicalStlFamily> {
+    if let Some(family) = detect_direct_std_stl_family(name, cpp_type)
+        .and_then(CanonicalStlFamily::from_symbol_leaf)
+    {
+        return Some(family);
+    }
+
+    let mut matched_families = HashSet::new();
+    for spelling in name.into_iter().chain(cpp_type) {
+        collect_stl_family_matches_for_spelling(scope_path, spelling, stl_context, &mut matched_families);
+    }
+
+    if matched_families.len() == 1 {
+        matched_families.into_iter().next()
+    } else {
+        None
+    }
+}
+
 fn map_parser_node_kind(kind: &ClangNodeKind) -> String {
     let variant = clang_kind_variant(kind);
     let parser_kind = match variant.as_str() {
@@ -738,6 +891,16 @@ fn map_parser_node_kind(kind: &ClangNodeKind) -> String {
         _ => "statement",
     };
     parser_kind.to_string()
+}
+
+fn map_parser_node_kind_with_stl_boundary(
+    kind: &ClangNodeKind,
+    stl_family: Option<CanonicalStlFamily>,
+) -> String {
+    if let Some(family) = stl_family {
+        return family.placeholder_node_kind().to_string();
+    }
+    map_parser_node_kind(kind)
 }
 
 fn clang_kind_variant(kind: &ClangNodeKind) -> String {

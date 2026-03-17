@@ -114,3 +114,38 @@ fn stl_symbol_detection_fixture_resolves_typedef_and_using_chains_deterministica
         "fixture alias-table extraction should normalize direct/typedef/using STL symbols"
     );
 }
+
+#[test]
+fn stl_symbol_detection_fixture_emits_placeholder_node_kinds_for_detected_boundaries() {
+    let source_path = fixture_source("stl_symbol_detection.cpp");
+    assert!(
+        source_path.is_file(),
+        "expected fixture source at {}",
+        source_path.display()
+    );
+
+    let output = parse_fixture_with_backend(&source_path);
+    let has_named_placeholder = |name: &str, kind: &str| {
+        output
+            .nodes
+            .iter()
+            .any(|node| node.name.as_deref() == Some(name) && node.node_kind == kind)
+    };
+
+    assert!(
+        has_named_placeholder("direct_vec", "stl_vector_placeholder"),
+        "expected direct std variable to emit stl_vector_placeholder"
+    );
+    assert!(
+        has_named_placeholder("imported_vec", "stl_vector_placeholder"),
+        "expected alias/using-chain vector variable to emit stl_vector_placeholder"
+    );
+    assert!(
+        has_named_placeholder("transit_vec", "stl_vector_placeholder"),
+        "expected transitive using-chain vector variable to emit stl_vector_placeholder"
+    );
+    assert!(
+        has_named_placeholder("imported_map", "stl_map_placeholder"),
+        "expected alias/using-chain map variable to emit stl_map_placeholder"
+    );
+}
