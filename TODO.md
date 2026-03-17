@@ -66,7 +66,7 @@ Acceptance:
 - [x] M2.A1 New backend can parse and emit IR for a non-trivial fixture corpus.
 - [ ] M2.A2 Pipeline compiles/runs without LibTooling-specific parse dependency in active path.
   - [x] M2.A2.1 Add parser-core parse-manifest handoff artifact contract in strict entry points (CLI + driver) with deterministic coverage.
-  - [ ] M2.A2.2 Introduce parser-output-to-codegen interface so active codegen path no longer requires LibTooling parser invocation.
+  - [x] M2.A2.2 Introduce parser-output-to-codegen interface so active codegen path no longer requires LibTooling parser invocation.
   - [ ] M2.A2.3 Route strict compile active parser stage through parser-core output handoff and keep temporary explicit escape hatch only for hardening.
 
 ### M3) STL Boundary Detection (Opaque, Not Deep Parse)

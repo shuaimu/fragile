@@ -31,6 +31,12 @@ pub use parse::{ClangParser, ParserLanguage};
 pub use types::{CppType, TypeProperties, TypeTraitEvaluator, TypeTraitResult};
 
 use fragile_ast_exporter::{clang_ast::AstContext, clang_ast::SrcSpan, ASTEntryTag};
+use fragile_parser_core::{
+    IncludeDirective as ParserCoreIncludeDirective,
+    ParserLanguage as ParserCoreLanguage,
+    ParserOutputV1,
+    PARSER_OUTPUT_SCHEMA_VERSION_V1,
+};
 use miette::Result;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -114,6 +120,15 @@ impl Default for TranspileOptions {
     }
 }
 
+/// Parser-output handoff configuration for codegen-only transpile entry points.
+#[derive(Debug, Clone, Default)]
+pub struct ParserOutputCodegenOptions {
+    /// Error patterns to ignore while reparsing source with libclang.
+    pub ignored_error_patterns: Vec<String>,
+    /// Optional stage timing trace output path.
+    pub stage_timing_trace_path: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TranspileStageTimings {
     pub parse: Duration,
@@ -132,6 +147,7 @@ const TRANSPILE_STAGE_PARSE: &str = "parse";
 const TRANSPILE_STAGE_EXPORT: &str = "export";
 const TRANSPILE_STAGE_ENRICHMENT: &str = "enrichment";
 const TRANSPILE_STAGE_CODEGEN: &str = "codegen";
+const PARSER_OUTPUT_HANDOFF_BACKEND_LABEL: &str = "parser-output-handoff";
 
 fn parser_backend_label(backend: ParserBackend) -> &'static str {
     match backend {
@@ -157,7 +173,11 @@ fn sanitize_stage_trace_message(message: &str) -> String {
     message.trim().replace('\r', "").replace('\n', "\\n")
 }
 
-fn initialize_stage_trace(trace_path: Option<&Path>, source: &Path, backend: ParserBackend) {
+fn initialize_stage_trace_with_backend_label(
+    trace_path: Option<&Path>,
+    source: &Path,
+    backend_label: &str,
+) {
     let Some(path) = trace_path else {
         return;
     };
@@ -166,9 +186,13 @@ fn initialize_stage_trace(trace_path: Option<&Path>, source: &Path, backend: Par
     }
     let mut initial = String::new();
     initial.push_str(&format!("source={}\n", source.display()));
-    initial.push_str(&format!("backend={}\n", parser_backend_label(backend)));
+    initial.push_str(&format!("backend={backend_label}\n"));
     initial.push_str("status=started\n");
     let _ = fs::write(path, initial);
+}
+
+fn initialize_stage_trace(trace_path: Option<&Path>, source: &Path, backend: ParserBackend) {
+    initialize_stage_trace_with_backend_label(trace_path, source, parser_backend_label(backend));
 }
 
 fn stage_start(trace_path: Option<&Path>, stage: &str) {
@@ -413,6 +437,112 @@ fn template_parsing_label(delayed: bool) -> &'static str {
     } else {
         "standard"
     }
+}
+
+fn parser_output_to_parser_language(language: ParserCoreLanguage) -> ParserLanguage {
+    match language {
+        ParserCoreLanguage::C => ParserLanguage::C,
+        ParserCoreLanguage::Cpp => ParserLanguage::Cpp,
+    }
+}
+
+fn parser_output_frontend_include_paths(frontend_args: &[String]) -> Vec<String> {
+    let mut include_paths = Vec::new();
+    let mut index = 0usize;
+    while index < frontend_args.len() {
+        let arg = frontend_args[index].as_str();
+        if matches!(arg, "-I" | "-isystem" | "-iquote") {
+            if let Some(next) = frontend_args.get(index + 1) {
+                if let Some(path) = sanitize_parser_output_frontend_value(next) {
+                    include_paths.push(path);
+                }
+            }
+            index += 2;
+            continue;
+        }
+        if let Some(path) = arg
+            .strip_prefix("-I")
+            .or_else(|| arg.strip_prefix("-isystem"))
+            .or_else(|| arg.strip_prefix("-iquote"))
+            .and_then(sanitize_parser_output_frontend_value)
+        {
+            include_paths.push(path);
+        }
+        index += 1;
+    }
+    include_paths
+}
+
+fn parser_output_frontend_defines(frontend_args: &[String]) -> Vec<String> {
+    let mut defines = Vec::new();
+    let mut index = 0usize;
+    while index < frontend_args.len() {
+        let arg = frontend_args[index].as_str();
+        if arg == "-D" {
+            if let Some(next) = frontend_args.get(index + 1) {
+                if let Some(define) = sanitize_parser_output_frontend_value(next) {
+                    defines.push(define);
+                }
+            }
+            index += 2;
+            continue;
+        }
+        if let Some(define) = arg
+            .strip_prefix("-D")
+            .and_then(sanitize_parser_output_frontend_value)
+        {
+            defines.push(define);
+        }
+        index += 1;
+    }
+    defines
+}
+
+fn sanitize_parser_output_frontend_value(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    let trimmed = trimmed.strip_prefix('=').unwrap_or(trimmed).trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn dedupe_parser_output_values<I>(values: I) -> Vec<String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut seen = HashSet::new();
+    let mut deduped = Vec::new();
+    for value in values {
+        let normalized = value.trim();
+        if normalized.is_empty() {
+            continue;
+        }
+        let normalized = normalized.to_string();
+        if seen.insert(normalized.clone()) {
+            deduped.push(normalized);
+        }
+    }
+    deduped
+}
+
+fn parser_output_effective_include_paths(parser_output: &ParserOutputV1) -> Vec<String> {
+    let requested = parser_output
+        .translation_unit
+        .include_directives
+        .iter()
+        .map(|directive: &ParserCoreIncludeDirective| directive.path.clone());
+    let frontend =
+        parser_output_frontend_include_paths(&parser_output.translation_unit.frontend_args)
+            .into_iter();
+    dedupe_parser_output_values(requested.chain(frontend))
+}
+
+fn parser_output_effective_defines(parser_output: &ParserOutputV1) -> Vec<String> {
+    let requested = parser_output.translation_unit.defines.iter().cloned();
+    let frontend =
+        parser_output_frontend_defines(&parser_output.translation_unit.frontend_args).into_iter();
+    dedupe_parser_output_values(requested.chain(frontend))
 }
 
 fn extract_missing_header_name_from_line(line: &str) -> Option<String> {
@@ -1012,6 +1142,74 @@ pub fn transpile_cpp_to_rust_with_options(
     transpile_result
 }
 
+/// Transpile via parser-output handoff without invoking LibTooling parse/export.
+///
+/// This consumes `ParserOutputV1` metadata and performs codegen using a libclang parse.
+pub fn transpile_parser_output_to_rust(parser_output: &ParserOutputV1) -> Result<String> {
+    transpile_parser_output_to_rust_with_options(
+        parser_output,
+        &ParserOutputCodegenOptions::default(),
+    )
+}
+
+/// Transpile via parser-output handoff with explicit codegen options.
+pub fn transpile_parser_output_to_rust_with_options(
+    parser_output: &ParserOutputV1,
+    options: &ParserOutputCodegenOptions,
+) -> Result<String> {
+    if parser_output.schema_version != PARSER_OUTPUT_SCHEMA_VERSION_V1 {
+        return Err(miette::miette!(
+            "unsupported parser output schema `{}` (expected `{}`)",
+            parser_output.schema_version,
+            PARSER_OUTPUT_SCHEMA_VERSION_V1
+        ));
+    }
+
+    let source = &parser_output.translation_unit.source_path;
+    let trace_path = options.stage_timing_trace_path.as_deref();
+    initialize_stage_trace_with_backend_label(
+        trace_path,
+        source,
+        PARSER_OUTPUT_HANDOFF_BACKEND_LABEL,
+    );
+    let mut timings = TranspileStageTimings::default();
+    let transpile_result: Result<String> = (|| {
+        let parser = ClangParser::with_paths_defines_language_and_ignored_errors(
+            parser_output_effective_include_paths(parser_output),
+            parser_output_effective_defines(parser_output),
+            parser_output_to_parser_language(parser_output.translation_unit.language),
+            options.ignored_error_patterns.clone(),
+        )
+        .map_err(|err| {
+            miette::miette!(
+                "failed to initialize parser-output handoff parser for {} (backend={}): {}",
+                source.display(),
+                parser_output.translation_unit.parser_backend,
+                err
+            )
+        })?;
+
+        let ast = trace_stage(trace_path, TRANSPILE_STAGE_PARSE, &mut timings.parse, || {
+            parser.parse_file(source)
+        })?;
+
+        trace_stage(
+            trace_path,
+            TRANSPILE_STAGE_CODEGEN,
+            &mut timings.codegen,
+            || Ok(AstCodeGen::new().generate(&ast.translation_unit)),
+        )
+    })();
+
+    if let Err(err) = &transpile_result {
+        let err_message = err.to_string();
+        finalize_stage_trace(trace_path, &timings, "error", Some(err_message.as_str()));
+    } else {
+        finalize_stage_trace(trace_path, &timings, "completed", None);
+    }
+    transpile_result
+}
+
 /// Generate Rust stubs from a C++ source file.
 ///
 /// Stubs are function signatures with placeholder bodies,
@@ -1034,6 +1232,15 @@ mod tests {
     use fragile_ast_exporter::{
         clang_ast::{AstNode, SrcFile},
         CborValue,
+    };
+    use fragile_parser_core::{
+        IncludeDirective as ParserCoreIncludeDirective,
+        IncludeDirectiveKind as ParserCoreIncludeDirectiveKind,
+        ParserDiagnostic,
+        ParserLanguage as ParserCoreLanguage,
+        ParserNode,
+        ParserOutputV1,
+        ParserTranslationUnit,
     };
 
     fn span(
@@ -1066,6 +1273,34 @@ mod tests {
             loc,
             type_id: None,
             extras,
+        }
+    }
+
+    fn parser_output_fixture(
+        source_path: PathBuf,
+        language: ParserCoreLanguage,
+        frontend_args: Vec<String>,
+        defines: Vec<String>,
+        include_directives: Vec<ParserCoreIncludeDirective>,
+    ) -> ParserOutputV1 {
+        ParserOutputV1 {
+            schema_version: PARSER_OUTPUT_SCHEMA_VERSION_V1.to_string(),
+            translation_unit: ParserTranslationUnit {
+                source_path,
+                language,
+                parser_backend: "fragile-parser-clang".to_string(),
+                frontend_args,
+                defines,
+                include_directives,
+            },
+            nodes: vec![ParserNode {
+                node_id: "n0".to_string(),
+                parent_id: None,
+                node_kind: "translation_unit".to_string(),
+                name: Some("unit".to_string()),
+                cpp_type: None,
+            }],
+            diagnostics: Vec::<ParserDiagnostic>::new(),
         }
     }
 
@@ -1490,5 +1725,84 @@ mod tests {
         assert!(stub_dir.join("rcc_rpc.h").exists());
         assert!(stub_dir.join("foo/bar.hpp").exists());
         let _ = fs::remove_dir_all(stub_dir);
+    }
+
+    #[test]
+    fn parser_output_codegen_rejects_unknown_schema_version() {
+        let parser_output = ParserOutputV1 {
+            schema_version: "0.0.0".to_string(),
+            ..parser_output_fixture(
+                PathBuf::from("fixture.c"),
+                ParserCoreLanguage::C,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            )
+        };
+
+        let err = transpile_parser_output_to_rust(&parser_output)
+            .expect_err("schema mismatch should return an error");
+        let err_text = err.to_string();
+        assert!(
+            err_text.contains("unsupported parser output schema")
+                && err_text.contains("1.0.0"),
+            "unexpected schema validation error: {err_text}"
+        );
+    }
+
+    #[test]
+    fn parser_output_codegen_uses_handoff_metadata_without_libtooling_export() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("fragile_parser_output_codegen_{stamp}"));
+        let include_dir = temp_dir.join("include");
+        fs::create_dir_all(&include_dir).expect("failed to create include dir");
+        fs::write(include_dir.join("value.h"), "#define HEADER_VALUE 41\n")
+            .expect("failed to write header");
+        let source = temp_dir.join("unit.c");
+        fs::write(
+            &source,
+            "#include \"value.h\"\nint compute(void) { return HEADER_VALUE + FRONTEND_FLAG + REQUEST_FLAG; }\n",
+        )
+        .expect("failed to write source");
+        let parser_output = parser_output_fixture(
+            source.clone(),
+            ParserCoreLanguage::C,
+            vec!["-DFRONTEND_FLAG=3".to_string()],
+            vec!["REQUEST_FLAG=7".to_string()],
+            vec![ParserCoreIncludeDirective {
+                kind: ParserCoreIncludeDirectiveKind::Include,
+                path: include_dir.to_string_lossy().to_string(),
+            }],
+        );
+        let stage_trace_path = temp_dir.join("stage_trace.txt");
+        let transpiled = transpile_parser_output_to_rust_with_options(
+            &parser_output,
+            &ParserOutputCodegenOptions {
+                ignored_error_patterns: Vec::new(),
+                stage_timing_trace_path: Some(stage_trace_path.clone()),
+            },
+        )
+        .expect("parser-output handoff transpile should succeed");
+        assert!(
+            transpiled.contains("fn compute("),
+            "transpiled output should contain compute function:\n{}",
+            transpiled
+        );
+
+        let trace =
+            fs::read_to_string(&stage_trace_path).expect("failed to read stage trace output");
+        assert!(
+            trace.contains("backend=parser-output-handoff")
+                && trace.contains("event=stage_end stage=parse status=ok")
+                && trace.contains("event=stage_end stage=codegen status=ok")
+                && trace.contains("status=completed"),
+            "stage trace missing parser-output handoff markers:\n{}",
+            trace
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

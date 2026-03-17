@@ -19024,3 +19024,30 @@ Validation:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
 - Full workspace suite:
   - `cargo test --workspace --all-targets`
+
+## 2026-03-17: M2.A2.2 Parser-Output to Codegen Interface
+
+Context:
+- Executed next unresolved P0 leaf `M2.A2.2` after closing `M2.A2.1`.
+- Goal: introduce a parser-output handoff API so codegen can run without LibTooling parse/export.
+
+Wrong-approach check:
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- Kept implementation generic with no target-specific branches, no semantic stub bodies, and no bypass shortcuts.
+
+Design update:
+- Added `fragile-clang` parser-output codegen interface:
+  - `transpile_parser_output_to_rust`
+  - `transpile_parser_output_to_rust_with_options`
+- Added `ParserOutputCodegenOptions` for ignored diagnostic patterns and stage trace output.
+- Added schema guard (`1.0.0`) and deterministic stage trace backend label:
+  - `backend=parser-output-handoff`
+- Added metadata-resolution helpers for include/define extraction from parser-output translation-unit metadata and frontend args.
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-clang parser_output_codegen`
+- Full Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+- Full workspace suite:
+  - `cargo test --workspace --all-targets`
