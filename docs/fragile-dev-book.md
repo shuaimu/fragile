@@ -19194,3 +19194,43 @@ Validation:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
 - Full workspace suite:
   - `cargo test --workspace --all-targets`
+
+## 2026-03-17: M3.1.d Deterministic STL Symbol-Detection Fixtures
+
+Context:
+- Next unresolved P0 leaf after `M3.1.c` was `M3.1.d`.
+- Goal: add deterministic regression fixtures/tests for direct `std::` detection,
+  typedef alias chains, and using-chain STL resolution.
+
+Wrong-approach check:
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before
+  implementation.
+- No target-specific conditionals, no force-native bypasses, and no synthetic
+  semantic fallback bodies were introduced.
+
+Design update:
+- Added parser-clang fixture source:
+  - `crates/fragile-parser-clang/tests/fixtures/m3_1_d/src/stl_symbol_detection.cpp`
+- Added parser-clang integration regression suite:
+  - `crates/fragile-parser-clang/tests/stl_symbol_detection_fixture_tests.rs`
+  - verifies deterministic repeated parse output,
+  - verifies direct canonical-family detection from parsed node surfaces,
+  - verifies deterministic canonical alias-table extraction for direct +
+    typedef + using-chain STL cases.
+- While implementing fixture regression, identified and fixed a real parser gap
+  in `UsingDeclaration` qualification extraction:
+  - `crates/fragile-clang/src/parse.rs:get_qualified_name`
+  - now preserves namespace path + declaration leaf via child-reference
+    extraction with deterministic fallback.
+- Added focused parser-unit coverage for the fix:
+  - `test_parse_using_declaration_keeps_qualified_leaf_name`
+  - `test_parse_using_declaration_keeps_nested_qualified_leaf_name`
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-clang test_parse_using_declaration`
+  - `cargo test -p fragile-parser-clang`
+- Full Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+- Full workspace suite:
+  - `cargo test --workspace --all-targets`

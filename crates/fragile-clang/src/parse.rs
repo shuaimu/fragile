@@ -3512,14 +3512,87 @@ impl ClangParser {
     /// Get the qualified name from a UsingDeclaration cursor.
     fn get_qualified_name(&self, cursor: clang_sys::CXCursor) -> Vec<String> {
         unsafe {
+            // Prefer child-reference extraction to preserve namespace qualifiers
+            // that may be dropped from referenced declaration parent chains.
+            struct UsingDeclParts {
+                namespaces: Vec<String>,
+                leaf: Option<String>,
+            }
+            let mut parts = UsingDeclParts {
+                namespaces: Vec::new(),
+                leaf: None,
+            };
+            let parts_ptr: *mut UsingDeclParts = &mut parts;
+
+            extern "C" fn using_decl_visitor(
+                child: clang_sys::CXCursor,
+                _parent: clang_sys::CXCursor,
+                data: clang_sys::CXClientData,
+            ) -> clang_sys::CXChildVisitResult {
+                unsafe {
+                    let parts = &mut *(data as *mut UsingDeclParts);
+                    let kind = clang_sys::clang_getCursorKind(child);
+                    let spelling = cursor_spelling(child);
+                    if spelling.is_empty() {
+                        return clang_sys::CXChildVisit_Continue;
+                    }
+                    if kind == clang_sys::CXCursor_NamespaceRef {
+                        parts.namespaces.push(spelling);
+                    } else {
+                        parts.leaf = Some(spelling);
+                    }
+                    clang_sys::CXChildVisit_Continue
+                }
+            }
+
+            clang_sys::clang_visitChildren(
+                cursor,
+                using_decl_visitor,
+                parts_ptr as clang_sys::CXClientData,
+            );
+
+            if !parts.namespaces.is_empty() {
+                let mut qualified_name = parts.namespaces;
+                if let Some(leaf) = parts.leaf {
+                    if !leaf.is_empty() && qualified_name.last().map(String::as_str) != Some(leaf.as_str())
+                    {
+                        qualified_name.push(leaf);
+                    }
+                }
+                if !qualified_name.is_empty() {
+                    return qualified_name;
+                }
+            }
+
             // Get the referenced declaration
             let referenced = clang_sys::clang_getCursorReferenced(cursor);
             if clang_sys::clang_Cursor_isNull(referenced) != 0 {
                 return Vec::new();
             }
 
-            // Build the qualified name path
-            self.build_namespace_path(referenced)
+            // Build namespace path and append the referenced declaration leaf.
+            let mut path = self.build_namespace_path(referenced);
+            let referenced_kind = clang_sys::clang_getCursorKind(referenced);
+            if referenced_kind != clang_sys::CXCursor_Namespace {
+                let leaf_name = cursor_spelling(referenced);
+                if !leaf_name.is_empty() {
+                    path.push(leaf_name);
+                }
+            }
+            if !path.is_empty() {
+                return path;
+            }
+
+            let cursor_name = cursor_spelling(cursor);
+            if cursor_name.is_empty() {
+                Vec::new()
+            } else {
+                cursor_name
+                    .split("::")
+                    .filter(|segment| !segment.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            }
         }
     }
 
@@ -5135,6 +5208,68 @@ int main() { return 0; }
                 assert_eq!(namespace, &vec!["outer", "inner"]);
             }
             _ => panic!("Expected UsingDirective"),
+        }
+    }
+
+    #[test]
+    fn test_parse_using_declaration_keeps_qualified_leaf_name() {
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                namespace foo {
+                    struct Bar {};
+                }
+                using foo::Bar;
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        let using_decl = ast
+            .translation_unit
+            .children
+            .iter()
+            .find(|c| matches!(&c.kind, ClangNodeKind::UsingDeclaration { .. }));
+
+        assert!(using_decl.is_some(), "Expected UsingDeclaration");
+        match &using_decl.unwrap().kind {
+            ClangNodeKind::UsingDeclaration { qualified_name } => {
+                assert_eq!(qualified_name, &vec!["foo", "Bar"]);
+            }
+            _ => panic!("Expected UsingDeclaration"),
+        }
+    }
+
+    #[test]
+    fn test_parse_using_declaration_keeps_nested_qualified_leaf_name() {
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                namespace outer {
+                    namespace inner {
+                        int value;
+                    }
+                }
+                using outer::inner::value;
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        let using_decl = ast
+            .translation_unit
+            .children
+            .iter()
+            .find(|c| matches!(&c.kind, ClangNodeKind::UsingDeclaration { .. }));
+
+        assert!(using_decl.is_some(), "Expected UsingDeclaration");
+        match &using_decl.unwrap().kind {
+            ClangNodeKind::UsingDeclaration { qualified_name } => {
+                assert_eq!(qualified_name, &vec!["outer", "inner", "value"]);
+            }
+            _ => panic!("Expected UsingDeclaration"),
         }
     }
 
