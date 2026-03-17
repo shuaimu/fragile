@@ -204,7 +204,10 @@
         "cpp_type",
         "is_opaque",
         "boundary_reason",
-        "placeholder_version"
+        "placeholder_version",
+        "type_shape",
+        "policy_shape",
+        "operation_selector"
       ],
       "properties": {
         "family": {
@@ -236,6 +239,385 @@
         },
         "placeholder_version": {
           "const": 1
+        },
+        "type_shape": {
+          "$ref": "#/$defs/stl_type_shape"
+        },
+        "policy_shape": {
+          "$ref": "#/$defs/stl_policy_shape"
+        },
+        "operation_selector": {
+          "$ref": "#/$defs/stl_operation_selector"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "family": {
+                "enum": [
+                  "vector",
+                  "string",
+                  "optional",
+                  "shared_ptr",
+                  "unique_ptr"
+                ]
+              }
+            },
+            "required": [
+              "family"
+            ]
+          },
+          "then": {
+            "properties": {
+              "type_shape": {
+                "properties": {
+                  "element_type": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "key_type": {
+                    "type": "null"
+                  },
+                  "value_type": {
+                    "type": "null"
+                  },
+                  "element_types": {
+                    "maxItems": 0
+                  }
+                }
+              },
+              "policy_shape": {
+                "properties": {
+                  "comparator": {
+                    "properties": {
+                      "shape": {
+                        "const": "none"
+                      }
+                    }
+                  },
+                  "hash": {
+                    "properties": {
+                      "shape": {
+                        "const": "none"
+                      }
+                    }
+                  },
+                  "equal": {
+                    "properties": {
+                      "shape": {
+                        "const": "none"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "family": {
+                "enum": [
+                  "map",
+                  "unordered_map"
+                ]
+              }
+            },
+            "required": [
+              "family"
+            ]
+          },
+          "then": {
+            "properties": {
+              "type_shape": {
+                "properties": {
+                  "element_type": {
+                    "type": "null"
+                  },
+                  "key_type": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "value_type": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "element_types": {
+                    "maxItems": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "family": {
+                "enum": [
+                  "variant",
+                  "tuple"
+                ]
+              }
+            },
+            "required": [
+              "family"
+            ]
+          },
+          "then": {
+            "properties": {
+              "type_shape": {
+                "properties": {
+                  "element_type": {
+                    "type": "null"
+                  },
+                  "key_type": {
+                    "type": "null"
+                  },
+                  "value_type": {
+                    "type": "null"
+                  },
+                  "element_types": {
+                    "minItems": 2
+                  }
+                }
+              },
+              "policy_shape": {
+                "properties": {
+                  "allocator": {
+                    "properties": {
+                      "shape": {
+                        "const": "none"
+                      }
+                    }
+                  },
+                  "comparator": {
+                    "properties": {
+                      "shape": {
+                        "const": "none"
+                      }
+                    }
+                  },
+                  "hash": {
+                    "properties": {
+                      "shape": {
+                        "const": "none"
+                      }
+                    }
+                  },
+                  "equal": {
+                    "properties": {
+                      "shape": {
+                        "const": "none"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "family": {
+                "const": "map"
+              }
+            },
+            "required": [
+              "family"
+            ]
+          },
+          "then": {
+            "properties": {
+              "policy_shape": {
+                "properties": {
+                  "comparator": {
+                    "properties": {
+                      "shape": {
+                        "enum": [
+                          "default",
+                          "custom"
+                        ]
+                      }
+                    }
+                  },
+                  "hash": {
+                    "properties": {
+                      "shape": {
+                        "const": "none"
+                      }
+                    }
+                  },
+                  "equal": {
+                    "properties": {
+                      "shape": {
+                        "const": "none"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "family": {
+                "const": "unordered_map"
+              }
+            },
+            "required": [
+              "family"
+            ]
+          },
+          "then": {
+            "properties": {
+              "policy_shape": {
+                "properties": {
+                  "comparator": {
+                    "properties": {
+                      "shape": {
+                        "const": "none"
+                      }
+                    }
+                  },
+                  "hash": {
+                    "properties": {
+                      "shape": {
+                        "enum": [
+                          "default",
+                          "custom"
+                        ]
+                      }
+                    }
+                  },
+                  "equal": {
+                    "properties": {
+                      "shape": {
+                        "enum": [
+                          "default",
+                          "custom"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "stl_type_shape": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "element_type",
+        "key_type",
+        "value_type",
+        "element_types"
+      ],
+      "properties": {
+        "element_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "element_types": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "stl_policy_shape": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allocator",
+        "comparator",
+        "hash",
+        "equal"
+      ],
+      "properties": {
+        "allocator": {
+          "$ref": "#/$defs/stl_policy_entry"
+        },
+        "comparator": {
+          "$ref": "#/$defs/stl_policy_entry"
+        },
+        "hash": {
+          "$ref": "#/$defs/stl_policy_entry"
+        },
+        "equal": {
+          "$ref": "#/$defs/stl_policy_entry"
+        }
+      }
+    },
+    "stl_policy_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "shape",
+        "cpp_type"
+      ],
+      "properties": {
+        "shape": {
+          "enum": [
+            "default",
+            "custom",
+            "none"
+          ]
+        },
+        "cpp_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "stl_operation_selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "selector_kind",
+        "selector",
+        "arity"
+      ],
+      "properties": {
+        "selector_kind": {
+          "enum": [
+            "method",
+            "operator"
+          ]
+        },
+        "selector": {
+          "type": "string",
+          "minLength": 1
+        },
+        "arity": {
+          "type": "integer",
+          "minimum": 0
         }
       }
     },

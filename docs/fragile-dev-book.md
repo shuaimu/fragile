@@ -18775,3 +18775,49 @@ Validation:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
 - Full workspace suite:
   - `cargo test --workspace --all-targets`
+
+## 2026-03-17: M1.2 Placeholder Metadata Contract Closure
+
+Context:
+- Executed next unresolved P0 leaf `M1.2` from `TODO.md`.
+- Goal: add explicit placeholder metadata contract fields to `ParserOutput v1`.
+
+Wrong-approach check:
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- Kept scope to schema/fixture/test contract work only; no target-specific hacks, no force-native bypasses, and no fake semantic fallback bodies.
+
+Design update:
+- Extended schema `docs/schemas/parser_output_v1.schema.json`:
+  - `stl_placeholder` now requires:
+    - `type_shape`
+    - `policy_shape`
+    - `operation_selector`
+- Added metadata sub-structures:
+  - `stl_type_shape`: `element_type`, `key_type`, `value_type`, `element_types`
+  - `stl_policy_shape`: `allocator`, `comparator`, `hash`, `equal`
+  - `stl_operation_selector`: `selector_kind`, `selector`, `arity`
+- Added family-conditioned constraints for:
+  - sequence/pointer-like families
+  - map/unordered_map families
+  - tuple/variant families
+  - map policy vs unordered-map policy shape expectations
+
+Fixture update:
+- Updated canonical corpus fixture
+  `docs/fixtures/parser_output_v1_full_placeholders.json` so each STL placeholder
+  includes representative `type_shape`, `policy_shape`, and `operation_selector`.
+
+Regression coverage:
+- Extended `tests/python/test_parser_output_v1_schema.py` to verify:
+  - schema-required metadata fields and nested required keys
+  - per-family fixture metadata completeness and shape expectations
+  - operation selector shape and policy entry consistency
+  - TODO closure markers for `M1.1` and `M1.2`
+
+Validation:
+- Focused:
+  - `python3 -m unittest tests/python/test_parser_output_v1_schema.py -v`
+- Full Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+- Full workspace suite:
+  - `cargo test --workspace --all-targets`
