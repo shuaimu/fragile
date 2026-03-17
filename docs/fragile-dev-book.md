@@ -18957,6 +18957,40 @@ Validation:
 - Full workspace suite:
   - `cargo test --workspace --all-targets`
 
+## 2026-03-17: M3.1.b Type-Alias Symbol Table with Canonical STL Targets
+
+Context:
+- Next unresolved P0 leaf after `M3.1.a` was `M3.1.b`.
+- Goal: add deterministic typedef/type-alias symbol table extraction with
+  canonical STL target normalization.
+
+Wrong-approach check:
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- Kept implementation generic with no target-specific branches, no semantic
+  stubs, and no bypass shortcuts.
+
+Design update:
+- Added `fragile-parser-clang` helper:
+  - `extract_stl_type_alias_symbol_table(root: &ClangNode) -> BTreeMap<String, String>`
+- The helper:
+  - traverses `TypeAliasDecl`, `TypeAliasTemplateDecl`, and `TypedefDecl`
+  - builds fully-qualified alias names from namespace scope
+  - resolves direct STL targets and typedef/type-alias chains
+  - normalizes to canonical symbols:
+    - `std::vector`, `std::map`, `std::unordered_map`, `std::string`,
+      `std::optional`, `std::variant`, `std::tuple`,
+      `std::shared_ptr`, `std::unique_ptr`
+  - leaves unresolved/ambiguous aliases unresolved (no guessed fallback)
+- `using` declaration/directive chain resolution remains in follow-up `M3.1.c`.
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-parser-clang`
+- Full Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+- Full workspace suite:
+  - `cargo test --workspace --all-targets`
+
 ## 2026-03-17: M2.A1 Non-Trivial Parser Fixture Corpus Closure
 
 Context:

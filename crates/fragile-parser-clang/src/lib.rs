@@ -6,7 +6,7 @@ use fragile_parser_core::{
     ParseRequest, ParserBackend, ParserLanguage, ParserNode, ParserOutputV1, ParserTranslationUnit,
     PARSER_OUTPUT_SCHEMA_VERSION_V1,
 };
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 pub const FRAGILE_PARSER_CLANG_BACKEND_ID: &str = "fragile-parser-clang";
@@ -219,6 +219,20 @@ impl CanonicalStlFamily {
             Self::UniquePtr => "unique_ptr",
         }
     }
+
+    fn canonical_symbol(self) -> &'static str {
+        match self {
+            Self::Vector => "std::vector",
+            Self::Map => "std::map",
+            Self::UnorderedMap => "std::unordered_map",
+            Self::String => "std::string",
+            Self::Optional => "std::optional",
+            Self::Variant => "std::variant",
+            Self::Tuple => "std::tuple",
+            Self::SharedPtr => "std::shared_ptr",
+            Self::UniquePtr => "std::unique_ptr",
+        }
+    }
 }
 
 fn is_std_namespace_passthrough(segment: &str) -> bool {
@@ -277,6 +291,232 @@ pub fn detect_direct_std_stl_family(
         .chain(cpp_type)
         .find_map(|spelling| detect_direct_std_stl_family_in_spelling(spelling))
         .map(CanonicalStlFamily::as_str)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TypeAliasDeclRecord {
+    qualified_name: String,
+    scope_path: Vec<String>,
+    target_spelling: String,
+}
+
+fn join_scope_path(scope_path: &[String], leaf_name: &str) -> String {
+    if scope_path.is_empty() {
+        leaf_name.to_string()
+    } else {
+        format!("{}::{}", scope_path.join("::"), leaf_name)
+    }
+}
+
+fn extract_type_alias_decl_record(
+    node: &ClangNode,
+    scope_path: &[String],
+) -> Option<TypeAliasDeclRecord> {
+    let (alias_name, underlying_type) = match &node.kind {
+        ClangNodeKind::TypeAliasDecl {
+            name,
+            underlying_type,
+        }
+        | ClangNodeKind::TypeAliasTemplateDecl {
+            name,
+            underlying_type,
+            ..
+        }
+        | ClangNodeKind::TypedefDecl {
+            name,
+            underlying_type,
+        } => (name, underlying_type),
+        _ => return None,
+    };
+    Some(TypeAliasDeclRecord {
+        qualified_name: join_scope_path(scope_path, alias_name),
+        scope_path: scope_path.to_vec(),
+        target_spelling: cpp_type_to_string(underlying_type),
+    })
+}
+
+fn collect_type_alias_decl_records(
+    node: &ClangNode,
+    scope_path: &mut Vec<String>,
+    out: &mut Vec<TypeAliasDeclRecord>,
+) {
+    let mut pushed_namespace = false;
+    if let ClangNodeKind::NamespaceDecl {
+        name: Some(name), ..
+    } = &node.kind
+    {
+        if !name.trim().is_empty() {
+            scope_path.push(name.clone());
+            pushed_namespace = true;
+        }
+    }
+
+    if let Some(record) = extract_type_alias_decl_record(node, scope_path) {
+        out.push(record);
+    }
+
+    for child in &node.children {
+        collect_type_alias_decl_records(child, scope_path, out);
+    }
+
+    if pushed_namespace {
+        scope_path.pop();
+    }
+}
+
+fn is_alias_resolution_keyword(token: &str) -> bool {
+    matches!(
+        token,
+        "const"
+            | "volatile"
+            | "signed"
+            | "unsigned"
+            | "short"
+            | "long"
+            | "int"
+            | "char"
+            | "float"
+            | "double"
+            | "bool"
+            | "void"
+            | "wchar_t"
+            | "char8_t"
+            | "char16_t"
+            | "char32_t"
+            | "size_t"
+            | "ptrdiff_t"
+            | "typename"
+            | "class"
+            | "struct"
+            | "enum"
+            | "union"
+            | "template"
+            | "auto"
+            | "decltype"
+            | "true"
+            | "false"
+            | "nullptr"
+    )
+}
+
+fn extract_alias_reference_tokens(spelling: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut tokens = Vec::new();
+    for token in spelling.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == ':'))
+    {
+        let normalized = token.trim().trim_matches(':');
+        if normalized.is_empty() {
+            continue;
+        }
+        if !normalized
+            .chars()
+            .any(|ch| ch.is_ascii_alphabetic() || ch == '_')
+        {
+            continue;
+        }
+        if is_alias_resolution_keyword(&normalized.to_ascii_lowercase()) {
+            continue;
+        }
+        if seen.insert(normalized.to_string()) {
+            tokens.push(normalized.to_string());
+        }
+    }
+    tokens
+}
+
+fn candidate_alias_names_for_token(scope_path: &[String], token: &str) -> Vec<String> {
+    let normalized = token.trim().trim_matches(':');
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+
+    let explicit_global = token.trim_start().starts_with("::");
+    let mut seen = HashSet::new();
+    let mut candidates = Vec::new();
+    let mut push_candidate = |candidate: String| {
+        if seen.insert(candidate.clone()) {
+            candidates.push(candidate);
+        }
+    };
+
+    if explicit_global {
+        push_candidate(normalized.to_string());
+        return candidates;
+    }
+
+    for depth in (0..=scope_path.len()).rev() {
+        if depth == 0 {
+            push_candidate(normalized.to_string());
+            continue;
+        }
+        push_candidate(format!("{}::{}", scope_path[..depth].join("::"), normalized));
+    }
+
+    candidates
+}
+
+fn resolve_type_alias_target_family(
+    record: &TypeAliasDeclRecord,
+    resolved_alias_targets: &BTreeMap<String, CanonicalStlFamily>,
+) -> Option<CanonicalStlFamily> {
+    if let Some(family) = detect_direct_std_stl_family_in_spelling(&record.target_spelling) {
+        return Some(family);
+    }
+
+    for token in extract_alias_reference_tokens(&record.target_spelling) {
+        for candidate in candidate_alias_names_for_token(&record.scope_path, &token) {
+            if let Some(family) = resolved_alias_targets.get(&candidate).copied() {
+                return Some(family);
+            }
+        }
+    }
+
+    None
+}
+
+/// Extracts a deterministic type-alias symbol table for STL aliases. The table
+/// maps fully qualified alias names to canonical STL symbols (for example,
+/// `std::vector`, `std::map`, `std::string`).
+///
+/// Resolution includes:
+/// - direct aliases to known `std::` STL symbols
+/// - alias chains through `typedef` / `using` declarations
+///
+/// This helper intentionally excludes `using` declaration/directive chain
+/// resolution, which is handled by follow-up STL boundary work.
+pub fn extract_stl_type_alias_symbol_table(root: &ClangNode) -> BTreeMap<String, String> {
+    let mut alias_records = Vec::new();
+    collect_type_alias_decl_records(root, &mut Vec::new(), &mut alias_records);
+
+    let mut resolved_alias_targets: BTreeMap<String, CanonicalStlFamily> = BTreeMap::new();
+    let mut unresolved_indices = (0..alias_records.len()).collect::<Vec<_>>();
+    while !unresolved_indices.is_empty() {
+        let mut progressed = false;
+        let mut still_unresolved = Vec::new();
+        for index in unresolved_indices {
+            let record = &alias_records[index];
+            if resolved_alias_targets.contains_key(&record.qualified_name) {
+                continue;
+            }
+            let Some(family) = resolve_type_alias_target_family(record, &resolved_alias_targets) else {
+                still_unresolved.push(index);
+                continue;
+            };
+            resolved_alias_targets
+                .entry(record.qualified_name.clone())
+                .or_insert(family);
+            progressed = true;
+        }
+        if !progressed {
+            break;
+        }
+        unresolved_indices = still_unresolved;
+    }
+
+    resolved_alias_targets
+        .into_iter()
+        .map(|(alias_name, family)| (alias_name, family.canonical_symbol().to_string()))
+        .collect()
 }
 
 fn map_parser_node_kind(kind: &ClangNodeKind) -> String {
@@ -505,12 +745,15 @@ fn cpp_type_to_string(ty: &CppType) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        detect_direct_std_stl_family, FragileParserClangBackend, FRAGILE_PARSER_CLANG_BACKEND_ID,
+        detect_direct_std_stl_family, extract_stl_type_alias_symbol_table, FragileParserClangBackend,
+        FRAGILE_PARSER_CLANG_BACKEND_ID,
     };
+    use fragile_clang::{ClangNode, ClangNodeKind, CppType};
     use fragile_parser_core::{
         IncludeDirective, IncludeDirectiveKind, ParseRequest, ParserBackend, ParserLanguage,
         PARSER_OUTPUT_SCHEMA_VERSION_V1,
     };
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -549,6 +792,36 @@ mod tests {
                 "node ids should be deterministic pre-order indices"
             );
         }
+    }
+
+    fn namespace_decl(name: &str, children: Vec<ClangNode>) -> ClangNode {
+        ClangNode::new(ClangNodeKind::NamespaceDecl {
+            name: Some(name.to_string()),
+            is_inline: false,
+        })
+        .with_children(children)
+    }
+
+    fn type_alias_decl(name: &str, underlying_type: CppType) -> ClangNode {
+        ClangNode::new(ClangNodeKind::TypeAliasDecl {
+            name: name.to_string(),
+            underlying_type,
+        })
+    }
+
+    fn type_alias_template_decl(name: &str, params: &[&str], underlying_type: CppType) -> ClangNode {
+        ClangNode::new(ClangNodeKind::TypeAliasTemplateDecl {
+            name: name.to_string(),
+            template_params: params.iter().map(|param| (*param).to_string()).collect(),
+            underlying_type,
+        })
+    }
+
+    fn typedef_decl(name: &str, underlying_type: CppType) -> ClangNode {
+        ClangNode::new(ClangNodeKind::TypedefDecl {
+            name: name.to_string(),
+            underlying_type,
+        })
     }
 
     #[test]
@@ -620,6 +893,108 @@ mod tests {
                 cpp_type
             );
         }
+    }
+
+    #[test]
+    fn extract_stl_type_alias_symbol_table_normalizes_direct_alias_targets() {
+        let root = ClangNode::new(ClangNodeKind::TranslationUnit).with_children(vec![
+            type_alias_decl("VecAlias", CppType::Named("std::__1::vector<int>".to_string())),
+            typedef_decl("OrderedMapAlias", CppType::Named("std::map<int, int>".to_string())),
+            type_alias_template_decl(
+                "OptionalAlias",
+                &["T"],
+                CppType::Named("std::optional<T>".to_string()),
+            ),
+            type_alias_decl("NonStlAlias", CppType::Named("project::Widget".to_string())),
+            namespace_decl(
+                "core",
+                vec![type_alias_decl(
+                    "StringAlias",
+                    CppType::Named("std::__cxx11::basic_string<char>".to_string()),
+                )],
+            ),
+        ]);
+
+        let table = extract_stl_type_alias_symbol_table(&root);
+        let expected = BTreeMap::from([
+            ("VecAlias".to_string(), "std::vector".to_string()),
+            ("OrderedMapAlias".to_string(), "std::map".to_string()),
+            ("OptionalAlias".to_string(), "std::optional".to_string()),
+            ("core::StringAlias".to_string(), "std::string".to_string()),
+        ]);
+        assert_eq!(
+            table, expected,
+            "direct STL aliases should normalize to canonical std symbols"
+        );
+    }
+
+    #[test]
+    fn extract_stl_type_alias_symbol_table_resolves_typedef_and_type_alias_chains() {
+        let root = ClangNode::new(ClangNodeKind::TranslationUnit).with_children(vec![
+            type_alias_decl("RawVec", CppType::Named("std::vector<int>".to_string())),
+            type_alias_decl("VecAlias", CppType::Named("RawVec".to_string())),
+            typedef_decl("VecAlias2", CppType::Named("VecAlias".to_string())),
+            namespace_decl(
+                "ns",
+                vec![
+                    type_alias_decl("LocalVec", CppType::Named("VecAlias2".to_string())),
+                    type_alias_decl("LocalMap", CppType::Named("std::map<int, int>".to_string())),
+                    type_alias_decl("MapAlias", CppType::Named("LocalMap".to_string())),
+                ],
+            ),
+        ]);
+
+        let table = extract_stl_type_alias_symbol_table(&root);
+        let expected = BTreeMap::from([
+            ("RawVec".to_string(), "std::vector".to_string()),
+            ("VecAlias".to_string(), "std::vector".to_string()),
+            ("VecAlias2".to_string(), "std::vector".to_string()),
+            ("ns::LocalVec".to_string(), "std::vector".to_string()),
+            ("ns::LocalMap".to_string(), "std::map".to_string()),
+            ("ns::MapAlias".to_string(), "std::map".to_string()),
+        ]);
+        assert_eq!(
+            table, expected,
+            "typedef/type-alias chains should resolve through known STL aliases"
+        );
+    }
+
+    #[test]
+    fn extract_stl_type_alias_symbol_table_resolves_scope_qualified_aliases_only() {
+        let root = ClangNode::new(ClangNodeKind::TranslationUnit).with_children(vec![
+            namespace_decl(
+                "left",
+                vec![type_alias_decl(
+                    "Alias",
+                    CppType::Named("std::vector<int>".to_string()),
+                )],
+            ),
+            namespace_decl(
+                "right",
+                vec![
+                    type_alias_decl("Alias", CppType::Named("std::map<int, int>".to_string())),
+                    type_alias_decl("RightLocal", CppType::Named("Alias".to_string())),
+                ],
+            ),
+            type_alias_decl("FromLeft", CppType::Named("left::Alias".to_string())),
+            type_alias_decl("Ambiguous", CppType::Named("Alias".to_string())),
+        ]);
+
+        let table = extract_stl_type_alias_symbol_table(&root);
+        assert_eq!(
+            table.get("FromLeft").map(String::as_str),
+            Some("std::vector"),
+            "qualified alias reference should resolve deterministically"
+        );
+        assert_eq!(
+            table.get("right::RightLocal").map(String::as_str),
+            Some("std::map"),
+            "same-scope unqualified alias should prefer namespace-local alias target"
+        );
+        assert!(
+            !table.contains_key("Ambiguous"),
+            "unqualified alias without an in-scope definition should not be resolved"
+        );
     }
 
     #[test]
