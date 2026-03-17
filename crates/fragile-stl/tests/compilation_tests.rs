@@ -96,14 +96,16 @@ fn math_builtins_compile() {
 
 #[test]
 fn clib_stubs_compile() {
-    // strtol/strtoul are stub implementations (return 0)
+    // Numeric conversion wrappers should be callable and forward valid inputs.
     let result = strtol(b"42\0".as_ptr() as *const i8, std::ptr::null_mut(), 10);
-    assert_eq!(result, 0); // Stub returns 0
+    assert_eq!(result, 42);
 
-    // Just verify they exist and are callable
-    let _ = strtoul(b"100\0".as_ptr() as *const i8, std::ptr::null_mut(), 10);
-    let _ = strtoll(b"100\0".as_ptr() as *const i8, std::ptr::null_mut(), 10);
-    let _ = strtoull(b"100\0".as_ptr() as *const i8, std::ptr::null_mut(), 10);
+    let as_u64 = strtoul(b"100\0".as_ptr() as *const i8, std::ptr::null_mut(), 10);
+    let as_i64 = strtoll(b"100\0".as_ptr() as *const i8, std::ptr::null_mut(), 10);
+    let as_u64_wide = strtoull(b"100\0".as_ptr() as *const i8, std::ptr::null_mut(), 10);
+    assert_eq!(as_u64, 100);
+    assert_eq!(as_i64, 100);
+    assert_eq!(as_u64_wide, 100);
 }
 
 #[test]

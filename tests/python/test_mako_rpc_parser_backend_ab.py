@@ -168,6 +168,21 @@ class MakoRpcParserBackendAbTests(unittest.TestCase):
             self.assertEqual(manifest["different_002_key"], "backend_observed")
             self.assertEqual(manifest["different_002_baseline"], "libtooling")
             self.assertEqual(manifest["different_002_candidate"], "libclang")
+            self.assertEqual(manifest["run_root_contract_version"], "1")
+            self.assertEqual(manifest["run_root_name_is_contract_valid"], "false")
+            self.assertEqual(manifest["required_artifact_count"], "12")
+            self.assertEqual(manifest["missing_required_artifact_count"], "0")
+
+            required_manifest = self._parse_manifest(
+                Path(manifest["required_artifact_contract_manifest"])
+            )
+            self.assertEqual(required_manifest["task_leaf"], "M0.2")
+            self.assertEqual(required_manifest["required_artifact_count"], "12")
+            self.assertEqual(required_manifest["missing_required_artifact_count"], "0")
+            self.assertEqual(
+                required_manifest["required_artifact_001_relpath"],
+                "parser_backend_ab_commands.txt",
+            )
 
             baseline_comp = self._parse_manifest(
                 run_root / "parser_backend_ab_baseline_comparable_manifest.txt"
@@ -200,6 +215,7 @@ class MakoRpcParserBackendAbTests(unittest.TestCase):
             self.assertEqual(manifest["missing_in_baseline_count"], "0")
             self.assertEqual(manifest["missing_in_candidate_count"], "0")
             self.assertEqual(manifest["comparable_equal"], "true")
+            self.assertEqual(manifest["missing_required_artifact_count"], "0")
 
     def test_missing_candidate_manifest_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

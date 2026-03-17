@@ -12,6 +12,7 @@
 - [2.4 Mode 1 call-stitching architecture (target state)](#24-mode-1-call-stitching-architecture-target-state)
 - [2.5 `misc.cpp` compile-cost investigation baseline](#25-misccpp-compile-cost-investigation-baseline)
 - [2.6 STL-opaque parser architecture (target state)](#26-stl-opaque-parser-architecture-target-state)
+- [2.7 M0 Run-Root and Artifact Contract](#27-m0-run-root-and-artifact-contract)
 - [3. Internal Data Models](#3-internal-data-models)
 - [4. C++ Declaration to Rust Item Mapping](#4-c-declaration-to-rust-item-mapping)
 - [5. C++ Type to Rust Type Mapping](#5-c-type-to-rust-type-mapping)
@@ -369,6 +370,40 @@ Migration policy:
 
 - Deprecated `LibTooling`/`libclang` paths may remain temporarily for reference,
   but new behavior should be implemented only on the STL-opaque parser path.
+
+### 2.7 M0 Run-Root and Artifact Contract
+
+M0 baseline tooling now uses a shared contract helper:
+
+- `scripts/mako_rpc_milestone_contract.py`
+
+Contract objectives:
+
+1. Standardize milestone run-root naming.
+2. Make required artifact presence machine-checkable.
+
+Run-root naming contract:
+
+- version: `1`
+- pattern:
+  - `^fragile_(m0_1_strict_baseline|m0_2_parser_backend_ab)_\d{8}T\d{6}Z_p\d+$`
+
+M0 script behavior:
+
+- default run roots follow this contract
+- explicit `--run-root` overrides are still supported
+- scripts record whether the provided run-root name is contract-valid
+
+Artifact contracts emitted per run:
+
+- `M0.1`: `strict_baseline_required_artifacts_manifest.txt`
+- `M0.2`: `parser_backend_ab_required_artifacts_manifest.txt`
+
+Each contract manifest records required relpaths and per-artifact existence
+flags, plus deterministic counters:
+
+- `required_artifact_count`
+- `missing_required_artifact_count`
 
 ## 3. Internal Data Models
 
@@ -18357,6 +18392,49 @@ Full-suite sweep (step 4):
 - Python suite:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
   - observed: `PY_STATUS=0`, `Ran 34 tests`, `OK`, `skipped=1`
+
+## 2026-03-16: M0.1 Strict Baseline Capture (Harness + Inventory + Stage Timing)
+
+Context:
+- Active TODO moved to STL-opaque parser migration; first unfinished high-priority leaf was `M0.1`.
+- Requirement: capture deterministic strict baseline artifacts for `test_rpc`/`rpcbench` path, blocker inventory, and stage timing.
+
+Wrong-approach check:
+- Reviewed section `1.3` and `docs/dev/wrong.md` before implementation.
+- No target-specific parser/codegen conditionals, no force-native bypasses, and no fake semantic fallback bodies were introduced.
+
+Implementation:
+- Added orchestration script:
+  - `scripts/mako_rpc_strict_baseline.py`
+- Added comprehensive unit coverage:
+  - `tests/python/test_mako_rpc_strict_baseline.py`
+- Added design/manual note:
+  - `docs/m0_1_strict_baseline_capture_design_2026_03_16.md`
+
+Execution evidence:
+- Command:
+  - `python3 scripts/mako_rpc_strict_baseline.py --run-root /tmp/fragile_m0_1_strict_baseline_20260316_v1 --lanes fragilec --jobs 4 --trials 1 --build-timeout-seconds 180 --replay-timeout-seconds 120 --replay-max-replays 1`
+- Captured run root:
+  - `/tmp/fragile_m0_1_strict_baseline_20260316_v1`
+- Key baseline fields (`strict_baseline_manifest.txt`):
+  - `harness_status=1`
+  - `inventory_status=0`
+  - `replay_status=0`
+  - `lane_fragilec_configure_status=0`
+  - `lane_fragilec_clean_status=0`
+  - `lane_fragilec_build_status=124`
+  - `lane_fragilec_test_rpc_status=-1`
+  - `lane_fragilec_failure_class=build_timeout`
+  - `lane_fragilec_first_failing_compile_class=build_timeout`
+  - `lane_fragilec_first_failing_compile_file=src/rrr/base/misc.cpp`
+  - `replay_01_status=124`
+  - `replay_01_timed_out=true`
+  - `stage_timing_exists=true`
+  - `stage_timing_status=started`
+
+Validation:
+- `python3 -m unittest tests/python/test_mako_rpc_strict_baseline.py -v`
+- `python3 -m unittest tests/python/test_mako_rpcbench_harness.py -v`
 
 ## 2026-03-16: Strict RPC Build-Timeout Loop Iteration (Leaf 2.6.d...c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.c.a)
 

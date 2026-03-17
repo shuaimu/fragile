@@ -1755,7 +1755,7 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
     };
 
     let preferred_skip = skip_system_headers_from_env();
-    match compile_once(preferred_skip, TemplateParsingMode::Standard) {
+    match compile_once(preferred_skip, TemplateParsingMode::Auto) {
         Ok(()) => {}
         Err(primary_err) => {
             if !preferred_skip {

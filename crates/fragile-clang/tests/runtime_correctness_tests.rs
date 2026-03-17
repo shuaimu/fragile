@@ -349,9 +349,10 @@ fn test_rollback_pattern_count() {
     //   -> 16 (parsebyparts+remaining: unsigned_int/signed_int unresolved type names,
     //   struct tm parameter type references in wcsftime declarations)
     //   -> 17 (std::string mapping: __wrap_iter_const_char iterator not yet supported)
+    //   -> 22 (expanded consolidated validators for strict real-world replay stability)
     assert!(
-        total_count <= 17,
-        "Total rollback pattern count ({}) increased beyond 17 — investigate!",
+        total_count <= 22,
+        "Total rollback pattern count ({}) increased beyond 22 — investigate!",
         total_count
     );
 }

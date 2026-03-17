@@ -16,10 +16,18 @@ import os
 import shlex
 import subprocess
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
+
+from mako_rpc_milestone_contract import (
+    RUN_ROOT_CONTRACT_VERSION,
+    RUN_ROOT_NAME_PATTERN,
+    default_run_root_path,
+    required_artifacts_m0_2,
+    run_root_name_is_contract_valid,
+    write_artifact_contract_manifest,
+)
 
 SUPPORTED_LANES: tuple[str, str] = ("clang", "fragilec")
 COMMAND_NOT_FOUND_STATUS = 127
@@ -151,8 +159,9 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     script_dir = Path(__file__).resolve().parent
     workspace_root = script_dir.parent
     default_mako_root = workspace_root / "vendor" / "mako"
-    default_run_root = Path(
-        f"/tmp/fragile_m0_2_parser_backend_ab_{os.getpid()}_{time.time_ns()}"
+    default_run_root = default_run_root_path(
+        "m0_2_parser_backend_ab",
+        base_dir=Path("/tmp"),
     )
 
     parser = argparse.ArgumentParser(
@@ -420,7 +429,45 @@ def main(argv: Sequence[str]) -> int:
                 ]
             )
 
-        write_lines(run_root / "parser_backend_ab_manifest.txt", lines)
+        lines.extend(
+            [
+                f"run_root_contract_version={RUN_ROOT_CONTRACT_VERSION}",
+                f"run_root_name_pattern={RUN_ROOT_NAME_PATTERN}",
+                (
+                    "run_root_name_is_contract_valid="
+                    f"{'true' if run_root_name_is_contract_valid(run_root.name) else 'false'}"
+                ),
+            ]
+        )
+        manifest_path = run_root / "parser_backend_ab_manifest.txt"
+        write_lines(manifest_path, lines)
+        artifact_contract_summary = write_artifact_contract_manifest(
+            manifest_path=run_root / "parser_backend_ab_required_artifacts_manifest.txt",
+            task_leaf="M0.2",
+            run_root=run_root,
+            required_relpaths=required_artifacts_m0_2(
+                baseline_backend=baseline_backend,
+                candidate_backend=candidate_backend,
+            ),
+        )
+        lines.extend(
+            [
+                "required_artifact_contract_version=1",
+                (
+                    "required_artifact_contract_manifest="
+                    f"{artifact_contract_summary.manifest_path}"
+                ),
+                (
+                    "required_artifact_count="
+                    f"{artifact_contract_summary.expected_count}"
+                ),
+                (
+                    "missing_required_artifact_count="
+                    f"{artifact_contract_summary.missing_count}"
+                ),
+            ]
+        )
+        write_lines(manifest_path, lines)
         print(run_root)
         return 0
     except Exception as exc:  # pylint: disable=broad-except

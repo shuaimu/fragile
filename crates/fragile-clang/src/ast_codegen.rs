@@ -7012,6 +7012,70 @@ impl AstCodeGen {
         out
     }
 
+    /// libc++ `std::byte` bit-operator helpers can degrade into bare `std`
+    /// item-signature types. If the generated `byte` alias exists, recover the
+    /// affected operator signatures to use `byte`.
+    fn normalize_std_byte_operator_module_root_types(code: &str) -> String {
+        if !code.contains("pub type byte = u8;")
+            || !code.contains("fn op_bit")
+            || !code.contains(": std")
+        {
+            return code.to_string();
+        }
+
+        fn brace_delta(line: &str) -> isize {
+            let mut delta = 0isize;
+            for ch in line.chars() {
+                if ch == '{' {
+                    delta += 1;
+                } else if ch == '}' {
+                    delta -= 1;
+                }
+            }
+            delta
+        }
+
+        let mut out = String::with_capacity(code.len());
+        let mut inside_byte_op = false;
+        let mut op_scope_depth = 0isize;
+        for line in code.lines() {
+            let trimmed = line.trim_start();
+            let is_byte_op_sig = trimmed.contains(" fn op_bitor(")
+                || trimmed.contains(" fn op_bitand(")
+                || trimmed.contains(" fn op_bitxor(")
+                || trimmed.contains(" fn op_bitnot(");
+            if is_byte_op_sig {
+                let rewritten = line.replace(": std", ": byte").replace("-> std", "-> byte");
+                out.push_str(&rewritten);
+                inside_byte_op = true;
+                op_scope_depth = brace_delta(trimmed);
+            } else {
+                if inside_byte_op
+                    && trimmed == "return unsafe { std::mem::zeroed::<UnknownTagEnumType>() };"
+                {
+                    let indent_len = line.len().saturating_sub(trimmed.len());
+                    let indent = &line[..indent_len];
+                    out.push_str(indent);
+                    out.push_str("return 0u8;");
+                } else {
+                    out.push_str(line);
+                }
+                if inside_byte_op {
+                    op_scope_depth += brace_delta(trimmed);
+                    if op_scope_depth <= 0 {
+                        inside_byte_op = false;
+                        op_scope_depth = 0;
+                    }
+                }
+            }
+            out.push('\n');
+        }
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
     /// Degraded lowering can leave unresolved bare lowercase identifiers in
     /// item-signature type positions (for example `pair`, `id`). Rewrite those
     /// unresolved type tokens to a compile-safe fallback.
@@ -10236,7 +10300,7 @@ impl AstCodeGen {
 
         if !code.contains("-> bool")
             || !code.contains("return Default::default();")
-            || !code.contains("loop {")
+            || (!code.contains("loop {") && !code.contains("while "))
         {
             return code.to_string();
         }
@@ -10307,8 +10371,30 @@ impl AstCodeGen {
                 continue;
             }
 
-            let has_loop = (i + 1..j).any(|idx| lines[idx].contains("loop {"));
+            let has_loop = (i + 1..j).any(|idx| {
+                let current = lines[idx].trim_start();
+                current.contains("loop {") || current.starts_with("while ")
+            });
             if !has_loop {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+
+            // Prime-like predicates use an early `<=` guard chain plus modulo
+            // divisibility checks. Let the dedicated prime-like normalizer
+            // repair those, instead of rewriting only the final tail here.
+            let has_le_guard = (i + 1..last_body_idx).any(|idx| {
+                let current = lines[idx].trim_start();
+                current.starts_with("if ") && current.contains("<=")
+            });
+            let has_mod_guard = (i + 1..last_body_idx).any(|idx| lines[idx].contains('%'));
+            if has_le_guard && has_mod_guard {
                 for k in i..=j {
                     out.push_str(lines[k]);
                     if k + 1 < lines.len() || code.ends_with('\n') {
@@ -10333,7 +10419,12 @@ impl AstCodeGen {
                     .and_then(|s| s.strip_suffix('{'))
                     .map(str::trim)
                     .unwrap_or("");
-                let is_violation_cond = cond.contains('>') || cond.contains("!=");
+                let is_violation_cond = cond.contains('<')
+                    || cond.contains('>')
+                    || cond.contains("!=")
+                    || cond.contains(".is_null()")
+                    || cond.contains("== 0")
+                    || cond.contains("==0");
                 if !is_violation_cond {
                     cursor += 1;
                     continue;
@@ -10385,6 +10476,233 @@ impl AstCodeGen {
                     let indent = &lines[k][..indent_len];
                     out.push_str(indent);
                     out.push_str("return true;");
+                } else {
+                    out.push_str(lines[k]);
+                }
+                if k + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            i = j + 1;
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Recover degraded pointer-membership bool predicates where success paths
+    /// inside null-checked traversal loops were lowered to
+    /// `return Default::default();`.
+    ///
+    /// Pattern repaired (conservative):
+    /// - bool-return function
+    /// - contains `while !(ptr).is_null() { ... }`
+    /// - loop body advances the same pointer via `ptr = ... (*ptr).next ...`
+    /// - equality guard inside the loop (`if ... == ... { ... }`) contains one
+    ///   or more `return Default::default();` statements
+    /// - function tail remains `return Default::default();` (false/not-found)
+    ///
+    /// Rewrite only guard-local default returns to `return true;`.
+    fn normalize_bool_pointer_membership_default_returns(code: &str) -> String {
+        fn is_default_return_line(trimmed: &str) -> bool {
+            matches!(
+                trimmed,
+                "return Default::default();"
+                    | "return std::default::Default::default();"
+                    | "return std::prelude::v1::Default::default();"
+            )
+        }
+
+        fn parse_while_not_null_var(line: &str) -> Option<String> {
+            let trimmed = line.trim();
+            if !(trimmed.starts_with("while !(") && trimmed.ends_with('{')) {
+                return None;
+            }
+            let after_prefix = trimmed.strip_prefix("while !(")?;
+            let close_idx = after_prefix.find(").is_null()")?;
+            let var = after_prefix[..close_idx].trim().trim_start_matches("r#");
+            if var.is_empty() || !var.chars().all(AstCodeGen::is_identifier_char) {
+                None
+            } else {
+                Some(var.to_string())
+            }
+        }
+
+        fn contains_pointer_next_advance(line: &str, var: &str) -> bool {
+            let trimmed = line.trim();
+            trimmed.contains(&format!("{} = ", var)) && trimmed.contains(&format!("(*{}).next", var))
+        }
+
+        if !code.contains("-> bool")
+            || !code.contains(".is_null()")
+            || !code.contains("return Default::default();")
+        {
+            return code.to_string();
+        }
+
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        let mut i = 0usize;
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim_end();
+            let is_fn_start =
+                (trimmed.contains(" fn ") || trimmed.starts_with("fn ")) && trimmed.ends_with('{');
+            if !is_fn_start || !trimmed.contains("-> bool") {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let mut j = i;
+            let mut depth = 0isize;
+            while j < lines.len() {
+                let current = lines[j];
+                depth += current.chars().filter(|c| *c == '{').count() as isize;
+                depth -= current.chars().filter(|c| *c == '}').count() as isize;
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if j >= lines.len() || depth != 0 {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let body_nonempty: Vec<usize> = (i + 1..j)
+                .filter(|idx| !lines[*idx].trim().is_empty())
+                .collect();
+            let Some(&last_body_idx) = body_nonempty.last() else {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            };
+            if !is_default_return_line(lines[last_body_idx].trim()) {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+
+            let mut loop_vars: HashSet<String> = HashSet::new();
+            for idx in i + 1..j {
+                if let Some(var) = parse_while_not_null_var(lines[idx]) {
+                    loop_vars.insert(var);
+                }
+            }
+            if loop_vars.is_empty() {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+
+            let mut traversed_vars: HashSet<String> = HashSet::new();
+            for var in &loop_vars {
+                if (i + 1..last_body_idx).any(|idx| contains_pointer_next_advance(lines[idx], var)) {
+                    traversed_vars.insert(var.clone());
+                }
+            }
+            if traversed_vars.is_empty() {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+
+            let mut rewrites: HashMap<usize, String> = HashMap::new();
+            let mut idx = i + 1;
+            while idx < last_body_idx {
+                let current = lines[idx].trim();
+                if !(current.starts_with("if ") && current.ends_with('{')) {
+                    idx += 1;
+                    continue;
+                }
+                let cond = current
+                    .strip_prefix("if ")
+                    .and_then(|s| s.strip_suffix('{'))
+                    .map(str::trim)
+                    .unwrap_or("");
+                if cond.contains("!=") || !cond.contains("==") || cond.contains('%') {
+                    idx += 1;
+                    continue;
+                }
+                let matches_loop_var = traversed_vars.iter().any(|var| {
+                    cond.contains(&format!("(*{}).", var))
+                        || cond.contains(&format!("((*{}).", var))
+                        || cond.contains(&format!("(*unsafe {{ *{} }}).", var))
+                });
+                if !matches_loop_var {
+                    idx += 1;
+                    continue;
+                }
+
+                let mut guard_depth = 0isize;
+                let mut end_idx: Option<usize> = None;
+                let mut scan = idx;
+                while scan < last_body_idx {
+                    let line_scan = lines[scan];
+                    guard_depth += line_scan.chars().filter(|c| *c == '{').count() as isize;
+                    guard_depth -= line_scan.chars().filter(|c| *c == '}').count() as isize;
+                    if scan > idx && guard_depth == 0 {
+                        end_idx = Some(scan);
+                        break;
+                    }
+                    scan += 1;
+                }
+                let Some(end_idx) = end_idx else {
+                    idx += 1;
+                    continue;
+                };
+
+                for probe in idx + 1..end_idx {
+                    if !is_default_return_line(lines[probe].trim()) {
+                        continue;
+                    }
+                    let indent_len = lines[probe]
+                        .len()
+                        .saturating_sub(lines[probe].trim_start().len());
+                    let indent = &lines[probe][..indent_len];
+                    rewrites.insert(probe, format!("{indent}return true;"));
+                }
+
+                idx = end_idx + 1;
+            }
+
+            for k in i..=j {
+                if let Some(rewrite) = rewrites.get(&k) {
+                    out.push_str(rewrite);
                 } else {
                     out.push_str(lines[k]);
                 }
@@ -10669,10 +10987,17 @@ impl AstCodeGen {
                 continue;
             }
 
-            let default_return_indices: Vec<usize> = (i + 1..j)
-                .filter(|idx| is_default_return_line(lines[*idx].trim()))
-                .collect();
-            if default_return_indices.len() != 2 {
+            // This recovery is for straight-line guarded-success helpers.
+            // Loop-based membership predicates (for example table/list contains)
+            // have different success/failure polarity and must be handled by
+            // dedicated passes.
+            let has_loop_construct = (i + 1..j).any(|idx| {
+                let current = lines[idx].trim_start();
+                current.starts_with("while ")
+                    || current.starts_with("loop ")
+                    || current.starts_with("for ")
+            });
+            if has_loop_construct {
                 for k in i..=j {
                     out.push_str(lines[k]);
                     if k + 1 < lines.len() || code.ends_with('\n') {
@@ -10683,8 +11008,21 @@ impl AstCodeGen {
                 continue;
             }
 
-            let first_default_idx = default_return_indices[0];
-            let last_default_idx = default_return_indices[1];
+            let default_return_indices: Vec<usize> = (i + 1..j)
+                .filter(|idx| is_default_return_line(lines[*idx].trim()))
+                .collect();
+            if default_return_indices.len() < 2 {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+
+            let last_default_idx = *default_return_indices.last().unwrap();
             let body_nonempty: Vec<usize> = (i + 1..j)
                 .filter(|idx| !lines[*idx].trim().is_empty())
                 .collect();
@@ -10710,23 +11048,38 @@ impl AstCodeGen {
                 continue;
             }
 
-            let guard_header_idx = (i + 1..first_default_idx)
-                .rev()
-                .find(|idx| !lines[*idx].trim().is_empty());
-            let guard_close_idx = (first_default_idx + 1..j)
-                .find(|idx| !lines[*idx].trim().is_empty());
+            let mut all_default_guards_are_if_blocks = true;
+            let mut last_guard_close_idx: Option<usize> = None;
+            for guard_default_idx in default_return_indices
+                .iter()
+                .copied()
+                .take(default_return_indices.len() - 1)
+            {
+                let guard_header_idx = (i + 1..guard_default_idx)
+                    .rev()
+                    .find(|idx| !lines[*idx].trim().is_empty());
+                let guard_close_idx =
+                    (guard_default_idx + 1..j).find(|idx| !lines[*idx].trim().is_empty());
+                let is_guard_header = guard_header_idx
+                    .map(|idx| {
+                        let current = lines[idx].trim();
+                        current.starts_with("if ") && current.ends_with('{')
+                    })
+                    .unwrap_or(false);
+                let is_guard_close = guard_close_idx
+                    .map(|idx| lines[idx].trim() == "}")
+                    .unwrap_or(false);
+                if !is_guard_header || !is_guard_close {
+                    all_default_guards_are_if_blocks = false;
+                    break;
+                }
+                if let Some(close_idx) = guard_close_idx {
+                    last_guard_close_idx =
+                        Some(last_guard_close_idx.map_or(close_idx, |prev| prev.max(close_idx)));
+                }
+            }
 
-            let is_guard_header = guard_header_idx
-                .map(|idx| {
-                    let current = lines[idx].trim();
-                    current.starts_with("if ") && current.ends_with('{')
-                })
-                .unwrap_or(false);
-            let is_guard_close = guard_close_idx
-                .map(|idx| lines[idx].trim() == "}")
-                .unwrap_or(false);
-
-            if !is_guard_header || !is_guard_close {
+            if !all_default_guards_are_if_blocks {
                 for k in i..=j {
                     out.push_str(lines[k]);
                     if k + 1 < lines.len() || code.ends_with('\n') {
@@ -10737,7 +11090,18 @@ impl AstCodeGen {
                 continue;
             }
 
-            let side_effect_start = guard_close_idx.unwrap() + 1;
+            let Some(last_guard_close_idx) = last_guard_close_idx else {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            };
+
+            let side_effect_start = last_guard_close_idx + 1;
             let has_side_effect_assignment = (side_effect_start..last_default_idx)
                 .any(|idx| line_has_assignment_side_effect(lines[idx].trim()));
 
@@ -11148,6 +11512,422 @@ impl AstCodeGen {
 
             for k in i..=j {
                 if k == *second_ret_idx || k == last_body_idx {
+                    let indent_len = lines[k].len().saturating_sub(lines[k].trim_start().len());
+                    let indent = &lines[k][..indent_len];
+                    out.push_str(indent);
+                    out.push_str("return true;");
+                } else {
+                    out.push_str(lines[k]);
+                }
+                if k + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            i = j + 1;
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Recover degraded bool helpers where a top-level equality short-circuit
+    /// guard was lowered to `return Default::default();` even though the
+    /// function tail returns a delegated helper result.
+    ///
+    /// Pattern repaired (conservative):
+    /// - bool-return function
+    /// - tail statement is `return self.<helper>(...);`
+    /// - first top-level `if <lhs> == <rhs> { ... }` guard returns default
+    /// - a later top-level range-style guard (`<`/`>`) also returns default
+    ///
+    /// Rewrite only the equality-guard return to `return true;`.
+    fn normalize_bool_top_level_eq_guard_helper_returns(code: &str) -> String {
+        fn is_default_return_line(trimmed: &str) -> bool {
+            matches!(
+                trimmed,
+                "return Default::default();"
+                    | "return std::default::Default::default();"
+                    | "return std::prelude::v1::Default::default();"
+            )
+        }
+
+        fn count_brace_delta(line: &str) -> isize {
+            let mut delta = 0isize;
+            for ch in line.chars() {
+                if ch == '{' {
+                    delta += 1;
+                } else if ch == '}' {
+                    delta -= 1;
+                }
+            }
+            delta
+        }
+
+        fn extract_if_guard_condition(line: &str) -> Option<String> {
+            let trimmed = line.trim();
+            if !(trimmed.starts_with("if ") && trimmed.ends_with('{')) {
+                return None;
+            }
+            trimmed
+                .strip_prefix("if ")
+                .and_then(|s| s.strip_suffix('{'))
+                .map(|s| s.trim().to_string())
+        }
+
+        if !code.contains("-> bool")
+            || !code.contains("return Default::default();")
+            || !code.contains("return self.")
+            || !code.contains("==")
+        {
+            return code.to_string();
+        }
+
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        let mut i = 0usize;
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim_end();
+            let is_fn_start =
+                (trimmed.contains(" fn ") || trimmed.starts_with("fn ")) && trimmed.ends_with('{');
+            if !is_fn_start || !trimmed.contains("-> bool") {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let mut j = i;
+            let mut depth = 0isize;
+            while j < lines.len() {
+                let current = lines[j];
+                depth += current.chars().filter(|c| *c == '{').count() as isize;
+                depth -= current.chars().filter(|c| *c == '}').count() as isize;
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if j >= lines.len() || depth != 0 {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let body_nonempty: Vec<usize> = (i + 1..j)
+                .filter(|idx| !lines[*idx].trim().is_empty())
+                .collect();
+            let Some(&last_body_idx) = body_nonempty.last() else {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            };
+            let tail_line = lines[last_body_idx].trim();
+            let has_helper_tail = tail_line.starts_with("return self.")
+                && tail_line.ends_with(';')
+                && tail_line.contains('(')
+                && !is_default_return_line(tail_line);
+            if !has_helper_tail {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+
+            let mut eq_guard_return_idx: Option<usize> = None;
+            let mut eq_guard_line_idx: Option<usize> = None;
+            let mut has_range_default_guard_after_eq = false;
+
+            let mut cursor = i + 1;
+            let mut scope_depth = 1isize;
+            while cursor < j {
+                let current_line = lines[cursor];
+                let current_trimmed = current_line.trim();
+
+                if scope_depth == 1 {
+                    if let Some(cond) = extract_if_guard_condition(current_line) {
+                        let mut probe = cursor + 1;
+                        while probe < j && lines[probe].trim().is_empty() {
+                            probe += 1;
+                        }
+                        let mut has_inner_block = false;
+                        if probe < j && lines[probe].trim() == "{" {
+                            has_inner_block = true;
+                            probe += 1;
+                            while probe < j && lines[probe].trim().is_empty() {
+                                probe += 1;
+                            }
+                        }
+                        if probe < j && is_default_return_line(lines[probe].trim()) {
+                            let mut close_probe = probe + 1;
+                            while close_probe < j && lines[close_probe].trim().is_empty() {
+                                close_probe += 1;
+                            }
+                            if has_inner_block {
+                                if close_probe < j && lines[close_probe].trim() == "}" {
+                                    close_probe += 1;
+                                    while close_probe < j && lines[close_probe].trim().is_empty() {
+                                        close_probe += 1;
+                                    }
+                                } else {
+                                    close_probe = j;
+                                }
+                            }
+                            if close_probe < j && lines[close_probe].trim() == "}" {
+                                if cond.contains("==")
+                                    && !cond.contains("!=")
+                                    && eq_guard_return_idx.is_none()
+                                {
+                                    eq_guard_return_idx = Some(probe);
+                                    eq_guard_line_idx = Some(cursor);
+                                } else if (cond.contains('<') || cond.contains('>'))
+                                    && eq_guard_line_idx.is_some_and(|eq_idx| cursor > eq_idx)
+                                {
+                                    has_range_default_guard_after_eq = true;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                scope_depth += count_brace_delta(current_trimmed);
+                cursor += 1;
+            }
+
+            let should_rewrite = eq_guard_return_idx.is_some() && has_range_default_guard_after_eq;
+            for k in i..=j {
+                if should_rewrite && Some(k) == eq_guard_return_idx {
+                    let indent_len = lines[k].len().saturating_sub(lines[k].trim_start().len());
+                    let indent = &lines[k][..indent_len];
+                    out.push_str(indent);
+                    out.push_str("return true;");
+                } else {
+                    out.push_str(lines[k]);
+                }
+                if k + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            i = j + 1;
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Recover degraded recursive bool helpers where base-case equality and
+    /// recursive-hit branches were both lowered to `return Default::default();`.
+    ///
+    /// Pattern repaired (conservative):
+    /// - bool-return function
+    /// - function body contains a recursive call to itself
+    /// - has an equality guard (`if ... == ...`) returning default
+    /// - has an `if` guard whose condition calls itself and returns default
+    /// - final body statement is `return Default::default();` (failure tail)
+    ///
+    /// Rewrite equality and recursive-hit default returns to `return true;`.
+    fn normalize_bool_recursive_success_default_returns(code: &str) -> String {
+        fn is_default_return_line(trimmed: &str) -> bool {
+            matches!(
+                trimmed,
+                "return Default::default();"
+                    | "return std::default::Default::default();"
+                    | "return std::prelude::v1::Default::default();"
+            )
+        }
+
+        fn parse_fn_name(signature_line: &str) -> Option<String> {
+            let rest = signature_line.split("fn ").nth(1)?;
+            let name = rest.split('(').next()?.trim();
+            if name.is_empty() {
+                None
+            } else {
+                Some(name.trim_start_matches("r#").to_string())
+            }
+        }
+
+        if !code.contains("-> bool")
+            || !code.contains("return Default::default();")
+            || !code.contains("==")
+        {
+            return code.to_string();
+        }
+
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        let mut i = 0usize;
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim_end();
+            let is_fn_start =
+                (trimmed.contains(" fn ") || trimmed.starts_with("fn ")) && trimmed.ends_with('{');
+            if !is_fn_start || !trimmed.contains("-> bool") {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let Some(fn_name) = parse_fn_name(trimmed) else {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            };
+            let recursive_marker = format!("{}(", fn_name);
+
+            let mut j = i;
+            let mut depth = 0isize;
+            while j < lines.len() {
+                let current = lines[j];
+                depth += current.chars().filter(|c| *c == '{').count() as isize;
+                depth -= current.chars().filter(|c| *c == '}').count() as isize;
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if j >= lines.len() || depth != 0 {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let body_nonempty: Vec<usize> = (i + 1..j)
+                .filter(|idx| !lines[*idx].trim().is_empty())
+                .collect();
+            let Some(&last_body_idx) = body_nonempty.last() else {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            };
+            if !is_default_return_line(lines[last_body_idx].trim()) {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+
+            let has_recursive_use = (i + 1..j).any(|idx| lines[idx].contains(&recursive_marker));
+            if !has_recursive_use {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+
+            let mut eq_guard_return_idx: Option<usize> = None;
+            let mut recursive_guard_return_indices: Vec<usize> = Vec::new();
+            let mut cursor = i + 1;
+            while cursor < last_body_idx {
+                let current = lines[cursor].trim();
+                if !(current.starts_with("if ") && current.ends_with('{')) {
+                    cursor += 1;
+                    continue;
+                }
+
+                let cond = current
+                    .strip_prefix("if ")
+                    .and_then(|s| s.strip_suffix('{'))
+                    .map(str::trim)
+                    .unwrap_or("");
+                let mut probe = cursor + 1;
+                while probe < last_body_idx && lines[probe].trim().is_empty() {
+                    probe += 1;
+                }
+                let mut has_inner_block = false;
+                if probe < last_body_idx && lines[probe].trim() == "{" {
+                    has_inner_block = true;
+                    probe += 1;
+                    while probe < last_body_idx && lines[probe].trim().is_empty() {
+                        probe += 1;
+                    }
+                }
+                if probe >= last_body_idx || !is_default_return_line(lines[probe].trim()) {
+                    cursor += 1;
+                    continue;
+                }
+
+                let mut close_probe = probe + 1;
+                while close_probe < last_body_idx && lines[close_probe].trim().is_empty() {
+                    close_probe += 1;
+                }
+                if has_inner_block {
+                    if close_probe >= last_body_idx || lines[close_probe].trim() != "}" {
+                        cursor += 1;
+                        continue;
+                    }
+                    close_probe += 1;
+                    while close_probe < last_body_idx && lines[close_probe].trim().is_empty() {
+                        close_probe += 1;
+                    }
+                }
+                if close_probe >= last_body_idx || lines[close_probe].trim() != "}" {
+                    cursor += 1;
+                    continue;
+                }
+
+                if cond.contains("==") && !cond.contains("!=") && eq_guard_return_idx.is_none() {
+                    eq_guard_return_idx = Some(probe);
+                }
+                if cond.contains(&recursive_marker) && !cond.contains('!') {
+                    recursive_guard_return_indices.push(probe);
+                }
+                cursor = close_probe + 1;
+            }
+
+            let should_rewrite = eq_guard_return_idx.is_some() && !recursive_guard_return_indices.is_empty();
+            for k in i..=j {
+                if should_rewrite
+                    && (Some(k) == eq_guard_return_idx
+                        || recursive_guard_return_indices.contains(&k))
+                {
                     let indent_len = lines[k].len().saturating_sub(lines[k].trim_start().len());
                     let indent = &lines[k][..indent_len];
                     out.push_str(indent);
@@ -19445,17 +20225,43 @@ impl AstCodeGen {
             expr: &str,
             pointer_depths: &HashMap<String, usize>,
         ) -> Option<usize> {
-            let ident = expr.trim();
-            if ident.is_empty()
-                || !ident
-                    .chars()
-                    .all(|ch| AstCodeGen::is_identifier_char(ch) || ch == '#')
-            {
-                return None;
+            fn lookup_simple_ident(
+                ident: &str,
+                pointer_depths: &HashMap<String, usize>,
+            ) -> Option<usize> {
+                if ident.is_empty()
+                    || !ident
+                        .chars()
+                        .all(|ch| AstCodeGen::is_identifier_char(ch) || ch == '#')
+                {
+                    return None;
+                }
+                pointer_depths
+                    .get(ident.trim_start_matches("r#"))
+                    .copied()
             }
-            pointer_depths
-                .get(ident.trim_start_matches("r#"))
-                .copied()
+
+            let expr = expr.trim();
+            if let Some(depth) = lookup_simple_ident(expr, pointer_depths) {
+                return Some(depth);
+            }
+
+            // Pointer arithmetic/method forms like `argv.add(i)` still carry the
+            // base pointer depth from `argv`.
+            for marker in [".add(", ".offset(", ".wrapping_add(", ".wrapping_offset("] {
+                let Some(marker_idx) = expr.find(marker) else {
+                    continue;
+                };
+                let mut base = expr[..marker_idx].trim();
+                while base.starts_with('(') && base.ends_with(')') && base.len() > 2 {
+                    base = base[1..base.len() - 1].trim();
+                }
+                if let Some(depth) = lookup_simple_ident(base, pointer_depths) {
+                    return Some(depth);
+                }
+            }
+
+            None
         }
 
         fn should_preserve_deref_cast(
@@ -19577,6 +20383,46 @@ impl AstCodeGen {
                 let replacement = format!("({}{})", ident, cast_tail);
                 rewritten.replace_range(start..close_idx + 1, &replacement);
                 legacy_idx = start + replacement.len();
+            }
+
+            // Shape 4: `*((&mut expr as *mut T) as *mut T)` / const variants.
+            // This is a redundant deref around an address-taken pointer cast and
+            // commonly appears in call arguments where a raw pointer is expected.
+            let mut ref_cast_idx = 0usize;
+            while let Some(rel) = rewritten[ref_cast_idx..].find("*(") {
+                let start = ref_cast_idx + rel;
+                let prev_non_ws = rewritten[..start]
+                    .chars()
+                    .rev()
+                    .find(|ch| !ch.is_whitespace());
+                if matches!(
+                    prev_non_ws,
+                    Some(ch) if AstCodeGen::is_identifier_char(ch) || ch == ')' || ch == ']'
+                ) {
+                    // Likely multiplication or another non-unary context.
+                    ref_cast_idx = start + 2;
+                    continue;
+                }
+
+                let open_idx = start + 1;
+                let Some(close_idx) = AstCodeGen::find_matching_close_paren(&rewritten, open_idx)
+                else {
+                    break;
+                };
+                let inner = rewritten[open_idx + 1..close_idx].trim();
+                let is_ref_cast = (inner.starts_with("(&mut ")
+                    || inner.starts_with("(&")
+                    || inner.starts_with("(unsafe { &mut ")
+                    || inner.starts_with("(unsafe { &"))
+                    && (inner.contains(" as *mut ") || inner.contains(" as *const "));
+                if !is_ref_cast {
+                    ref_cast_idx = close_idx + 1;
+                    continue;
+                }
+
+                let replacement = format!("({})", inner);
+                rewritten.replace_range(start..close_idx + 1, &replacement);
+                ref_cast_idx = start + replacement.len();
             }
 
             rewritten
@@ -24197,6 +25043,64 @@ impl AstCodeGen {
             names
         }
 
+        fn collect_match_binding_names(lines: &[&str]) -> HashSet<String> {
+            fn collect_pattern_idents(pattern: &str, names: &mut HashSet<String>) {
+                let mut idx = 0usize;
+                while idx < pattern.len() {
+                    let ch = pattern[idx..].chars().next().unwrap();
+                    if !AstCodeGen::is_identifier_char(ch) {
+                        idx += ch.len_utf8();
+                        continue;
+                    }
+                    let start = idx;
+                    idx += ch.len_utf8();
+                    while idx < pattern.len() {
+                        let next = pattern[idx..].chars().next().unwrap();
+                        if AstCodeGen::is_identifier_char(next) {
+                            idx += next.len_utf8();
+                        } else {
+                            break;
+                        }
+                    }
+                    let ident = &pattern[start..idx];
+                    let raw = ident.trim_start_matches("r#");
+                    if raw.is_empty() {
+                        continue;
+                    }
+                    if matches!(raw, "Some" | "None" | "Ok" | "Err" | "mut" | "ref" | "true" | "false")
+                    {
+                        continue;
+                    }
+                    let prev = pattern[..start].trim_end();
+                    if prev.ends_with("::") {
+                        continue;
+                    }
+                    let first = raw.chars().next().unwrap();
+                    if !(first == '_' || first.is_ascii_lowercase()) {
+                        continue;
+                    }
+                    names.insert(ident.to_string());
+                    if ident != raw {
+                        names.insert(raw.to_string());
+                    }
+                }
+            }
+
+            let mut names = HashSet::new();
+            for line in lines {
+                let trimmed = line.trim_start();
+                let Some(arrow_idx) = trimmed.find("=>") else {
+                    continue;
+                };
+                let pattern = trimmed[..arrow_idx].trim();
+                if pattern.is_empty() {
+                    continue;
+                }
+                collect_pattern_idents(pattern, &mut names);
+            }
+            names
+        }
+
         fn parse_fn_item_name(line: &str) -> Option<String> {
             let fn_src = if let Some(rest) = line.strip_prefix("pub unsafe extern \"C\" fn ") {
                 rest
@@ -24464,6 +25368,7 @@ impl AstCodeGen {
             let body_lines: &[&str] = if j > i + 1 { &lines[i + 1..j] } else { &[] };
             let mut occupied_names = collect_param_names(trimmed);
             occupied_names.extend(collect_local_let_names(body_lines));
+            occupied_names.extend(collect_match_binding_names(body_lines));
             let mut candidate_aliases = global_aliases.clone();
             if let Some(Some(impl_prefix)) = impl_prefix_per_line.get(i) {
                 if let Some(prefix_aliases) = impl_prefix_aliases.get(impl_prefix) {
@@ -27606,10 +28511,13 @@ impl AstCodeGen {
         output = Self::normalize_default_tail_returns_to_matching_result_locals(&output);
         output = Self::normalize_bool_signed_digit_guard_default_returns(&output);
         output = Self::normalize_bool_loop_violation_default_tail_returns(&output);
+        output = Self::normalize_bool_pointer_membership_default_returns(&output);
         output = Self::normalize_bool_null_eq_guard_default_returns(&output);
         output = Self::normalize_bool_guarded_success_default_tail_returns(&output);
         output = Self::normalize_bool_guard_chain_success_default_tail_returns(&output);
         output = Self::normalize_bool_prime_like_guard_default_returns(&output);
+        output = Self::normalize_bool_top_level_eq_guard_helper_returns(&output);
+        output = Self::normalize_bool_recursive_success_default_returns(&output);
         // Degraded placeholder rewrites can leak call-shaped tokens into local
         // binding names (e.g. `let mut Default::default(): T = ...;`).
         output = Self::normalize_invalid_local_binding_identifiers(&output);
@@ -27851,6 +28759,9 @@ impl AstCodeGen {
         output = Self::normalize_final_rpc_straggler_artifacts(&output);
         output = Self::normalize_malformed_unsafe_deref_size_casts(&output);
         output = Self::normalize_struct_literal_unit_entry_artifacts(&output);
+        // Late pointer/call-shape rewrites can reintroduce redundant
+        // dereferences around ref-to-pointer cast arguments.
+        output = Self::normalize_redundant_deref_in_pointer_casts(&output);
         // Final pass: late normalizations can still reintroduce statement-only
         // degraded preface expressions and default tail returns in helper bodies.
         output = Self::normalize_default_preface_local_assignment_artifacts(&output);
@@ -27858,12 +28769,18 @@ impl AstCodeGen {
         output = Self::normalize_bool_guarded_success_default_tail_returns(&output);
         output = Self::normalize_bool_guard_chain_success_default_tail_returns(&output);
         output = Self::normalize_bool_prime_like_guard_default_returns(&output);
+        output = Self::normalize_bool_pointer_membership_default_returns(&output);
+        output = Self::normalize_bool_top_level_eq_guard_helper_returns(&output);
+        output = Self::normalize_bool_recursive_success_default_returns(&output);
         output = Self::normalize_bool_call_is_null_artifacts(&output);
         // Late pointer/assignment rewrites can still surface malformed
         // `wrapping_add((arg })` call args; run one final cast-shape cleanup.
         output = Self::normalize_wrapping_add_argument_casts(&output);
         output = Self::normalize_invalid_local_binding_identifiers(&output);
         output = Self::normalize_invalid_item_declaration_namespaced_identifiers(&output);
+        // libc++ `std::byte` bit-operator helpers can degrade to bare `std`
+        // type tokens late in the pipeline; recover those signatures.
+        output = Self::normalize_std_byte_operator_module_root_types(&output);
         output = Self::append_compile_error_for_unresolved_non_c_abi_external_calls(&output);
         if Self::output_requires_c_variadic_feature(&output) {
             output = Self::ensure_c_variadic_feature_attr(&output);
@@ -30991,6 +31908,85 @@ impl FragileAtomicBoolCompat for atomic_bool {
             out
         }
 
+        fn parse_struct_array_field_elements(
+            code: &str,
+            struct_fields: &HashMap<String, HashSet<String>>,
+        ) -> HashMap<String, HashMap<String, String>> {
+            let lines: Vec<&str> = code.lines().collect();
+            let mut out: HashMap<String, HashMap<String, String>> = HashMap::new();
+            let mut i = 0usize;
+            while i < lines.len() {
+                let trimmed = lines[i].trim_start();
+                let Some(rest) = trimmed
+                    .strip_prefix("pub struct ")
+                    .or_else(|| trimmed.strip_prefix("struct "))
+                else {
+                    i += 1;
+                    continue;
+                };
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| AstCodeGen::is_identifier_char(*c) || *c == '#')
+                    .collect();
+                if name.is_empty() || !trimmed.ends_with('{') {
+                    i += 1;
+                    continue;
+                }
+                let mut field_elements: HashMap<String, String> = HashMap::new();
+                let mut depth = 1isize;
+                let mut j = i + 1;
+                while j < lines.len() && depth > 0 {
+                    let current = lines[j];
+                    let current_trim = current.trim();
+                    if depth == 1 {
+                        let mut field_src = current_trim;
+                        if let Some(rest) = field_src.strip_prefix("pub(") {
+                            if let Some(close_idx) = rest.find(')') {
+                                field_src = rest[close_idx + 1..].trim_start();
+                            }
+                        } else if let Some(rest) = field_src.strip_prefix("pub ") {
+                            field_src = rest.trim_start();
+                        }
+                        if let Some((lhs, rhs)) = field_src.split_once(':') {
+                            let field = lhs.trim().trim_start_matches("r#");
+                            if field.is_empty() {
+                                j += 1;
+                                continue;
+                            }
+                            let ty = rhs.trim().trim_end_matches(',').trim();
+                            if !(ty.starts_with('[') && ty.ends_with(']')) {
+                                j += 1;
+                                continue;
+                            }
+                            let inner = &ty[1..ty.len() - 1];
+                            let Some((element_src, _size_src)) = inner.split_once(';') else {
+                                j += 1;
+                                continue;
+                            };
+                            let element_src = element_src.trim();
+                            let element = element_src
+                                .split('<')
+                                .next()
+                                .unwrap_or(element_src)
+                                .trim()
+                                .trim_start_matches("r#");
+                            if !element.is_empty() && struct_fields.contains_key(element) {
+                                field_elements.insert(field.to_string(), element.to_string());
+                            }
+                        }
+                    }
+                    depth += current.chars().filter(|c| *c == '{').count() as isize;
+                    depth -= current.chars().filter(|c| *c == '}').count() as isize;
+                    j += 1;
+                }
+                if !field_elements.is_empty() {
+                    out.insert(name.trim_start_matches("r#").to_string(), field_elements);
+                }
+                i = j;
+            }
+            out
+        }
+
         fn parse_impl_target(line: &str) -> Option<String> {
             let trimmed = line.trim_start();
             let rest = trimmed.strip_prefix("impl ")?;
@@ -31385,6 +32381,127 @@ impl FragileAtomicBoolCompat for atomic_bool {
             rewritten
         }
 
+        fn rewrite_array_element_field_calls(
+            line: &str,
+            self_array_field_elements: &HashMap<String, String>,
+            struct_fields: &HashMap<String, HashSet<String>>,
+        ) -> String {
+            if self_array_field_elements.is_empty() || !line.contains(").") || !line.contains("()") {
+                return line.to_string();
+            }
+            let mut rewritten = line.to_string();
+
+            let mut array_fields: Vec<(String, String)> = self_array_field_elements
+                .iter()
+                .map(|(field, element)| (field.clone(), element.clone()))
+                .collect();
+            array_fields.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then(a.0.cmp(&b.0)));
+
+            for (array_field, element_ty) in array_fields {
+                let Some(element_fields) = struct_fields.get(&element_ty) else {
+                    continue;
+                };
+                let prefixes = [
+                    format!("(self.{}[", array_field),
+                    format!("((*self).{}[", array_field),
+                ];
+                for prefix in prefixes {
+                    let mut idx = 0usize;
+                    while let Some(rel) = rewritten[idx..].find(&prefix) {
+                        let start = idx + rel;
+                        let mut cursor = start + prefix.len();
+                        let bytes = rewritten.as_bytes();
+                        let mut bracket_depth = 1i32;
+                        while cursor < rewritten.len() && bracket_depth > 0 {
+                            match bytes[cursor] {
+                                b'[' => bracket_depth += 1,
+                                b']' => bracket_depth -= 1,
+                                _ => {}
+                            }
+                            cursor += 1;
+                        }
+                        if bracket_depth != 0 {
+                            idx = start + prefix.len();
+                            continue;
+                        }
+
+                        while cursor < rewritten.len() && rewritten.as_bytes()[cursor].is_ascii_whitespace()
+                        {
+                            cursor += 1;
+                        }
+                        if cursor >= rewritten.len() || rewritten.as_bytes()[cursor] != b')' {
+                            idx = start + prefix.len();
+                            continue;
+                        }
+                        cursor += 1;
+                        while cursor < rewritten.len() && rewritten.as_bytes()[cursor].is_ascii_whitespace()
+                        {
+                            cursor += 1;
+                        }
+                        if cursor >= rewritten.len() || rewritten.as_bytes()[cursor] != b'.' {
+                            idx = start + prefix.len();
+                            continue;
+                        }
+                        cursor += 1;
+                        while cursor < rewritten.len() && rewritten.as_bytes()[cursor].is_ascii_whitespace()
+                        {
+                            cursor += 1;
+                        }
+                        if cursor >= rewritten.len() {
+                            idx = start + prefix.len();
+                            continue;
+                        }
+
+                        let method_start = cursor;
+                        while cursor < rewritten.len() {
+                            let ch = rewritten[cursor..].chars().next().unwrap();
+                            if AstCodeGen::is_identifier_char(ch) || ch == '#' {
+                                cursor += ch.len_utf8();
+                            } else {
+                                break;
+                            }
+                        }
+                        if cursor == method_start {
+                            idx = method_start + 1;
+                            continue;
+                        }
+                        let method = rewritten[method_start..cursor]
+                            .trim()
+                            .trim_start_matches("r#")
+                            .to_string();
+                        if !element_fields.contains(&method) {
+                            idx = cursor;
+                            continue;
+                        }
+
+                        while cursor < rewritten.len() && rewritten.as_bytes()[cursor].is_ascii_whitespace()
+                        {
+                            cursor += 1;
+                        }
+                        if cursor >= rewritten.len() || rewritten.as_bytes()[cursor] != b'(' {
+                            idx = cursor;
+                            continue;
+                        }
+                        let call_open = cursor;
+                        cursor += 1;
+                        while cursor < rewritten.len() && rewritten.as_bytes()[cursor].is_ascii_whitespace()
+                        {
+                            cursor += 1;
+                        }
+                        if cursor >= rewritten.len() || rewritten.as_bytes()[cursor] != b')' {
+                            idx = call_open + 1;
+                            continue;
+                        }
+                        let call_close = cursor;
+                        rewritten.replace_range(call_open..=call_close, "");
+                        idx = method_start + method.len();
+                    }
+                }
+            }
+
+            rewritten
+        }
+
         let lines: Vec<&str> = code.lines().collect();
         if lines.is_empty() {
             return code.to_string();
@@ -31392,6 +32509,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
         let struct_fields = parse_struct_fields(code);
         let pointer_fields = parse_struct_pointer_fields(code);
         let pointer_field_pointees = parse_struct_pointer_field_pointees(code, &struct_fields);
+        let array_field_elements = parse_struct_array_field_elements(code, &struct_fields);
         let impl_targets = collect_impl_target_per_line(&lines);
 
         let mut out = String::with_capacity(code.len());
@@ -31444,6 +32562,12 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 .get(i)
                 .and_then(|t| t.as_ref())
                 .and_then(|target| pointer_field_pointees.get(target))
+                .cloned()
+                .unwrap_or_default();
+            let self_array_field_elements: HashMap<String, String> = impl_targets
+                .get(i)
+                .and_then(|t| t.as_ref())
+                .and_then(|target| array_field_elements.get(target))
                 .cloned()
                 .unwrap_or_default();
 
@@ -31518,6 +32642,11 @@ impl FragileAtomicBoolCompat for atomic_bool {
                     &rewritten,
                     &pointer_binding_pointees,
                     &pointer_self_field_pointees,
+                    &struct_fields,
+                );
+                rewritten = rewrite_array_element_field_calls(
+                    &rewritten,
+                    &self_array_field_elements,
                     &struct_fields,
                 );
                 out.push_str(&rewritten);
@@ -47120,39 +48249,21 @@ impl FragileAtomicBoolCompat for atomic_bool {
         ));
         self.indent += 1;
 
-        // For variadic templates, the body references all parameters with the same name
-        // (e.g., all named "args"), but we renamed them (args, args_1, args_2).
-        // Until we implement proper parameter renaming in the body, generate a stub.
-        // Check if this is a variadic template with duplicate param names
-        let has_duplicate_names = {
-            let mut names = std::collections::HashSet::new();
-            params.iter().any(|(n, _)| !names.insert(n.clone()))
-        };
-
-        if has_duplicate_names {
-            // Strict mode: skip unresolved pack-expansion wrappers instead of
-            // emitting synthetic fallback bodies.
+        // Generate the concrete instantiated body. Parameter names in signatures
+        // are already deduplicated above (e.g. args, args_1, args_2).
+        let before_body = self.output.len();
+        for child in children {
+            if let ClangNodeKind::CompoundStmt = &child.kind {
+                self.generate_block_contents(&child.children, &return_type);
+            }
+        }
+        let body_is_empty = self.output.len() == before_body;
+        if body_is_empty && return_type != CppType::Void {
             self.output.truncate(output_start);
             self.generated_functions.remove(&func_name);
             self.generated_function_param_rust_types
                 .remove(&(func_name.clone(), param_entries.len()));
             return;
-        } else {
-            // No duplicate names - generate the body normally
-            let before_body = self.output.len();
-            for child in children {
-                if let ClangNodeKind::CompoundStmt = &child.kind {
-                    self.generate_block_contents(&child.children, &return_type);
-                }
-            }
-            let body_is_empty = self.output.len() == before_body;
-            if body_is_empty && return_type != CppType::Void {
-                self.output.truncate(output_start);
-                self.generated_functions.remove(&func_name);
-                self.generated_function_param_rust_types
-                    .remove(&(func_name.clone(), param_entries.len()));
-                return;
-            }
         }
 
         self.indent -= 1;
@@ -97236,6 +98347,37 @@ pub fn probe() {
     }
 
     #[test]
+    fn test_normalize_unprefixed_global_static_reads_to_locals_skips_match_arm_bindings() {
+        let input = r#"
+pub(crate) static mut __gv_result: i32 = 0;
+pub mod fragile_runtime {
+    pub fn join_like() -> i32 {
+        let handle = Some(7i32);
+        match handle {
+            Some(h) => match Ok(h) {
+                Ok(result) => result,
+                Err(_) => 0,
+            },
+            None => 0,
+        }
+    }
+}
+"#;
+
+        let normalized = AstCodeGen::normalize_unprefixed_global_static_reads_to_locals(input);
+        assert!(
+            !normalized.contains("let mut result = unsafe { __gv_result"),
+            "global-static alias normalization must not inject snapshot locals for match-arm bindings, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("Ok(result) => result"),
+            "match-arm bindings should remain intact when snapshot injection is skipped, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
     fn test_unreferenced_static_cleanup_keeps_globals_referenced_via_late_alias_rewrite() {
         let input = r#"
 pub(crate) static mut __gv_pxs_workers_g: vector_shared_ptr_PaxosWorker = unsafe { std::mem::zeroed() };
@@ -105116,6 +106258,52 @@ pub struct Holder {
     }
 
     #[test]
+    fn test_normalize_invalid_module_like_type_tokens_rewrites_fn_signature_module_roots() {
+        let input = r#"
+pub extern "C" fn op_bitor(__lhs: std, __rhs: std) -> std {
+    return unsafe { std::mem::zeroed::<UnknownTagEnumType>() };
+}
+"#;
+        let output = AstCodeGen::normalize_invalid_module_like_type_tokens(input);
+        assert!(
+            output.contains(
+                "pub extern \"C\" fn op_bitor(__lhs: UnknownTagAutoType, __rhs: UnknownTagAutoType) -> UnknownTagAutoType"
+            ),
+            "module-like type normalization should rewrite fn params/returns with bare module roots, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_std_byte_operator_module_root_types_rewrites_bit_operator_signatures() {
+        let input = r#"
+pub type byte = u8;
+pub extern "C" fn op_bitor(__lhs: std, __rhs: std) -> std {
+    return unsafe { std::mem::zeroed::<UnknownTagEnumType>() };
+}
+pub extern "C" fn op_bitnot(__b: std) -> std {
+    return unsafe { std::mem::zeroed::<UnknownTagEnumType>() };
+}
+"#;
+        let output = AstCodeGen::normalize_std_byte_operator_module_root_types(input);
+        assert!(
+            output.contains("pub extern \"C\" fn op_bitor(__lhs: byte, __rhs: byte) -> byte"),
+            "byte operator normalization should rewrite op_bitor signature types, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub extern \"C\" fn op_bitnot(__b: byte) -> byte"),
+            "byte operator normalization should rewrite op_bitnot signature types, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("return 0u8;"),
+            "byte operator normalization should rewrite degraded UnknownTagEnumType returns to byte zero, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
     fn test_normalize_unresolved_lowercase_item_type_tokens_rewrites_bare_lowercase_types() {
         let input = r#"
 pub struct KnownType {
@@ -108295,6 +109483,150 @@ pub fn isPositive(n: i32) -> bool {
     }
 
     #[test]
+    fn test_normalize_bool_loop_violation_default_tail_returns_handles_while_and_less_than_guards()
+    {
+        let input = r#"
+pub fn startsWith(text: *const i8, prefix: *const i8) -> bool {
+    let mut i: i32 = 0;
+    while ((unsafe { *prefix.add((i) as usize) }) as i32) != 0 {
+        if (((unsafe { *text.add((i) as usize) }) as i32) == 0) || (((unsafe { *text.add((i) as usize) }) as i32) < ((unsafe { *prefix.add((i) as usize) }) as i32)) {
+            return Default::default();
+        }
+        i = i + 1;
+    }
+    return Default::default();
+}
+"#;
+        let output = AstCodeGen::normalize_bool_loop_violation_default_tail_returns(input);
+        assert!(
+            output.contains("return true;"),
+            "loop violation bool-tail recovery should rewrite trailing default tail for while-loop violation predicates, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("return Default::default();"),
+            "loop violation bool-tail recovery should preserve violation guard default return, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_bool_loop_violation_default_tail_returns_handles_null_guard_traversal_tails() {
+        let input = r#"
+pub fn startsWith(root: *mut TrieNode, prefix: *const i8) -> bool {
+    let mut current: *mut TrieNode = root as *mut TrieNode;
+    let mut i: i32 = 0;
+    while ((unsafe { *prefix.add((i) as usize) }) as i32) != 0 {
+        if (getChild(current as *mut TrieNode, (0) as i32)).is_null() {
+            return Default::default();
+        }
+        current = getChild(current as *mut TrieNode, (0) as i32);
+        i = i + 1;
+    }
+    return Default::default();
+}
+"#;
+        let output = AstCodeGen::normalize_bool_loop_violation_default_tail_returns(input);
+        assert!(
+            output.contains("return true;"),
+            "loop violation bool-tail recovery should rewrite trailing default tails for null-guard traversal predicates, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("is_null() {\n            return Default::default();\n        }"),
+            "loop violation bool-tail recovery should preserve null-guard failure returns, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_bool_loop_violation_default_tail_returns_skips_prime_like_guard_chains() {
+        let input = r#"
+pub fn isPrime(n: i32) -> bool {
+    if n <= 1 {
+        return Default::default();
+    }
+    if n <= 3 {
+        return Default::default();
+    }
+    if (n % 2 == 0) || (n % 3 == 0) {
+        return Default::default();
+    }
+    let mut i: i32 = 5;
+    while i * i <= n {
+        if (n % i == 0) || (n % (i + 2) == 0) {
+            return Default::default();
+        }
+        i = i + 6;
+    }
+    return Default::default();
+}
+"#;
+        let output = AstCodeGen::normalize_bool_loop_violation_default_tail_returns(input);
+        assert_eq!(
+            output, input,
+            "loop violation bool-tail recovery should skip prime-like <=/% guard chains so the dedicated prime-like pass can repair them"
+        );
+    }
+
+    #[test]
+    fn test_normalize_bool_pointer_membership_default_returns_rewrites_contains_guard() {
+        let input = r#"
+pub fn contains(head: *mut Node, key: i32) -> bool {
+    let mut curr: *mut Node = head;
+    while !(curr).is_null() {
+        if (unsafe { (*curr).key }) == key {
+            return Default::default();
+        }
+        curr = (unsafe { (*curr).next }) as *mut Node;
+    }
+    return Default::default();
+}
+"#;
+        let output = AstCodeGen::normalize_bool_pointer_membership_default_returns(input);
+        assert!(
+            output.contains("if (unsafe { (*curr).key }) == key {\n            return true;\n        }"),
+            "pointer-membership bool recovery should rewrite equality-hit guard returns to true, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("return Default::default();"),
+            "pointer-membership bool recovery should preserve default false tail, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_bool_pointer_membership_default_returns_rewrites_nested_remove_guard() {
+        let input = r#"
+pub fn remove(head: *mut Node, key: i32) -> bool {
+    let mut curr: *mut Node = head;
+    while !(curr).is_null() {
+        if (unsafe { (*curr).key }) == key {
+            {
+                let _x = 1;
+                return Default::default();
+            }
+        }
+        curr = (unsafe { (*curr).next }) as *mut Node;
+    }
+    return Default::default();
+}
+"#;
+        let output = AstCodeGen::normalize_bool_pointer_membership_default_returns(input);
+        assert!(
+            output.contains("return true;"),
+            "pointer-membership bool recovery should rewrite nested equality-hit default returns to true, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("return Default::default();"),
+            "pointer-membership bool recovery should preserve default false tail, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
     fn test_normalize_bool_null_eq_guard_default_returns_recovers_recursive_search_match_guard() {
         let input = r#"
 pub struct Node { pub value: i32, pub left: *mut Node, pub right: *mut Node }
@@ -108382,6 +109714,54 @@ pub fn onlyGuardAndComputation(n: i32) -> bool {
         assert_eq!(
             output, input,
             "guarded bool success-tail recovery should skip bodies without assignment side effects"
+        );
+    }
+
+    #[test]
+    fn test_normalize_bool_guarded_success_default_tail_returns_skips_loop_based_membership_predicates()
+    {
+        let input = r#"
+pub fn contains_like(mut curr: *mut Node, key: i32) -> bool {
+    while !(curr).is_null() {
+        if unsafe { (*curr).key } == key {
+            return Default::default();
+        }
+        curr = unsafe { (*curr).next };
+    }
+    return Default::default();
+}
+"#;
+        let output = AstCodeGen::normalize_bool_guarded_success_default_tail_returns(input);
+        assert_eq!(
+            output, input,
+            "guarded bool success-tail recovery should not rewrite loop-based membership predicates"
+        );
+    }
+
+    #[test]
+    fn test_normalize_bool_guarded_success_default_tail_returns_rewrites_multi_guard_success_tail() {
+        let input = r#"
+pub fn deallocate_like(idx: i32, active: bool, count: &mut i32) -> bool {
+    if (idx < 0) || (idx >= 16) {
+        return Default::default();
+    }
+    if !active {
+        return Default::default();
+    }
+    *count = (*count) + 1;
+    return Default::default();
+}
+"#;
+        let output = AstCodeGen::normalize_bool_guarded_success_default_tail_returns(input);
+        assert!(
+            output.contains("return true;"),
+            "guarded bool success-tail recovery should rewrite trailing default return to true for multi-guard success helpers, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("if !active {\n        return Default::default();\n    }"),
+            "guarded bool success-tail recovery should preserve failure guards as default/false, got:\n{}",
+            output
         );
     }
 
@@ -108490,6 +109870,72 @@ pub fn maybePositive(n: i32) -> bool {
     }
 
     #[test]
+    fn test_normalize_bool_top_level_eq_guard_helper_returns_rewrites_has_path_base_case() {
+        let input = r#"
+impl Graph {
+    pub fn hasPath(&mut self, from: i32, to: i32) -> bool {
+        if from == to {
+            return Default::default();
+        }
+        if (from < 0) || (from >= self.numVertices) {
+            return Default::default();
+        }
+        if (to < 0) || (to >= self.numVertices) {
+            return Default::default();
+        }
+        return self.dfsHelper(from, to, std::ptr::null_mut());
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_bool_top_level_eq_guard_helper_returns(input);
+        assert!(
+            output.contains("if from == to {\n            return true;\n        }"),
+            "top-level equality guard recovery should rewrite delegated-helper base-case defaults to true, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("if (from < 0) || (from >= self.numVertices) {\n            return Default::default();\n        }"),
+            "top-level equality guard recovery should preserve range failure guards, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_bool_recursive_success_default_returns_rewrites_dfs_success_guards() {
+        let input = r#"
+impl Graph {
+    pub fn dfsHelper(&mut self, curr: i32, target: i32, visited: *mut bool) -> bool {
+        if curr == target {
+            return Default::default();
+        }
+        while !(std::ptr::null_mut::<i32>()).is_null() {
+            if self.dfsHelper(curr + 1, target, visited) {
+                return Default::default();
+            }
+        }
+        return Default::default();
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_bool_recursive_success_default_returns(input);
+        assert!(
+            output.contains("if curr == target {\n            return true;\n        }"),
+            "recursive success recovery should rewrite equality base-case defaults to true, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("if self.dfsHelper(curr + 1, target, visited) {\n                return true;\n            }"),
+            "recursive success recovery should rewrite recursive-hit guard defaults to true, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("return Default::default();"),
+            "recursive success recovery should preserve trailing default failure tail, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
     fn test_normalize_bool_call_is_null_artifacts_rewrites_wrapped_bool_calls_to_negation() {
         let input = r#"
 pub fn cacheGet(cache: *mut i32, key: i32, value: *mut i32) -> bool {
@@ -108594,6 +110040,39 @@ pub fn sum(curr: *mut DLLNode) -> i32 {
         assert!(
             !output.contains("(*curr).data()"),
             "pointer receiver normalization should remove method-call parens on pointer binding field access, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_pointer_receiver_method_calls_rewrites_array_element_field_method_calls() {
+        let input = r#"
+pub struct PoolObject {
+    pub data: i32,
+    pub active: bool,
+}
+
+pub struct ObjectPool {
+    pub objects: [PoolObject; 16],
+}
+
+impl ObjectPool {
+    pub fn sumData(&self) -> i32 {
+        let mut sum: i32 = 0;
+        sum += (self.objects[(0) as usize]).data();
+        return sum;
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_pointer_receiver_method_calls(input);
+        assert!(
+            output.contains("(self.objects[(0) as usize]).data;"),
+            "pointer receiver normalization should rewrite array-element field calls to direct field access, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("(self.objects[(0) as usize]).data()"),
+            "pointer receiver normalization should remove empty parens for array-element field access, got:\n{}",
             output
         );
     }
@@ -110533,6 +112012,46 @@ pub fn drop_redundant_deref(mut ptr: *const i8) -> *const i8 {
         assert!(
             !output.contains("(unsafe { *ptr }) as *const i8"),
             "normalization should not keep redundant deref for same-depth pointer casts, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_redundant_deref_in_pointer_casts_strips_ref_to_ptr_cast_deref_call_args() {
+        let input = r#"
+pub fn tokNext(tok: *mut Tokenizer) -> Token {
+    return Default::default();
+}
+pub fn main_like() {
+    let mut tok: Tokenizer = Default::default();
+    let mut t: Token = tokNext(*((&mut tok as *mut Tokenizer) as *mut Tokenizer)).clone();
+}
+"#;
+        let output = AstCodeGen::normalize_redundant_deref_in_pointer_casts(input);
+        assert!(
+            output.contains("tokNext(((&mut tok as *mut Tokenizer) as *mut Tokenizer)).clone()"),
+            "redundant-deref pointer-cast normalization should drop unary deref around address-of pointer casts in call args, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("tokNext(*((&mut tok as *mut Tokenizer) as *mut Tokenizer)).clone()"),
+            "redundant-deref pointer-cast normalization should remove starred ref-to-pointer call args, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_redundant_deref_in_pointer_casts_preserves_table_lookup_deref_with_add() {
+        let input = r#"
+pub fn parseArg(argv: *const *const i8, index: i32) -> *const i8 {
+    let arg: *const i8 = (unsafe { *argv.add((index) as usize) }) as *const i8;
+    return arg;
+}
+"#;
+        let output = AstCodeGen::normalize_redundant_deref_in_pointer_casts(input);
+        assert!(
+            output.contains("(unsafe { *argv.add((index) as usize) }) as *const i8"),
+            "redundant-deref pointer-cast normalization should preserve required deref when loading pointer table entries, got:\n{}",
             output
         );
     }

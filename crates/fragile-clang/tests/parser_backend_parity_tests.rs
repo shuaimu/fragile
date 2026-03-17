@@ -17,8 +17,10 @@ const CPP_TYPE_QUALIFIER_DECAY_SNAPSHOT_LOG_ROOT_PREFIX: &str =
     "fragile_parser_backend_cpp_type_qualifier_decay_snapshot_fixture";
 const MARKER_FN_ADD: &str = "pub extern \"C\" fn add";
 const MARKER_FN_MUL: &str = "pub extern \"C\" fn mul";
-const MARKER_RETURN_ADD: &str = "return a + b";
-const MARKER_RETURN_MUL: &str = "return x * y";
+const MARKER_RETURN_ADD_LEGACY: &str = "return a + b";
+const MARKER_RETURN_ADD_CAST_I32: &str = "return (a + b) as i32";
+const MARKER_RETURN_MUL_LEGACY: &str = "return x * y";
+const MARKER_RETURN_MUL_CAST_I32: &str = "return (x * y) as i32";
 const MARKER_TYPEDEF_COUNT: &str = "pub type Count =";
 const MARKER_ALIAS_DISTANCE: &str = "pub type Distance =";
 const MARKER_ENUM_MODE: &str = "pub enum Mode";
@@ -291,8 +293,10 @@ int mul(int x, int y) {
             rustc_status: rustc_output.status.code().unwrap_or(-1),
             has_fn_add: rust_code.contains(MARKER_FN_ADD),
             has_fn_mul: rust_code.contains(MARKER_FN_MUL),
-            has_return_add: rust_code.contains(MARKER_RETURN_ADD),
-            has_return_mul: rust_code.contains(MARKER_RETURN_MUL),
+            has_return_add: rust_code.contains(MARKER_RETURN_ADD_LEGACY)
+                || rust_code.contains(MARKER_RETURN_ADD_CAST_I32),
+            has_return_mul: rust_code.contains(MARKER_RETURN_MUL_LEGACY)
+                || rust_code.contains(MARKER_RETURN_MUL_CAST_I32),
             has_typedef_count: rust_code.contains(MARKER_TYPEDEF_COUNT),
             has_alias_distance: rust_code.contains(MARKER_ALIAS_DISTANCE),
             has_enum_mode: rust_code.contains(MARKER_ENUM_MODE),
