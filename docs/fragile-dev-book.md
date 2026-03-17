@@ -19051,3 +19051,43 @@ Validation:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
 - Full workspace suite:
   - `cargo test --workspace --all-targets`
+
+## 2026-03-17: M2.A2.3 Strict Compile Parser-Core Output Handoff
+
+Context:
+- Executed next unresolved P0 leaf `M2.A2.3` after closing `M2.A2.2`.
+- Goal: route strict compile active parser stages through parser-core output
+  handoff while keeping a temporary explicit hardening hatch.
+
+Wrong-approach check:
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- Kept implementation generic with no target-specific branches, no fake
+  semantic bodies, and no force-native bypasses.
+
+Design update:
+- Extended strict compile in both entry points:
+  - `crates/fragile-cli/src/bin/fragilec.rs`
+  - `crates/fragile-driver/src/lib.rs`
+- `run_parser_core_backend_parse` now returns `ParserOutputV1` so strict compile
+  can directly consume parser-core output.
+- Added parser-output handoff compile path:
+  - `fragile_clang::transpile_parser_output_to_rust_with_options`
+  - then standard normalized rustc object emission.
+- Added temporary explicit hardening hatch:
+  - env: `FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH`
+  - value: `libtooling`
+  - when enabled, parser-core parse still runs and codegen falls back to legacy
+    libtooling path.
+- Added deterministic validation tests for handoff compile and hatch parsing in
+  both CLI and driver.
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-cli strict_compile_parser_core_backend_routes_through_parser_output_handoff`
+  - `cargo test -p fragile-cli parser_core_codegen_escape_hatch_validation`
+  - `cargo test -p fragile-driver parser_core_backend_routes_through_parser_output_handoff`
+  - `cargo test -p fragile-driver parser_core_codegen_escape_hatch_validation`
+- Full Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+- Full workspace suite:
+  - `cargo test --workspace --all-targets`

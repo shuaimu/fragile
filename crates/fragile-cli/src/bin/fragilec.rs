@@ -1,6 +1,7 @@
 use fragile_clang::{
     IncludeDirective, IncludeDirectiveKind, ParserBackend as ClangParserBackend,
-    ParserLanguage as ClangParserLanguage, TemplateParsingMode, TranspileOptions,
+    ParserLanguage as ClangParserLanguage, ParserOutputCodegenOptions, TemplateParsingMode,
+    TranspileOptions,
 };
 use fragile_parser_clang::{FragileParserClangBackend, FRAGILE_PARSER_CLANG_BACKEND_ID};
 use fragile_parser_core::{
@@ -26,6 +27,8 @@ const FRAGILEC_KEEP_RS_ENV: &str = "FRAGILEC_KEEP_RS";
 const FRAGILEC_LINKER_ENV: &str = "FRAGILEC_LINKER";
 const FRAGILEC_PARSER_BACKEND_ENV: &str = "FRAGILEC_PARSER_BACKEND";
 const FRAGILEC_PARSER_CORE_MANIFEST_DIR_ENV: &str = "FRAGILEC_PARSER_CORE_MANIFEST_DIR";
+const FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH_ENV: &str =
+    "FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH";
 const FRAGILEC_SKIP_SYSTEM_HEADERS_ENV: &str = "FRAGILEC_SKIP_SYSTEM_HEADERS";
 const FRAGILEC_TRANSPILE_STAGE_TIMING_PATH_ENV: &str = "FRAGILEC_TRANSPILE_STAGE_TIMING_PATH";
 const FRAGILEC_RUSTC_BIN_ENV: &str = "FRAGILEC_RUSTC_BIN";
@@ -38,6 +41,11 @@ const FRAGILEC_NATIVE_FALLBACK_CXX_ENV: &str = "FRAGILEC_NATIVE_FALLBACK_CXX";
 enum StrictParserBackend {
     Libtooling,
     ParserCore { backend_id: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParserCoreCodegenEscapeHatch {
+    Libtooling,
 }
 
 fn validate_strict_mode_value(mode: &str) -> Result<(), String> {
@@ -1362,6 +1370,39 @@ fn strict_parser_backend_label(backend: &StrictParserBackend) -> &str {
     }
 }
 
+fn supported_parser_core_codegen_escape_hatch_values_message() -> &'static str {
+    "libtooling"
+}
+
+fn parse_parser_core_codegen_escape_hatch_value(
+    raw: &str,
+) -> Result<ParserCoreCodegenEscapeHatch, String> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "libtooling" => Ok(ParserCoreCodegenEscapeHatch::Libtooling),
+        other => Err(format!(
+            "unsupported FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH value `{}`; expected one of: {}",
+            other,
+            supported_parser_core_codegen_escape_hatch_values_message()
+        )),
+    }
+}
+
+fn parser_core_codegen_escape_hatch_from_value(
+    raw: Option<&str>,
+) -> Result<Option<ParserCoreCodegenEscapeHatch>, String> {
+    match raw.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => parse_parser_core_codegen_escape_hatch_value(value).map(Some),
+        None => Ok(None),
+    }
+}
+
+fn parser_core_codegen_escape_hatch_from_env(
+) -> Result<Option<ParserCoreCodegenEscapeHatch>, String> {
+    let raw = std::env::var(FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH_ENV).ok();
+    parser_core_codegen_escape_hatch_from_value(raw.as_deref())
+}
+
 fn strict_parser_backend_from_legacy_backend(
     backend: ClangParserBackend,
 ) -> Result<StrictParserBackend, String> {
@@ -1517,7 +1558,7 @@ fn run_parser_core_backend_parse(
     frontend_args: &[String],
     backend_id: &str,
     cwd: &Path,
-) -> Result<(), String> {
+) -> Result<ParserOutputV1, String> {
     let mut registry = BackendRegistry::new();
     registry
         .register(FragileParserClangBackend)
@@ -1545,7 +1586,7 @@ fn run_parser_core_backend_parse(
             ));
         }
         maybe_write_parser_core_parse_manifest(source, &output)?;
-        Ok(())
+        Ok(output)
     })
 }
 
@@ -1884,21 +1925,8 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
         .map(|raw| raw.trim().to_string())
         .filter(|raw| !raw.is_empty())
         .map(PathBuf::from);
-    if let StrictParserBackend::ParserCore { backend_id } = parser_backend {
-        run_parser_core_backend_parse(
-            &source,
-            language,
-            includes,
-            defines,
-            frontend_args,
-            backend_id.as_str(),
-            &cwd,
-        )?;
-        return Err(format!(
-            "parser backend `{}` is wired through fragile-parser-core, but transpile codegen cutover is not implemented yet; use FRAGILEC_PARSER_BACKEND=libtooling",
-            backend_id
-        ));
-    }
+    let parser_core_codegen_escape_hatch = parser_core_codegen_escape_hatch_from_env()?;
+    let mut use_libtooling_codegen_escape_hatch = false;
     let keep_rs = env_flag_is_true(FRAGILEC_KEEP_RS_ENV);
     let transpiled_rs = if keep_rs {
         out_obj.with_extension("fragile.rs")
@@ -1915,38 +1943,9 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
         })?;
     }
 
-    let compile_once = |skip_system_headers: bool,
-                        template_parsing_mode: TemplateParsingMode|
-     -> Result<(), String> {
-        let transpile_frontend_args = filter_transpile_frontend_args(frontend_args);
-        let transpile_options = TranspileOptions {
-            include_paths: Vec::new(),
-            include_directives: includes.to_vec(),
-            frontend_args: transpile_frontend_args,
-            defines: defines.to_vec(),
-            language: language.clone(),
-            language_standard: language_standard.clone(),
-            ignored_error_patterns: strict_parser_ignored_error_patterns(language.clone()),
-            backend: ClangParserBackend::Libtooling,
-            template_parsing_mode,
-            libtooling_skip_system_headers: skip_system_headers,
-            stage_timing_trace_path: stage_timing_trace_path.clone(),
-        };
-        let transpiled =
-            fragile_clang::transpile_cpp_to_rust_with_options(&source, &transpile_options)
-                .map_err(|e| {
-                    format!(
-                        "failed to transpile {} with parser backend {} (skip_system_headers={}, template_parsing_mode={:?}): {}",
-                        source.display(),
-                        strict_parser_backend_label(parser_backend),
-                        skip_system_headers,
-                        template_parsing_mode,
-                        e
-                    )
-                })?;
+    let compile_transpiled_text = |transpiled: String, context: &str| -> Result<(), String> {
         let transpiled = normalize_transpiled_main_entry(transpiled);
         enforce_unresolved_type_invariant(&source, &transpiled)?;
-
         fs::write(&transpiled_rs, transpiled).map_err(|e| {
             format!(
                 "failed to write transpiled source {}: {}",
@@ -1975,15 +1974,108 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
 
         if !rustc.status.success() {
             return Err(format!(
-                "fragile rustc object compile failed for {} (skip_system_headers={}, template_parsing_mode={:?})\nstdout:\n{}\nstderr:\n{}",
+                "fragile rustc object compile failed for {} ({})\nstdout:\n{}\nstderr:\n{}",
                 source.display(),
-                skip_system_headers,
-                template_parsing_mode,
+                context,
                 String::from_utf8_lossy(&rustc.stdout),
                 String::from_utf8_lossy(&rustc.stderr)
             ));
         }
         Ok(())
+    };
+
+    if let StrictParserBackend::ParserCore { backend_id } = parser_backend {
+        let parser_output = run_parser_core_backend_parse(
+            &source,
+            language,
+            includes,
+            defines,
+            frontend_args,
+            backend_id.as_str(),
+            &cwd,
+        )?;
+        if matches!(
+            parser_core_codegen_escape_hatch,
+            Some(ParserCoreCodegenEscapeHatch::Libtooling)
+        ) {
+            use_libtooling_codegen_escape_hatch = true;
+            eprintln!(
+                "[fragilec] parser-core codegen escape hatch enabled; routing {} through legacy libtooling codegen",
+                source.display()
+            );
+        } else {
+            let transpiled = with_current_dir(&cwd, || {
+                fragile_clang::transpile_parser_output_to_rust_with_options(
+                    &parser_output,
+                    &ParserOutputCodegenOptions {
+                        ignored_error_patterns: strict_parser_ignored_error_patterns(language),
+                        stage_timing_trace_path: stage_timing_trace_path.clone(),
+                    },
+                )
+                .map_err(|e| {
+                    format!(
+                        "failed parser-output handoff transpile for {} with parser backend {}: {}",
+                        source.display(),
+                        strict_parser_backend_label(parser_backend),
+                        e
+                    )
+                })
+            })?;
+            compile_transpiled_text(transpiled, "parser-output-handoff")?;
+            if !keep_rs {
+                let _ = fs::remove_file(&transpiled_rs);
+            }
+            write_meta_file(&source, out_obj, args_for_meta)?;
+            return Ok(());
+        }
+    }
+
+    let codegen_backend_label = if use_libtooling_codegen_escape_hatch {
+        format!(
+            "{}+libtooling-escape-hatch",
+            strict_parser_backend_label(parser_backend)
+        )
+    } else {
+        strict_parser_backend_label(parser_backend).to_string()
+    };
+
+    let compile_once = |skip_system_headers: bool,
+                        template_parsing_mode: TemplateParsingMode|
+     -> Result<(), String> {
+        let transpile_frontend_args = filter_transpile_frontend_args(frontend_args);
+        let transpile_options = TranspileOptions {
+            include_paths: Vec::new(),
+            include_directives: includes.to_vec(),
+            frontend_args: transpile_frontend_args,
+            defines: defines.to_vec(),
+            language: language.clone(),
+            language_standard: language_standard.clone(),
+            ignored_error_patterns: strict_parser_ignored_error_patterns(language.clone()),
+            backend: ClangParserBackend::Libtooling,
+            template_parsing_mode,
+            libtooling_skip_system_headers: skip_system_headers,
+            stage_timing_trace_path: stage_timing_trace_path.clone(),
+        };
+        let transpiled =
+            fragile_clang::transpile_cpp_to_rust_with_options(&source, &transpile_options)
+                .map_err(|e| {
+                    format!(
+                        "failed to transpile {} with parser backend {} (skip_system_headers={}, template_parsing_mode={:?}): {}",
+                        source.display(),
+                        codegen_backend_label,
+                        skip_system_headers,
+                        template_parsing_mode,
+                        e
+                    )
+                })?;
+        compile_transpiled_text(
+            transpiled,
+            format!(
+                "skip_system_headers={}, template_parsing_mode={:?}, backend={}",
+                skip_system_headers, template_parsing_mode, codegen_backend_label
+            )
+            .as_str(),
+        )
     };
 
     let preferred_skip = skip_system_headers_from_env();
@@ -2589,6 +2681,8 @@ Environment:
   FRAGILEC_PARSER_BACKEND=<name>     Parser backend: libtooling or fragile-parser-clang
   FRAGILEC_PARSER_CORE_MANIFEST_DIR=<path>
                                      Optional parser-core parse summary output directory
+  FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH=libtooling
+                                     Temporary hardening hatch: force libtooling codegen after parser-core parse
   FRAGILEC_SKIP_SYSTEM_HEADERS=<0|1> Skip system/header-unit AST export (default: disabled)
   FRAGILEC_LOG=<path>                Append invocation log (cwd/args records)
   FRAGILEC_BUILD_ID=<id>             Build-id used for metadata writes/checks
@@ -3167,7 +3261,33 @@ pub fn rust_accumulator_drop(ptr: *mut RustAccumulator) {
     }
 
     #[test]
-    fn strict_compile_parser_core_backend_reports_cutover_boundary() {
+    fn parser_core_codegen_escape_hatch_validation() {
+        assert_eq!(
+            parser_core_codegen_escape_hatch_from_value(None).expect("missing value should disable"),
+            None
+        );
+        assert_eq!(
+            parser_core_codegen_escape_hatch_from_value(Some("  "))
+                .expect("empty value should disable"),
+            None
+        );
+        assert_eq!(
+            parser_core_codegen_escape_hatch_from_value(Some("LIBTOOLING"))
+                .expect("libtooling value should parse"),
+            Some(ParserCoreCodegenEscapeHatch::Libtooling)
+        );
+        let err = parser_core_codegen_escape_hatch_from_value(Some("unsupported"))
+            .expect_err("unsupported escape hatch should fail");
+        assert!(
+            err.contains("FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH")
+                && err.contains("libtooling"),
+            "unexpected escape hatch validation error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn strict_compile_parser_core_backend_routes_through_parser_output_handoff() {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock must be monotonic")
@@ -3178,7 +3298,7 @@ pub fn rust_accumulator_drop(ptr: *mut RustAccumulator) {
         let out_obj = temp_dir.join("program.o");
         fs::write(&source, "int main(void) { return 0; }\n").expect("failed to write source");
 
-        let err = strict_compile_source_to_object_with_frontend_args_and_backend(
+        strict_compile_source_to_object_with_frontend_args_and_backend(
             &source,
             &out_obj,
             &[],
@@ -3189,17 +3309,10 @@ pub fn rust_accumulator_drop(ptr: *mut RustAccumulator) {
                 backend_id: FRAGILE_PARSER_CLANG_BACKEND_ID.to_string(),
             },
         )
-        .expect_err("parser-core backend should currently stop at codegen cutover boundary");
+        .expect("parser-core backend should compile through parser-output handoff");
         assert!(
-            err.contains("fragile-parser-core")
-                && err.contains("codegen cutover is not implemented yet")
-                && err.contains(FRAGILE_PARSER_CLANG_BACKEND_ID),
-            "unexpected cutover error: {}",
-            err
-        );
-        assert!(
-            !out_obj.exists(),
-            "object output should not be produced on parser-core cutover boundary"
+            out_obj.exists(),
+            "object output should be produced on parser-core handoff compile"
         );
 
         let _ = fs::remove_dir_all(&temp_dir);

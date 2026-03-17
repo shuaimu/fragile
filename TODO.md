@@ -64,10 +64,10 @@ Acceptance:
 - [x] M2.3 Wire transpiler entry points to backend trait behind feature/flag cutover switch.
 Acceptance:
 - [x] M2.A1 New backend can parse and emit IR for a non-trivial fixture corpus.
-- [ ] M2.A2 Pipeline compiles/runs without LibTooling-specific parse dependency in active path.
+- [x] M2.A2 Pipeline compiles/runs without LibTooling-specific parse dependency in active path.
   - [x] M2.A2.1 Add parser-core parse-manifest handoff artifact contract in strict entry points (CLI + driver) with deterministic coverage.
   - [x] M2.A2.2 Introduce parser-output-to-codegen interface so active codegen path no longer requires LibTooling parser invocation.
-  - [ ] M2.A2.3 Route strict compile active parser stage through parser-core output handoff and keep temporary explicit escape hatch only for hardening.
+  - [x] M2.A2.3 Route strict compile active parser stage through parser-core output handoff and keep temporary explicit escape hatch only for hardening.
 
 ### M3) STL Boundary Detection (Opaque, Not Deep Parse)
 - [ ] M3.1 Implement canonical STL symbol detection (`std::`, alias chains, using/typedef resolution).
@@ -128,9 +128,9 @@ Acceptance:
 - [ ] M9.A3 Performance gate (`fragile_avg_qps >= clang_avg_qps`) is green.
 
 ## Cross-Milestone Regression Gates (Required Each Iteration)
-- [ ] R1 Focused touched-subsystem tests pass.
-- [ ] R2 `cargo test --workspace --all-targets` non-regression check recorded.
-- [ ] R3 `python3 -m unittest discover -s tests/python -p 'test_*.py'` pass/non-regression recorded.
+- [x] R1 Focused touched-subsystem tests pass.
+- [x] R2 `cargo test --workspace --all-targets` non-regression check recorded.
+- [x] R3 `python3 -m unittest discover -s tests/python -p 'test_*.py'` pass/non-regression recorded.
 - [ ] R4 Deterministic blocker inventory non-increase gate recorded when build is still red.
 
 ## RapidJSON Phase-2 Closure Ledger (Compatibility Snapshot)
