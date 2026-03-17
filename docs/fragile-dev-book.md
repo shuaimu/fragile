@@ -13,6 +13,7 @@
 - [2.5 `misc.cpp` compile-cost investigation baseline](#25-misccpp-compile-cost-investigation-baseline)
 - [2.6 STL-opaque parser architecture (target state)](#26-stl-opaque-parser-architecture-target-state)
 - [2.7 M0 Run-Root and Artifact Contract](#27-m0-run-root-and-artifact-contract)
+- [2.8 M2.3 Parser Entry Wiring Cutover Boundary](#28-m23-parser-entry-wiring-cutover-boundary)
 - [3. Internal Data Models](#3-internal-data-models)
 - [4. C++ Declaration to Rust Item Mapping](#4-c-declaration-to-rust-item-mapping)
 - [5. C++ Type to Rust Type Mapping](#5-c-type-to-rust-type-mapping)
@@ -404,6 +405,29 @@ flags, plus deterministic counters:
 
 - `required_artifact_count`
 - `missing_required_artifact_count`
+
+### 2.8 M2.3 Parser Entry Wiring Cutover Boundary
+
+Milestone `M2.3` wires strict entry points to the parser-core backend trait
+path while keeping codegen cutover explicit:
+
+- strict backend selection accepts:
+  - `libtooling`
+  - `fragile-parser-clang`
+- for `fragile-parser-clang`, driver/CLI register backend(s) in
+  `fragile_parser_core::BackendRegistry` and run parse preflight using
+  `ParseRequest`
+- parser output schema version is validated before continuing
+- pipeline returns deterministic cutover-boundary error instead of synthetic
+  fallback codegen behavior
+- `libtooling` remains the active transpile/codegen path until cutover
+  milestones complete
+
+Wrong-approach guard (Section 1.3):
+
+- no target-specific conditionals
+- no fake semantic fallback bodies
+- no force-native bypass strategy
 
 ## 3. Internal Data Models
 

@@ -1,6 +1,12 @@
 use fragile_clang::{
-    IncludeDirective, IncludeDirectiveKind, ParserBackend, ParserLanguage, TemplateParsingMode,
-    TranspileOptions,
+    IncludeDirective, IncludeDirectiveKind, ParserBackend as ClangParserBackend,
+    ParserLanguage as ClangParserLanguage, TemplateParsingMode, TranspileOptions,
+};
+use fragile_parser_clang::{FragileParserClangBackend, FRAGILE_PARSER_CLANG_BACKEND_ID};
+use fragile_parser_core::{
+    BackendRegistry, IncludeDirective as CoreIncludeDirective,
+    IncludeDirectiveKind as CoreIncludeDirectiveKind, ParseRequest,
+    ParserLanguage as CoreParserLanguage, PARSER_OUTPUT_SCHEMA_VERSION_V1,
 };
 use std::collections::hash_map::DefaultHasher;
 use std::ffi::OsString;
@@ -14,6 +20,12 @@ pub const FRAGILEC_BUILD_ID_ENV: &str = "FRAGILEC_BUILD_ID";
 pub const FRAGILEC_KEEP_RS_ENV: &str = "FRAGILEC_KEEP_RS";
 pub const FRAGILEC_PARSER_BACKEND_ENV: &str = "FRAGILEC_PARSER_BACKEND";
 pub const FRAGILEC_TRANSPILE_STAGE_TIMING_PATH_ENV: &str = "FRAGILEC_TRANSPILE_STAGE_TIMING_PATH";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StrictParserBackend {
+    Libtooling,
+    ParserCore { backend_id: String },
+}
 
 #[derive(Debug, Clone)]
 struct ParsedInvocation {
@@ -492,15 +504,15 @@ fn default_object_output(source_arg: &Path, cwd: &Path) -> Result<PathBuf, Strin
     Ok(cwd.join(format!("{stem}.o")))
 }
 
-fn source_language(source: &Path) -> ParserLanguage {
+fn source_language(source: &Path) -> ClangParserLanguage {
     if is_c_file(source) {
-        ParserLanguage::C
+        ClangParserLanguage::C
     } else {
-        ParserLanguage::Cpp
+        ClangParserLanguage::Cpp
     }
 }
 
-fn normalize_language_standard(raw: &str, language: ParserLanguage) -> Option<String> {
+fn normalize_language_standard(raw: &str, language: ClangParserLanguage) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return None;
@@ -509,14 +521,14 @@ fn normalize_language_standard(raw: &str, language: ParserLanguage) -> Option<St
     let is_cpp_standard = lower.contains("++");
     let is_c_standard = !is_cpp_standard && (lower.starts_with('c') || lower.starts_with("gnu"));
     match language {
-        ParserLanguage::Cpp => {
+        ClangParserLanguage::Cpp => {
             if is_cpp_standard {
                 Some(trimmed.to_string())
             } else {
                 None
             }
         }
-        ParserLanguage::C => {
+        ClangParserLanguage::C => {
             if is_c_standard {
                 Some(trimmed.to_string())
             } else {
@@ -526,7 +538,7 @@ fn normalize_language_standard(raw: &str, language: ParserLanguage) -> Option<St
     }
 }
 
-fn extract_language_standard(args: &[OsString], language: ParserLanguage) -> Option<String> {
+fn extract_language_standard(args: &[OsString], language: ClangParserLanguage) -> Option<String> {
     let mut detected: Option<String> = None;
     let mut i = 0usize;
     while i < args.len() {
@@ -551,31 +563,127 @@ fn extract_language_standard(args: &[OsString], language: ParserLanguage) -> Opt
     detected
 }
 
-fn strict_parser_ignored_error_patterns(language: ParserLanguage) -> Vec<String> {
+fn strict_parser_ignored_error_patterns(language: ClangParserLanguage) -> Vec<String> {
     let _ = language;
     Vec::new()
 }
 
-fn parse_parser_backend_value(backend: &str) -> Result<ParserBackend, String> {
-    match backend.to_ascii_lowercase().as_str() {
-        "libtooling" => Ok(ParserBackend::Libtooling),
+fn supported_parser_backend_values_message() -> String {
+    format!("libtooling, {}", FRAGILE_PARSER_CLANG_BACKEND_ID)
+}
+
+fn parse_parser_backend_value(backend: &str) -> Result<StrictParserBackend, String> {
+    let normalized = backend.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "libtooling" => Ok(StrictParserBackend::Libtooling),
+        FRAGILE_PARSER_CLANG_BACKEND_ID => Ok(StrictParserBackend::ParserCore {
+            backend_id: FRAGILE_PARSER_CLANG_BACKEND_ID.to_string(),
+        }),
         other => Err(format!(
-            "unsupported FRAGILEC_PARSER_BACKEND value `{}`; expected: libtooling",
-            other
+            "unsupported FRAGILEC_PARSER_BACKEND value `{}`; expected one of: {}",
+            other,
+            supported_parser_backend_values_message()
         )),
     }
 }
 
-fn strict_parser_backend_from_value(raw: Option<&str>) -> Result<ParserBackend, String> {
+fn strict_parser_backend_from_value(raw: Option<&str>) -> Result<StrictParserBackend, String> {
     match raw.map(|v| v.trim()).filter(|v| !v.is_empty()) {
         Some(backend) => parse_parser_backend_value(backend),
-        None => Ok(ParserBackend::Libtooling),
+        None => Ok(StrictParserBackend::Libtooling),
     }
 }
 
-fn strict_parser_backend_from_env() -> Result<ParserBackend, String> {
+fn strict_parser_backend_from_env() -> Result<StrictParserBackend, String> {
     let raw = std::env::var(FRAGILEC_PARSER_BACKEND_ENV).ok();
     strict_parser_backend_from_value(raw.as_deref())
+}
+
+fn strict_parser_backend_label(backend: &StrictParserBackend) -> &str {
+    match backend {
+        StrictParserBackend::Libtooling => "libtooling",
+        StrictParserBackend::ParserCore { backend_id } => backend_id.as_str(),
+    }
+}
+
+#[cfg(test)]
+fn strict_parser_backend_from_legacy_backend(
+    backend: ClangParserBackend,
+) -> Result<StrictParserBackend, String> {
+    match backend {
+        ClangParserBackend::Libtooling => Ok(StrictParserBackend::Libtooling),
+        ClangParserBackend::Libclang | ClangParserBackend::Hybrid => Err(format!(
+            "legacy parser backend alias `{}` is unsupported in strict mode; expected one of: {}",
+            match backend {
+                ClangParserBackend::Libclang => "libclang",
+                ClangParserBackend::Hybrid => "hybrid",
+                ClangParserBackend::Libtooling => "libtooling",
+            },
+            supported_parser_backend_values_message()
+        )),
+    }
+}
+
+fn parser_core_language(language: ClangParserLanguage) -> CoreParserLanguage {
+    match language {
+        ClangParserLanguage::C => CoreParserLanguage::C,
+        ClangParserLanguage::Cpp => CoreParserLanguage::Cpp,
+    }
+}
+
+fn parser_core_include_directives(
+    include_directives: &[IncludeDirective],
+) -> Vec<CoreIncludeDirective> {
+    include_directives
+        .iter()
+        .map(|directive| CoreIncludeDirective {
+            kind: match directive.kind {
+                IncludeDirectiveKind::Include => CoreIncludeDirectiveKind::Include,
+                IncludeDirectiveKind::System => CoreIncludeDirectiveKind::System,
+                IncludeDirectiveKind::Quote => CoreIncludeDirectiveKind::Quote,
+            },
+            path: directive.path.clone(),
+        })
+        .collect()
+}
+
+fn run_parser_core_backend_parse(
+    source: &Path,
+    language: ClangParserLanguage,
+    includes: &[IncludeDirective],
+    defines: &[String],
+    frontend_args: &[String],
+    backend_id: &str,
+    cwd: &Path,
+) -> Result<(), String> {
+    let mut registry = BackendRegistry::new();
+    registry
+        .register(FragileParserClangBackend)
+        .map_err(|err| format!("failed to register parser backend `{}`: {}", backend_id, err))?;
+    let request = ParseRequest {
+        source_path: source.to_path_buf(),
+        language: parser_core_language(language),
+        frontend_args: frontend_args.to_vec(),
+        defines: defines.to_vec(),
+        include_directives: parser_core_include_directives(includes),
+    };
+    with_current_dir(cwd, || {
+        let output = registry.parse_with(backend_id, &request).map_err(|err| {
+            format!(
+                "parser backend `{}` preflight parse failed for {}: {}",
+                backend_id,
+                source.display(),
+                err
+            )
+        })?;
+        if output.schema_version != PARSER_OUTPUT_SCHEMA_VERSION_V1 {
+            return Err(format!(
+                "parser backend `{}` returned schema version `{}`; expected `{}`",
+                backend_id, output.schema_version, PARSER_OUTPUT_SCHEMA_VERSION_V1
+            ));
+        }
+        Ok(())
+    })
 }
 
 fn crate_name_for_source(source: &Path) -> String {
@@ -667,7 +775,7 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
     defines: &[String],
     frontend_args: &[String],
     args_for_meta: &[OsString],
-    parser_backend: ParserBackend,
+    parser_backend: &StrictParserBackend,
     cwd: &Path,
 ) -> Result<(), String> {
     let source = resolve_path(source_arg, cwd);
@@ -692,6 +800,21 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
         .map(|raw| raw.trim().to_string())
         .filter(|raw| !raw.is_empty())
         .map(PathBuf::from);
+    if let StrictParserBackend::ParserCore { backend_id } = parser_backend {
+        run_parser_core_backend_parse(
+            &source,
+            language,
+            includes,
+            defines,
+            frontend_args,
+            backend_id.as_str(),
+            cwd,
+        )?;
+        return Err(format!(
+            "parser backend `{}` is wired through fragile-parser-core, but transpile codegen cutover is not implemented yet; use FRAGILEC_PARSER_BACKEND=libtooling",
+            backend_id
+        ));
+    }
     with_current_dir(cwd, || {
         let transpile_options = TranspileOptions {
             include_paths: Vec::new(),
@@ -701,7 +824,7 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
             language,
             language_standard,
             ignored_error_patterns: strict_parser_ignored_error_patterns(language),
-            backend: parser_backend,
+            backend: ClangParserBackend::Libtooling,
             template_parsing_mode: TemplateParsingMode::Standard,
             // Keep system headers visible by default so libc/kernel symbols
             // (e.g. socket/epoll/netdb) retain full declaration surfaces.
@@ -712,9 +835,9 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
             fragile_clang::transpile_cpp_to_rust_with_options(&source, &transpile_options)
                 .map_err(|e| {
                     format!(
-                        "failed to transpile {} with parser backend {:?}: {}",
+                        "failed to transpile {} with parser backend {}: {}",
                         source.display(),
-                        parser_backend,
+                        strict_parser_backend_label(parser_backend),
                         e
                     )
                 })?;
@@ -929,7 +1052,7 @@ fn run_fragile_compile_in_dir(parsed: &ParsedInvocation, cwd: &Path) -> Result<(
             &parsed.defines,
             &resolved_frontend_args,
             &parsed.args,
-            parser_backend,
+            &parser_backend,
             cwd,
         )?;
     }
@@ -1087,5 +1210,87 @@ mod tests {
             resolve_path(&parsed.sources[0], cwd),
             PathBuf::from("/src/main.cc")
         );
+    }
+
+    #[test]
+    fn strict_parser_backend_validation_accepts_parser_core_backend() {
+        assert_eq!(
+            strict_parser_backend_from_legacy_backend(ClangParserBackend::Libtooling)
+                .expect("legacy libtooling alias should map"),
+            StrictParserBackend::Libtooling
+        );
+        strict_parser_backend_from_legacy_backend(ClangParserBackend::Libclang)
+            .expect_err("legacy libclang alias should be rejected");
+        assert_eq!(
+            parse_parser_backend_value("libtooling").expect("libtooling should parse"),
+            StrictParserBackend::Libtooling
+        );
+        assert_eq!(
+            parse_parser_backend_value("FRAGILE-PARSER-CLANG")
+                .expect("parser-core backend should parse"),
+            StrictParserBackend::ParserCore {
+                backend_id: FRAGILE_PARSER_CLANG_BACKEND_ID.to_string()
+            }
+        );
+        strict_parser_backend_from_value(Some(" libclang "))
+            .expect_err("legacy libclang alias should be rejected");
+        strict_parser_backend_from_value(Some(" hybrid "))
+            .expect_err("legacy hybrid alias should be rejected");
+    }
+
+    #[test]
+    fn strict_parser_backend_validation_error_lists_supported_values() {
+        let err = parse_parser_backend_value("unsupported")
+            .expect_err("unsupported backend value should be rejected");
+        assert!(
+            err.contains("unsupported FRAGILEC_PARSER_BACKEND value"),
+            "unexpected error: {}",
+            err
+        );
+        assert!(
+            err.contains("libtooling") && err.contains(FRAGILE_PARSER_CLANG_BACKEND_ID),
+            "error should list supported backend values: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn parser_core_backend_cutover_reports_deterministic_message_after_parse_preflight() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("fragile_driver_parser_core_{}", stamp));
+        fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
+        let source = temp_dir.join("program.c");
+        let out_obj = temp_dir.join("program.o");
+        fs::write(&source, "int main(void) { return 0; }\n").expect("failed to write source");
+
+        let err = strict_compile_source_to_object_with_frontend_args_and_backend(
+            &source,
+            &out_obj,
+            &[],
+            &[],
+            &[],
+            &[],
+            &StrictParserBackend::ParserCore {
+                backend_id: FRAGILE_PARSER_CLANG_BACKEND_ID.to_string(),
+            },
+            &temp_dir,
+        )
+        .expect_err("parser-core backend should currently stop at cutover boundary");
+        assert!(
+            err.contains("fragile-parser-core")
+                && err.contains("codegen cutover is not implemented yet")
+                && err.contains(FRAGILE_PARSER_CLANG_BACKEND_ID),
+            "unexpected cutover message: {}",
+            err
+        );
+        assert!(
+            !out_obj.exists(),
+            "object should not be generated on parser-core cutover boundary"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

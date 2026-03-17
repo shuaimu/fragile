@@ -61,7 +61,7 @@ Acceptance:
 ### M2) New Parser Module Bootstrap (Non-LibTooling Active Path)
 - [x] M2.1 Introduce `fragile-parser-core` trait and backend registry.
 - [x] M2.2 Implement `fragile-parser-clang` backend skeleton producing `ParserOutput v1`.
-- [ ] M2.3 Wire transpiler entry points to backend trait behind feature/flag cutover switch.
+- [x] M2.3 Wire transpiler entry points to backend trait behind feature/flag cutover switch.
 Acceptance:
 - [ ] M2.A1 New backend can parse and emit IR for a non-trivial fixture corpus.
 - [ ] M2.A2 Pipeline compiles/runs without LibTooling-specific parse dependency in active path.

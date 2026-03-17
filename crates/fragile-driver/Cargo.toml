@@ -7,3 +7,5 @@ description = "Reusable strict compile driver APIs for Fragile"
 
 [dependencies]
 fragile-clang.workspace = true
+fragile-parser-clang.workspace = true
+fragile-parser-core.workspace = true
