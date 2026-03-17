@@ -134,7 +134,17 @@ fn stl_symbol_detection_fixture_covers_direct_std_detection_deterministically() 
         .iter()
         .filter_map(|node| detect_direct_std_stl_family(node.name.as_deref(), node.cpp_type.as_deref()))
         .collect::<HashSet<_>>();
-    for required_family in ["vector", "map", "optional"] {
+    for required_family in [
+        "vector",
+        "map",
+        "unordered_map",
+        "string",
+        "optional",
+        "variant",
+        "tuple",
+        "shared_ptr",
+        "unique_ptr",
+    ] {
         assert!(
             detected_families.contains(required_family),
             "expected direct std detector to include family `{}` in fixture output, saw {:?}",
@@ -163,13 +173,63 @@ fn stl_symbol_detection_fixture_resolves_typedef_and_using_chains_deterministica
     let expected = BTreeMap::from([
         ("direct::DirectMap".to_string(), "std::map".to_string()),
         ("direct::DirectOpt".to_string(), "std::optional".to_string()),
+        (
+            "direct::DirectShared".to_string(),
+            "std::shared_ptr".to_string(),
+        ),
+        ("direct::DirectString".to_string(), "std::string".to_string()),
+        ("direct::DirectTuple".to_string(), "std::tuple".to_string()),
+        (
+            "direct::DirectUnique".to_string(),
+            "std::unique_ptr".to_string(),
+        ),
+        (
+            "direct::DirectUnorderedMap".to_string(),
+            "std::unordered_map".to_string(),
+        ),
+        ("direct::DirectVariant".to_string(), "std::variant".to_string()),
         ("direct::DirectVec".to_string(), "std::vector".to_string()),
         ("typedef_chain::Final".to_string(), "std::vector".to_string()),
         ("typedef_chain::Mid".to_string(), "std::vector".to_string()),
         ("typedef_chain::Seed".to_string(), "std::vector".to_string()),
+        ("transit::TransitMap".to_string(), "std::map".to_string()),
+        ("transit::TransitOpt".to_string(), "std::optional".to_string()),
+        (
+            "transit::TransitShared".to_string(),
+            "std::shared_ptr".to_string(),
+        ),
+        ("transit::TransitString".to_string(), "std::string".to_string()),
+        ("transit::TransitTuple".to_string(), "std::tuple".to_string()),
+        (
+            "transit::TransitUnique".to_string(),
+            "std::unique_ptr".to_string(),
+        ),
+        (
+            "transit::TransitUnorderedMap".to_string(),
+            "std::unordered_map".to_string(),
+        ),
+        ("transit::TransitVariant".to_string(), "std::variant".to_string()),
         ("transit::TransitVec".to_string(), "std::vector".to_string()),
         ("using_chain::ImportedMap".to_string(), "std::map".to_string()),
         ("using_chain::ImportedOpt".to_string(), "std::optional".to_string()),
+        (
+            "using_chain::ImportedShared".to_string(),
+            "std::shared_ptr".to_string(),
+        ),
+        ("using_chain::ImportedString".to_string(), "std::string".to_string()),
+        ("using_chain::ImportedTuple".to_string(), "std::tuple".to_string()),
+        (
+            "using_chain::ImportedUnique".to_string(),
+            "std::unique_ptr".to_string(),
+        ),
+        (
+            "using_chain::ImportedUnorderedMap".to_string(),
+            "std::unordered_map".to_string(),
+        ),
+        (
+            "using_chain::ImportedVariant".to_string(),
+            "std::variant".to_string(),
+        ),
         ("using_chain::ImportedVec".to_string(), "std::vector".to_string()),
     ]);
     assert_eq!(
@@ -217,16 +277,90 @@ fn stl_symbol_detection_fixture_emits_placeholder_node_kinds_for_detected_bounda
     );
 
     let expected_manifest = BTreeMap::from([
+        ("direct_map".to_string(), "stl_map_placeholder".to_string()),
+        ("direct_opt".to_string(), "stl_optional_placeholder".to_string()),
+        (
+            "direct_shared".to_string(),
+            "stl_shared_ptr_placeholder".to_string(),
+        ),
+        (
+            "direct_string".to_string(),
+            "stl_string_placeholder".to_string(),
+        ),
+        ("direct_tuple".to_string(), "stl_tuple_placeholder".to_string()),
+        (
+            "direct_unique".to_string(),
+            "stl_unique_ptr_placeholder".to_string(),
+        ),
+        (
+            "direct_unordered_map".to_string(),
+            "stl_unordered_map_placeholder".to_string(),
+        ),
+        (
+            "direct_variant".to_string(),
+            "stl_variant_placeholder".to_string(),
+        ),
         ("direct_vec".to_string(), "stl_vector_placeholder".to_string()),
         (
             "direct_vec_init".to_string(),
             "stl_vector_placeholder".to_string(),
         ),
         ("imported_map".to_string(), "stl_map_placeholder".to_string()),
+        (
+            "imported_opt".to_string(),
+            "stl_optional_placeholder".to_string(),
+        ),
+        (
+            "imported_shared".to_string(),
+            "stl_shared_ptr_placeholder".to_string(),
+        ),
+        (
+            "imported_string".to_string(),
+            "stl_string_placeholder".to_string(),
+        ),
+        (
+            "imported_tuple".to_string(),
+            "stl_tuple_placeholder".to_string(),
+        ),
+        (
+            "imported_unique".to_string(),
+            "stl_unique_ptr_placeholder".to_string(),
+        ),
+        (
+            "imported_unordered_map".to_string(),
+            "stl_unordered_map_placeholder".to_string(),
+        ),
+        (
+            "imported_variant".to_string(),
+            "stl_variant_placeholder".to_string(),
+        ),
         ("imported_vec".to_string(), "stl_vector_placeholder".to_string()),
         (
             "imported_vec_init".to_string(),
             "stl_vector_placeholder".to_string(),
+        ),
+        ("transit_map".to_string(), "stl_map_placeholder".to_string()),
+        ("transit_opt".to_string(), "stl_optional_placeholder".to_string()),
+        (
+            "transit_shared".to_string(),
+            "stl_shared_ptr_placeholder".to_string(),
+        ),
+        (
+            "transit_string".to_string(),
+            "stl_string_placeholder".to_string(),
+        ),
+        ("transit_tuple".to_string(), "stl_tuple_placeholder".to_string()),
+        (
+            "transit_unique".to_string(),
+            "stl_unique_ptr_placeholder".to_string(),
+        ),
+        (
+            "transit_unordered_map".to_string(),
+            "stl_unordered_map_placeholder".to_string(),
+        ),
+        (
+            "transit_variant".to_string(),
+            "stl_variant_placeholder".to_string(),
         ),
         ("transit_vec".to_string(), "stl_vector_placeholder".to_string()),
     ]);

@@ -14,6 +14,7 @@
 - [2.6 STL-opaque parser architecture (target state)](#26-stl-opaque-parser-architecture-target-state)
 - [2.7 M0 Run-Root and Artifact Contract](#27-m0-run-root-and-artifact-contract)
 - [2.8 M2.3 Parser Entry Wiring Cutover Boundary](#28-m23-parser-entry-wiring-cutover-boundary)
+- [2.9 M3.3 STL Family Fixture Coverage Contract](#29-m33-stl-family-fixture-coverage-contract)
 - [3. Internal Data Models](#3-internal-data-models)
 - [4. C++ Declaration to Rust Item Mapping](#4-c-declaration-to-rust-item-mapping)
 - [5. C++ Type to Rust Type Mapping](#5-c-type-to-rust-type-mapping)
@@ -428,6 +429,38 @@ Wrong-approach guard (Section 1.3):
 - no target-specific conditionals
 - no fake semantic fallback bodies
 - no force-native bypass strategy
+
+### 2.9 M3.3 STL Family Fixture Coverage Contract
+
+Milestone `M3.3` extends deterministic fixture coverage for known STL
+boundaries in `crates/fragile-parser-clang/tests/fixtures/m3_1_d/src/stl_symbol_detection.cpp`.
+
+Required family set:
+
+- `vector`
+- `map`
+- `unordered_map`
+- `string`
+- `optional`
+- `variant`
+- `tuple`
+- `shared_ptr`
+- `unique_ptr`
+
+Regression contract in `stl_symbol_detection_fixture_tests.rs`:
+
+1. direct `std::*` detection deterministically reports every required family
+2. typedef/using-chain alias extraction deterministically normalizes to
+   canonical symbols (`std::<family>`)
+3. `consume_symbols` boundary placeholders are emitted for all covered
+   declarations with correct `stl_*_placeholder` node kinds
+4. placeholder boundaries remain opaque (no lowered descendants)
+
+Wrong-approach guard (Section 1.3):
+
+- do not add fallback/synthetic STL method bodies when detection misses a family
+- treat missing family coverage as a real parser/codegen gap and fix generic
+  symbol detection or alias resolution
 
 ## 3. Internal Data Models
 
