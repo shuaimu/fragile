@@ -68882,6 +68882,16 @@ impl FragileAtomicBoolCompat for atomic_bool {
 
     /// Normalize trailing C-style bool-as-int checks in condition strings.
     /// Example: `(a > b) != 0` -> `(a > b)`.
+    fn looks_inline_c_string_compare_expr(cond: &str) -> bool {
+        let trimmed = cond.trim();
+        trimmed.contains("let mut __p1")
+            && trimmed.contains("let mut __p2")
+            && (trimmed.contains("break (c1 as i32) - (c2 as i32)")
+                || (trimmed.contains("let mut __out = 0i32") && trimmed.contains("__out")))
+    }
+
+    /// Normalize trailing C-style bool-as-int checks in condition strings.
+    /// Example: `(a > b) != 0` -> `(a > b)`.
     fn normalize_bool_int_condition_str(cond: &str) -> String {
         fn strip_outer_parens(s: &str) -> &str {
             let mut cur = s.trim();
@@ -68936,6 +68946,9 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 normalized.len() - "!=0".len()
             };
             let lhs = strip_outer_parens(normalized[..idx].trim());
+            if Self::looks_inline_c_string_compare_expr(lhs) {
+                return format!("({}) != 0", lhs);
+            }
             if looks_booleanish(lhs) {
                 return lhs.to_string();
             }
@@ -68947,6 +68960,9 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 normalized.len() - "==0".len()
             };
             let lhs = strip_outer_parens(normalized[..idx].trim());
+            if Self::looks_inline_c_string_compare_expr(lhs) {
+                return format!("({}) == 0", lhs);
+            }
             if looks_booleanish(lhs) {
                 return format!("!({})", lhs);
             }
@@ -69018,10 +69034,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
 
         // Builtin C string-compare lowering is emitted as an inline loop that returns
         // integer diff semantics. In condition context this remains C truthiness (`!= 0`).
-        let looks_inline_c_strcmp_expr = cond_trim.contains("let mut __p1")
-            && cond_trim.contains("let mut __p2")
-            && cond_trim.contains("break (c1 as i32) - (c2 as i32)");
-        if looks_inline_c_strcmp_expr {
+        if Self::looks_inline_c_string_compare_expr(cond_trim) {
             return format!("({}) != 0", cond_trim);
         }
 
@@ -77963,6 +77976,48 @@ impl FragileAtomicBoolCompat for atomic_bool {
                         } else if right.contains(".offset_from(") && !left.contains(".offset_from(")
                         {
                             left = format!("({}) as isize", left);
+                        }
+
+                        // C/C++ compares signed/unsigned integral operands by promoting
+                        // to a common domain. Rust requires explicit casting.
+                        let left_integral_non_bool = left_type
+                            .as_ref()
+                            .is_some_and(|t| t.is_integral() == Some(true) && !matches!(t, CppType::Bool));
+                        let right_integral_non_bool = right_type
+                            .as_ref()
+                            .is_some_and(|t| t.is_integral() == Some(true) && !matches!(t, CppType::Bool));
+                        if left_integral_non_bool && right_integral_non_bool {
+                            let left_rust_ty = left_type
+                                .as_ref()
+                                .map(|t| t.to_rust_type_str())
+                                .unwrap_or_default();
+                            let right_rust_ty = right_type
+                                .as_ref()
+                                .map(|t| t.to_rust_type_str())
+                                .unwrap_or_default();
+                            let cast_integral_operand = |expr: String, target_ty: &str| -> String {
+                                let trimmed = expr.trim();
+                                if trimmed.contains(&format!(" as {}", target_ty)) {
+                                    return expr;
+                                }
+                                if let Some(casted_negative_literal) =
+                                    cast_negative_literal_to_unsigned(trimmed, target_ty)
+                                {
+                                    return casted_negative_literal;
+                                }
+                                format!("({}) as {}", expr, target_ty)
+                            };
+                            if left_rust_ty != right_rust_ty {
+                                if is_unsigned_rust_int_type(&left_rust_ty)
+                                    && !is_unsigned_rust_int_type(&right_rust_ty)
+                                {
+                                    right = cast_integral_operand(right, &left_rust_ty);
+                                } else if is_unsigned_rust_int_type(&right_rust_ty)
+                                    && !is_unsigned_rust_int_type(&left_rust_ty)
+                                {
+                                    left = cast_integral_operand(left, &right_rust_ty);
+                                }
+                            }
                         }
 
                         // Handle comparison of unsigned type with -1:
@@ -127141,6 +127196,59 @@ pub fn demo() {
             phases.contains(&status),
             "status history should include final status `{status}`, got {:?}",
             phases
+        );
+    }
+
+    #[test]
+    fn test_normalize_bool_int_condition_str_keeps_inline_c_string_compare_zero_check() {
+        let inline_cmp =
+            "({ let mut __p1 = a; let mut __p2 = b; let mut __out = 0i32; __out }) == 0";
+        let normalized = AstCodeGen::normalize_bool_int_condition_str(inline_cmp);
+        assert!(
+            normalized.contains("== 0"),
+            "inline C string-compare expression should keep explicit zero-compare, got:\n{}",
+            normalized
+        );
+        assert!(
+            !normalized.starts_with("!("),
+            "inline C string-compare expression should not normalize to logical-not, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_comparison_signed_rhs_casts_to_unsigned_lhs_type() {
+        let cmp = make_node(
+            ClangNodeKind::BinaryOperator {
+                op: BinaryOp::Eq,
+                ty: CppType::Bool,
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "size".to_string(),
+                        ty: CppType::Long { signed: false },
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "literalSize".to_string(),
+                        ty: CppType::Int { signed: true },
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+            ],
+        );
+        let rendered = AstCodeGen::new().expr_to_string(&cmp);
+        assert!(
+            rendered.contains("size")
+                && rendered.contains("literalSize")
+                && rendered.contains("as u64"),
+            "signed rhs should cast to unsigned lhs type in comparison, got:\n{}",
+            rendered
         );
     }
 }

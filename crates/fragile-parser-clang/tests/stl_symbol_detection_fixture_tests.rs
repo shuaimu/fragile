@@ -132,20 +132,35 @@ fn stl_symbol_detection_fixture_emits_placeholder_node_kinds_for_detected_bounda
             .any(|node| node.name.as_deref() == Some(name) && node.node_kind == kind)
     };
 
-    assert!(
-        has_named_placeholder("direct_vec", "stl_vector_placeholder"),
-        "expected direct std variable to emit stl_vector_placeholder"
-    );
-    assert!(
-        has_named_placeholder("imported_vec", "stl_vector_placeholder"),
-        "expected alias/using-chain vector variable to emit stl_vector_placeholder"
-    );
-    assert!(
-        has_named_placeholder("transit_vec", "stl_vector_placeholder"),
-        "expected transitive using-chain vector variable to emit stl_vector_placeholder"
-    );
-    assert!(
-        has_named_placeholder("imported_map", "stl_map_placeholder"),
-        "expected alias/using-chain map variable to emit stl_map_placeholder"
-    );
+    for (name, kind) in [
+        ("direct_vec", "stl_vector_placeholder"),
+        ("direct_vec_init", "stl_vector_placeholder"),
+        ("imported_vec", "stl_vector_placeholder"),
+        ("imported_vec_init", "stl_vector_placeholder"),
+        ("transit_vec", "stl_vector_placeholder"),
+        ("imported_map", "stl_map_placeholder"),
+    ] {
+        assert!(
+            has_named_placeholder(name, kind),
+            "expected `{}` to emit `{}`",
+            name,
+            kind
+        );
+    }
+
+    for placeholder_name in ["direct_vec_init", "imported_vec_init"] {
+        let placeholder = output
+            .nodes
+            .iter()
+            .find(|node| node.name.as_deref() == Some(placeholder_name))
+            .unwrap_or_else(|| panic!("expected placeholder node for `{}`", placeholder_name));
+        assert!(
+            !output
+                .nodes
+                .iter()
+                .any(|node| node.parent_id.as_deref() == Some(placeholder.node_id.as_str())),
+            "placeholder boundary `{}` should have no lowered descendants",
+            placeholder_name
+        );
+    }
 }

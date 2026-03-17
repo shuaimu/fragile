@@ -18957,6 +18957,82 @@ Validation:
 - Full workspace suite:
   - `cargo test --workspace --all-targets`
 
+## 2026-03-17: Full-Suite Regression Fix (yaml-cpp null.cpp compile-only)
+
+Context:
+- During full-suite replay for `M3.2.b`, workspace test
+  `real_world_yamlcpp_null_cpp_fragilec_compile_only` failed in strict
+  libtooling mode with Rust type mismatches in generated code.
+
+Root cause:
+- Inline C string-compare lowering (`strncmp`/memcmp-like loop form) was
+  rewritten through boolean-int normalization as logical-not (`!(i32_expr)`)
+  instead of explicit zero-compare (`i32_expr == 0`).
+- Mixed signed/unsigned integral comparison (`u64` vs `i32`) lacked explicit
+  cast alignment in comparison lowering.
+
+Design update:
+- In `crates/fragile-clang/src/ast_codegen.rs`:
+  - added `looks_inline_c_string_compare_expr` guard for inline compare-loop
+    shapes,
+  - updated `normalize_bool_int_condition_str` to preserve explicit
+    `== 0`/`!= 0` for inline compare-loop expressions instead of rewriting to
+    logical-not,
+  - updated `condition_to_bool_expr` to use the same inline compare-loop guard,
+  - added signed/unsigned integral comparison alignment by casting signed
+    operand to the unsigned side's Rust type when both operands are non-bool
+    integral comparisons.
+- Added focused regression tests:
+  - `test_normalize_bool_int_condition_str_keeps_inline_c_string_compare_zero_check`
+  - `test_comparison_signed_rhs_casts_to_unsigned_lhs_type`
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-clang test_normalize_bool_int_condition_str_keeps_inline_c_string_compare_zero_check -- --nocapture`
+  - `cargo test -p fragile-clang test_comparison_signed_rhs_casts_to_unsigned_lhs_type -- --nocapture`
+  - `cargo test -p fragile-clang --test real_world_yamlcpp_tests -- --nocapture`
+- Full Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+- Full workspace suite:
+  - `cargo test --workspace --all-targets`
+
+## 2026-03-17: M3.2.b STL Boundary Subtree Pruning
+
+Context:
+- Next unresolved P0 leaf after `M3.2.a` was `M3.2.b`.
+- Goal: stop deep STL subtree lowering once a known STL boundary placeholder is
+  emitted.
+
+Wrong-approach check:
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before
+  implementation.
+- No target-specific conditionals, no force-native bypasses, and no synthetic
+  semantic fallback bodies were introduced.
+- Unresolved/ambiguous STL-family cases remain unresolved rather than guessed.
+
+Design update:
+- Updated `flatten_clang_ast_node` in
+  `crates/fragile-parser-clang/src/lib.rs`:
+  - detect whether current node emitted STL placeholder kind
+  - return immediately after emission when placeholder boundary is emitted
+  - continue normal child recursion for non-placeholder nodes
+- Added focused unit regression:
+  - `flatten_clang_ast_nodes_prunes_descendants_for_stl_placeholder_boundaries`
+  - validates placeholder boundary pruning and non-STL descendant preservation
+- Extended deterministic fixture coverage:
+  - `crates/fragile-parser-clang/tests/fixtures/m3_1_d/src/stl_symbol_detection.cpp`
+    now includes initialized STL boundary vars
+  - `crates/fragile-parser-clang/tests/stl_symbol_detection_fixture_tests.rs`
+    asserts initialized STL placeholder boundaries have no lowered descendants
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-parser-clang`
+- Full Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+- Full workspace suite:
+  - `cargo test --workspace --all-targets`
+
 ## 2026-03-17: M3.1.b Type-Alias Symbol Table with Canonical STL Targets
 
 Context:

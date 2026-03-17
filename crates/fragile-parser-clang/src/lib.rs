@@ -183,6 +183,7 @@ fn flatten_clang_ast_node(
         node_cpp_type.as_deref(),
         stl_context,
     );
+    let emitted_stl_placeholder = stl_family.is_some();
     out.push(ParserNode {
         node_id: node_id.clone(),
         parent_id: parent_id.map(str::to_string),
@@ -190,6 +191,10 @@ fn flatten_clang_ast_node(
         name: node_name,
         cpp_type: node_cpp_type,
     });
+    if emitted_stl_placeholder {
+        // Known STL boundaries are opaque placeholders; do not lower internals.
+        return;
+    }
 
     let mut pushed_namespace = false;
     if let ClangNodeKind::NamespaceDecl {
@@ -1101,8 +1106,8 @@ fn cpp_type_to_string(ty: &CppType) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        detect_direct_std_stl_family, extract_stl_type_alias_symbol_table, FragileParserClangBackend,
-        FRAGILE_PARSER_CLANG_BACKEND_ID,
+        detect_direct_std_stl_family, extract_stl_type_alias_symbol_table, flatten_clang_ast_nodes,
+        FragileParserClangBackend, StlResolutionContext, FRAGILE_PARSER_CLANG_BACKEND_ID,
     };
     use fragile_clang::{ClangNode, ClangNodeKind, CppType};
     use fragile_parser_core::{
@@ -1440,6 +1445,67 @@ mod tests {
         assert!(
             !table.contains_key("consumer::AmbiguousAlias"),
             "aliases with ambiguous using-imported candidates should remain unresolved"
+        );
+    }
+
+    #[test]
+    fn flatten_clang_ast_nodes_prunes_descendants_for_stl_placeholder_boundaries() {
+        let root = ClangNode::new(ClangNodeKind::TranslationUnit).with_children(vec![
+            ClangNode::new(ClangNodeKind::VarDecl {
+                name: "numbers".to_string(),
+                ty: CppType::Named("std::vector<int>".to_string()),
+                has_init: true,
+                is_static: false,
+                is_extern: false,
+            })
+            .with_children(vec![
+                ClangNode::new(ClangNodeKind::CXXConstructExpr {
+                    ty: CppType::Named("std::vector<int>".to_string()),
+                })
+                .with_children(vec![ClangNode::new(ClangNodeKind::IntegerLiteral {
+                    value: 3,
+                    cpp_type: Some(CppType::int()),
+                })]),
+            ]),
+            ClangNode::new(ClangNodeKind::VarDecl {
+                name: "plain".to_string(),
+                ty: CppType::int(),
+                has_init: true,
+                is_static: false,
+                is_extern: false,
+            })
+            .with_children(vec![ClangNode::new(ClangNodeKind::IntegerLiteral {
+                value: 7,
+                cpp_type: Some(CppType::int()),
+            })]),
+        ]);
+
+        let nodes = flatten_clang_ast_nodes(&root, &StlResolutionContext::default());
+        let numbers = nodes
+            .iter()
+            .find(|node| node.name.as_deref() == Some("numbers"))
+            .expect("expected STL boundary var node");
+        assert_eq!(
+            numbers.node_kind, "stl_vector_placeholder",
+            "STL boundary var should emit placeholder node kind"
+        );
+        assert!(
+            !nodes
+                .iter()
+                .any(|node| node.parent_id.as_deref() == Some(numbers.node_id.as_str())),
+            "placeholder boundary node should prune all descendants"
+        );
+
+        let plain = nodes
+            .iter()
+            .find(|node| node.name.as_deref() == Some("plain"))
+            .expect("expected non-STL var node");
+        assert_eq!(plain.node_kind, "variable_decl");
+        assert!(
+            nodes
+                .iter()
+                .any(|node| node.parent_id.as_deref() == Some(plain.node_id.as_str())),
+            "non-STL node should still lower descendants"
         );
     }
 

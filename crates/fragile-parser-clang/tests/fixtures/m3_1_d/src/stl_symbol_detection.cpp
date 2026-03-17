@@ -37,7 +37,9 @@ using TransitVec = ImportedVec;
 
 void consume_symbols() {
     std::vector<int> direct_vec;
+    std::vector<int> direct_vec_init = std::vector<int>();
     using_chain::ImportedVec imported_vec;
+    using_chain::ImportedVec imported_vec_init = using_chain::ImportedVec();
     using_chain::ImportedMap imported_map;
     transit::TransitVec transit_vec;
 }
