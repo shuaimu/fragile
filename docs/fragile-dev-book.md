@@ -18701,3 +18701,35 @@ Full-suite sweep (step 4):
 - Python suite:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
   - observed: `PY_STATUS=0`, `Ran 34 tests`, `OK`, `skipped=1`
+
+## 2026-03-17: M0.A1 Baseline Manifest Reproducibility Closure
+
+Context:
+- Executed top unresolved P0 acceptance leaf `M0.A1` from `TODO.md`.
+- Goal: make baseline-manifest comparison deterministic across consecutive runs.
+
+Wrong-approach check:
+- Reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before implementation.
+- Kept scope to generic orchestration and test coverage only; no target-specific hacks, no force-native bypass, and no fake semantic stubs.
+
+Design update:
+- File: `scripts/mako_rpc_strict_baseline.py`
+- Added deterministic comparable-manifest emission:
+  - `strict_baseline_comparable_manifest.txt`
+  - `comparable_manifest_sha256`
+  - `comparable_manifest_key_count`
+  - `non_comparable_keys`
+- Comparable subset excludes run-local/path/timing-volatile keys (for example `run_root`, manifest path fields, and raw stage timing duration/error fields) so two equivalent runs can be compared stably.
+
+Regression coverage:
+- File: `tests/python/test_mako_rpc_strict_baseline.py`
+- Extended baseline test to assert comparable-manifest fields and filtering.
+- Added consecutive-run regression that executes strict baseline twice (same fake harness inputs) and asserts identical comparable manifests and hashes.
+
+Validation:
+- Focused:
+  - `python3 -m unittest tests/python/test_mako_rpc_strict_baseline.py -v`
+- Full Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+- Full workspace suite:
+  - `cargo test --workspace --all-targets`

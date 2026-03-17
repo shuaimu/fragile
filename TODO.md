@@ -1,6 +1,6 @@
 # Fragile TODO
 
-Last updated: 2026-03-16
+Last updated: 2026-03-17
 Status: active plan is parser-first STL-opaque migration (LibTooling retirement path); RPC target closure is deferred to final hardening.
 
 ## Deprecation Notice
@@ -47,7 +47,7 @@ Goal: replace LibTooling-centered parsing with a custom parser module that treat
 - [x] M0.2 Add parser-backend A/B harness for side-by-side run roots and deterministic manifest diffing.
 - [x] M0.3 Define milestone run-root naming and required artifact contract.
 Acceptance:
-- [ ] M0.A1 Baseline manifests are reproducible across two consecutive runs.
+- [x] M0.A1 Baseline manifests are reproducible across two consecutive runs.
 - [x] M0.A2 A/B harness can run old and new parser backends and emit comparable summaries.
 
 ### M1) Parser IR Contract with STL Placeholders

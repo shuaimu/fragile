@@ -12,6 +12,7 @@ Artifacts are summarized in `strict_baseline_manifest.txt`.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import shlex
 import subprocess
@@ -31,6 +32,22 @@ from mako_rpc_milestone_contract import (
 
 SUPPORTED_LANES: tuple[str, str] = ("clang", "fragilec")
 COMMAND_NOT_FOUND_STATUS = 127
+NON_COMPARABLE_KEYS: tuple[str, ...] = (
+    "run_root",
+    "harness_manifest",
+    "inventory_manifest",
+    "replay_manifest",
+    "stage_timing_path",
+    "stage_timing_parse_ms",
+    "stage_timing_export_ms",
+    "stage_timing_enrichment_ms",
+    "stage_timing_codegen_ms",
+    "stage_timing_total_ms",
+    "stage_timing_error",
+    "required_artifact_contract_manifest",
+    "comparable_manifest",
+    "comparable_manifest_sha256",
+)
 
 
 @dataclass(frozen=True)
@@ -95,6 +112,32 @@ def parse_key_value_file(path: Path) -> dict[str, str]:
         key, value = line.split("=", 1)
         result[key.strip()] = value.strip()
     return result
+
+
+def parse_manifest_lines(lines: Sequence[str]) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in lines:
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
+def canonical_manifest_lines(values: Mapping[str, str]) -> list[str]:
+    return [f"{key}={values[key]}" for key in sorted(values)]
+
+
+def comparable_manifest(values: Mapping[str, str]) -> dict[str, str]:
+    return {key: values[key] for key in sorted(values) if key not in NON_COMPARABLE_KEYS}
+
+
+def manifest_sha256(values: Mapping[str, str]) -> str:
+    digest = hashlib.sha256()
+    for line in canonical_manifest_lines(values):
+        digest.update(line.encode("utf-8"))
+        digest.update(b"\n")
+    return digest.hexdigest()
 
 
 def run_capture(
@@ -519,6 +562,21 @@ def main(argv: Sequence[str]) -> int:
                     "missing_required_artifact_count="
                     f"{artifact_contract_summary.missing_count}"
                 ),
+            ]
+        )
+        manifest_values = parse_manifest_lines(lines)
+        comparable_values = comparable_manifest(manifest_values)
+        comparable_manifest_path = run_root / "strict_baseline_comparable_manifest.txt"
+        write_lines(
+            comparable_manifest_path,
+            canonical_manifest_lines(comparable_values),
+        )
+        lines.extend(
+            [
+                f"comparable_manifest={comparable_manifest_path}",
+                f"comparable_manifest_sha256={manifest_sha256(comparable_values)}",
+                f"comparable_manifest_key_count={len(comparable_values)}",
+                f"non_comparable_keys={','.join(NON_COMPARABLE_KEYS)}",
             ]
         )
         write_lines(manifest_path, lines)

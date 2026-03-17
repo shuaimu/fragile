@@ -261,6 +261,18 @@ class MakoRpcStrictBaselineTests(unittest.TestCase):
                 required_manifest["required_artifact_014_relpath"],
                 "strict_baseline_manifest.txt",
             )
+            comparable_manifest_path = Path(manifest["comparable_manifest"])
+            self.assertTrue(comparable_manifest_path.exists())
+            comparable_manifest = self._parse_manifest(comparable_manifest_path)
+            self.assertNotIn("run_root", comparable_manifest)
+            self.assertNotIn("stage_timing_path", comparable_manifest)
+            self.assertNotIn("required_artifact_contract_manifest", comparable_manifest)
+            self.assertEqual(
+                manifest["comparable_manifest_key_count"],
+                str(len(comparable_manifest)),
+            )
+            self.assertIn("run_root", manifest["non_comparable_keys"])
+            self.assertIn("stage_timing_total_ms", manifest["non_comparable_keys"])
 
             commands = (run_root / "strict_baseline_commands.txt").read_text(
                 encoding="utf-8"
@@ -302,6 +314,61 @@ class MakoRpcStrictBaselineTests(unittest.TestCase):
             self.assertEqual(manifest["stage_timing_status"], "none")
             self.assertEqual(manifest["stage_timing_total_ms"], "none")
             self.assertEqual(manifest["missing_required_artifact_count"], "0")
+
+    def test_consecutive_runs_emit_identical_comparable_manifests(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            workspace_root = tmp_path / "workspace"
+            mako_root = workspace_root / "vendor" / "mako"
+            mako_root.mkdir(parents=True, exist_ok=True)
+            harness_script = tmp_path / "fake_harness.py"
+            inventory_script = tmp_path / "fake_inventory.py"
+            replay_script = tmp_path / "fake_replay.py"
+            self._write_fake_harness(harness_script)
+            self._write_fake_inventory(inventory_script)
+            self._write_fake_replay(replay_script)
+
+            run_one = tmp_path / "run_one"
+            run_two = tmp_path / "run_two"
+            result_one = self._run_script(
+                run_root=run_one,
+                workspace_root=workspace_root,
+                mako_root=mako_root,
+                harness_script=harness_script,
+                inventory_script=inventory_script,
+                replay_script=replay_script,
+                lanes="fragilec",
+                extra_env={"FAKE_REPLAY_WRITE_STAGE_TIMING": "1"},
+            )
+            self.assertEqual(result_one.returncode, 0, msg=result_one.stderr)
+            result_two = self._run_script(
+                run_root=run_two,
+                workspace_root=workspace_root,
+                mako_root=mako_root,
+                harness_script=harness_script,
+                inventory_script=inventory_script,
+                replay_script=replay_script,
+                lanes="fragilec",
+                extra_env={"FAKE_REPLAY_WRITE_STAGE_TIMING": "1"},
+            )
+            self.assertEqual(result_two.returncode, 0, msg=result_two.stderr)
+
+            manifest_one = self._parse_manifest(run_one / "strict_baseline_manifest.txt")
+            manifest_two = self._parse_manifest(run_two / "strict_baseline_manifest.txt")
+            comp_one = Path(manifest_one["comparable_manifest"])
+            comp_two = Path(manifest_two["comparable_manifest"])
+            self.assertEqual(
+                comp_one.read_text(encoding="utf-8"),
+                comp_two.read_text(encoding="utf-8"),
+            )
+            self.assertEqual(
+                manifest_one["comparable_manifest_sha256"],
+                manifest_two["comparable_manifest_sha256"],
+            )
+            self.assertEqual(
+                manifest_one["comparable_manifest_key_count"],
+                manifest_two["comparable_manifest_key_count"],
+            )
 
     def test_inventory_failure_causes_nonzero_exit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
