@@ -5,6 +5,7 @@ members = [
     "crates/fragile-cli",
     "crates/fragile-common",
     "crates/fragile-clang",
+    "crates/fragile-parser-clang",
     "crates/fragile-parser-core",
     "crates/fragile-runtime",
     "crates/fragile-driver",
@@ -24,6 +25,7 @@ rust-version = "1.75"
 # Internal crates
 fragile-common = { path = "crates/fragile-common" }
 fragile-clang = { path = "crates/fragile-clang" }
+fragile-parser-clang = { path = "crates/fragile-parser-clang" }
 fragile-parser-core = { path = "crates/fragile-parser-core" }
 fragile-runtime = { path = "crates/fragile-runtime" }
 fragile-driver = { path = "crates/fragile-driver" }

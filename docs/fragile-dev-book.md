@@ -18896,3 +18896,39 @@ Validation:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
 - Full workspace suite:
   - `cargo test --workspace --all-targets`
+
+## 2026-03-17: M2.2 fragile-parser-clang Backend Skeleton Closure
+
+Context:
+- Executed next unresolved P0 leaf `M2.2` from `TODO.md`.
+- Goal: implement a concrete parser backend that emits `ParserOutput v1`.
+
+Wrong-approach check:
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- Kept scope to a generic backend skeleton; no target-specific hacks, no force-native bypasses, and no fake semantic fallback bodies.
+
+Design update:
+- Added new workspace crate:
+  - `crates/fragile-parser-clang`
+- Implemented `FragileParserClangBackend` for `fragile_parser_core::ParserBackend`:
+  - backend id `fragile-parser-clang`
+  - parse path via `fragile_clang::ClangParser`
+  - effective frontend handling for `-I`/`-isystem`/`-iquote`/`-D` flags from `ParseRequest.frontend_args`
+  - deterministic pre-order flattening of `ClangAst` into `ParserOutputV1` node ids (`n0`, `n1`, ...)
+  - parser node-kind normalization + best-effort node name/cpp_type extraction
+
+Regression coverage:
+- Added focused unit tests in `fragile-parser-clang` for:
+  - backend id contract
+  - C-source parse success + deterministic node id ordering
+  - C++ parse success with include-directive + define propagation
+  - C++ parse success with frontend include/define flags
+  - missing source path error behavior
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-parser-clang`
+- Full Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+- Full workspace suite:
+  - `cargo test --workspace --all-targets`

@@ -1,0 +1,9 @@
+[package]
+name = "fragile-parser-clang"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+fragile-clang.workspace = true
+fragile-parser-core.workspace = true
