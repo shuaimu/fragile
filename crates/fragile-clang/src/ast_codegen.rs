@@ -9,6 +9,10 @@ use crate::ast::{
     CoroutineKind, TemplateSpecializationKind, UnaryOp,
 };
 use crate::types::{normalize_rusty_type_alias_to_std, parse_template_args, CppType};
+use fragile_stl::layout_contract::{
+    pre_generated_stl_module_source_v1, pre_generated_stl_modules_v1,
+    PREGENERATED_STL_LAYOUT_NAMESPACE_V1, PREGENERATED_STL_LAYOUT_VERSION_V1,
+};
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -57769,60 +57773,27 @@ impl FragileAtomicBoolCompat for atomic_bool {
         self.writeln("#![allow(non_snake_case)]");
         self.writeln("");
         self.writeln("use std::io::Write;");
+        self.writeln(&format!(
+            "// fragile_stl layout contract: {} ({})",
+            PREGENERATED_STL_LAYOUT_VERSION_V1, PREGENERATED_STL_LAYOUT_NAMESPACE_V1
+        ));
 
-        // STL stub modules from the fragile-stl crate.
+        // STL stub modules from the fragile-stl layout contract.
         // Each file is included as raw text and inlined into the generated preamble.
-        self.output
-            .push_str(include_str!("../../fragile-stl/src/file_header.rs"));
-        self.output.push('\n');
-        self.output
-            .push_str(include_str!("../../fragile-stl/src/array_helpers.rs"));
-        self.output.push('\n');
-        self.output
-            .push_str(include_str!("../../fragile-stl/src/comparison.rs"));
-        self.output.push('\n');
-        self.output
-            .push_str(include_str!("../../fragile-stl/src/vector.rs"));
-        self.output.push('\n');
-        self.output
-            .push_str(include_str!("../../fragile-stl/src/container_adapters.rs"));
-        self.output.push('\n');
-        self.output
-            .push_str(include_str!("../../fragile-stl/src/string.rs"));
-        self.output.push('\n');
-        self.output
-            .push_str(include_str!("../../fragile-stl/src/smart_ptr.rs"));
-        self.output.push('\n');
-        self.output
-            .push_str(include_str!("../../fragile-stl/src/algorithm.rs"));
-        self.output.push('\n');
-        self.output
-            .push_str(include_str!("../../fragile-stl/src/tree.rs"));
-        self.output.push('\n');
-        self.output
-            .push_str(include_str!("../../fragile-stl/src/hash.rs"));
-        self.output.push('\n');
-        self.output
-            .push_str(include_str!("../../fragile-stl/src/numeric.rs"));
-        self.output.push('\n');
-        self.output
-            .push_str(include_str!("../../fragile-stl/src/locale.rs"));
-        self.output.push('\n');
-        self.output
-            .push_str(include_str!("../../fragile-stl/src/io.rs"));
-        self.output.push('\n');
-        self.output
-            .push_str(include_str!("../../fragile-stl/src/exception.rs"));
-        self.output.push('\n');
-        self.output
-            .push_str(include_str!("../../fragile-stl/src/math.rs"));
-        self.output.push('\n');
-        self.output
-            .push_str(include_str!("../../fragile-stl/src/clib.rs"));
-        self.output.push('\n');
-        self.output
-            .push_str(include_str!("../../fragile-stl/src/runtime.rs"));
-        self.output.push('\n');
+        for module in pre_generated_stl_modules_v1() {
+            self.writeln(&format!(
+                "// fragile_stl module: {} ({})",
+                module.module_id, module.source_file
+            ));
+            let source = pre_generated_stl_module_source_v1(module.module_id).unwrap_or_else(|| {
+                panic!(
+                    "missing fragile-stl source for module `{}` in layout contract {}",
+                    module.module_id, PREGENERATED_STL_LAYOUT_VERSION_V1
+                )
+            });
+            self.output.push_str(source);
+            self.output.push('\n');
+        }
 
         // Non-auto-covered registrations: module stubs
         for name in &[
@@ -86328,6 +86299,46 @@ mod tests {
             "preamble should expose generic std_stack container adapter stub, got:\n{}",
             code
         );
+    }
+
+    #[test]
+    fn test_preamble_emits_versioned_fragile_stl_layout_contract_modules_in_order() {
+        let code = AstCodeGen::new().generate(&make_node(ClangNodeKind::TranslationUnit, vec![]));
+        let layout_marker = format!(
+            "// fragile_stl layout contract: {} ({})",
+            PREGENERATED_STL_LAYOUT_VERSION_V1, PREGENERATED_STL_LAYOUT_NAMESPACE_V1
+        );
+        assert!(
+            code.contains(layout_marker.as_str()),
+            "preamble should include fragile_stl layout contract marker, got:\n{}",
+            code
+        );
+
+        let mut last_pos = 0usize;
+        for module in pre_generated_stl_modules_v1() {
+            let module_marker = format!(
+                "// fragile_stl module: {} ({})",
+                module.module_id, module.source_file
+            );
+            let marker_pos = code.find(module_marker.as_str()).unwrap_or_else(|| {
+                panic!(
+                    "missing module marker `{}` in generated preamble:\n{}",
+                    module_marker, code
+                )
+            });
+            assert!(
+                marker_pos >= last_pos,
+                "module marker `{}` should appear after prior contract modules",
+                module_marker
+            );
+            last_pos = marker_pos;
+
+            assert!(
+                code.contains(module.sentinel),
+                "generated preamble should include sentinel for module `{}`",
+                module.module_id
+            );
+        }
     }
 
     #[test]

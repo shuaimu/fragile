@@ -22,6 +22,8 @@
 
 use std::io::Write;
 
+pub mod layout_contract;
+
 include!("file_header.rs");
 include!("array_helpers.rs");
 include!("comparison.rs");

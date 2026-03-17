@@ -85,7 +85,7 @@ Acceptance:
 - [x] M3.A2 Alias-heavy STL fixtures still resolve to correct placeholder families.
 
 ### M4) Pre-Generated STL Implementation Module
-- [ ] M4.1 Create versioned pre-generated STL module layout and naming contract.
+- [x] M4.1 Create versioned pre-generated STL module layout and naming contract.
 - [ ] M4.2 Implement/port required operations used by current benchmarks/tests (container ops, iterators, value semantics).
 - [ ] M4.3 Add generation reproducibility checks and deterministic manifest for generated outputs.
 Acceptance:

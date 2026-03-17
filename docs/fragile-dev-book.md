@@ -15,6 +15,7 @@
 - [2.7 M0 Run-Root and Artifact Contract](#27-m0-run-root-and-artifact-contract)
 - [2.8 M2.3 Parser Entry Wiring Cutover Boundary](#28-m23-parser-entry-wiring-cutover-boundary)
 - [2.9 M3.3 STL Family Fixture Coverage Contract](#29-m33-stl-family-fixture-coverage-contract)
+- [2.10 M4.1 Pre-Generated STL Layout + Naming Contract](#210-m41-pre-generated-stl-layout--naming-contract)
 - [3. Internal Data Models](#3-internal-data-models)
 - [4. C++ Declaration to Rust Item Mapping](#4-c-declaration-to-rust-item-mapping)
 - [5. C++ Type to Rust Type Mapping](#5-c-type-to-rust-type-mapping)
@@ -461,6 +462,39 @@ Wrong-approach guard (Section 1.3):
 - do not add fallback/synthetic STL method bodies when detection misses a family
 - treat missing family coverage as a real parser/codegen gap and fix generic
   symbol detection or alias resolution
+
+### 2.10 M4.1 Pre-Generated STL Layout + Naming Contract
+
+Milestone `M4.1` defines a versioned contract for pre-generated STL module
+layout and naming in:
+
+- `crates/fragile-stl/src/layout_contract.rs`
+
+Contract v1 surfaces:
+
+- deterministic module manifest (`module_id`, `source_file`, `sentinel`) via
+  `PREGENERATED_STL_MODULES_V1`
+- deterministic family naming/status manifest for required families (`vector`,
+  `map`, `unordered_map`, `string`, `optional`, `variant`, `tuple`,
+  `shared_ptr`, `unique_ptr`) via `PREGENERATED_STL_FAMILY_CONTRACT_V1`
+- helper APIs:
+  - `pre_generated_stl_modules_v1`
+  - `pre_generated_stl_module_source_v1`
+  - `pre_generated_stl_family_contract_v1`
+  - `pre_generated_stl_family_contract_entry_v1`
+
+Codegen integration:
+
+- `AstCodeGen::emit_stl_preamble` now consumes the contract manifest instead of
+  duplicating a hardcoded preamble file list.
+- generated preamble includes an explicit layout marker:
+  - `// fragile_stl layout contract: v1 (fragile_stl::v1)`
+
+Wrong-approach guard (Section 1.3):
+
+- no semantic fallback method bodies were introduced for planned families
+- planned families are marked explicitly in the contract instead of hidden
+  stubs or silent remaps
 
 ## 3. Internal Data Models
 

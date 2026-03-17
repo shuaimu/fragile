@@ -12,6 +12,7 @@ clang-sys.workspace = true
 # AST exporter using LibTooling for template instantiation support
 fragile-ast-exporter = { path = "../fragile-ast-exporter" }
 fragile-parser-core.workspace = true
+fragile-stl = { path = "../fragile-stl" }
 
 # Error handling
 miette.workspace = true
