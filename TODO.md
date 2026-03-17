@@ -53,10 +53,10 @@ Acceptance:
 ### M1) Parser IR Contract with STL Placeholders
 - [x] M1.1 Define `ParserOutput v1` schema with explicit STL placeholder node kinds.
 - [x] M1.2 Add placeholder metadata contract: container family, element/key/value types, allocator/comparator/hash/equal policy shape, method/op selector.
-- [ ] M1.3 Add deterministic serialization + fixture tests for placeholder IR.
+- [x] M1.3 Add deterministic serialization + fixture tests for placeholder IR.
 Acceptance:
-- [ ] M1.A1 Schema docs and fixture corpus are checked in.
-- [ ] M1.A2 ParserOutput round-trip tests pass with deterministic output.
+- [x] M1.A1 Schema docs and fixture corpus are checked in.
+- [x] M1.A2 ParserOutput round-trip tests pass with deterministic output.
 
 ### M2) New Parser Module Bootstrap (Non-LibTooling Active Path)
 - [ ] M2.1 Introduce `fragile-parser-core` trait and backend registry.

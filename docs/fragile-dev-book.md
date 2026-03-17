@@ -18821,3 +18821,39 @@ Validation:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
 - Full workspace suite:
   - `cargo test --workspace --all-targets`
+
+## 2026-03-17: M1.3 Deterministic Serialization and Round-Trip Closure
+
+Context:
+- Executed next unresolved P0 leaf `M1.3` from `TODO.md`.
+- Goal: add deterministic serialization and fixture round-trip tests for `ParserOutput v1`.
+
+Wrong-approach check:
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- Kept scope to contract serialization/testing only; no target-specific hacks, no force-native bypasses, and no fake semantic fallback bodies.
+
+Design update:
+- Added helper module `scripts/parser_output_v1_contract.py` with:
+  - `dumps_parser_output_canonical(...)` for stable JSON serialization
+  - `canonical_round_trip(...)` for deterministic serialize/parse cycle
+  - `check_canonical_parser_output(...)` for strict fixture verification
+  - CLI generation/check modes (`--check`)
+- Added canonical fixture artifact:
+  - `docs/fixtures/parser_output_v1_full_placeholders.canonical.json`
+
+Regression coverage:
+- Added `tests/python/test_parser_output_v1_serialization.py`:
+  - canonical fixture matches serializer output
+  - canonical round-trip is stable
+  - key-order invariance holds for canonical serializer
+  - canonical fixture remains semantically equivalent to source fixture
+  - TODO closure marker for `M1.3` remains checked
+
+Validation:
+- Focused:
+  - `python3 -m unittest tests/python/test_parser_output_v1_schema.py -v`
+  - `python3 -m unittest tests/python/test_parser_output_v1_serialization.py -v`
+- Full Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+- Full workspace suite:
+  - `cargo test --workspace --all-targets`
