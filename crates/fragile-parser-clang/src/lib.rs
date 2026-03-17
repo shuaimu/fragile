@@ -177,7 +177,7 @@ fn flatten_clang_ast_node(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum CanonicalStlFamily {
     Vector,
     Map,
@@ -300,6 +300,18 @@ struct TypeAliasDeclRecord {
     target_spelling: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UsingDeclarationRecord {
+    scope_path: Vec<String>,
+    qualified_name: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UsingDirectiveRecord {
+    scope_path: Vec<String>,
+    namespace_path: Vec<String>,
+}
+
 fn join_scope_path(scope_path: &[String], leaf_name: &str) -> String {
     if scope_path.is_empty() {
         leaf_name.to_string()
@@ -362,6 +374,159 @@ fn collect_type_alias_decl_records(
     if pushed_namespace {
         scope_path.pop();
     }
+}
+
+fn collect_using_resolution_records(
+    node: &ClangNode,
+    scope_path: &mut Vec<String>,
+    using_declarations: &mut Vec<UsingDeclarationRecord>,
+    using_directives: &mut Vec<UsingDirectiveRecord>,
+) {
+    let mut pushed_namespace = false;
+    if let ClangNodeKind::NamespaceDecl {
+        name: Some(name), ..
+    } = &node.kind
+    {
+        if !name.trim().is_empty() {
+            scope_path.push(name.clone());
+            pushed_namespace = true;
+        }
+    }
+
+    match &node.kind {
+        ClangNodeKind::UsingDeclaration { qualified_name } => {
+            if !qualified_name.is_empty() {
+                using_declarations.push(UsingDeclarationRecord {
+                    scope_path: scope_path.clone(),
+                    qualified_name: qualified_name.clone(),
+                });
+            }
+        }
+        ClangNodeKind::UsingDirective { namespace } => {
+            if !namespace.is_empty() {
+                using_directives.push(UsingDirectiveRecord {
+                    scope_path: scope_path.clone(),
+                    namespace_path: namespace.clone(),
+                });
+            }
+        }
+        _ => {}
+    }
+
+    for child in &node.children {
+        collect_using_resolution_records(child, scope_path, using_declarations, using_directives);
+    }
+
+    if pushed_namespace {
+        scope_path.pop();
+    }
+}
+
+fn is_scope_visible_in_nested_scope(scope_path: &[String], nested_scope_path: &[String]) -> bool {
+    scope_path.len() <= nested_scope_path.len() && nested_scope_path.starts_with(scope_path)
+}
+
+fn collect_visible_using_namespace_paths(
+    scope_path: &[String],
+    using_directive_records: &[UsingDirectiveRecord],
+) -> Vec<Vec<String>> {
+    let mut visible_paths = Vec::new();
+    let mut seen_namespace_paths = HashSet::new();
+    let mut seen_contexts = HashSet::new();
+    let mut contexts = vec![scope_path.to_vec()];
+
+    while let Some(context_path) = contexts.pop() {
+        let context_key = context_path.join("::");
+        if !seen_contexts.insert(context_key) {
+            continue;
+        }
+        for record in using_directive_records {
+            if !is_scope_visible_in_nested_scope(&record.scope_path, &context_path) {
+                continue;
+            }
+            if record.namespace_path.is_empty() {
+                continue;
+            }
+            let namespace_key = record.namespace_path.join("::");
+            if !seen_namespace_paths.insert(namespace_key) {
+                continue;
+            }
+            visible_paths.push(record.namespace_path.clone());
+            contexts.push(record.namespace_path.clone());
+        }
+    }
+
+    visible_paths
+}
+
+fn candidate_alias_names_for_token_with_using_resolution(
+    scope_path: &[String],
+    token: &str,
+    using_declaration_records: &[UsingDeclarationRecord],
+    visible_using_namespace_paths: &[Vec<String>],
+) -> Vec<String> {
+    let normalized = token.trim().trim_matches(':');
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+
+    let explicit_global = token.trim_start().starts_with("::");
+    let token_segments = normalized
+        .split("::")
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    if token_segments.is_empty() {
+        return Vec::new();
+    }
+
+    let visible_namespace_keys = visible_using_namespace_paths
+        .iter()
+        .map(|path| path.join("::"))
+        .collect::<HashSet<_>>();
+    let mut seen = HashSet::new();
+    let mut candidates = Vec::new();
+    let mut push_candidate = |candidate: String| {
+        if seen.insert(candidate.clone()) {
+            candidates.push(candidate);
+        }
+    };
+
+    for candidate in candidate_alias_names_for_token(scope_path, token) {
+        push_candidate(candidate);
+    }
+
+    if explicit_global {
+        return candidates;
+    }
+
+    let token_head = token_segments[0];
+    for record in using_declaration_records {
+        let lexically_visible = is_scope_visible_in_nested_scope(&record.scope_path, scope_path);
+        let visible_via_using_namespace = visible_namespace_keys.contains(&record.scope_path.join("::"));
+        if !lexically_visible && !visible_via_using_namespace {
+            continue;
+        }
+        let Some(imported_leaf) = record.qualified_name.last().map(String::as_str) else {
+            continue;
+        };
+        if imported_leaf != token_head {
+            continue;
+        }
+        let mut candidate_segments = record.qualified_name.clone();
+        candidate_segments.extend(token_segments.iter().skip(1).map(|segment| (*segment).to_string()));
+        push_candidate(candidate_segments.join("::"));
+    }
+
+    for namespace_path in visible_using_namespace_paths {
+        if namespace_path.is_empty() {
+            continue;
+        }
+        let mut candidate_segments = namespace_path.clone();
+        candidate_segments.extend(token_segments.iter().map(|segment| (*segment).to_string()));
+        push_candidate(candidate_segments.join("::"));
+    }
+
+    candidates
 }
 
 fn is_alias_resolution_keyword(token: &str) -> bool {
@@ -458,20 +623,37 @@ fn candidate_alias_names_for_token(scope_path: &[String], token: &str) -> Vec<St
 fn resolve_type_alias_target_family(
     record: &TypeAliasDeclRecord,
     resolved_alias_targets: &BTreeMap<String, CanonicalStlFamily>,
+    using_declaration_records: &[UsingDeclarationRecord],
+    using_directive_records: &[UsingDirectiveRecord],
 ) -> Option<CanonicalStlFamily> {
     if let Some(family) = detect_direct_std_stl_family_in_spelling(&record.target_spelling) {
         return Some(family);
     }
 
+    let visible_using_namespace_paths =
+        collect_visible_using_namespace_paths(&record.scope_path, using_directive_records);
+    let mut matched_families = HashSet::new();
     for token in extract_alias_reference_tokens(&record.target_spelling) {
-        for candidate in candidate_alias_names_for_token(&record.scope_path, &token) {
+        for candidate in candidate_alias_names_for_token_with_using_resolution(
+            &record.scope_path,
+            &token,
+            using_declaration_records,
+            &visible_using_namespace_paths,
+        ) {
+            if let Some(family) = detect_direct_std_stl_family_in_spelling(&candidate) {
+                matched_families.insert(family);
+            }
             if let Some(family) = resolved_alias_targets.get(&candidate).copied() {
-                return Some(family);
+                matched_families.insert(family);
             }
         }
     }
 
-    None
+    if matched_families.len() == 1 {
+        matched_families.into_iter().next()
+    } else {
+        None
+    }
 }
 
 /// Extracts a deterministic type-alias symbol table for STL aliases. The table
@@ -481,12 +663,18 @@ fn resolve_type_alias_target_family(
 /// Resolution includes:
 /// - direct aliases to known `std::` STL symbols
 /// - alias chains through `typedef` / `using` declarations
-///
-/// This helper intentionally excludes `using` declaration/directive chain
-/// resolution, which is handled by follow-up STL boundary work.
+/// - `using` declaration/directive chain lookup over visible namespace scopes
 pub fn extract_stl_type_alias_symbol_table(root: &ClangNode) -> BTreeMap<String, String> {
     let mut alias_records = Vec::new();
     collect_type_alias_decl_records(root, &mut Vec::new(), &mut alias_records);
+    let mut using_declaration_records = Vec::new();
+    let mut using_directive_records = Vec::new();
+    collect_using_resolution_records(
+        root,
+        &mut Vec::new(),
+        &mut using_declaration_records,
+        &mut using_directive_records,
+    );
 
     let mut resolved_alias_targets: BTreeMap<String, CanonicalStlFamily> = BTreeMap::new();
     let mut unresolved_indices = (0..alias_records.len()).collect::<Vec<_>>();
@@ -498,7 +686,12 @@ pub fn extract_stl_type_alias_symbol_table(root: &ClangNode) -> BTreeMap<String,
             if resolved_alias_targets.contains_key(&record.qualified_name) {
                 continue;
             }
-            let Some(family) = resolve_type_alias_target_family(record, &resolved_alias_targets) else {
+            let Some(family) = resolve_type_alias_target_family(
+                record,
+                &resolved_alias_targets,
+                &using_declaration_records,
+                &using_directive_records,
+            ) else {
                 still_unresolved.push(index);
                 continue;
             };
@@ -824,6 +1017,24 @@ mod tests {
         })
     }
 
+    fn using_declaration(qualified_name: &[&str]) -> ClangNode {
+        ClangNode::new(ClangNodeKind::UsingDeclaration {
+            qualified_name: qualified_name
+                .iter()
+                .map(|segment| (*segment).to_string())
+                .collect(),
+        })
+    }
+
+    fn using_directive(namespace: &[&str]) -> ClangNode {
+        ClangNode::new(ClangNodeKind::UsingDirective {
+            namespace: namespace
+                .iter()
+                .map(|segment| (*segment).to_string())
+                .collect(),
+        })
+    }
+
     #[test]
     fn backend_id_matches_contract_constant() {
         let backend = FragileParserClangBackend;
@@ -994,6 +1205,78 @@ mod tests {
         assert!(
             !table.contains_key("Ambiguous"),
             "unqualified alias without an in-scope definition should not be resolved"
+        );
+    }
+
+    #[test]
+    fn extract_stl_type_alias_symbol_table_resolves_using_declarations_and_directive_chains() {
+        let root = ClangNode::new(ClangNodeKind::TranslationUnit).with_children(vec![
+            namespace_decl(
+                "left",
+                vec![type_alias_decl(
+                    "LeftVec",
+                    CppType::Named("std::vector<int>".to_string()),
+                )],
+            ),
+            namespace_decl(
+                "bridge",
+                vec![
+                    using_declaration(&["left", "LeftVec"]),
+                    type_alias_decl("BridgeVec", CppType::Named("LeftVec".to_string())),
+                ],
+            ),
+            namespace_decl("std_bridge", vec![using_directive(&["std"])]),
+            using_declaration(&["std", "map"]),
+            using_directive(&["bridge"]),
+            using_directive(&["std_bridge"]),
+            type_alias_decl("TopVec", CppType::Named("BridgeVec".to_string())),
+            type_alias_decl("TopMap", CppType::Named("map<int, int>".to_string())),
+        ]);
+
+        let table = extract_stl_type_alias_symbol_table(&root);
+        let expected = BTreeMap::from([
+            ("left::LeftVec".to_string(), "std::vector".to_string()),
+            ("bridge::BridgeVec".to_string(), "std::vector".to_string()),
+            ("TopVec".to_string(), "std::vector".to_string()),
+            ("TopMap".to_string(), "std::map".to_string()),
+        ]);
+        assert_eq!(
+            table, expected,
+            "using declaration/directive chains should resolve STL alias targets"
+        );
+    }
+
+    #[test]
+    fn extract_stl_type_alias_symbol_table_keeps_ambiguous_using_resolution_unresolved() {
+        let root = ClangNode::new(ClangNodeKind::TranslationUnit).with_children(vec![
+            namespace_decl(
+                "left",
+                vec![type_alias_decl(
+                    "Alias",
+                    CppType::Named("std::vector<int>".to_string()),
+                )],
+            ),
+            namespace_decl(
+                "right",
+                vec![type_alias_decl(
+                    "Alias",
+                    CppType::Named("std::map<int, int>".to_string()),
+                )],
+            ),
+            namespace_decl(
+                "consumer",
+                vec![
+                    using_directive(&["left"]),
+                    using_directive(&["right"]),
+                    type_alias_decl("AmbiguousAlias", CppType::Named("Alias".to_string())),
+                ],
+            ),
+        ]);
+
+        let table = extract_stl_type_alias_symbol_table(&root);
+        assert!(
+            !table.contains_key("consumer::AmbiguousAlias"),
+            "aliases with ambiguous using-imported candidates should remain unresolved"
         );
     }
 

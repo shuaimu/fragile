@@ -73,7 +73,7 @@ Acceptance:
 - [ ] M3.1 Implement canonical STL symbol detection (`std::`, alias chains, using/typedef resolution).
   - [x] M3.1.a Add direct canonical `std::` symbol detection utility for known STL families (`vector`, `map`, `unordered_map`, `string`, `optional`, `variant`, `tuple`, `shared_ptr`, `unique_ptr`).
   - [x] M3.1.b Add typedef/type-alias symbol table extraction with canonical target normalization for STL aliases.
-  - [ ] M3.1.c Add `using` declaration/directive chain resolution over the alias table for canonical STL symbol detection.
+  - [x] M3.1.c Add `using` declaration/directive chain resolution over the alias table for canonical STL symbol detection.
   - [ ] M3.1.d Add deterministic regression fixtures/tests for direct `std::`, typedef alias chains, and using-chain STL resolution.
 - [ ] M3.2 Emit STL placeholders at boundary and stop deep subtree lowering for STL internals.
 - [ ] M3.3 Add regression fixtures for common STL families (`vector`, `map`, `unordered_map`, `string`, `optional`, `variant`, `tuple`, `shared_ptr`, `unique_ptr`).

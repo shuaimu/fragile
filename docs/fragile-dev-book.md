@@ -19161,3 +19161,36 @@ Validation:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
 - Full workspace suite:
   - `cargo test --workspace --all-targets`
+
+## 2026-03-17: M3.1.c Using Declaration/Directive Chain Resolution
+
+Context:
+- Next unresolved P0 leaf after `M3.1.b` was `M3.1.c`.
+- Goal: resolve canonical STL alias targets when names are introduced through
+  `using X::Y` and `using namespace X` chains.
+
+Wrong-approach check:
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before
+  implementation.
+- No target-specific conditionals, no force-native bypasses, and no fake
+  semantic fallback bodies were introduced.
+- Ambiguous using-based candidates are kept unresolved (no guessed fallback).
+
+Design update:
+- Extended `extract_stl_type_alias_symbol_table` in
+  `crates/fragile-parser-clang/src/lib.rs` with using-aware resolution:
+  - collects `UsingDeclaration` and `UsingDirective` records with scope paths,
+  - computes visible using-directive namespace closure for each alias scope,
+  - resolves alias tokens through lexical aliases + using-imported candidates,
+  - resolves to canonical STL families via direct `std::...` detection and
+    already-resolved alias-table entries.
+- Added ambiguity-safe family resolution: if matches span multiple canonical STL
+  families, the alias remains unresolved.
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-parser-clang`
+- Full Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+- Full workspace suite:
+  - `cargo test --workspace --all-targets`
