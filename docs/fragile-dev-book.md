@@ -18956,3 +18956,38 @@ Validation:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
 - Full workspace suite:
   - `cargo test --workspace --all-targets`
+
+## 2026-03-17: M2.A1 Non-Trivial Parser Fixture Corpus Closure
+
+Context:
+- Executed next unresolved P0 leaf `M2.A1` from `TODO.md`.
+- Goal: prove the new backend can parse and emit `ParserOutput v1` for a non-trivial corpus.
+
+Wrong-approach check:
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- Kept scope to generic parser fixture/test coverage; no target-specific hacks, no force-native bypasses, and no fake semantic fallback bodies.
+
+Design update:
+- Added checked-in non-trivial fixture corpus for `fragile-parser-clang`:
+  - `crates/fragile-parser-clang/tests/fixtures/m2_a1/include/corpus_common.hpp`
+  - `crates/fragile-parser-clang/tests/fixtures/m2_a1/include/corpus_algo.hpp`
+  - `crates/fragile-parser-clang/tests/fixtures/m2_a1/src/pipeline.cpp`
+  - `crates/fragile-parser-clang/tests/fixtures/m2_a1/src/dispatch.cpp`
+  - `crates/fragile-parser-clang/tests/fixtures/m2_a1/src/metrics.c`
+- Added parser-core-backed integration test:
+  - `crates/fragile-parser-clang/tests/non_trivial_corpus_tests.rs`
+- Coverage validates for each corpus translation unit:
+  - parse dispatch through `BackendRegistry` using backend id `fragile-parser-clang`
+  - schema/version and translation-unit metadata
+  - deterministic repeated parse output equality
+  - deterministic node ids (`n0..nN`)
+  - required node kinds and names
+  - aggregate non-trivial node volume across corpus entries
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-parser-clang`
+- Full Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+- Full workspace suite:
+  - `cargo test --workspace --all-targets`
