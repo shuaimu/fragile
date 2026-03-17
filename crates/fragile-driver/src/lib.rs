@@ -5,10 +5,10 @@ use fragile_clang::{
 use fragile_parser_clang::{FragileParserClangBackend, FRAGILE_PARSER_CLANG_BACKEND_ID};
 use fragile_parser_core::{
     BackendRegistry, IncludeDirective as CoreIncludeDirective,
-    IncludeDirectiveKind as CoreIncludeDirectiveKind, ParseRequest,
+    IncludeDirectiveKind as CoreIncludeDirectiveKind, ParseRequest, ParserOutputV1,
     ParserLanguage as CoreParserLanguage, PARSER_OUTPUT_SCHEMA_VERSION_V1,
 };
-use std::collections::hash_map::DefaultHasher;
+use std::collections::{hash_map::DefaultHasher, BTreeMap};
 use std::ffi::OsString;
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -19,6 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const FRAGILEC_BUILD_ID_ENV: &str = "FRAGILEC_BUILD_ID";
 pub const FRAGILEC_KEEP_RS_ENV: &str = "FRAGILEC_KEEP_RS";
 pub const FRAGILEC_PARSER_BACKEND_ENV: &str = "FRAGILEC_PARSER_BACKEND";
+pub const FRAGILEC_PARSER_CORE_MANIFEST_DIR_ENV: &str = "FRAGILEC_PARSER_CORE_MANIFEST_DIR";
 pub const FRAGILEC_TRANSPILE_STAGE_TIMING_PATH_ENV: &str = "FRAGILEC_TRANSPILE_STAGE_TIMING_PATH";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -647,6 +648,113 @@ fn parser_core_include_directives(
         .collect()
 }
 
+fn parser_core_manifest_dir_from_env() -> Option<PathBuf> {
+    std::env::var(FRAGILEC_PARSER_CORE_MANIFEST_DIR_ENV)
+        .ok()
+        .map(|raw| raw.trim().to_string())
+        .filter(|raw| !raw.is_empty())
+        .map(PathBuf::from)
+}
+
+fn parser_core_manifest_path_for_source(manifest_dir: &Path, source: &Path) -> PathBuf {
+    let mut hasher = DefaultHasher::new();
+    source.display().to_string().hash(&mut hasher);
+    let hash = hasher.finish();
+    let file_stem = source
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("unit");
+    manifest_dir.join(format!("{}_{}.parser_core_manifest.txt", file_stem, hash))
+}
+
+fn parser_core_language_label(language: CoreParserLanguage) -> &'static str {
+    match language {
+        CoreParserLanguage::C => "c",
+        CoreParserLanguage::Cpp => "cpp",
+    }
+}
+
+fn parser_core_parse_manifest(output: &ParserOutputV1) -> String {
+    let mut node_kind_counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for node in &output.nodes {
+        *node_kind_counts.entry(node.node_kind.as_str()).or_insert(0) += 1;
+    }
+
+    let mut manifest = String::new();
+    manifest.push_str(&format!("schema_version={}\n", output.schema_version));
+    manifest.push_str(&format!(
+        "parser_backend={}\n",
+        output.translation_unit.parser_backend
+    ));
+    manifest.push_str(&format!(
+        "source={}\n",
+        output.translation_unit.source_path.display()
+    ));
+    manifest.push_str(&format!(
+        "language={}\n",
+        parser_core_language_label(output.translation_unit.language)
+    ));
+    manifest.push_str(&format!(
+        "frontend_arg_count={}\n",
+        output.translation_unit.frontend_args.len()
+    ));
+    manifest.push_str(&format!(
+        "define_count={}\n",
+        output.translation_unit.defines.len()
+    ));
+    manifest.push_str(&format!(
+        "include_directive_count={}\n",
+        output.translation_unit.include_directives.len()
+    ));
+    manifest.push_str(&format!("node_count={}\n", output.nodes.len()));
+    manifest.push_str(&format!("diagnostic_count={}\n", output.diagnostics.len()));
+    if let Some(first) = output.nodes.first() {
+        manifest.push_str(&format!("first_node_id={}\n", first.node_id));
+    }
+    if let Some(last) = output.nodes.last() {
+        manifest.push_str(&format!("last_node_id={}\n", last.node_id));
+    }
+    for (kind, count) in node_kind_counts {
+        manifest.push_str(&format!("node_kind.{}={}\n", kind, count));
+    }
+    manifest
+}
+
+fn write_parser_core_parse_manifest(
+    manifest_dir: Option<&Path>,
+    source: &Path,
+    output: &ParserOutputV1,
+) -> Result<Option<PathBuf>, String> {
+    let Some(manifest_dir) = manifest_dir else {
+        return Ok(None);
+    };
+    fs::create_dir_all(manifest_dir).map_err(|err| {
+        format!(
+            "failed to create parser-core manifest directory {}: {}",
+            manifest_dir.display(),
+            err
+        )
+    })?;
+    let manifest_path = parser_core_manifest_path_for_source(manifest_dir, source);
+    fs::write(&manifest_path, parser_core_parse_manifest(output)).map_err(|err| {
+        format!(
+            "failed to write parser-core manifest {}: {}",
+            manifest_path.display(),
+            err
+        )
+    })?;
+    Ok(Some(manifest_path))
+}
+
+fn maybe_write_parser_core_parse_manifest(
+    source: &Path,
+    output: &ParserOutputV1,
+) -> Result<(), String> {
+    let manifest_dir = parser_core_manifest_dir_from_env();
+    write_parser_core_parse_manifest(manifest_dir.as_deref(), source, output)?;
+    Ok(())
+}
+
 fn run_parser_core_backend_parse(
     source: &Path,
     language: ClangParserLanguage,
@@ -682,6 +790,7 @@ fn run_parser_core_backend_parse(
                 backend_id, output.schema_version, PARSER_OUTPUT_SCHEMA_VERSION_V1
             ));
         }
+        maybe_write_parser_core_parse_manifest(source, &output)?;
         Ok(())
     })
 }
@@ -1173,6 +1282,7 @@ fn fragilec_candidates() -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fragile_parser_core::ParserLanguage as CoreParserLanguage;
 
     #[test]
     fn parse_collects_sources_and_compile_output() {
@@ -1289,6 +1399,60 @@ mod tests {
         assert!(
             !out_obj.exists(),
             "object should not be generated on parser-core cutover boundary"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn parser_core_manifest_writer_emits_deterministic_summary() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("fragile_driver_manifest_{}", stamp));
+        let manifest_dir = temp_dir.join("manifests");
+        fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
+        let source = temp_dir.join("unit.c");
+        fs::write(
+            &source,
+            "int add(int a, int b) { return a + b; }\nint main(void) { return add(1, 2); }\n",
+        )
+        .expect("failed to write source fixture");
+
+        let mut registry = BackendRegistry::new();
+        registry
+            .register(FragileParserClangBackend)
+            .expect("failed to register parser-core backend");
+        let request = ParseRequest {
+            source_path: source.clone(),
+            language: CoreParserLanguage::C,
+            frontend_args: Vec::new(),
+            defines: Vec::new(),
+            include_directives: Vec::new(),
+        };
+        let output = registry
+            .parse_with(FRAGILE_PARSER_CLANG_BACKEND_ID, &request)
+            .expect("parser-core parse should succeed");
+
+        let manifest_path = write_parser_core_parse_manifest(Some(&manifest_dir), &source, &output)
+            .expect("manifest write should succeed")
+            .expect("manifest path should be present");
+        let first = fs::read_to_string(&manifest_path).expect("failed to read first manifest");
+        let second_path = write_parser_core_parse_manifest(Some(&manifest_dir), &source, &output)
+            .expect("second manifest write should succeed")
+            .expect("second manifest path should be present");
+        let second = fs::read_to_string(&second_path).expect("failed to read second manifest");
+
+        assert_eq!(manifest_path, second_path, "manifest path should be deterministic");
+        assert_eq!(first, second, "manifest content should be deterministic");
+        assert!(
+            first.contains("schema_version=1.0.0")
+                && first.contains("language=c")
+                && first.contains("node_kind.function_decl=")
+                && first.contains("node_count="),
+            "manifest missing required summary fields:\n{}",
+            first
         );
 
         let _ = fs::remove_dir_all(&temp_dir);

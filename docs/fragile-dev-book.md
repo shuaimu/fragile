@@ -18991,3 +18991,36 @@ Validation:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
 - Full workspace suite:
   - `cargo test --workspace --all-targets`
+
+## 2026-03-17: M2.A2.1 Parser-Core Manifest Handoff Closure
+
+Context:
+- Executed next unresolved P0 leaf `M2.A2.1` after decomposing `M2.A2`.
+- Goal: add deterministic parser-core parse-handoff artifact coverage in strict entry points.
+
+Wrong-approach check:
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- Kept scope to generic parser-core handoff artifacts; no target-specific hacks, no force-native bypasses, and no fake semantic fallback bodies.
+
+Design update:
+- Added optional parser-core manifest output env:
+  - `FRAGILEC_PARSER_CORE_MANIFEST_DIR`
+- Extended strict parser-core preflight paths in:
+  - `crates/fragile-driver/src/lib.rs`
+  - `crates/fragile-cli/src/bin/fragilec.rs`
+- Manifest contract includes deterministic summary fields:
+  - schema/backend/source/language
+  - frontend/define/include counts
+  - node/diagnostic counts
+  - first/last node ids
+  - sorted node-kind frequency entries
+- Added focused unit tests in both driver and CLI for manifest determinism and summary field presence.
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-driver`
+  - `cargo test -p fragile-cli`
+- Full Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+- Full workspace suite:
+  - `cargo test --workspace --all-targets`
