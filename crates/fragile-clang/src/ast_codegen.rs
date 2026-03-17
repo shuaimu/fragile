@@ -18676,6 +18676,125 @@ impl AstCodeGen {
             rewritten
         }
 
+        fn normalize_type_token(ty: &str) -> String {
+            ty.split_whitespace().collect::<String>()
+        }
+
+        fn is_signed_integer_type(ty: &str) -> bool {
+            matches!(ty, "i8" | "i16" | "i32" | "i64" | "i128" | "isize")
+        }
+
+        fn is_unsigned_integer_type(ty: &str) -> bool {
+            matches!(ty, "u8" | "u16" | "u32" | "u64" | "u128" | "usize")
+        }
+
+        fn rewrite_integral_identifier_comparisons(
+            line: &str,
+            known_types: &HashMap<String, String>,
+        ) -> String {
+            if line.trim_start().starts_with("//") || !line.contains('=') {
+                return line.to_string();
+            }
+
+            let operators = ["<=", ">=", "==", "!=", "<", ">"];
+            let mut rewritten = line.to_string();
+            let mut search_idx = 0usize;
+            while search_idx < rewritten.len() {
+                let mut best_match: Option<(usize, &str)> = None;
+                for op in operators {
+                    if let Some(rel) = rewritten[search_idx..].find(op) {
+                        let pos = search_idx + rel;
+                        if best_match.is_none_or(|(best_pos, _)| pos < best_pos) {
+                            best_match = Some((pos, op));
+                        }
+                    }
+                }
+                let Some((op_pos, op)) = best_match else {
+                    break;
+                };
+
+                let mut lhs_end = op_pos;
+                while lhs_end > 0 {
+                    let ch = rewritten[..lhs_end].chars().next_back().unwrap();
+                    if ch.is_whitespace() {
+                        lhs_end -= ch.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+                let mut lhs_start = lhs_end;
+                while lhs_start > 0 {
+                    let ch = rewritten[..lhs_start].chars().next_back().unwrap();
+                    if AstCodeGen::is_identifier_char(ch) {
+                        lhs_start -= ch.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+                if lhs_start == lhs_end {
+                    search_idx = op_pos + op.len();
+                    continue;
+                }
+
+                let mut rhs_start = op_pos + op.len();
+                while rhs_start < rewritten.len() {
+                    let ch = rewritten[rhs_start..].chars().next().unwrap();
+                    if ch.is_whitespace() {
+                        rhs_start += ch.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+                let mut rhs_end = rhs_start;
+                while rhs_end < rewritten.len() {
+                    let ch = rewritten[rhs_end..].chars().next().unwrap();
+                    if AstCodeGen::is_identifier_char(ch) {
+                        rhs_end += ch.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+                if rhs_start == rhs_end {
+                    search_idx = op_pos + op.len();
+                    continue;
+                }
+
+                let lhs_ident = rewritten[lhs_start..lhs_end].trim();
+                let rhs_ident = rewritten[rhs_start..rhs_end].trim();
+                let lhs_ty = known_types
+                    .get(lhs_ident)
+                    .map(|ty| normalize_type_token(ty));
+                let rhs_ty = known_types
+                    .get(rhs_ident)
+                    .map(|ty| normalize_type_token(ty));
+
+                let mut replacement: Option<String> = None;
+                if let (Some(lhs_ty), Some(rhs_ty)) = (lhs_ty, rhs_ty) {
+                    if is_unsigned_integer_type(&lhs_ty) && is_signed_integer_type(&rhs_ty) {
+                        replacement = Some(format!(
+                            "{} {} (({}) as {})",
+                            lhs_ident, op, rhs_ident, lhs_ty
+                        ));
+                    } else if is_signed_integer_type(&lhs_ty) && is_unsigned_integer_type(&rhs_ty)
+                    {
+                        replacement = Some(format!(
+                            "(({}) as {}) {} {}",
+                            lhs_ident, rhs_ty, op, rhs_ident
+                        ));
+                    }
+                }
+
+                let Some(replacement) = replacement else {
+                    search_idx = op_pos + op.len();
+                    continue;
+                };
+
+                rewritten.replace_range(lhs_start..rhs_end, &replacement);
+                search_idx = lhs_start + replacement.len();
+            }
+            rewritten
+        }
+
         let mut out = String::with_capacity(code.len());
         let mut known_types: HashMap<String, String> = HashMap::new();
         let mut fn_depth = 0isize;
@@ -18692,7 +18811,10 @@ impl AstCodeGen {
                 }
             }
 
-            let rewritten = rewrite_wrapping_add_calls(line, &known_types);
+            let rewritten = rewrite_integral_identifier_comparisons(
+                &rewrite_wrapping_add_calls(line, &known_types),
+                &known_types,
+            );
             out.push_str(&rewritten);
             out.push('\n');
 
@@ -77980,21 +78102,27 @@ impl FragileAtomicBoolCompat for atomic_bool {
 
                         // C/C++ compares signed/unsigned integral operands by promoting
                         // to a common domain. Rust requires explicit casting.
-                        let left_integral_non_bool = left_type
+                        let left_integral_ty = left_type
                             .as_ref()
-                            .is_some_and(|t| t.is_integral() == Some(true) && !matches!(t, CppType::Bool));
-                        let right_integral_non_bool = right_type
+                            .filter(|t| t.is_integral() == Some(true) && !matches!(t, CppType::Bool))
+                            .or_else(|| {
+                                left_orig_type.as_ref().filter(|t| {
+                                    t.is_integral() == Some(true) && !matches!(t, CppType::Bool)
+                                })
+                            });
+                        let right_integral_ty = right_type
                             .as_ref()
-                            .is_some_and(|t| t.is_integral() == Some(true) && !matches!(t, CppType::Bool));
-                        if left_integral_non_bool && right_integral_non_bool {
-                            let left_rust_ty = left_type
-                                .as_ref()
-                                .map(|t| t.to_rust_type_str())
-                                .unwrap_or_default();
-                            let right_rust_ty = right_type
-                                .as_ref()
-                                .map(|t| t.to_rust_type_str())
-                                .unwrap_or_default();
+                            .filter(|t| t.is_integral() == Some(true) && !matches!(t, CppType::Bool))
+                            .or_else(|| {
+                                right_orig_type.as_ref().filter(|t| {
+                                    t.is_integral() == Some(true) && !matches!(t, CppType::Bool)
+                                })
+                            });
+                        if let (Some(left_integral_ty), Some(right_integral_ty)) =
+                            (left_integral_ty, right_integral_ty)
+                        {
+                            let left_rust_ty = left_integral_ty.to_rust_type_str();
+                            let right_rust_ty = right_integral_ty.to_rust_type_str();
                             let cast_integral_operand = |expr: String, target_ty: &str| -> String {
                                 let trimmed = expr.trim();
                                 if trimmed.contains(&format!(" as {}", target_ty)) {
@@ -97538,6 +97666,37 @@ pub extern "C" fn __exchange_and_add_single(mut __mem: *mut i32, __val: i32) -> 
         assert!(
             normalized.contains("unsafe { *__mem = __mem.wrapping_add((__val ) as usize)};"),
             "wrapping-add normalization should relocate displaced block closers outside call args, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_wrapping_add_argument_casts_rewrites_signed_unsigned_identifier_comparison() {
+        let input = r#"
+pub fn same_ptr_const_i8_u64_ref__i8__2_(size: u64) -> bool {
+    let mut literalSize: i32 = ((2 - 1) as i32);
+    return size == literalSize && literalSize == 1;
+}
+"#;
+        let normalized = AstCodeGen::normalize_wrapping_add_argument_casts(input);
+        assert!(
+            normalized.contains("return size == ((literalSize) as u64) && literalSize == 1;"),
+            "wrapping-add normalization should cast signed identifier side in unsigned comparisons, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_wrapping_add_argument_casts_keeps_same_signed_lane_comparisons() {
+        let input = r#"
+pub fn same_lane(a: i32, b: i32) -> bool {
+    return a == b;
+}
+"#;
+        let normalized = AstCodeGen::normalize_wrapping_add_argument_casts(input);
+        assert!(
+            normalized.contains("return a == b;"),
+            "wrapping-add normalization should not rewrite same-lane signed comparisons, got:\n{}",
             normalized
         );
     }
@@ -127248,6 +127407,48 @@ pub fn demo() {
                 && rendered.contains("literalSize")
                 && rendered.contains("as u64"),
             "signed rhs should cast to unsigned lhs type in comparison, got:\n{}",
+            rendered
+        );
+    }
+
+    #[test]
+    fn test_comparison_signed_rhs_casts_to_unsigned_lhs_type_using_original_expr_type() {
+        let cmp = make_node(
+            ClangNodeKind::BinaryOperator {
+                op: BinaryOp::Eq,
+                ty: CppType::Bool,
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "size".to_string(),
+                        ty: CppType::Long { signed: false },
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::ImplicitCastExpr {
+                        cast_kind: CastKind::LValueToRValue,
+                        ty: CppType::Named("UnknownTagAutoType".to_string()),
+                    },
+                    vec![make_node(
+                        ClangNodeKind::DeclRefExpr {
+                            name: "literalSize".to_string(),
+                            ty: CppType::Int { signed: true },
+                            namespace_path: vec![],
+                        },
+                        vec![],
+                    )],
+                ),
+            ],
+        );
+        let rendered = AstCodeGen::new().expr_to_string(&cmp);
+        assert!(
+            rendered.contains("size")
+                && rendered.contains("literalSize")
+                && rendered.contains("as u64"),
+            "signed rhs should cast to unsigned lhs type when only original expr type is integral, got:\n{}",
             rendered
         );
     }

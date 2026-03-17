@@ -78,7 +78,7 @@ Acceptance:
 - [ ] M3.2 Emit STL placeholders at boundary and stop deep subtree lowering for STL internals.
   - [x] M3.2.a Emit canonical STL placeholder node kinds for boundary declarations/expressions using direct + alias/using-aware symbol detection.
   - [x] M3.2.b Stop deep STL subtree lowering by pruning descendants once a known STL boundary placeholder node is emitted.
-  - [ ] M3.2.c Add deterministic fixture regressions asserting STL boundary placeholder emission and no deep STL internals under placeholder roots.
+  - [x] M3.2.c Add deterministic fixture regressions asserting STL boundary placeholder emission and no deep STL internals under placeholder roots.
 - [ ] M3.3 Add regression fixtures for common STL families (`vector`, `map`, `unordered_map`, `string`, `optional`, `variant`, `tuple`, `shared_ptr`, `unique_ptr`).
 Acceptance:
 - [ ] M3.A1 No deep STL AST subtrees appear in parser output for covered fixtures.

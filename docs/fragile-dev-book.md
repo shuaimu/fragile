@@ -18957,6 +18957,53 @@ Validation:
 - Full workspace suite:
   - `cargo test --workspace --all-targets`
 
+## 2026-03-17: M3.2.c STL Boundary Fixture Regression Closure
+
+Context:
+- Next unresolved P0 leaf after `M3.2.b` was `M3.2.c`.
+- Goal: add deterministic fixture regressions asserting STL boundary placeholder
+  emission and no deep STL internals under placeholder roots.
+
+Wrong-approach check:
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before
+  implementation.
+- No target-specific conditionals, no force-native bypasses, and no synthetic
+  semantic fallback bodies were introduced.
+
+Design update:
+- Extended parser-clang fixture regression in:
+  - `crates/fragile-parser-clang/tests/stl_symbol_detection_fixture_tests.rs`
+- Added deterministic fixture-manifest and structure assertions:
+  - collect named STL placeholder manifest deterministically
+  - scope boundary placeholder coverage to `consume_symbols` descendants
+  - compare repeated parses for deterministic manifest stability
+  - compare against explicit expected boundary placeholder manifest
+  - compute recursive descendants per placeholder root and assert empty set
+- This closes the remaining fixture-level gap after:
+  - `M3.2.a` placeholder kind emission
+  - `M3.2.b` subtree pruning behavior
+- Full-suite replay surfaced an additional strict compile regression in
+  `real_world_yamlcpp_null_cpp_fragilec_compile_only` (`u64`/`i32`
+  identifier-comparison mismatch):
+  - extended post-generation normalization in
+    `crates/fragile-clang/src/ast_codegen.rs`
+    (`normalize_wrapping_add_argument_casts`) to align signed/unsigned
+    identifier-only comparisons using known function/local integer lanes
+  - added focused coverage:
+    - `test_normalize_wrapping_add_argument_casts_rewrites_signed_unsigned_identifier_comparison`
+    - `test_normalize_wrapping_add_argument_casts_keeps_same_signed_lane_comparisons`
+    - `test_comparison_signed_rhs_casts_to_unsigned_lhs_type_using_original_expr_type`
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-parser-clang`
+  - `cargo test -p fragile-clang normalize_wrapping_add_argument_casts -- --nocapture`
+  - `cargo test -p fragile-clang --test real_world_yamlcpp_tests test_real_world_yamlcpp_null_cpp_fragilec_compile_only -- --nocapture`
+- Full Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+- Full workspace suite:
+  - `cargo test --workspace --all-targets`
+
 ## 2026-03-17: Full-Suite Regression Fix (yaml-cpp null.cpp compile-only)
 
 Context:

@@ -2,8 +2,8 @@ use fragile_clang::{ClangParser, ParserLanguage as ClangParserLanguage};
 use fragile_parser_clang::{
     detect_direct_std_stl_family, extract_stl_type_alias_symbol_table, FragileParserClangBackend,
 };
-use fragile_parser_core::{ParseRequest, ParserBackend, ParserLanguage};
-use std::collections::{BTreeMap, HashSet};
+use fragile_parser_core::{ParseRequest, ParserBackend, ParserLanguage, ParserNode};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 fn fixture_source(file_name: &str) -> PathBuf {
@@ -48,6 +48,69 @@ fn parse_fixture_alias_table(source_path: &Path) -> BTreeMap<String, String> {
         )
     });
     extract_stl_type_alias_symbol_table(&ast.translation_unit)
+}
+
+fn collect_placeholder_manifest(nodes: &[ParserNode]) -> BTreeMap<String, String> {
+    nodes.iter()
+        .filter_map(|node| {
+            let name = node.name.as_ref()?;
+            if !node.node_kind.starts_with("stl_") || !node.node_kind.ends_with("_placeholder") {
+                return None;
+            }
+            Some((name.clone(), node.node_kind.clone()))
+        })
+        .collect()
+}
+
+fn collect_descendant_ids(nodes: &[ParserNode], root_id: &str) -> HashSet<String> {
+    let mut children_by_parent = BTreeMap::<&str, Vec<&ParserNode>>::new();
+    for node in nodes {
+        if let Some(parent_id) = node.parent_id.as_deref() {
+            children_by_parent
+                .entry(parent_id)
+                .or_default()
+                .push(node);
+        }
+    }
+
+    let mut descendants = HashSet::new();
+    let mut queue = VecDeque::new();
+    queue.push_back(root_id);
+    while let Some(current) = queue.pop_front() {
+        if let Some(children) = children_by_parent.get(current) {
+            for child in children {
+                if descendants.insert(child.node_id.clone()) {
+                    queue.push_back(child.node_id.as_str());
+                }
+            }
+        }
+    }
+    descendants
+}
+
+fn descendants_for_node<'a>(nodes: &'a [ParserNode], root_id: &str) -> Vec<&'a ParserNode> {
+    let mut children_by_parent = BTreeMap::<&str, Vec<&ParserNode>>::new();
+    for node in nodes {
+        if let Some(parent_id) = node.parent_id.as_deref() {
+            children_by_parent
+                .entry(parent_id)
+                .or_default()
+                .push(node);
+        }
+    }
+
+    let mut descendants = Vec::new();
+    let mut queue = VecDeque::new();
+    queue.push_back(root_id);
+    while let Some(current) = queue.pop_front() {
+        if let Some(children) = children_by_parent.get(current) {
+            for child in children {
+                descendants.push(*child);
+                queue.push_back(child.node_id.as_str());
+            }
+        }
+    }
+    descendants
 }
 
 #[test]
@@ -124,41 +187,63 @@ fn stl_symbol_detection_fixture_emits_placeholder_node_kinds_for_detected_bounda
         source_path.display()
     );
 
-    let output = parse_fixture_with_backend(&source_path);
-    let has_named_placeholder = |name: &str, kind: &str| {
-        output
-            .nodes
+    let first = parse_fixture_with_backend(&source_path);
+    let second = parse_fixture_with_backend(&source_path);
+    let collect_boundary_manifest = |nodes: &[ParserNode]| {
+        let boundary_function_id = nodes
             .iter()
-            .any(|node| node.name.as_deref() == Some(name) && node.node_kind == kind)
+            .find(|node| {
+                node.node_kind == "function_decl" && node.name.as_deref() == Some("consume_symbols")
+            })
+            .map(|node| node.node_id.clone())
+            .expect("expected consume_symbols function node");
+        let boundary_descendant_ids = collect_descendant_ids(nodes, boundary_function_id.as_str());
+        collect_placeholder_manifest(nodes)
+            .into_iter()
+            .filter(|(name, _)| {
+                nodes.iter().any(|node| {
+                    node.name.as_deref() == Some(name.as_str())
+                        && boundary_descendant_ids.contains(node.node_id.as_str())
+                })
+            })
+            .collect::<BTreeMap<_, _>>()
     };
 
-    for (name, kind) in [
-        ("direct_vec", "stl_vector_placeholder"),
-        ("direct_vec_init", "stl_vector_placeholder"),
-        ("imported_vec", "stl_vector_placeholder"),
-        ("imported_vec_init", "stl_vector_placeholder"),
-        ("transit_vec", "stl_vector_placeholder"),
-        ("imported_map", "stl_map_placeholder"),
-    ] {
-        assert!(
-            has_named_placeholder(name, kind),
-            "expected `{}` to emit `{}`",
-            name,
-            kind
-        );
-    }
+    let first_manifest = collect_boundary_manifest(&first.nodes);
+    let second_manifest = collect_boundary_manifest(&second.nodes);
+    assert_eq!(
+        first_manifest, second_manifest,
+        "placeholder manifest should be deterministic across repeated fixture parses"
+    );
 
-    for placeholder_name in ["direct_vec_init", "imported_vec_init"] {
-        let placeholder = output
+    let expected_manifest = BTreeMap::from([
+        ("direct_vec".to_string(), "stl_vector_placeholder".to_string()),
+        (
+            "direct_vec_init".to_string(),
+            "stl_vector_placeholder".to_string(),
+        ),
+        ("imported_map".to_string(), "stl_map_placeholder".to_string()),
+        ("imported_vec".to_string(), "stl_vector_placeholder".to_string()),
+        (
+            "imported_vec_init".to_string(),
+            "stl_vector_placeholder".to_string(),
+        ),
+        ("transit_vec".to_string(), "stl_vector_placeholder".to_string()),
+    ]);
+    assert_eq!(
+        first_manifest, expected_manifest,
+        "fixture placeholder manifest should match expected STL boundary roots"
+    );
+
+    for placeholder_name in expected_manifest.keys() {
+        let placeholder = first
             .nodes
             .iter()
-            .find(|node| node.name.as_deref() == Some(placeholder_name))
+            .find(|node| node.name.as_deref() == Some(placeholder_name.as_str()))
             .unwrap_or_else(|| panic!("expected placeholder node for `{}`", placeholder_name));
+        let descendants = descendants_for_node(&first.nodes, placeholder.node_id.as_str());
         assert!(
-            !output
-                .nodes
-                .iter()
-                .any(|node| node.parent_id.as_deref() == Some(placeholder.node_id.as_str())),
+            descendants.is_empty(),
             "placeholder boundary `{}` should have no lowered descendants",
             placeholder_name
         );
