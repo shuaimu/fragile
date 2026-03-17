@@ -1,0 +1,305 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fragile.dev/schemas/parser_output_v1.schema.json",
+  "title": "Fragile ParserOutput v1",
+  "description": "Canonical parser output schema for the STL-opaque migration path.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "translation_unit",
+    "nodes",
+    "diagnostics"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "translation_unit": {
+      "$ref": "#/$defs/translation_unit"
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/node"
+      }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/diagnostic"
+      }
+    }
+  },
+  "$defs": {
+    "translation_unit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_path",
+        "language",
+        "parser_backend",
+        "frontend_args",
+        "defines",
+        "include_directives"
+      ],
+      "properties": {
+        "source_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "language": {
+          "enum": [
+            "c",
+            "cpp"
+          ]
+        },
+        "parser_backend": {
+          "type": "string",
+          "minLength": 1
+        },
+        "frontend_args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "defines": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "include_directives": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/include_directive"
+          }
+        }
+      }
+    },
+    "include_directive": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "path"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "include",
+            "system",
+            "quote"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node_id",
+        "node_kind",
+        "span"
+      ],
+      "properties": {
+        "node_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "parent_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "node_kind": {
+          "enum": [
+            "translation_unit",
+            "namespace_decl",
+            "record_decl",
+            "enum_decl",
+            "function_decl",
+            "method_decl",
+            "constructor_decl",
+            "destructor_decl",
+            "variable_decl",
+            "field_decl",
+            "parameter_decl",
+            "type_ref",
+            "expression",
+            "statement",
+            "stl_vector_placeholder",
+            "stl_map_placeholder",
+            "stl_unordered_map_placeholder",
+            "stl_string_placeholder",
+            "stl_optional_placeholder",
+            "stl_variant_placeholder",
+            "stl_tuple_placeholder",
+            "stl_shared_ptr_placeholder",
+            "stl_unique_ptr_placeholder"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "cpp_type": {
+          "type": "string"
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.:-]+$"
+          }
+        },
+        "span": {
+          "$ref": "#/$defs/span"
+        },
+        "stl_placeholder": {
+          "$ref": "#/$defs/stl_placeholder"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "node_kind": {
+                "enum": [
+                  "stl_vector_placeholder",
+                  "stl_map_placeholder",
+                  "stl_unordered_map_placeholder",
+                  "stl_string_placeholder",
+                  "stl_optional_placeholder",
+                  "stl_variant_placeholder",
+                  "stl_tuple_placeholder",
+                  "stl_shared_ptr_placeholder",
+                  "stl_unique_ptr_placeholder"
+                ]
+              }
+            },
+            "required": [
+              "node_kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "stl_placeholder"
+            ]
+          }
+        }
+      ]
+    },
+    "stl_placeholder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "cpp_type",
+        "is_opaque",
+        "boundary_reason",
+        "placeholder_version"
+      ],
+      "properties": {
+        "family": {
+          "enum": [
+            "vector",
+            "map",
+            "unordered_map",
+            "string",
+            "optional",
+            "variant",
+            "tuple",
+            "shared_ptr",
+            "unique_ptr"
+          ]
+        },
+        "cpp_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "is_opaque": {
+          "type": "boolean"
+        },
+        "boundary_reason": {
+          "enum": [
+            "std_namespace",
+            "aliased_std_symbol",
+            "using_alias_chain"
+          ]
+        },
+        "placeholder_version": {
+          "const": 1
+        }
+      }
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "line",
+        "column",
+        "end_line",
+        "end_column"
+      ],
+      "properties": {
+        "file": {
+          "type": "string",
+          "minLength": 1
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "column": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "end_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "end_column": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "level",
+        "code",
+        "message",
+        "span"
+      ],
+      "properties": {
+        "level": {
+          "enum": [
+            "warning",
+            "error"
+          ]
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "span": {
+          "$ref": "#/$defs/span"
+        }
+      }
+    }
+  }
+}

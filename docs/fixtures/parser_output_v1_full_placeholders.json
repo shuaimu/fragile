@@ -1,0 +1,278 @@
+{
+  "schema_version": "1.0.0",
+  "translation_unit": {
+    "source_path": "tests/fixtures/parser_output_v1_stl_placeholder_fixture.cpp",
+    "language": "cpp",
+    "parser_backend": "fragile-parser-clang",
+    "frontend_args": [
+      "-std=c++20"
+    ],
+    "defines": [
+      "FRAGILE_SCHEMA_FIXTURE=1"
+    ],
+    "include_directives": [
+      {
+        "kind": "system",
+        "path": "vector"
+      },
+      {
+        "kind": "system",
+        "path": "map"
+      },
+      {
+        "kind": "system",
+        "path": "unordered_map"
+      },
+      {
+        "kind": "system",
+        "path": "string"
+      },
+      {
+        "kind": "system",
+        "path": "optional"
+      },
+      {
+        "kind": "system",
+        "path": "variant"
+      },
+      {
+        "kind": "system",
+        "path": "tuple"
+      },
+      {
+        "kind": "system",
+        "path": "memory"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "node_id": "n0",
+      "node_kind": "translation_unit",
+      "name": "parser_output_v1_stl_placeholder_fixture.cpp",
+      "span": {
+        "file": "tests/fixtures/parser_output_v1_stl_placeholder_fixture.cpp",
+        "line": 1,
+        "column": 1,
+        "end_line": 1,
+        "end_column": 1
+      },
+      "children": [
+        "n1",
+        "n2",
+        "n3",
+        "n4",
+        "n5",
+        "n6",
+        "n7",
+        "n8",
+        "n9",
+        "n10"
+      ]
+    },
+    {
+      "node_id": "n1",
+      "parent_id": "n0",
+      "node_kind": "function_decl",
+      "name": "consume_placeholders",
+      "cpp_type": "void()",
+      "span": {
+        "file": "tests/fixtures/parser_output_v1_stl_placeholder_fixture.cpp",
+        "line": 3,
+        "column": 1,
+        "end_line": 3,
+        "end_column": 25
+      }
+    },
+    {
+      "node_id": "n2",
+      "parent_id": "n0",
+      "node_kind": "stl_vector_placeholder",
+      "name": "v",
+      "cpp_type": "std::vector<int>",
+      "span": {
+        "file": "tests/fixtures/parser_output_v1_stl_placeholder_fixture.cpp",
+        "line": 4,
+        "column": 3,
+        "end_line": 4,
+        "end_column": 21
+      },
+      "stl_placeholder": {
+        "family": "vector",
+        "cpp_type": "std::vector<int>",
+        "is_opaque": true,
+        "boundary_reason": "std_namespace",
+        "placeholder_version": 1
+      }
+    },
+    {
+      "node_id": "n3",
+      "parent_id": "n0",
+      "node_kind": "stl_map_placeholder",
+      "name": "m",
+      "cpp_type": "std::map<int, int>",
+      "span": {
+        "file": "tests/fixtures/parser_output_v1_stl_placeholder_fixture.cpp",
+        "line": 5,
+        "column": 3,
+        "end_line": 5,
+        "end_column": 22
+      },
+      "stl_placeholder": {
+        "family": "map",
+        "cpp_type": "std::map<int, int>",
+        "is_opaque": true,
+        "boundary_reason": "std_namespace",
+        "placeholder_version": 1
+      }
+    },
+    {
+      "node_id": "n4",
+      "parent_id": "n0",
+      "node_kind": "stl_unordered_map_placeholder",
+      "name": "um",
+      "cpp_type": "std::unordered_map<int, int>",
+      "span": {
+        "file": "tests/fixtures/parser_output_v1_stl_placeholder_fixture.cpp",
+        "line": 6,
+        "column": 3,
+        "end_line": 6,
+        "end_column": 31
+      },
+      "stl_placeholder": {
+        "family": "unordered_map",
+        "cpp_type": "std::unordered_map<int, int>",
+        "is_opaque": true,
+        "boundary_reason": "std_namespace",
+        "placeholder_version": 1
+      }
+    },
+    {
+      "node_id": "n5",
+      "parent_id": "n0",
+      "node_kind": "stl_string_placeholder",
+      "name": "s",
+      "cpp_type": "std::string",
+      "span": {
+        "file": "tests/fixtures/parser_output_v1_stl_placeholder_fixture.cpp",
+        "line": 7,
+        "column": 3,
+        "end_line": 7,
+        "end_column": 13
+      },
+      "stl_placeholder": {
+        "family": "string",
+        "cpp_type": "std::string",
+        "is_opaque": true,
+        "boundary_reason": "std_namespace",
+        "placeholder_version": 1
+      }
+    },
+    {
+      "node_id": "n6",
+      "parent_id": "n0",
+      "node_kind": "stl_optional_placeholder",
+      "name": "o",
+      "cpp_type": "std::optional<int>",
+      "span": {
+        "file": "tests/fixtures/parser_output_v1_stl_placeholder_fixture.cpp",
+        "line": 8,
+        "column": 3,
+        "end_line": 8,
+        "end_column": 22
+      },
+      "stl_placeholder": {
+        "family": "optional",
+        "cpp_type": "std::optional<int>",
+        "is_opaque": true,
+        "boundary_reason": "std_namespace",
+        "placeholder_version": 1
+      }
+    },
+    {
+      "node_id": "n7",
+      "parent_id": "n0",
+      "node_kind": "stl_variant_placeholder",
+      "name": "variant_value",
+      "cpp_type": "std::variant<int, long>",
+      "span": {
+        "file": "tests/fixtures/parser_output_v1_stl_placeholder_fixture.cpp",
+        "line": 9,
+        "column": 3,
+        "end_line": 9,
+        "end_column": 29
+      },
+      "stl_placeholder": {
+        "family": "variant",
+        "cpp_type": "std::variant<int, long>",
+        "is_opaque": true,
+        "boundary_reason": "std_namespace",
+        "placeholder_version": 1
+      }
+    },
+    {
+      "node_id": "n8",
+      "parent_id": "n0",
+      "node_kind": "stl_tuple_placeholder",
+      "name": "pair_like",
+      "cpp_type": "std::tuple<int, int>",
+      "span": {
+        "file": "tests/fixtures/parser_output_v1_stl_placeholder_fixture.cpp",
+        "line": 10,
+        "column": 3,
+        "end_line": 10,
+        "end_column": 24
+      },
+      "stl_placeholder": {
+        "family": "tuple",
+        "cpp_type": "std::tuple<int, int>",
+        "is_opaque": true,
+        "boundary_reason": "std_namespace",
+        "placeholder_version": 1
+      }
+    },
+    {
+      "node_id": "n9",
+      "parent_id": "n0",
+      "node_kind": "stl_shared_ptr_placeholder",
+      "name": "shared_value",
+      "cpp_type": "std::shared_ptr<int>",
+      "span": {
+        "file": "tests/fixtures/parser_output_v1_stl_placeholder_fixture.cpp",
+        "line": 11,
+        "column": 3,
+        "end_line": 11,
+        "end_column": 24
+      },
+      "stl_placeholder": {
+        "family": "shared_ptr",
+        "cpp_type": "std::shared_ptr<int>",
+        "is_opaque": true,
+        "boundary_reason": "std_namespace",
+        "placeholder_version": 1
+      }
+    },
+    {
+      "node_id": "n10",
+      "parent_id": "n0",
+      "node_kind": "stl_unique_ptr_placeholder",
+      "name": "unique_value",
+      "cpp_type": "std::unique_ptr<int>",
+      "span": {
+        "file": "tests/fixtures/parser_output_v1_stl_placeholder_fixture.cpp",
+        "line": 12,
+        "column": 3,
+        "end_line": 12,
+        "end_column": 24
+      },
+      "stl_placeholder": {
+        "family": "unique_ptr",
+        "cpp_type": "std::unique_ptr<int>",
+        "is_opaque": true,
+        "boundary_reason": "std_namespace",
+        "placeholder_version": 1
+      }
+    }
+  ],
+  "diagnostics": []
+}

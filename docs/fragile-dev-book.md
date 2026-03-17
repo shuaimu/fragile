@@ -18733,3 +18733,45 @@ Validation:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
 - Full workspace suite:
   - `cargo test --workspace --all-targets`
+
+## 2026-03-17: M1.1 ParserOutput v1 Schema Closure
+
+Context:
+- Executed top unresolved P0 leaf `M1.1` from `TODO.md`.
+- Goal: define `ParserOutput v1` with explicit STL placeholder node kinds.
+
+Wrong-approach check:
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- Kept this leaf to schema/fixture/test contract work only; no target-specific hacks, no force-native bypasses, and no fake semantic fallback bodies.
+
+Design update:
+- Added machine-readable schema:
+  - `docs/schemas/parser_output_v1.schema.json`
+- Added canonical fixture corpus entry:
+  - `docs/fixtures/parser_output_v1_full_placeholders.json`
+- Explicit STL placeholder `node_kind` values in the v1 schema:
+  - `stl_vector_placeholder`
+  - `stl_map_placeholder`
+  - `stl_unordered_map_placeholder`
+  - `stl_string_placeholder`
+  - `stl_optional_placeholder`
+  - `stl_variant_placeholder`
+  - `stl_tuple_placeholder`
+  - `stl_shared_ptr_placeholder`
+  - `stl_unique_ptr_placeholder`
+
+Regression coverage:
+- Added `tests/python/test_parser_output_v1_schema.py`:
+  - validates schema version pin (`1.0.0`)
+  - validates explicit placeholder kind coverage
+  - validates canonical fixture covers all placeholder kinds with matching family payloads
+  - validates fixture node kinds are schema-defined
+  - validates `TODO.md` keeps `M1.1` marked complete
+
+Validation:
+- Focused:
+  - `python3 -m unittest tests/python/test_parser_output_v1_schema.py -v`
+- Full Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+- Full workspace suite:
+  - `cargo test --workspace --all-targets`
