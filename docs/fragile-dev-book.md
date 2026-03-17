@@ -18857,3 +18857,42 @@ Validation:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
 - Full workspace suite:
   - `cargo test --workspace --all-targets`
+
+## 2026-03-17: M2.1 Parser Core Trait and Backend Registry Closure
+
+Context:
+- Executed next unresolved P0 leaf `M2.1` from `TODO.md`.
+- Goal: introduce `fragile-parser-core` trait contracts and backend registry.
+
+Wrong-approach check:
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- Kept scope to generic parser-core contracts; no target-specific hacks, no force-native bypasses, and no fake semantic fallback bodies.
+
+Design update:
+- Added new workspace crate:
+  - `crates/fragile-parser-core`
+- Added parser backend trait and contract models:
+  - `ParserBackend`
+  - `ParseRequest`
+  - `ParserOutputV1` and companion structs
+- Added deterministic backend registry:
+  - `BackendRegistry` (BTreeMap-backed ordering)
+  - `register`, `register_arc`, `get`, `backend_ids`, `parse_with`
+  - error model `ParserCoreError` for invalid/duplicate/unknown/failure paths
+
+Regression coverage:
+- Added focused unit tests in `fragile-parser-core` for:
+  - successful register + dispatch
+  - duplicate registration rejection
+  - unknown backend path
+  - backend failure wrapping with backend id
+  - deterministic sorted backend id listing
+  - invalid backend id rejection
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-parser-core`
+- Full Python suite:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+- Full workspace suite:
+  - `cargo test --workspace --all-targets`

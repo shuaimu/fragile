@@ -59,7 +59,7 @@ Acceptance:
 - [x] M1.A2 ParserOutput round-trip tests pass with deterministic output.
 
 ### M2) New Parser Module Bootstrap (Non-LibTooling Active Path)
-- [ ] M2.1 Introduce `fragile-parser-core` trait and backend registry.
+- [x] M2.1 Introduce `fragile-parser-core` trait and backend registry.
 - [ ] M2.2 Implement `fragile-parser-clang` backend skeleton producing `ParserOutput v1`.
 - [ ] M2.3 Wire transpiler entry points to backend trait behind feature/flag cutover switch.
 Acceptance:
