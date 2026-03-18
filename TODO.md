@@ -131,7 +131,7 @@ Acceptance:
 - [x] M6.A2 No semantic stub/fake body is produced for unsupported shapes. Done 2026-03-18. Evidence: m6_3_transpile_returns_error_not_code_for_unknown_placeholder asserts transpile_parser_output_to_rust returns Err (not Ok with generated code) for unsupported placeholders.
 
 ### M7) Shadow Mode and Parity Hardening
-- [ ] M7.1 Run old/new parser backends in shadow mode on representative non-RPC corpus; queue RPC corpus for M9 closure.
+- [ ] M7.1 Run old/new parser backends in shadow mode on representative non-RPC corpus; queue RPC corpus for M9 closure. **[WIP on claude/parser]**
 - [ ] M7.2 Track parity metrics: first failure class, unresolved-name counts, runtime status, perf manifest fields.
 - [ ] M7.3 Close parity blockers using generic fixes only.
 Acceptance:
