@@ -59,6 +59,23 @@ pub struct ParserNode {
     pub node_kind: String,
     pub name: Option<String>,
     pub cpp_type: Option<String>,
+    /// Source file path where this node was parsed, if available.
+    pub source_file: Option<String>,
+    /// 1-based line number in the source file, if available.
+    pub source_line: Option<u32>,
+    /// 1-based column number in the source file, if available.
+    pub source_column: Option<u32>,
+}
+
+impl ParserNode {
+    /// Returns the source location as a `StlShapeSourceLocation` for diagnostic use.
+    pub fn source_location(&self) -> StlShapeSourceLocation {
+        StlShapeSourceLocation {
+            file: self.source_file.clone(),
+            line: self.source_line,
+            column: self.source_column,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +83,50 @@ pub struct ParserDiagnostic {
     pub level: ParserDiagnosticLevel,
     pub code: String,
     pub message: String,
+    /// Optional structured payload for actionable diagnostics (M6.2).
+    pub payload: Option<DiagnosticPayload>,
+}
+
+/// Structured payload carrying actionable metadata for an STL shape diagnostic.
+///
+/// All fields are deterministic for the same input: ordering and formatting
+/// are stable across runs so that consumers can parse them programmatically.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiagnosticPayload {
+    /// The C++ symbol or type spelling that triggered the diagnostic.
+    pub symbol: String,
+    /// Source location where the issue was observed.
+    pub location: StlShapeSourceLocation,
+    /// A deterministic fingerprint of the STL shape (family + element types).
+    /// Format: `"family(element_types)"` e.g. `"map(std::string, int)"`.
+    pub shape_fingerprint: String,
+    /// The mapping key that was looked up but not found, if applicable.
+    pub missing_mapping_key: Option<String>,
+    /// The parser-output placeholder node kind, if applicable.
+    pub placeholder_kind: Option<String>,
+    /// The STL family name, if parseable from the placeholder kind.
+    pub family: Option<String>,
+    /// Sorted list of supported families, for context in actionable suggestions.
+    pub supported_families: Vec<String>,
+}
+
+impl fmt::Display for DiagnosticPayload {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "symbol=`{}`, location={}, shape=`{}`", self.symbol, self.location, self.shape_fingerprint)?;
+        if let Some(ref key) = self.missing_mapping_key {
+            write!(f, ", missing_key=`{key}`")?;
+        }
+        if let Some(ref kind) = self.placeholder_kind {
+            write!(f, ", placeholder_kind=`{kind}`")?;
+        }
+        if let Some(ref family) = self.family {
+            write!(f, ", family=`{family}`")?;
+        }
+        if !self.supported_families.is_empty() {
+            write!(f, ", supported=[{}]", self.supported_families.join(", "))?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -333,12 +394,21 @@ impl UnsupportedStlShapeError {
         self
     }
 
-    /// Convert this error into a `ParserDiagnostic`.
+    /// Convert this error into a `ParserDiagnostic` with a structured payload.
     pub fn to_parser_diagnostic(&self) -> ParserDiagnostic {
         ParserDiagnostic {
             level: ParserDiagnosticLevel::Error,
             code: self.code.code_str().to_string(),
             message: self.to_string(),
+            payload: Some(DiagnosticPayload {
+                symbol: self.symbol.clone(),
+                location: self.location.clone(),
+                shape_fingerprint: self.shape_fingerprint.clone(),
+                missing_mapping_key: self.missing_mapping_key.clone(),
+                placeholder_kind: Some(self.placeholder_kind.clone()),
+                family: self.family.clone(),
+                supported_families: self.supported_families.clone(),
+            }),
         }
     }
 }
@@ -446,6 +516,9 @@ mod tests {
                     node_kind: "translation_unit".to_string(),
                     name: Some("tu".to_string()),
                     cpp_type: None,
+                    source_file: None,
+                    source_line: None,
+                    source_column: None,
                 }],
                 diagnostics: Vec::new(),
             })
@@ -790,5 +863,195 @@ mod tests {
             UnsupportedStlShapeErrorCode::MissingFamilyMapping
                 < UnsupportedStlShapeErrorCode::UnsupportedConcreteShape
         );
+    }
+
+    // --- Actionable diagnostics payload tests (M6.2) ---
+
+    use super::DiagnosticPayload;
+
+    #[test]
+    fn parser_node_source_location_returns_stl_shape_location() {
+        let node = ParserNode {
+            node_id: "n42".to_string(),
+            parent_id: None,
+            node_kind: "stl_deque_placeholder".to_string(),
+            name: Some("std::deque<int>".to_string()),
+            cpp_type: Some("std::deque<int>".to_string()),
+            source_file: Some("main.cpp".to_string()),
+            source_line: Some(10),
+            source_column: Some(5),
+        };
+        let loc = node.source_location();
+        assert_eq!(loc.file.as_deref(), Some("main.cpp"));
+        assert_eq!(loc.line, Some(10));
+        assert_eq!(loc.column, Some(5));
+    }
+
+    #[test]
+    fn parser_node_source_location_handles_missing_fields() {
+        let node = ParserNode {
+            node_id: "n0".to_string(),
+            parent_id: None,
+            node_kind: "translation_unit".to_string(),
+            name: None,
+            cpp_type: None,
+            source_file: None,
+            source_line: None,
+            source_column: None,
+        };
+        let loc = node.source_location();
+        assert_eq!(loc.file, None);
+        assert_eq!(loc.line, None);
+        assert_eq!(loc.column, None);
+        assert_eq!(loc.to_string(), "<unknown>");
+    }
+
+    #[test]
+    fn to_parser_diagnostic_includes_structured_payload() {
+        let err = UnsupportedStlShapeError::unrecognized_placeholder_kind(
+            "std::deque<int>",
+            "stl_deque_placeholder",
+            vec!["map".to_string(), "vector".to_string()],
+        )
+        .with_location(StlShapeSourceLocation {
+            file: Some("test.cpp".to_string()),
+            line: Some(42),
+            column: Some(5),
+        });
+        let diag = err.to_parser_diagnostic();
+        assert_eq!(diag.level, super::ParserDiagnosticLevel::Error);
+        assert_eq!(diag.code, "FRAGILE_STL_E001");
+
+        let payload = diag.payload.expect("diagnostic must have structured payload");
+        assert_eq!(payload.symbol, "std::deque<int>");
+        assert_eq!(payload.location.file.as_deref(), Some("test.cpp"));
+        assert_eq!(payload.location.line, Some(42));
+        assert_eq!(payload.location.column, Some(5));
+        assert_eq!(payload.shape_fingerprint, "deque");
+        assert_eq!(payload.placeholder_kind.as_deref(), Some("stl_deque_placeholder"));
+        assert_eq!(payload.family.as_deref(), Some("deque"));
+        assert_eq!(payload.supported_families, vec!["map", "vector"]);
+        assert!(payload.missing_mapping_key.is_none());
+    }
+
+    #[test]
+    fn missing_family_diagnostic_payload_has_mapping_key() {
+        let err = UnsupportedStlShapeError::missing_family_mapping(
+            "std::optional<int>",
+            "stl_optional_placeholder",
+            "optional",
+        );
+        let diag = err.to_parser_diagnostic();
+        let payload = diag.payload.expect("must have payload");
+        assert_eq!(payload.symbol, "std::optional<int>");
+        assert_eq!(payload.missing_mapping_key.as_deref(), Some("optional"));
+        assert_eq!(payload.family.as_deref(), Some("optional"));
+        assert_eq!(payload.shape_fingerprint, "optional");
+    }
+
+    #[test]
+    fn unsupported_concrete_shape_diagnostic_payload_complete() {
+        let err = UnsupportedStlShapeError::unsupported_concrete_shape(
+            "std::map<std::string, int>",
+            "stl_map_placeholder",
+            "map",
+            "map(std::string, int)",
+            "std_map_string__int",
+        )
+        .with_location(StlShapeSourceLocation {
+            file: Some("app.cpp".to_string()),
+            line: Some(100),
+            column: Some(12),
+        })
+        .with_supported_families(vec!["map".to_string(), "vector".to_string()]);
+        let diag = err.to_parser_diagnostic();
+        let payload = diag.payload.expect("must have payload");
+        assert_eq!(payload.symbol, "std::map<std::string, int>");
+        assert_eq!(payload.location.file.as_deref(), Some("app.cpp"));
+        assert_eq!(payload.location.line, Some(100));
+        assert_eq!(payload.location.column, Some(12));
+        assert_eq!(payload.shape_fingerprint, "map(std::string, int)");
+        assert_eq!(payload.missing_mapping_key.as_deref(), Some("std_map_string__int"));
+        assert_eq!(payload.placeholder_kind.as_deref(), Some("stl_map_placeholder"));
+        assert_eq!(payload.family.as_deref(), Some("map"));
+        assert_eq!(payload.supported_families, vec!["map", "vector"]);
+    }
+
+    #[test]
+    fn diagnostic_payload_display_is_deterministic() {
+        let payload = DiagnosticPayload {
+            symbol: "std::deque<int>".to_string(),
+            location: StlShapeSourceLocation {
+                file: Some("a.cpp".to_string()),
+                line: Some(3),
+                column: Some(7),
+            },
+            shape_fingerprint: "deque".to_string(),
+            missing_mapping_key: Some("deque_int".to_string()),
+            placeholder_kind: Some("stl_deque_placeholder".to_string()),
+            family: Some("deque".to_string()),
+            supported_families: vec!["map".to_string(), "vector".to_string()],
+        };
+        let display = payload.to_string();
+        assert!(display.contains("symbol=`std::deque<int>`"), "symbol: {display}");
+        assert!(display.contains("location=a.cpp:3:7"), "location: {display}");
+        assert!(display.contains("shape=`deque`"), "shape: {display}");
+        assert!(display.contains("missing_key=`deque_int`"), "missing_key: {display}");
+        assert!(display.contains("placeholder_kind=`stl_deque_placeholder`"), "placeholder_kind: {display}");
+        assert!(display.contains("family=`deque`"), "family: {display}");
+        assert!(display.contains("supported=[map, vector]"), "supported: {display}");
+
+        // Deterministic: same fields produce identical display.
+        let payload2 = DiagnosticPayload {
+            symbol: "std::deque<int>".to_string(),
+            location: StlShapeSourceLocation {
+                file: Some("a.cpp".to_string()),
+                line: Some(3),
+                column: Some(7),
+            },
+            shape_fingerprint: "deque".to_string(),
+            missing_mapping_key: Some("deque_int".to_string()),
+            placeholder_kind: Some("stl_deque_placeholder".to_string()),
+            family: Some("deque".to_string()),
+            supported_families: vec!["map".to_string(), "vector".to_string()],
+        };
+        assert_eq!(display, payload2.to_string());
+    }
+
+    #[test]
+    fn diagnostic_payload_display_omits_none_fields() {
+        let payload = DiagnosticPayload {
+            symbol: "std::vector<int>".to_string(),
+            location: StlShapeSourceLocation {
+                file: None,
+                line: None,
+                column: None,
+            },
+            shape_fingerprint: "vector(int)".to_string(),
+            missing_mapping_key: None,
+            placeholder_kind: None,
+            family: None,
+            supported_families: Vec::new(),
+        };
+        let display = payload.to_string();
+        assert!(display.contains("symbol=`std::vector<int>`"), "symbol: {display}");
+        assert!(display.contains("location=<unknown>"), "location: {display}");
+        assert!(display.contains("shape=`vector(int)`"), "shape: {display}");
+        assert!(!display.contains("missing_key"), "should not contain missing_key: {display}");
+        assert!(!display.contains("placeholder_kind"), "should not contain placeholder_kind: {display}");
+        assert!(!display.contains("family"), "should not contain family: {display}");
+        assert!(!display.contains("supported"), "should not contain supported: {display}");
+    }
+
+    #[test]
+    fn parser_diagnostic_without_payload_has_none() {
+        // Legacy diagnostics (not from UnsupportedStlShapeError) have no payload.
+        let diag = super::ParserDiagnostic {
+            level: super::ParserDiagnosticLevel::Warning,
+            code: "W001".to_string(),
+            message: "some warning".to_string(),
+            payload: None,
+        };
+        assert!(diag.payload.is_none());
     }
 }

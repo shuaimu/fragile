@@ -190,6 +190,9 @@ fn flatten_clang_ast_node(
         node_kind: map_parser_node_kind_with_stl_boundary(&node.kind, stl_family),
         name: node_name,
         cpp_type: node_cpp_type,
+        source_file: node.location.file.clone(),
+        source_line: if node.location.line > 0 { Some(node.location.line) } else { None },
+        source_column: if node.location.column > 0 { Some(node.location.column) } else { None },
     });
     if emitted_stl_placeholder {
         // Known STL boundaries are opaque placeholders; do not lower internals.

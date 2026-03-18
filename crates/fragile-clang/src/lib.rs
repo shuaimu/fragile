@@ -35,6 +35,7 @@ use fragile_parser_core::{
     IncludeDirective as ParserCoreIncludeDirective,
     ParserLanguage as ParserCoreLanguage,
     ParserOutputV1,
+    StlShapeSourceLocation,
     UnsupportedStlShapeError,
     PARSER_OUTPUT_SCHEMA_VERSION_V1,
 };
@@ -625,6 +626,65 @@ fn stl_placeholder_family_from_node_kind(node_kind: &str) -> Option<&'static str
         .find_map(|(kind, family)| (*kind == node_kind).then_some(*family))
 }
 
+fn parser_output_shape_error_location(parser_output: &ParserOutputV1) -> StlShapeSourceLocation {
+    let file = (!parser_output
+        .translation_unit
+        .source_path
+        .as_os_str()
+        .is_empty())
+    .then(|| parser_output.translation_unit.source_path.display().to_string());
+    StlShapeSourceLocation {
+        file,
+        line: None,
+        column: None,
+    }
+}
+
+/// Returns the best available source location for a node: node-level if
+/// present, otherwise falls back to TU-level file with no line/column.
+fn node_or_tu_shape_error_location(
+    node: &fragile_parser_core::ParserNode,
+    tu_fallback: &StlShapeSourceLocation,
+) -> StlShapeSourceLocation {
+    if node.source_file.is_some() || node.source_line.is_some() {
+        node.source_location()
+    } else {
+        tu_fallback.clone()
+    }
+}
+
+fn parser_output_stl_shape_error_symbol(node: &fragile_parser_core::ParserNode, node_kind: &str) -> String {
+    node.name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            node.cpp_type
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or(node_kind)
+        .to_string()
+}
+
+fn parser_output_stl_shape_fingerprint(
+    node: &fragile_parser_core::ParserNode,
+    node_kind: &str,
+    family: Option<&str>,
+) -> String {
+    if let Some(cpp_type) = node
+        .cpp_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let head = family.unwrap_or(node_kind);
+        return format!("{head}({cpp_type})");
+    }
+    family.unwrap_or(node_kind).to_string()
+}
+
 fn supported_stl_placeholder_node_kinds() -> String {
     let mut kinds = STL_PLACEHOLDER_KIND_FAMILY_MAP
         .iter()
@@ -638,6 +698,7 @@ fn resolve_parser_output_stl_placeholder_mappings(
     parser_output: &ParserOutputV1,
 ) -> Result<BTreeMap<String, String>> {
     let mut mappings = BTreeMap::new();
+    let tu_location = parser_output_shape_error_location(parser_output);
     for node in &parser_output.nodes {
         let node_kind = node.node_kind.trim();
         if !(node_kind.starts_with("stl_") && node_kind.ends_with("_placeholder")) {
@@ -648,25 +709,39 @@ fn resolve_parser_output_stl_placeholder_mappings(
                 .iter()
                 .map(|(_, fam)| fam.to_string())
                 .collect();
-            let symbol = node.name.as_deref().unwrap_or(node_kind);
+            let symbol = parser_output_stl_shape_error_symbol(node, node_kind);
+            let location = node_or_tu_shape_error_location(node, &tu_location);
+            let mut err = UnsupportedStlShapeError::unrecognized_placeholder_kind(
+                symbol,
+                node_kind,
+                supported_families,
+            )
+            .with_location(location);
+            err.shape_fingerprint = parser_output_stl_shape_fingerprint(
+                node,
+                node_kind,
+                err.family.as_deref(),
+            );
+            err.missing_mapping_key = Some(node_kind.to_string());
             return Err(miette::miette!(
                 "{}",
-                UnsupportedStlShapeError::unrecognized_placeholder_kind(
-                    symbol,
-                    node_kind,
-                    supported_families,
-                )
+                err
             ));
         };
         let Some(contract_entry) = pre_generated_stl_family_contract_entry_v1(family) else {
-            let symbol = node.name.as_deref().unwrap_or(node_kind);
+            let symbol = parser_output_stl_shape_error_symbol(node, node_kind);
+            let location = node_or_tu_shape_error_location(node, &tu_location);
+            let mut err = UnsupportedStlShapeError::missing_family_mapping(
+                symbol,
+                node_kind,
+                family,
+            )
+            .with_location(location);
+            err.shape_fingerprint =
+                parser_output_stl_shape_fingerprint(node, node_kind, Some(family));
             return Err(miette::miette!(
                 "{}",
-                UnsupportedStlShapeError::missing_family_mapping(
-                    symbol,
-                    node_kind,
-                    family,
-                )
+                err
             ));
         };
         mappings
@@ -1666,6 +1741,9 @@ mod tests {
                 node_kind: "translation_unit".to_string(),
                 name: Some("unit".to_string()),
                 cpp_type: None,
+                source_file: None,
+                source_line: None,
+                source_column: None,
             }],
             diagnostics: Vec::<ParserDiagnostic>::new(),
         }
@@ -1678,6 +1756,9 @@ mod tests {
             node_kind: node_kind.to_string(),
             name: None,
             cpp_type: None,
+            source_file: None,
+            source_line: None,
+            source_column: None,
         }
     }
 
@@ -2141,9 +2222,12 @@ mod tests {
             Vec::new(),
             Vec::new(),
         );
+        let mut deque_node = parser_node_fixture("n1", "stl_deque_placeholder");
+        deque_node.name = Some("std::deque<int>".to_string());
+        deque_node.cpp_type = Some("std::deque<int>".to_string());
         parser_output.nodes = vec![
             parser_node_fixture("n0", "translation_unit"),
-            parser_node_fixture("n1", "stl_deque_placeholder"),
+            deque_node,
         ];
 
         let err = resolve_parser_output_stl_placeholder_mappings(&parser_output)
@@ -2151,8 +2235,72 @@ mod tests {
         let err_text = err.to_string();
         assert!(
             err_text.contains("stl_deque_placeholder")
-                && err_text.contains("FRAGILE_STL_E001"),
+                && err_text.contains("FRAGILE_STL_E001")
+                && err_text.contains("fixture.cc")
+                && err_text.contains("`std::deque<int>`")
+                && err_text.contains("shape=`deque(std::deque<int>)`")
+                && err_text.contains("missing_key=`stl_deque_placeholder`"),
             "unexpected error for unknown placeholder kind: {err_text}"
+        );
+    }
+
+    #[test]
+    fn parser_output_stl_placeholder_mapping_unknown_kind_uses_cpp_type_as_symbol_when_name_missing()
+    {
+        let mut parser_output = parser_output_fixture(
+            PathBuf::from("fixture.cc"),
+            ParserCoreLanguage::Cpp,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let mut deque_node = parser_node_fixture("n1", "stl_deque_placeholder");
+        deque_node.cpp_type = Some("std::deque<long>".to_string());
+        parser_output.nodes = vec![
+            parser_node_fixture("n0", "translation_unit"),
+            deque_node,
+        ];
+
+        let err = resolve_parser_output_stl_placeholder_mappings(&parser_output)
+            .expect_err("unknown placeholder kind should fail fast");
+        let err_text = err.to_string();
+        assert!(
+            err_text.contains("`std::deque<long>`")
+                && err_text.contains("shape=`deque(std::deque<long>)`")
+                && err_text.contains("missing_key=`stl_deque_placeholder`"),
+            "unexpected unknown-placeholder diagnostic payload when name is missing: {err_text}"
+        );
+    }
+
+    #[test]
+    fn parser_output_stl_placeholder_mapping_unknown_kind_prefers_node_source_location() {
+        let mut parser_output = parser_output_fixture(
+            PathBuf::from("fixture.cc"),
+            ParserCoreLanguage::Cpp,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let mut deque_node = parser_node_fixture("n1", "stl_deque_placeholder");
+        deque_node.name = Some("std::deque<int>".to_string());
+        deque_node.cpp_type = Some("std::deque<int>".to_string());
+        deque_node.source_file = Some("node_source.cc".to_string());
+        deque_node.source_line = Some(11);
+        deque_node.source_column = Some(3);
+        parser_output.nodes = vec![
+            parser_node_fixture("n0", "translation_unit"),
+            deque_node,
+        ];
+
+        let err = resolve_parser_output_stl_placeholder_mappings(&parser_output)
+            .expect_err("unknown placeholder kind should fail fast");
+        let err_text = err.to_string();
+        assert!(
+            err_text.contains("node_source.cc:11:3")
+                && err_text.contains("`std::deque<int>`")
+                && err_text.contains("shape=`deque(std::deque<int>)`")
+                && err_text.contains("missing_key=`stl_deque_placeholder`"),
+            "unexpected node-location-aware unknown-placeholder diagnostic payload: {err_text}"
         );
     }
 

@@ -19882,6 +19882,63 @@ Validation:
   - `cargo test --workspace --all-targets`
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
 
+## 2026-03-18: M6.2 Actionable Diagnostics Payload for Unsupported STL Shapes
+
+Context:
+- After `M5.A2.c`, the next top unfinished P0 leaf was `M6.2`.
+- Goal: ensure unsupported STL-shape failures carry actionable deterministic
+  payload fields:
+  - location
+  - symbol
+  - shape fingerprint
+  - missing mapping key
+
+Wrong-approach check:
+- Re-checked section `1.3 Wrong Approaches (Do Not Do)` and
+  `docs/dev/wrong.md` before implementation.
+- No semantic stubs, target-specific hacks, or force-native bypasses were
+  introduced.
+
+Design update:
+- Extended parser-core diagnostics model:
+  - `ParserNode` now carries source coordinates:
+    - `source_file`, `source_line`, `source_column`
+  - `ParserNode::source_location()` helper added.
+  - `ParserDiagnostic` now supports optional structured payload:
+    - `payload: Option<DiagnosticPayload>`
+  - Added `DiagnosticPayload` (deterministic `Display`) containing:
+    - `symbol`
+    - `location`
+    - `shape_fingerprint`
+    - `missing_mapping_key`
+    - `placeholder_kind`
+    - `family`
+    - `supported_families`
+  - `UnsupportedStlShapeError::to_parser_diagnostic()` now populates payload.
+- Populated parser node source coordinates in parser backend flattening:
+  - `crates/fragile-parser-clang/src/lib.rs` now maps AST location into
+    `ParserNode` source fields.
+- Updated active mapping-resolution failure path to populate actionable details:
+  - `resolve_parser_output_stl_placeholder_mappings(...)`
+  - error symbol selection prefers node `name`, then `cpp_type`, then node kind
+  - error location prefers node source location, with TU file fallback
+  - shape fingerprint uses `family(cpp_type)` where available
+  - unknown placeholder-kind failures now include deterministic
+    `missing_key=<node_kind>`
+- Added deterministic regressions in `fragile-clang` for unknown-placeholder
+  error payload shape:
+  - includes file/symbol/fingerprint/missing key
+  - prefers node-level source location when present
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-parser-core`
+  - `cargo test -p fragile-parser-clang`
+  - `cargo test -p fragile-clang parser_output_stl_placeholder_mapping_ -- --nocapture`
+- Full regression:
+  - `cargo test --workspace --all-targets`
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
 ## 2026-03-18: M5.A2.c Corpus-Level Mapped-Family Legacy Fallback Alias Audit Gate
 
 Context:
