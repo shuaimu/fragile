@@ -19674,3 +19674,49 @@ Validation:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
 - Full workspace suite:
   - `cargo test --workspace --all-targets`
+
+## 2026-03-18: M5.1.a Parser-Output Placeholder Mapping Validation
+
+Context:
+- Top pending P0 leaf moved into `M5.1` (codegen placeholder mapping layer).
+- `M5.1` was too broad for a single implementation step, so it was broken into
+  `M5.1.a` through `M5.1.e` in `TODO.md`.
+- This entry records closure of `M5.1.a` only.
+
+Wrong-approach check:
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` before implementation.
+- No target-specific conditionals, no force-native bypasses, and no synthetic
+  semantic fallback bodies were introduced.
+- Unknown placeholder kinds now fail deterministically; no silent fallback lane.
+
+Design update:
+- Added canonical parser-output STL placeholder node-kind mapping table in
+  `crates/fragile-clang/src/lib.rs`:
+  - `stl_vector_placeholder` -> `vector`
+  - `stl_map_placeholder` -> `map`
+  - `stl_unordered_map_placeholder` -> `unordered_map`
+  - `stl_string_placeholder` -> `string`
+  - `stl_optional_placeholder` -> `optional`
+  - `stl_variant_placeholder` -> `variant`
+  - `stl_tuple_placeholder` -> `tuple`
+  - `stl_shared_ptr_placeholder` -> `shared_ptr`
+  - `stl_unique_ptr_placeholder` -> `unique_ptr`
+- Added contract-backed resolver
+  `resolve_parser_output_stl_placeholder_mappings(...)`:
+  - filters parser-output nodes for `stl_*_placeholder` kinds,
+  - resolves node kind -> family,
+  - resolves family via `fragile-stl` layout contract entry,
+  - returns deterministic kind -> canonical-prefix mapping,
+  - errors on unknown kinds or missing contract entries.
+- Wired validation into parser-output handoff path:
+  `transpile_parser_output_to_rust_with_options(...)` now validates placeholder
+  mappings before parse/codegen.
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-clang parser_output_stl_placeholder_mapping -- --nocapture`
+  - `cargo test -p fragile-clang parser_output_codegen_rejects_unknown_stl_placeholder_kind_before_parse -- --nocapture`
+- Added tests in `crates/fragile-clang/src/lib.rs`:
+  - `parser_output_stl_placeholder_mapping_resolves_known_placeholder_kinds`
+  - `parser_output_stl_placeholder_mapping_rejects_unknown_placeholder_kind`
+  - `parser_output_codegen_rejects_unknown_stl_placeholder_kind_before_parse`

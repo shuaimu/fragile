@@ -37,8 +37,9 @@ use fragile_parser_core::{
     ParserOutputV1,
     PARSER_OUTPUT_SCHEMA_VERSION_V1,
 };
+use fragile_stl::layout_contract::pre_generated_stl_family_contract_entry_v1;
 use miette::Result;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -148,6 +149,17 @@ const TRANSPILE_STAGE_EXPORT: &str = "export";
 const TRANSPILE_STAGE_ENRICHMENT: &str = "enrichment";
 const TRANSPILE_STAGE_CODEGEN: &str = "codegen";
 const PARSER_OUTPUT_HANDOFF_BACKEND_LABEL: &str = "parser-output-handoff";
+const STL_PLACEHOLDER_KIND_FAMILY_MAP: &[(&str, &str)] = &[
+    ("stl_vector_placeholder", "vector"),
+    ("stl_map_placeholder", "map"),
+    ("stl_unordered_map_placeholder", "unordered_map"),
+    ("stl_string_placeholder", "string"),
+    ("stl_optional_placeholder", "optional"),
+    ("stl_variant_placeholder", "variant"),
+    ("stl_tuple_placeholder", "tuple"),
+    ("stl_shared_ptr_placeholder", "shared_ptr"),
+    ("stl_unique_ptr_placeholder", "unique_ptr"),
+];
 
 fn parser_backend_label(backend: ParserBackend) -> &'static str {
     match backend {
@@ -543,6 +555,51 @@ fn parser_output_effective_defines(parser_output: &ParserOutputV1) -> Vec<String
     let frontend =
         parser_output_frontend_defines(&parser_output.translation_unit.frontend_args).into_iter();
     dedupe_parser_output_values(requested.chain(frontend))
+}
+
+fn stl_placeholder_family_from_node_kind(node_kind: &str) -> Option<&'static str> {
+    STL_PLACEHOLDER_KIND_FAMILY_MAP
+        .iter()
+        .find_map(|(kind, family)| (*kind == node_kind).then_some(*family))
+}
+
+fn supported_stl_placeholder_node_kinds() -> String {
+    let mut kinds = STL_PLACEHOLDER_KIND_FAMILY_MAP
+        .iter()
+        .map(|(kind, _)| *kind)
+        .collect::<Vec<_>>();
+    kinds.sort();
+    kinds.join(", ")
+}
+
+fn resolve_parser_output_stl_placeholder_mappings(
+    parser_output: &ParserOutputV1,
+) -> Result<BTreeMap<String, String>> {
+    let mut mappings = BTreeMap::new();
+    let supported_kinds = supported_stl_placeholder_node_kinds();
+    for node in &parser_output.nodes {
+        let node_kind = node.node_kind.trim();
+        if !(node_kind.starts_with("stl_") && node_kind.ends_with("_placeholder")) {
+            continue;
+        }
+        let Some(family) = stl_placeholder_family_from_node_kind(node_kind) else {
+            return Err(miette::miette!(
+                "unsupported parser-output STL placeholder node kind `{}` (supported: {})",
+                node_kind,
+                supported_kinds
+            ));
+        };
+        let Some(contract_entry) = pre_generated_stl_family_contract_entry_v1(family) else {
+            return Err(miette::miette!(
+                "missing pre-generated STL contract mapping for placeholder family `{}`",
+                family
+            ));
+        };
+        mappings
+            .entry(node_kind.to_string())
+            .or_insert_with(|| contract_entry.canonical_type_prefix.to_string());
+    }
+    Ok(mappings)
 }
 
 fn extract_missing_header_name_from_line(line: &str) -> Option<String> {
@@ -1174,6 +1231,7 @@ pub fn transpile_parser_output_to_rust_with_options(
     );
     let mut timings = TranspileStageTimings::default();
     let transpile_result: Result<String> = (|| {
+        let _placeholder_mappings = resolve_parser_output_stl_placeholder_mappings(parser_output)?;
         let parser = ClangParser::with_paths_defines_language_and_ignored_errors(
             parser_output_effective_include_paths(parser_output),
             parser_output_effective_defines(parser_output),
@@ -1301,6 +1359,16 @@ mod tests {
                 cpp_type: None,
             }],
             diagnostics: Vec::<ParserDiagnostic>::new(),
+        }
+    }
+
+    fn parser_node_fixture(node_id: &str, node_kind: &str) -> ParserNode {
+        ParserNode {
+            node_id: node_id.to_string(),
+            parent_id: None,
+            node_kind: node_kind.to_string(),
+            name: None,
+            cpp_type: None,
         }
     }
 
@@ -1728,6 +1796,58 @@ mod tests {
     }
 
     #[test]
+    fn parser_output_stl_placeholder_mapping_resolves_known_placeholder_kinds() {
+        let mut parser_output = parser_output_fixture(
+            PathBuf::from("fixture.cc"),
+            ParserCoreLanguage::Cpp,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        parser_output.nodes = vec![
+            parser_node_fixture("n0", "translation_unit"),
+            parser_node_fixture("n1", "stl_vector_placeholder"),
+            parser_node_fixture("n2", "stl_map_placeholder"),
+            parser_node_fixture("n3", "stl_unordered_map_placeholder"),
+            parser_node_fixture("n4", "stl_map_placeholder"),
+        ];
+
+        let mappings = resolve_parser_output_stl_placeholder_mappings(&parser_output)
+            .expect("known placeholders should resolve via contract");
+        assert_eq!(mappings.get("stl_vector_placeholder"), Some(&"std_vector".to_string()));
+        assert_eq!(mappings.get("stl_map_placeholder"), Some(&"std_map".to_string()));
+        assert_eq!(
+            mappings.get("stl_unordered_map_placeholder"),
+            Some(&"std_unordered_map".to_string())
+        );
+        assert_eq!(mappings.len(), 3);
+    }
+
+    #[test]
+    fn parser_output_stl_placeholder_mapping_rejects_unknown_placeholder_kind() {
+        let mut parser_output = parser_output_fixture(
+            PathBuf::from("fixture.cc"),
+            ParserCoreLanguage::Cpp,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        parser_output.nodes = vec![
+            parser_node_fixture("n0", "translation_unit"),
+            parser_node_fixture("n1", "stl_deque_placeholder"),
+        ];
+
+        let err = resolve_parser_output_stl_placeholder_mappings(&parser_output)
+            .expect_err("unknown placeholder kind should fail fast");
+        let err_text = err.to_string();
+        assert!(
+            err_text.contains("stl_deque_placeholder")
+                && err_text.contains("unsupported parser-output STL placeholder node kind"),
+            "unexpected error for unknown placeholder kind: {err_text}"
+        );
+    }
+
+    #[test]
     fn parser_output_codegen_rejects_unknown_schema_version() {
         let parser_output = ParserOutputV1 {
             schema_version: "0.0.0".to_string(),
@@ -1747,6 +1867,30 @@ mod tests {
             err_text.contains("unsupported parser output schema")
                 && err_text.contains("1.0.0"),
             "unexpected schema validation error: {err_text}"
+        );
+    }
+
+    #[test]
+    fn parser_output_codegen_rejects_unknown_stl_placeholder_kind_before_parse() {
+        let mut parser_output = parser_output_fixture(
+            PathBuf::from("this_file_should_not_exist_for_placeholder_validation.cc"),
+            ParserCoreLanguage::Cpp,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        parser_output.nodes = vec![
+            parser_node_fixture("n0", "translation_unit"),
+            parser_node_fixture("n1", "stl_fake_placeholder"),
+        ];
+
+        let err = transpile_parser_output_to_rust(&parser_output)
+            .expect_err("unknown placeholder should fail before parse");
+        let err_text = err.to_string();
+        assert!(
+            err_text.contains("stl_fake_placeholder")
+                && err_text.contains("unsupported parser-output STL placeholder node kind"),
+            "unexpected parser-output placeholder validation error: {err_text}"
         );
     }
 
