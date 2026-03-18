@@ -20034,3 +20034,37 @@ Validation:
 - Full regression:
   - `cargo test --workspace --all-targets`
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+## 2026-03-18: M5.3.a Associative Method/Operator Mapping Regression Coverage
+
+Context:
+- After `M5.2`, the top unfinished P0 item was `M5.3`.
+- `M5.3` was decomposed into leaf tasks and `M5.3.a` was selected first.
+- Goal for this leaf: add focused regressions proving mapped associative
+  method/operator call lowering uses canonical pre-generated lanes.
+
+Wrong-approach check:
+- Re-checked section `1.3 Wrong Approaches (Do Not Do)` and
+  `docs/dev/wrong.md` before implementation.
+- No target-specific hacks, no force-native bypasses, and no fake semantic
+  method bodies were introduced.
+- No semantic fallback remapping to `std::collections::*` was added.
+
+Design update:
+- Added focused `AstCodeGen` regression:
+  - `test_parser_output_mapping_associative_call_lowering_uses_canonical_operator_and_method_lanes`
+- Test constructs mapped associative call-sites under active parser-output
+  mapping context and asserts:
+  - `map_int__int` closes to canonical `std_map_int__int` alias target,
+  - `operator[]` lowers through `.op_index(...)`,
+  - mapped method lane uses `.insert_or_assign(...)`,
+  - no leaked `operator[]` spelling remains,
+  - no legacy `std::collections::BTreeMap` fallback appears.
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-clang test_parser_output_mapping_associative_call_lowering_uses_canonical_operator_and_method_lanes -- --nocapture`
+  - `cargo test -p fragile-clang test_close_unresolved_type_reference_gaps_with_placeholder_mapping -- --nocapture`
+- Full regression (run after leaf implementation):
+  - `cargo test --workspace --all-targets -q`
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`

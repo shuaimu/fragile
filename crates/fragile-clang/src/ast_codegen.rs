@@ -108616,6 +108616,184 @@ pub struct Holder {
     }
 
     #[test]
+    fn test_parser_output_mapping_associative_call_lowering_uses_canonical_operator_and_method_lanes(
+    ) {
+        let int_ty = CppType::Int { signed: true };
+        let int_ptr_ty = CppType::Pointer {
+            pointee: Box::new(int_ty.clone()),
+            is_const: false,
+        };
+        let map_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Named("map_int__int".to_string())),
+            is_const: false,
+        };
+
+        let ordered_ref = || {
+            make_node(
+                ClangNodeKind::DeclRefExpr {
+                    name: "ordered".to_string(),
+                    ty: map_ptr_ty.clone(),
+                    namespace_path: vec![],
+                },
+                vec![],
+            )
+        };
+        let key_ref = || {
+            make_node(
+                ClangNodeKind::DeclRefExpr {
+                    name: "key".to_string(),
+                    ty: int_ty.clone(),
+                    namespace_path: vec![],
+                },
+                vec![],
+            )
+        };
+        let value_ref = || {
+            make_node(
+                ClangNodeKind::DeclRefExpr {
+                    name: "value".to_string(),
+                    ty: int_ty.clone(),
+                    namespace_path: vec![],
+                },
+                vec![],
+            )
+        };
+
+        let index_call = make_node(
+            ClangNodeKind::CallExpr {
+                ty: int_ptr_ty.clone(),
+                template_instantiation: None,
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::MemberExpr {
+                        member_name: "operator[]".to_string(),
+                        is_arrow: true,
+                        ty: CppType::Function {
+                            return_type: Box::new(int_ptr_ty.clone()),
+                            params: vec![int_ty.clone()],
+                            is_variadic: false,
+                        },
+                        declaring_class: Some("map_int__int".to_string()),
+                        is_static: false,
+                    },
+                    vec![ordered_ref()],
+                ),
+                key_ref(),
+            ],
+        );
+
+        let insert_or_assign_call = make_node(
+            ClangNodeKind::CallExpr {
+                ty: int_ptr_ty.clone(),
+                template_instantiation: None,
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::MemberExpr {
+                        member_name: "insert_or_assign".to_string(),
+                        is_arrow: true,
+                        ty: CppType::Function {
+                            return_type: Box::new(int_ptr_ty.clone()),
+                            params: vec![int_ty.clone(), int_ty.clone()],
+                            is_variadic: false,
+                        },
+                        declaring_class: Some("map_int__int".to_string()),
+                        is_static: false,
+                    },
+                    vec![ordered_ref()],
+                ),
+                key_ref(),
+                value_ref(),
+            ],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "mapped_index_lane".to_string(),
+                        mangled_name: "mapped_index_lane".to_string(),
+                        is_static: false,
+                        return_type: int_ptr_ty.clone(),
+                        params: vec![
+                            ("ordered".to_string(), map_ptr_ty.clone()),
+                            ("key".to_string(), int_ty.clone()),
+                        ],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(ClangNodeKind::ReturnStmt, vec![index_call])],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "mapped_insert_or_assign_lane".to_string(),
+                        mangled_name: "mapped_insert_or_assign_lane".to_string(),
+                        is_static: false,
+                        return_type: int_ptr_ty.clone(),
+                        params: vec![
+                            ("ordered".to_string(), map_ptr_ty),
+                            ("key".to_string(), int_ty.clone()),
+                            ("value".to_string(), int_ty),
+                        ],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![insert_or_assign_call],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let mut codegen = AstCodeGen::new();
+        codegen.set_parser_output_stl_placeholder_mappings(std::collections::BTreeMap::from([(
+            "stl_map_placeholder".to_string(),
+            "std_map".to_string(),
+        )]));
+        let code = codegen.generate(&ast);
+        assert!(
+            code.contains("pub type map_int__int = std_map_int__int;"),
+            "mapping-aware handoff should close map aliases to canonical pre-generated target before method/operator call lowering checks, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains(".op_index(key)"),
+            "mapped associative operator[] calls should lower through canonical `op_index` lane, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains(".insert_or_assign(key, value)"),
+            "mapped associative method calls should preserve canonical pre-generated `insert_or_assign` lane, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("operator[]"),
+            "operator spellings should not leak into emitted Rust call-sites once lowered, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("std::collections::BTreeMap"),
+            "mapped associative call lowering regressions must not route through legacy std::collections fallback lanes, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
     fn test_resolve_missing_stub_concrete_alias_target_prefers_mapping_driven_vector_prefix(
     ) {
         let mut codegen = AstCodeGen::new();
