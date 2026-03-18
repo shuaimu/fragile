@@ -20137,3 +20137,34 @@ Validation:
 - Full regression (run after leaf implementation):
   - `cargo test --workspace --all-targets`
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+## 2026-03-18: M5.A1.a Active Handoff Acceptance Regression for Mapped Associative/Sequence/Smart-Pointer Families
+
+Context:
+- After closing `M5.3`, the next top unfinished P0 item was `M5.A1`.
+- `M5.A1` was decomposed into smaller leaves; this iteration executed
+  `M5.A1.a`.
+
+Wrong-approach check:
+- Re-checked section `1.3 Wrong Approaches (Do Not Do)` and
+  `docs/dev/wrong.md` before implementation.
+- No target-specific hacks, force-native bypasses, or fake semantic method
+  bodies were introduced.
+
+Design update:
+- Added active parser-output handoff acceptance regression that exercises
+  mapped families:
+  - `map`, `unordered_map`, `vector`, `shared_ptr`, `unique_ptr`
+- New test:
+  - `parser_output_codegen_active_handoff_mapped_supported_associative_sequence_smart_pointer_families_resolve_to_pre_generated_targets`
+- Regression asserts deterministic handoff manifest coverage and canonical
+  target routing markers for these mapped families, while ensuring family-
+  lowered unresolved placeholder structs are not emitted.
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-clang parser_output_codegen_active_handoff_mapped_supported_associative_sequence_smart_pointer_families_resolve_to_pre_generated_targets -- --nocapture`
+  - `cargo test -p fragile-clang parser_output_codegen_active_handoff_ -- --nocapture`
+- Full regression (run after leaf implementation):
+  - `cargo test --workspace --all-targets`
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`

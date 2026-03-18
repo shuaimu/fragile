@@ -2501,6 +2501,113 @@ pub struct unique_ptr_unsigned_int__bool {
     }
 
     #[test]
+    fn parser_output_codegen_active_handoff_mapped_supported_associative_sequence_smart_pointer_families_resolve_to_pre_generated_targets(
+    ) {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("fragile_parser_output_supported_families_{stamp}"));
+        fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
+        let source = temp_dir.join("supported_family_probe.cc");
+        fs::write(
+            &source,
+            "class map_int__int;\n\
+             class unordered_map_int__int;\n\
+             class vector_int;\n\
+             class shared_ptr_int;\n\
+             class unique_ptr_int;\n\
+             struct Holder {\n\
+             \tmap_int__int* ordered;\n\
+             \tunordered_map_int__int* unordered;\n\
+             \tvector_int* items;\n\
+             \tshared_ptr_int* shared_owner;\n\
+             \tunique_ptr_int* unique_owner;\n\
+             };\n\
+             int probe(Holder* h) { return h == 0 ? 0 : 1; }\n",
+        )
+        .expect("failed to write source");
+
+        let mut parser_output = parser_output_fixture(
+            source,
+            ParserCoreLanguage::Cpp,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        parser_output
+            .nodes
+            .push(parser_node_fixture("n1", STL_MAP_PLACEHOLDER_KIND));
+        parser_output.nodes.push(parser_node_fixture(
+            "n2",
+            STL_UNORDERED_MAP_PLACEHOLDER_KIND,
+        ));
+        parser_output
+            .nodes
+            .push(parser_node_fixture("n3", STL_VECTOR_PLACEHOLDER_KIND));
+        parser_output.nodes.push(parser_node_fixture(
+            "n4",
+            STL_SHARED_PTR_PLACEHOLDER_KIND,
+        ));
+        parser_output.nodes.push(parser_node_fixture(
+            "n5",
+            STL_UNIQUE_PTR_PLACEHOLDER_KIND,
+        ));
+
+        let transpiled = transpile_parser_output_to_rust(&parser_output)
+            .expect("mapped parser-output handoff should resolve supported associative/sequence/smart-pointer families");
+        assert!(
+            transpiled.contains("pub type map_int__int = std_map_int__int;"),
+            "mapped active parser-output run should alias map_int__int to canonical pre-generated map surface:\n{}",
+            transpiled
+        );
+        assert!(
+            transpiled.contains("pub type unordered_map_int__int = std_unordered_map_int__int;"),
+            "mapped active parser-output run should alias unordered_map_int__int to canonical pre-generated unordered-map surface:\n{}",
+            transpiled
+        );
+        assert!(
+            transpiled.contains("pub type vector_int = std_vector<i32>;"),
+            "mapped active parser-output run should alias vector_int to canonical pre-generated vector surface:\n{}",
+            transpiled
+        );
+        assert!(
+            transpiled.contains("pub type shared_ptr_int = std_shared_ptr<i32>;")
+                || transpiled.contains("pub shared_owner: *mut std_shared_ptr<i32>,"),
+            "mapped active parser-output run should route shared_ptr_int spellings to canonical pre-generated shared_ptr surface via alias closure or direct field-type normalization:\n{}",
+            transpiled
+        );
+        assert!(
+            transpiled.contains("pub type unique_ptr_int = std_unique_ptr<i32>;")
+                || transpiled.contains("pub unique_owner: *mut std_unique_ptr<i32>,"),
+            "mapped active parser-output run should route unique_ptr_int spellings to canonical pre-generated unique_ptr surface via alias closure or direct field-type normalization:\n{}",
+            transpiled
+        );
+        assert!(
+            !transpiled.contains("pub struct map_int__int {")
+                && !transpiled.contains("pub struct unordered_map_int__int {")
+                && !transpiled.contains("pub struct vector_int {")
+                && !transpiled.contains("pub struct shared_ptr_int {")
+                && !transpiled.contains("pub struct unique_ptr_int {"),
+            "mapped active parser-output run should not leave supported covered families unresolved as placeholder structs:\n{}",
+            transpiled
+        );
+        assert!(
+            transpiled.contains("// parser_output_observed_family_count=5")
+                && transpiled.contains("// parser_output_observed_family.map.placeholder_kind=stl_map_placeholder")
+                && transpiled.contains("// parser_output_observed_family.unordered_map.placeholder_kind=stl_unordered_map_placeholder")
+                && transpiled.contains("// parser_output_observed_family.vector.placeholder_kind=stl_vector_placeholder")
+                && transpiled.contains("// parser_output_observed_family.shared_ptr.placeholder_kind=stl_shared_ptr_placeholder")
+                && transpiled.contains("// parser_output_observed_family.unique_ptr.placeholder_kind=stl_unique_ptr_placeholder"),
+            "mapped active parser-output run should emit deterministic observed-family mapping manifest entries for supported associative/sequence/smart-pointer families:\n{}",
+            transpiled
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
     fn parser_output_codegen_active_handoff_mapped_sequence_smart_pointer_unresolved_shapes_fail_mapping_completeness(
     ) {
         let stamp = SystemTime::now()
