@@ -35,6 +35,7 @@ use fragile_parser_core::{
     IncludeDirective as ParserCoreIncludeDirective,
     ParserLanguage as ParserCoreLanguage,
     ParserOutputV1,
+    UnsupportedStlShapeError,
     PARSER_OUTPUT_SCHEMA_VERSION_V1,
 };
 use fragile_stl::layout_contract::pre_generated_stl_family_contract_entry_v1;
@@ -637,23 +638,35 @@ fn resolve_parser_output_stl_placeholder_mappings(
     parser_output: &ParserOutputV1,
 ) -> Result<BTreeMap<String, String>> {
     let mut mappings = BTreeMap::new();
-    let supported_kinds = supported_stl_placeholder_node_kinds();
     for node in &parser_output.nodes {
         let node_kind = node.node_kind.trim();
         if !(node_kind.starts_with("stl_") && node_kind.ends_with("_placeholder")) {
             continue;
         }
         let Some(family) = stl_placeholder_family_from_node_kind(node_kind) else {
+            let supported_families: Vec<String> = STL_PLACEHOLDER_KIND_FAMILY_MAP
+                .iter()
+                .map(|(_, fam)| fam.to_string())
+                .collect();
+            let symbol = node.name.as_deref().unwrap_or(node_kind);
             return Err(miette::miette!(
-                "unsupported parser-output STL placeholder node kind `{}` (supported: {})",
-                node_kind,
-                supported_kinds
+                "{}",
+                UnsupportedStlShapeError::unrecognized_placeholder_kind(
+                    symbol,
+                    node_kind,
+                    supported_families,
+                )
             ));
         };
         let Some(contract_entry) = pre_generated_stl_family_contract_entry_v1(family) else {
+            let symbol = node.name.as_deref().unwrap_or(node_kind);
             return Err(miette::miette!(
-                "missing pre-generated STL contract mapping for placeholder family `{}`",
-                family
+                "{}",
+                UnsupportedStlShapeError::missing_family_mapping(
+                    symbol,
+                    node_kind,
+                    family,
+                )
             ));
         };
         mappings
@@ -2138,7 +2151,7 @@ mod tests {
         let err_text = err.to_string();
         assert!(
             err_text.contains("stl_deque_placeholder")
-                && err_text.contains("unsupported parser-output STL placeholder node kind"),
+                && err_text.contains("FRAGILE_STL_E001"),
             "unexpected error for unknown placeholder kind: {err_text}"
         );
     }
@@ -2504,7 +2517,7 @@ pub struct unique_ptr_unsigned_int__bool {
         let err_text = err.to_string();
         assert!(
             err_text.contains("stl_fake_placeholder")
-                && err_text.contains("unsupported parser-output STL placeholder node kind"),
+                && err_text.contains("FRAGILE_STL_E001"),
             "unexpected parser-output placeholder validation error: {err_text}"
         );
     }
