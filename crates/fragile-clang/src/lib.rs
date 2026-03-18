@@ -163,6 +163,10 @@ const STL_PLACEHOLDER_KIND_FAMILY_MAP: &[(&str, &str)] = &[
 const STL_VECTOR_PLACEHOLDER_KIND: &str = "stl_vector_placeholder";
 const STL_MAP_PLACEHOLDER_KIND: &str = "stl_map_placeholder";
 const STL_UNORDERED_MAP_PLACEHOLDER_KIND: &str = "stl_unordered_map_placeholder";
+const STL_STRING_PLACEHOLDER_KIND: &str = "stl_string_placeholder";
+const STL_OPTIONAL_PLACEHOLDER_KIND: &str = "stl_optional_placeholder";
+const STL_VARIANT_PLACEHOLDER_KIND: &str = "stl_variant_placeholder";
+const STL_TUPLE_PLACEHOLDER_KIND: &str = "stl_tuple_placeholder";
 const STL_SHARED_PTR_PLACEHOLDER_KIND: &str = "stl_shared_ptr_placeholder";
 const STL_UNIQUE_PTR_PLACEHOLDER_KIND: &str = "stl_unique_ptr_placeholder";
 const PARSER_OUTPUT_MAPPED_FAMILY_ALIAS_PREFIX_SPECS: &[(&str, &str, &[&str])] = &[
@@ -180,6 +184,31 @@ const PARSER_OUTPUT_MAPPED_FAMILY_ALIAS_PREFIX_SPECS: &[(&str, &str, &[&str])] =
         STL_VECTOR_PLACEHOLDER_KIND,
         "vector",
         &["vector_", "std_vector_"],
+    ),
+    (
+        STL_STRING_PLACEHOLDER_KIND,
+        "string",
+        &[
+            "string_",
+            "std_string_",
+            "basic_string_",
+            "std_basic_string_",
+        ],
+    ),
+    (
+        STL_OPTIONAL_PLACEHOLDER_KIND,
+        "optional",
+        &["optional_", "std_optional_"],
+    ),
+    (
+        STL_VARIANT_PLACEHOLDER_KIND,
+        "variant",
+        &["variant_", "std_variant_"],
+    ),
+    (
+        STL_TUPLE_PLACEHOLDER_KIND,
+        "tuple",
+        &["tuple_", "std_tuple_"],
     ),
     (
         STL_SHARED_PTR_PLACEHOLDER_KIND,
@@ -2173,6 +2202,10 @@ pub type vector_int = fallback_vector_impl<i32>;
 pub type map_int__int = std_map_int__int;
 pub type unordered_map_int__int = std_unordered_map_int__int;
 pub type vector_int = std_vector<i32>;
+pub type basic_string_char = std_string;
+pub type optional_int = std_optional_int;
+pub type variant_int__long = std_variant_int__long;
+pub type tuple_int__int = std_tuple_int__int;
 pub type shared_ptr_int = std_shared_ptr<i32>;
 pub type unique_ptr_int = std_unique_ptr<i32>;
 "#;
@@ -2183,6 +2216,16 @@ pub type unique_ptr_int = std_unique_ptr<i32>;
                 "std_unordered_map".to_string(),
             ),
             (STL_VECTOR_PLACEHOLDER_KIND.to_string(), "std_vector".to_string()),
+            (STL_STRING_PLACEHOLDER_KIND.to_string(), "std_string".to_string()),
+            (
+                STL_OPTIONAL_PLACEHOLDER_KIND.to_string(),
+                "std_optional".to_string(),
+            ),
+            (
+                STL_VARIANT_PLACEHOLDER_KIND.to_string(),
+                "std_variant".to_string(),
+            ),
+            (STL_TUPLE_PLACEHOLDER_KIND.to_string(), "std_tuple".to_string()),
             (
                 STL_SHARED_PTR_PLACEHOLDER_KIND.to_string(),
                 "std_shared_ptr".to_string(),
@@ -2197,6 +2240,108 @@ pub type unique_ptr_int = std_unique_ptr<i32>;
             &mappings,
         )
         .expect("covered families with canonical mapped alias targets should pass mapping completeness validation");
+    }
+
+    #[test]
+    fn parser_output_mapping_completeness_validation_rejects_noncanonical_string_optional_variant_tuple_alias_targets(
+    ) {
+        let transpiled = r#"
+pub type basic_string_char = fallback_string_impl;
+pub type optional_int = fallback_optional_impl<i32>;
+pub type variant_int__long = fallback_variant_impl<i32, i64>;
+pub type tuple_int__int = fallback_tuple_impl<i32, i32>;
+"#;
+        let mappings = BTreeMap::from([
+            (STL_STRING_PLACEHOLDER_KIND.to_string(), "std_string".to_string()),
+            (
+                STL_OPTIONAL_PLACEHOLDER_KIND.to_string(),
+                "std_optional".to_string(),
+            ),
+            (
+                STL_VARIANT_PLACEHOLDER_KIND.to_string(),
+                "std_variant".to_string(),
+            ),
+            (STL_TUPLE_PLACEHOLDER_KIND.to_string(), "std_tuple".to_string()),
+        ]);
+        let err = validate_parser_output_handoff_mapping_completeness_for_covered_families(
+            transpiled,
+            &mappings,
+        )
+        .expect_err(
+            "covered string/optional/variant/tuple families should reject non-canonical alias targets in active handoff output",
+        );
+        let err_text = err.to_string();
+        assert!(
+            err_text.contains("mapping completeness")
+                && err_text.contains("covered family `string`")
+                && err_text.contains("covered family `optional`")
+                && err_text.contains("covered family `variant`")
+                && err_text.contains("covered family `tuple`")
+                && err_text.contains("fallback_string_impl")
+                && err_text.contains("fallback_optional_impl")
+                && err_text.contains("fallback_variant_impl")
+                && err_text.contains("fallback_tuple_impl"),
+            "unexpected non-canonical string/optional/variant/tuple alias mapping completeness error: {err_text}"
+        );
+    }
+
+    #[test]
+    fn parser_output_mapping_completeness_validation_rejects_string_optional_variant_tuple_placeholder_structs(
+    ) {
+        let transpiled = r#"
+/// Final unresolved type placeholder
+#[repr(C)]
+pub struct basic_string_unsigned_int__bool {
+    _opaque: [u8; 64],
+}
+/// Final unresolved type placeholder
+#[repr(C)]
+pub struct optional_unsigned_int__bool {
+    _opaque: [u8; 64],
+}
+/// Final unresolved type placeholder
+#[repr(C)]
+pub struct variant_unsigned_int__bool__bool {
+    _opaque: [u8; 64],
+}
+/// Final unresolved type placeholder
+#[repr(C)]
+pub struct tuple_unsigned_int__bool {
+    _opaque: [u8; 64],
+}
+"#;
+        let mappings = BTreeMap::from([
+            (STL_STRING_PLACEHOLDER_KIND.to_string(), "std_string".to_string()),
+            (
+                STL_OPTIONAL_PLACEHOLDER_KIND.to_string(),
+                "std_optional".to_string(),
+            ),
+            (
+                STL_VARIANT_PLACEHOLDER_KIND.to_string(),
+                "std_variant".to_string(),
+            ),
+            (STL_TUPLE_PLACEHOLDER_KIND.to_string(), "std_tuple".to_string()),
+        ]);
+        let err = validate_parser_output_handoff_mapping_completeness_for_covered_families(
+            transpiled,
+            &mappings,
+        )
+        .expect_err(
+            "covered string/optional/variant/tuple families should reject unresolved placeholder structs in active handoff output",
+        );
+        let err_text = err.to_string();
+        assert!(
+            err_text.contains("mapping completeness")
+                && err_text.contains("covered family `string`")
+                && err_text.contains("covered family `optional`")
+                && err_text.contains("covered family `variant`")
+                && err_text.contains("covered family `tuple`")
+                && err_text.contains("basic_string_unsigned_int__bool")
+                && err_text.contains("optional_unsigned_int__bool")
+                && err_text.contains("variant_unsigned_int__bool__bool")
+                && err_text.contains("tuple_unsigned_int__bool"),
+            "unexpected string/optional/variant/tuple placeholder mapping completeness error: {err_text}"
+        );
     }
 
     #[test]
@@ -2602,6 +2747,75 @@ pub struct unique_ptr_unsigned_int__bool {
                 && transpiled.contains("// parser_output_observed_family.unique_ptr.placeholder_kind=stl_unique_ptr_placeholder"),
             "mapped active parser-output run should emit deterministic observed-family mapping manifest entries for supported associative/sequence/smart-pointer families:\n{}",
             transpiled
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn parser_output_codegen_active_handoff_mapped_string_optional_variant_tuple_unresolved_shapes_fail_mapping_completeness(
+    ) {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir()
+            .join(format!("fragile_parser_output_value_semantics_failure_{stamp}"));
+        fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
+        let source = temp_dir.join("value_semantics_failure_probe.cc");
+        fs::write(
+            &source,
+            "class basic_string_unsigned_int__bool;\n\
+             class optional_unsigned_int__bool;\n\
+             class variant_unsigned_int__bool__bool;\n\
+             class tuple_unsigned_int__bool;\n\
+             struct Holder {\n\
+             \tbasic_string_unsigned_int__bool* text;\n\
+             \toptional_unsigned_int__bool* maybe;\n\
+             \tvariant_unsigned_int__bool__bool* choice;\n\
+             \ttuple_unsigned_int__bool* pairish;\n\
+             };\n\
+             int probe(Holder* h) { return h == 0 ? 0 : 1; }\n",
+        )
+        .expect("failed to write source");
+
+        let mut parser_output = parser_output_fixture(
+            source,
+            ParserCoreLanguage::Cpp,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        parser_output
+            .nodes
+            .push(parser_node_fixture("n1", STL_STRING_PLACEHOLDER_KIND));
+        parser_output.nodes.push(parser_node_fixture(
+            "n2",
+            STL_OPTIONAL_PLACEHOLDER_KIND,
+        ));
+        parser_output.nodes.push(parser_node_fixture(
+            "n3",
+            STL_VARIANT_PLACEHOLDER_KIND,
+        ));
+        parser_output
+            .nodes
+            .push(parser_node_fixture("n4", STL_TUPLE_PLACEHOLDER_KIND));
+        let err = transpile_parser_output_to_rust(&parser_output).expect_err(
+            "mapped parser-output handoff should fail mapping completeness when string/optional/variant/tuple lanes would require unresolved placeholder fallback",
+        );
+        let err_text = err.to_string();
+        assert!(
+            err_text.contains("mapping completeness")
+                && err_text.contains("covered family `string`")
+                && err_text.contains("covered family `optional`")
+                && err_text.contains("covered family `variant`")
+                && err_text.contains("covered family `tuple`")
+                && err_text.contains("basic_string_unsigned_int__bool")
+                && err_text.contains("optional_unsigned_int__bool")
+                && err_text.contains("variant_unsigned_int__bool__bool")
+                && err_text.contains("tuple_unsigned_int__bool"),
+            "mapped active parser-output run should report deterministic string/optional/variant/tuple mapping completeness failures for unresolved placeholder fallback:\n{}",
+            err_text
         );
 
         let _ = fs::remove_dir_all(&temp_dir);

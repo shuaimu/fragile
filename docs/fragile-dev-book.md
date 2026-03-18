@@ -20168,3 +20168,52 @@ Validation:
 - Full regression (run after leaf implementation):
   - `cargo test --workspace --all-targets`
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+## 2026-03-18: M5.A1.b Mapping-Completeness Coverage Expansion for `string`/`optional`/`variant`/`tuple`
+
+Context:
+- After `M5.A1.a`, the next top unfinished P0 leaf was `M5.A1.b`.
+- Goal: extend mapped-family mapping-completeness coverage to remaining mapped
+  placeholder families:
+  - `string`, `optional`, `variant`, `tuple`
+
+Wrong-approach check:
+- Re-checked section `1.3 Wrong Approaches (Do Not Do)` and
+  `docs/dev/wrong.md` before implementation.
+- No target-specific hacks, force-native bypasses, or fake semantic fallback
+  method bodies were introduced.
+
+Design update:
+- Expanded covered-family alias-prefix dispatch in
+  `PARSER_OUTPUT_MAPPED_FAMILY_ALIAS_PREFIX_SPECS`:
+  - `stl_string_placeholder`:
+    `string_`, `std_string_`, `basic_string_`, `std_basic_string_`
+  - `stl_optional_placeholder`:
+    `optional_`, `std_optional_`
+  - `stl_variant_placeholder`:
+    `variant_`, `std_variant_`
+  - `stl_tuple_placeholder`:
+    `tuple_`, `std_tuple_`
+- Extended canonical acceptance regression:
+  - `parser_output_mapping_completeness_validation_allows_canonical_covered_alias_targets`
+  now includes canonical alias targets for
+  `basic_string_char`/`optional_int`/`variant_int__long`/`tuple_int__int`.
+- Added deterministic negative regressions:
+  - `parser_output_mapping_completeness_validation_rejects_noncanonical_string_optional_variant_tuple_alias_targets`
+  - `parser_output_mapping_completeness_validation_rejects_string_optional_variant_tuple_placeholder_structs`
+- Added active parser-output handoff integration regression:
+  - `parser_output_codegen_active_handoff_mapped_string_optional_variant_tuple_unresolved_shapes_fail_mapping_completeness`
+  which verifies unresolved family-lowered placeholder shapes fail with mapping-
+  completeness diagnostics under mapped handoff context.
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-clang parser_output_mapping_completeness_validation_allows_canonical_covered_alias_targets -- --nocapture`
+  - `cargo test -p fragile-clang parser_output_mapping_completeness_validation_rejects_noncanonical_string_optional_variant_tuple_alias_targets -- --nocapture`
+  - `cargo test -p fragile-clang parser_output_mapping_completeness_validation_rejects_string_optional_variant_tuple_placeholder_structs -- --nocapture`
+  - `cargo test -p fragile-clang parser_output_codegen_active_handoff_mapped_string_optional_variant_tuple_unresolved_shapes_fail_mapping_completeness -- --nocapture`
+  - `cargo test -p fragile-clang test_parser_output_mapping_ -- --nocapture`
+  - `cargo test -p fragile-clang parser_output_codegen_active_handoff_ -- --nocapture`
+- Full regression:
+  - `cargo test --workspace --all-targets`
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
