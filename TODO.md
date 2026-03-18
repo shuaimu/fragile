@@ -125,7 +125,7 @@ Acceptance:
 ### M6) Diagnostic and Failure Policy for Unknown STL Shapes
 - [x] M6.1 Add deterministic error class for unsupported STL placeholder shapes.
 - [x] M6.2 Add actionable diagnostics payload (location, symbol, shape fingerprint, missing mapping key).
-- [ ] M6.3 Add regression tests that assert failure is explicit and non-silent.
+- [ ] M6.3 Add regression tests that assert failure is explicit and non-silent. [WIP — claude/parser]
 Acceptance:
 - [ ] M6.A1 Unknown STL shapes fail with deterministic error class and metadata.
 - [ ] M6.A2 No semantic stub/fake body is produced for unsupported shapes.
