@@ -19882,6 +19882,46 @@ Validation:
   - `cargo test --workspace --all-targets`
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
 
+## 2026-03-18: M5.A2.c Corpus-Level Mapped-Family Legacy Fallback Alias Audit Gate
+
+Context:
+- After `M5.A2.b`, next top unfinished P0 leaf was `M5.A2.c`.
+- Goal: add a corpus-level active parser-output replay audit gate that fails on
+  covered-family legacy deep STL fallback alias markers and records deterministic
+  fixture evidence.
+
+Wrong-approach check:
+- Re-checked section `1.3 Wrong Approaches (Do Not Do)` and
+  `docs/dev/wrong.md` before implementation.
+- No target-specific hacks, force-native bypasses, or fake semantic stubs were
+  introduced.
+
+Design update:
+- Added fixture-corpus source enumeration helper for replay tests:
+  - `fixture_corpus_sources()`
+- Added covered-family extraction helper from parser nodes:
+  - `covered_mapped_associative_families_from_parser_nodes(...)`
+- Added covered-family-aware associative legacy fallback alias marker audit
+  helper:
+  - `legacy_deep_stl_fallback_alias_violations_for_covered_mapped_associative_families(...)`
+- Added corpus-level replay audit gate:
+  - `parser_core_fixture_corpus_replay_audit_gate_rejects_covered_family_legacy_fallback_alias_markers`
+- Gate behavior:
+  1. replay all sorted fixture sources from `m3_1_d/src`,
+  2. collect deterministic fixture evidence for covered mapped associative
+     families,
+  3. fail with fixture-scoped evidence if any covered-family alias resolves to
+     legacy deep STL fallback targets.
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-parser-clang parser_core_fixture_corpus_replay_audit_gate_rejects_covered_family_legacy_fallback_alias_markers -- --nocapture`
+  - `cargo test -p fragile-parser-clang parser_core_fixture_replay_gate_keeps_mapped_placeholder_families_resolved_in_active_handoff_output -- --nocapture`
+  - `cargo test -p fragile-parser-clang --test stl_symbol_detection_fixture_tests -- --nocapture`
+- Full regression (run after leaf implementation):
+  - `cargo test --workspace --all-targets`
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
 ## 2026-03-18: M5.A2.b Mapped-Context Legacy Fallback Alias Reject/Accept Regressions
 
 Context:

@@ -5,6 +5,7 @@ use fragile_parser_clang::{
     detect_direct_std_stl_family, extract_stl_type_alias_symbol_table, FragileParserClangBackend,
 };
 use fragile_parser_core::{ParseRequest, ParserBackend, ParserLanguage, ParserNode};
+use std::fs;
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
@@ -15,6 +16,33 @@ fn fixture_source(file_name: &str) -> PathBuf {
         .join("m3_1_d")
         .join("src")
         .join(file_name)
+}
+
+fn fixture_corpus_sources() -> Vec<PathBuf> {
+    let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("m3_1_d")
+        .join("src");
+    let mut sources = fs::read_dir(&fixture_dir)
+        .unwrap_or_else(|err| {
+            panic!(
+                "failed to read fixture corpus directory `{}`: {}",
+                fixture_dir.display(),
+                err
+            )
+        })
+        .filter_map(|entry| entry.ok().map(|item| item.path()))
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("cpp"))
+        })
+        .collect::<Vec<_>>();
+    sources.sort();
+    sources
 }
 
 fn parse_fixture_with_backend(source_path: &Path) -> fragile_parser_core::ParserOutputV1 {
@@ -233,8 +261,25 @@ fn unresolved_mapped_family_placeholder_struct_violations(transpiled: &str) -> V
     violations.into_values().collect()
 }
 
-fn legacy_deep_stl_fallback_alias_violations_for_mapped_associative_families(
+fn covered_mapped_associative_families_from_parser_nodes(nodes: &[ParserNode]) -> HashSet<&'static str> {
+    let mut covered = HashSet::new();
+    for node in nodes {
+        match node.node_kind.as_str() {
+            "stl_map_placeholder" => {
+                covered.insert("map");
+            }
+            "stl_unordered_map_placeholder" => {
+                covered.insert("unordered_map");
+            }
+            _ => {}
+        }
+    }
+    covered
+}
+
+fn legacy_deep_stl_fallback_alias_violations_for_covered_mapped_associative_families(
     transpiled: &str,
+    covered_families: &HashSet<&'static str>,
 ) -> Vec<String> {
     let mut violations = BTreeMap::new();
 
@@ -250,9 +295,11 @@ fn legacy_deep_stl_fallback_alias_violations_for_mapped_associative_families(
         let alias_name = alias_name.trim();
         let target = target.trim().trim_end_matches(';').trim();
 
-        let is_map_alias = alias_name.starts_with("map_") || alias_name.starts_with("std_map_");
-        let is_unordered_map_alias = alias_name.starts_with("unordered_map_")
-            || alias_name.starts_with("std_unordered_map_");
+        let is_map_alias = covered_families.contains("map")
+            && (alias_name.starts_with("map_") || alias_name.starts_with("std_map_"));
+        let is_unordered_map_alias = covered_families.contains("unordered_map")
+            && (alias_name.starts_with("unordered_map_")
+                || alias_name.starts_with("std_unordered_map_"));
         if !is_map_alias && !is_unordered_map_alias {
             continue;
         }
@@ -637,10 +684,73 @@ fn parser_core_fixture_replay_gate_keeps_mapped_placeholder_families_resolved_in
     );
 
     let legacy_fallback_violations =
-        legacy_deep_stl_fallback_alias_violations_for_mapped_associative_families(&transpiled);
+        legacy_deep_stl_fallback_alias_violations_for_covered_mapped_associative_families(
+            &transpiled,
+            &HashSet::from(["map", "unordered_map"]),
+        );
     assert!(
         legacy_fallback_violations.is_empty(),
         "active parser-output handoff fixture replay should not resolve covered mapped-family associative aliases through legacy deep STL fallback lanes:\n{}",
         legacy_fallback_violations.join("\n")
+    );
+}
+
+#[test]
+fn parser_core_fixture_corpus_replay_audit_gate_rejects_covered_family_legacy_fallback_alias_markers(
+) {
+    let fixture_sources = fixture_corpus_sources();
+    assert!(
+        !fixture_sources.is_empty(),
+        "expected non-empty parser-core fixture corpus for active replay audit gate"
+    );
+
+    let mut covered_family_audit_manifest = BTreeMap::new();
+    let mut violation_evidence = Vec::new();
+
+    for source_path in fixture_sources {
+        let fixture_name = source_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("<unknown fixture>")
+            .to_string();
+        let parser_output = parse_fixture_with_backend(&source_path);
+        let covered_families = covered_mapped_associative_families_from_parser_nodes(&parser_output.nodes);
+        let mut covered_families_sorted = covered_families
+            .iter()
+            .map(|family| family.to_string())
+            .collect::<Vec<_>>();
+        covered_families_sorted.sort();
+        covered_family_audit_manifest.insert(fixture_name.clone(), covered_families_sorted);
+
+        let transpiled = transpile_parser_output_to_rust(&parser_output).unwrap_or_else(|err| {
+            panic!(
+                "active parser-output handoff replay failed for fixture `{}`: {}",
+                source_path.display(),
+                err
+            )
+        });
+        let fixture_violations =
+            legacy_deep_stl_fallback_alias_violations_for_covered_mapped_associative_families(
+                &transpiled,
+                &covered_families,
+            );
+        if !fixture_violations.is_empty() {
+            violation_evidence.push(format!(
+                "fixture `{}`:\n- {}",
+                fixture_name,
+                fixture_violations.join("\n- ")
+            ));
+        }
+    }
+
+    assert_eq!(
+        covered_family_audit_manifest.get("stl_symbol_detection.cpp"),
+        Some(&vec!["map".to_string(), "unordered_map".to_string()]),
+        "fixture corpus mapped-family replay audit should record deterministic covered-family evidence for stl_symbol_detection.cpp"
+    );
+    assert!(
+        violation_evidence.is_empty(),
+        "active parser-output fixture-corpus replay detected covered-family legacy deep STL fallback alias markers:\n{}",
+        violation_evidence.join("\n")
     );
 }
