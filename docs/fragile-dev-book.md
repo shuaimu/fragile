@@ -20101,3 +20101,39 @@ Validation:
 - Full regression (run after leaf implementation):
   - `cargo test --workspace --all-targets -q`
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+## 2026-03-18: M5.3.c Negative Regression for Unresolved Mapped Method/Operator Fallback Lanes
+
+Context:
+- After `M5.3.b`, next top unfinished P0 leaf was `M5.3.c`.
+- Goal: prove mapped sequence/smart-pointer method/operator lanes fail
+  deterministically when unresolved placeholder fallback would otherwise be
+  required.
+
+Wrong-approach check:
+- Re-checked section `1.3 Wrong Approaches (Do Not Do)` and
+  `docs/dev/wrong.md` before implementation.
+- No target-specific hacks, no force-native bypasses, and no fake semantic
+  method bodies were introduced.
+
+Design update:
+- Added negative mapping-completeness regression with mapped sequence/smart-
+  pointer method/operator lanes and unresolved placeholder structs:
+  - `parser_output_mapping_completeness_validation_rejects_sequence_smart_pointer_placeholder_fallback_with_method_operator_lanes`
+- Added active parser-output handoff integration regression for unresolved
+  covered-family shapes under mapped placeholder context:
+  - `parser_output_codegen_active_handoff_mapped_sequence_smart_pointer_unresolved_shapes_fail_mapping_completeness`
+- Strengthened completeness validation:
+  - `parser_output_mapping_completeness_violations_for_covered_families(...)`
+  now detects covered-family unresolved struct fallback directly from emitted
+  struct lines, not only marker-comment-delimited placeholder blocks.
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-clang parser_output_mapping_completeness_validation_rejects_sequence_smart_pointer_placeholder_fallback_with_method_operator_lanes -- --nocapture`
+  - `cargo test -p fragile-clang parser_output_codegen_active_handoff_mapped_sequence_smart_pointer_unresolved_shapes_fail_mapping_completeness -- --nocapture`
+  - `cargo test -p fragile-clang test_parser_output_mapping_ -- --nocapture`
+  - `cargo test -p fragile-clang parser_output_codegen_active_handoff_ -- --nocapture`
+- Full regression (run after leaf implementation):
+  - `cargo test --workspace --all-targets`
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`

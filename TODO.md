@@ -108,10 +108,10 @@ Acceptance:
   - [x] M5.1.d Add deterministic mapping manifest emission from active codegen path for placeholder families observed in parser output.
   - [x] M5.1.e Validate active backend runs do not rely on legacy deep STL translation path for covered families.
 - [x] M5.2 Enforce mapping completeness checks (no silent fallback to legacy STL translation).
-- [ ] M5.3 Add focused regressions for method/operator mapping correctness.
+- [x] M5.3 Add focused regressions for method/operator mapping correctness.
   - [x] M5.3.a Add parser-output handoff regression for mapped associative operator/method call lowering to canonical pre-generated targets.
   - [x] M5.3.b Add parser-output handoff regression for mapped sequence/smart-pointer method call lowering to canonical pre-generated targets.
-  - [ ] M5.3.c Add negative regression proving mapped method/operator lanes fail deterministically when unresolved placeholder fallback would be required.
+  - [x] M5.3.c Add negative regression proving mapped method/operator lanes fail deterministically when unresolved placeholder fallback would be required.
 Acceptance:
 - [ ] M5.A1 All placeholder nodes in corpus resolve to generated STL targets.
 - [ ] M5.A2 No legacy deep STL translation path is invoked in active backend runs.

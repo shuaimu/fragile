@@ -759,15 +759,9 @@ fn parser_output_mapping_completeness_violations_for_covered_families(
     placeholder_mappings: &BTreeMap<String, String>,
 ) -> Vec<String> {
     let mut violations = BTreeSet::new();
-    let mut unresolved_placeholder_block = false;
 
     for line in transpiled.lines() {
         let trimmed = line.trim_start();
-
-        if trimmed == "/// Final unresolved type placeholder" {
-            unresolved_placeholder_block = true;
-            continue;
-        }
 
         if let Some((alias, target)) = parser_output_type_alias_binding_from_line(trimmed) {
             let Some((_, family, canonical_prefix)) =
@@ -784,26 +778,15 @@ fn parser_output_mapping_completeness_violations_for_covered_families(
             continue;
         }
 
-        if !unresolved_placeholder_block {
-            continue;
-        }
-
-        if trimmed.is_empty() || trimmed.starts_with("#[") {
-            continue;
-        }
-
         let Some(struct_name) = parser_output_struct_name_from_line(trimmed) else {
-            unresolved_placeholder_block = false;
             continue;
         };
         let Some((_, family, canonical_prefix)) =
             parser_output_covered_family_spec_for_lowered_name(struct_name, placeholder_mappings)
         else {
-            unresolved_placeholder_block = false;
             continue;
         };
         if struct_name.starts_with(canonical_prefix) {
-            unresolved_placeholder_block = false;
             continue;
         }
 
@@ -811,7 +794,6 @@ fn parser_output_mapping_completeness_violations_for_covered_families(
             "covered family `{}` remained unresolved as placeholder struct `{}` instead of resolving to mapped pre-generated target",
             family, struct_name
         ));
-        unresolved_placeholder_block = false;
     }
 
     violations.into_iter().collect()
@@ -2218,6 +2200,50 @@ pub type unique_ptr_int = std_unique_ptr<i32>;
     }
 
     #[test]
+    fn parser_output_mapping_completeness_validation_rejects_sequence_smart_pointer_placeholder_fallback_with_method_operator_lanes(
+    ) {
+        let transpiled = r#"
+pub extern "C" fn lane_probe(vec: &mut vector_unsigned_int__bool, owner: &mut unique_ptr_unsigned_int__bool, value: u32) -> *mut u32 {
+    unsafe { (*vec).push_back(value) };
+    owner.op_arrow()
+}
+/// Final unresolved type placeholder
+#[repr(C)]
+pub struct vector_unsigned_int__bool {
+    _opaque: [u8; 64],
+}
+/// Final unresolved type placeholder
+#[repr(C)]
+pub struct unique_ptr_unsigned_int__bool {
+    _opaque: [u8; 64],
+}
+"#;
+        let mappings = BTreeMap::from([
+            (STL_VECTOR_PLACEHOLDER_KIND.to_string(), "std_vector".to_string()),
+            (
+                STL_UNIQUE_PTR_PLACEHOLDER_KIND.to_string(),
+                "std_unique_ptr".to_string(),
+            ),
+        ]);
+        let err = validate_parser_output_handoff_mapping_completeness_for_covered_families(
+            transpiled,
+            &mappings,
+        )
+        .expect_err(
+            "covered sequence/smart-pointer families should fail deterministically when method/operator lanes would require unresolved placeholder fallback",
+        );
+        let err_text = err.to_string();
+        assert!(
+            err_text.contains("mapping completeness")
+                && err_text.contains("covered family `vector`")
+                && err_text.contains("covered family `unique_ptr`")
+                && err_text.contains("vector_unsigned_int__bool")
+                && err_text.contains("unique_ptr_unsigned_int__bool"),
+            "unexpected sequence/smart-pointer mapping completeness fallback error: {err_text}"
+        );
+    }
+
+    #[test]
     fn parser_output_codegen_rejects_unknown_schema_version() {
         let parser_output = ParserOutputV1 {
             schema_version: "0.0.0".to_string(),
@@ -2469,6 +2495,60 @@ pub type unique_ptr_int = std_unique_ptr<i32>;
                 ),
             "mapped active parser-output run should not rely on legacy deep STL std::collections fallback aliases for covered supported associative families:\n{}",
             transpiled
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn parser_output_codegen_active_handoff_mapped_sequence_smart_pointer_unresolved_shapes_fail_mapping_completeness(
+    ) {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("fragile_parser_output_seq_sp_failure_{stamp}"));
+        fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
+        let source = temp_dir.join("seq_sp_failure_probe.cc");
+        fs::write(
+            &source,
+            "class vector_;\n\
+             class unique_ptr_;\n\
+             struct Holder {\n\
+             \tvector_* values;\n\
+             \tunique_ptr_* owner;\n\
+             };\n\
+             int probe(Holder* h) { return h == 0 ? 0 : 1; }\n",
+        )
+        .expect("failed to write source");
+
+        let mut parser_output = parser_output_fixture(
+            source,
+            ParserCoreLanguage::Cpp,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        parser_output
+            .nodes
+            .push(parser_node_fixture("n1", STL_VECTOR_PLACEHOLDER_KIND));
+        parser_output.nodes.push(parser_node_fixture(
+            "n2",
+            STL_UNIQUE_PTR_PLACEHOLDER_KIND,
+        ));
+        let err = transpile_parser_output_to_rust(&parser_output).expect_err(
+            "mapped parser-output handoff should fail mapping completeness when sequence/smart-pointer call lanes would require unresolved placeholder fallback",
+        );
+        let err_text = err.to_string();
+        assert!(
+            err_text.contains("mapping completeness")
+                && err_text.contains("covered family `vector`")
+                && err_text.contains("covered family `unique_ptr`")
+                && err_text.contains("vector_")
+                && err_text.contains("unique_ptr_"),
+            "mapped active parser-output run should report deterministic sequence/smart-pointer mapping completeness failures for unresolved placeholder fallback:\n{}",
+            err_text
         );
 
         let _ = fs::remove_dir_all(&temp_dir);
