@@ -20068,3 +20068,36 @@ Validation:
 - Full regression (run after leaf implementation):
   - `cargo test --workspace --all-targets -q`
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+## 2026-03-18: M5.3.b Sequence/Smart-Pointer Method-Operator Mapping Regression Coverage
+
+Context:
+- After `M5.3.a`, next top unfinished P0 leaf was `M5.3.b`.
+- Goal: add focused parser-output mapping regressions for sequence and
+  smart-pointer method/operator call lowering correctness.
+
+Wrong-approach check:
+- Re-checked section `1.3 Wrong Approaches (Do Not Do)` and
+  `docs/dev/wrong.md` before implementation.
+- No target-specific hacks, no force-native bypasses, and no fake semantic
+  method bodies were introduced.
+
+Design update:
+- Added focused `AstCodeGen` regression:
+  - `test_parser_output_mapping_sequence_smart_pointer_call_lowering_uses_canonical_method_operator_lanes`
+- Test enables parser-output mapping context for:
+  - `stl_vector_placeholder -> std_vector`
+  - `stl_unique_ptr_placeholder -> std_unique_ptr`
+- Assertions verify generated output routes through canonical lanes:
+  - sequence method lane: `.push_back(value)`
+  - smart-pointer operator lanes:
+    - `operator*` lowering via `.op_deref()`
+    - `operator->` lowering via `.op_arrow()`
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-clang test_parser_output_mapping_sequence_smart_pointer_call_lowering_uses_canonical_method_operator_lanes -- --nocapture`
+  - `cargo test -p fragile-clang test_parser_output_mapping_ -- --nocapture`
+- Full regression (run after leaf implementation):
+  - `cargo test --workspace --all-targets -q`
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`

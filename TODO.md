@@ -110,7 +110,7 @@ Acceptance:
 - [x] M5.2 Enforce mapping completeness checks (no silent fallback to legacy STL translation).
 - [ ] M5.3 Add focused regressions for method/operator mapping correctness.
   - [x] M5.3.a Add parser-output handoff regression for mapped associative operator/method call lowering to canonical pre-generated targets.
-  - [ ] M5.3.b Add parser-output handoff regression for mapped sequence/smart-pointer method call lowering to canonical pre-generated targets.
+  - [x] M5.3.b Add parser-output handoff regression for mapped sequence/smart-pointer method call lowering to canonical pre-generated targets.
   - [ ] M5.3.c Add negative regression proving mapped method/operator lanes fail deterministically when unresolved placeholder fallback would be required.
 Acceptance:
 - [ ] M5.A1 All placeholder nodes in corpus resolve to generated STL targets.

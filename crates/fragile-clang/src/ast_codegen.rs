@@ -108794,6 +108794,229 @@ pub struct Holder {
     }
 
     #[test]
+    fn test_parser_output_mapping_sequence_smart_pointer_call_lowering_uses_canonical_method_operator_lanes(
+    ) {
+        let int_ty = CppType::Int { signed: true };
+        let int_ref_ty = CppType::Reference {
+            referent: Box::new(int_ty.clone()),
+            is_const: false,
+            is_rvalue: false,
+        };
+        let int_ptr_ty = CppType::Pointer {
+            pointee: Box::new(int_ty.clone()),
+            is_const: false,
+        };
+        let vector_ref_ty = CppType::Reference {
+            referent: Box::new(CppType::Named("vector_int".to_string())),
+            is_const: false,
+            is_rvalue: false,
+        };
+        let unique_ptr_ref_ty = CppType::Reference {
+            referent: Box::new(CppType::Named("unique_ptr_int".to_string())),
+            is_const: false,
+            is_rvalue: false,
+        };
+
+        let vec_ref = || {
+            make_node(
+                ClangNodeKind::DeclRefExpr {
+                    name: "vec".to_string(),
+                    ty: vector_ref_ty.clone(),
+                    namespace_path: vec![],
+                },
+                vec![],
+            )
+        };
+        let value_ref = || {
+            make_node(
+                ClangNodeKind::DeclRefExpr {
+                    name: "value".to_string(),
+                    ty: int_ty.clone(),
+                    namespace_path: vec![],
+                },
+                vec![],
+            )
+        };
+        let owner_ref = || {
+            make_node(
+                ClangNodeKind::DeclRefExpr {
+                    name: "owner".to_string(),
+                    ty: unique_ptr_ref_ty.clone(),
+                    namespace_path: vec![],
+                },
+                vec![],
+            )
+        };
+
+        let push_back_call = make_node(
+            ClangNodeKind::CallExpr {
+                ty: CppType::Void,
+                template_instantiation: None,
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::MemberExpr {
+                        member_name: "push_back".to_string(),
+                        is_arrow: false,
+                        ty: CppType::Function {
+                            return_type: Box::new(CppType::Void),
+                            params: vec![int_ty.clone()],
+                            is_variadic: false,
+                        },
+                        declaring_class: Some("vector_int".to_string()),
+                        is_static: false,
+                    },
+                    vec![vec_ref()],
+                ),
+                value_ref(),
+            ],
+        );
+
+        let deref_call = make_node(
+            ClangNodeKind::CallExpr {
+                ty: int_ty.clone(),
+                template_instantiation: None,
+            },
+            vec![
+                owner_ref(),
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "operator*".to_string(),
+                        ty: CppType::Function {
+                            return_type: Box::new(int_ref_ty),
+                            params: vec![],
+                            is_variadic: false,
+                        },
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+            ],
+        );
+
+        let arrow_call = make_node(
+            ClangNodeKind::CallExpr {
+                ty: int_ptr_ty.clone(),
+                template_instantiation: None,
+            },
+            vec![
+                owner_ref(),
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "operator->".to_string(),
+                        ty: CppType::Function {
+                            return_type: Box::new(int_ptr_ty.clone()),
+                            params: vec![],
+                            is_variadic: false,
+                        },
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+            ],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "mapped_vector_push_lane".to_string(),
+                        mangled_name: "mapped_vector_push_lane".to_string(),
+                        is_static: false,
+                        return_type: CppType::Void,
+                        params: vec![
+                            ("vec".to_string(), vector_ref_ty),
+                            ("value".to_string(), int_ty.clone()),
+                        ],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(ClangNodeKind::ExprStmt, vec![push_back_call])],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "mapped_unique_ptr_deref_lane".to_string(),
+                        mangled_name: "mapped_unique_ptr_deref_lane".to_string(),
+                        is_static: false,
+                        return_type: int_ty.clone(),
+                        params: vec![("owner".to_string(), unique_ptr_ref_ty.clone())],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(ClangNodeKind::ReturnStmt, vec![deref_call])],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "mapped_unique_ptr_arrow_lane".to_string(),
+                        mangled_name: "mapped_unique_ptr_arrow_lane".to_string(),
+                        is_static: false,
+                        return_type: int_ptr_ty,
+                        params: vec![("owner".to_string(), unique_ptr_ref_ty)],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(ClangNodeKind::ReturnStmt, vec![arrow_call])],
+                    )],
+                ),
+            ],
+        );
+
+        let mut codegen = AstCodeGen::new();
+        codegen.set_parser_output_stl_placeholder_mappings(std::collections::BTreeMap::from([
+            ("stl_vector_placeholder".to_string(), "std_vector".to_string()),
+            (
+                "stl_unique_ptr_placeholder".to_string(),
+                "std_unique_ptr".to_string(),
+            ),
+        ]));
+        let code = codegen.generate(&ast);
+        assert!(
+            code.contains("pub type vector_int = std_vector<i32>;"),
+            "mapping-aware handoff should close vector aliases to canonical pre-generated target, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub type unique_ptr_int = std_unique_ptr<i32>;")
+                || code.contains("owner: &mut std_unique_ptr<i32>"),
+            "mapping-aware handoff should route unique_ptr spellings to canonical pre-generated target via alias closure or direct signature normalization, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains(".push_back(value)"),
+            "mapped sequence method calls should lower through canonical vector method lanes, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("owner.op_deref()"),
+            "mapped smart-pointer operator* calls should lower through canonical op_deref lane, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("owner.op_arrow()"),
+            "mapped smart-pointer operator-> calls should lower through canonical op_arrow lane, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
     fn test_resolve_missing_stub_concrete_alias_target_prefers_mapping_driven_vector_prefix(
     ) {
         let mut codegen = AstCodeGen::new();
