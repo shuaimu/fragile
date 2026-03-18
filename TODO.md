@@ -125,10 +125,10 @@ Acceptance:
 ### M6) Diagnostic and Failure Policy for Unknown STL Shapes
 - [x] M6.1 Add deterministic error class for unsupported STL placeholder shapes.
 - [x] M6.2 Add actionable diagnostics payload (location, symbol, shape fingerprint, missing mapping key).
-- [ ] M6.3 Add regression tests that assert failure is explicit and non-silent. [WIP — claude/parser]
+- [x] M6.3 Add regression tests that assert failure is explicit and non-silent. Done 2026-03-18. Evidence: 17 regression tests across fragile-clang (11) and fragile-parser-core (6) asserting E001/E002/E003 deterministic error codes, fail-fast behavior, full-pipeline error propagation, error format stability, payload field fidelity, and no silent stub production.
 Acceptance:
-- [ ] M6.A1 Unknown STL shapes fail with deterministic error class and metadata.
-- [ ] M6.A2 No semantic stub/fake body is produced for unsupported shapes.
+- [x] M6.A1 Unknown STL shapes fail with deterministic error class and metadata. Done 2026-03-18. Evidence: tests assert FRAGILE_STL_E001/E002/E003 codes with symbol, location, shape fingerprint, missing mapping key, and supported families in every error path.
+- [x] M6.A2 No semantic stub/fake body is produced for unsupported shapes. Done 2026-03-18. Evidence: m6_3_transpile_returns_error_not_code_for_unknown_placeholder asserts transpile_parser_output_to_rust returns Err (not Ok with generated code) for unsupported placeholders.
 
 ### M7) Shadow Mode and Parity Hardening
 - [ ] M7.1 Run old/new parser backends in shadow mode on representative non-RPC corpus; queue RPC corpus for M9 closure.
