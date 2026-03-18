@@ -101,7 +101,7 @@ Acceptance:
   - [x] M5.1.a Add deterministic parser-output STL placeholder family resolver + pre-generated contract mapping validation in handoff codegen path.
   - [ ] M5.1.b Wire codegen lowering decisions to resolved placeholder-family mappings (family -> canonical pre-generated type prefix) instead of legacy name-shape heuristics.
     - [x] M5.1.b.i Plumb parser-output placeholder mappings into `AstCodeGen` state and use mapping-aware unresolved-associative alias closure in the active generate pipeline.
-    - [ ] M5.1.b.ii Replace hardcoded associative alias target derivation with mapping-driven family dispatch for covered placeholder families.
+    - [x] M5.1.b.ii Replace hardcoded associative alias target derivation with mapping-driven family dispatch for covered placeholder families.
     - [ ] M5.1.b.iii Replace hardcoded sequence/smart-pointer alias family detection with mapping-driven family dispatch for covered placeholder families.
     - [ ] M5.1.b.iv Add deterministic diagnostics/tests proving mapped families no longer use legacy `std::collections::*` fallback lanes in active parser-output runs.
   - [ ] M5.1.c Remove active-path legacy unresolved STL alias fallback emission to `std::collections::*` for mapped placeholder families.

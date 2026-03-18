@@ -19762,3 +19762,37 @@ Validation:
 - Added tests in `crates/fragile-clang/src/ast_codegen.rs`:
   - `test_close_unresolved_type_reference_gaps_with_placeholder_mapping_blocks_legacy_associative_std_collections_aliases`
   - `test_close_unresolved_type_reference_gaps_with_placeholder_mapping_uses_pre_generated_map_alias_when_available`
+
+## 2026-03-18: M5.1.b.ii Mapping-Driven Associative Alias Dispatch
+
+Context:
+- After `M5.1.b.i`, next top P0 leaf was `M5.1.b.ii`.
+- Goal: replace hardcoded parser-output associative alias derivation branches
+  with mapping-driven family dispatch for covered families.
+
+Wrong-approach check:
+- Re-checked section `1.3 Wrong Approaches (Do Not Do)` before changes.
+- No target-specific branch logic, no force-native bypasses, and no synthetic
+  semantic fallback method bodies were introduced.
+
+Design update:
+- Replaced hardcoded map/unordered-map parser-output checks in associative alias
+  derivation with a dispatch table keyed by placeholder kinds and lowered
+  prefixes:
+  - `stl_map_placeholder` -> `map_` / `std_map_`
+  - `stl_unordered_map_placeholder` -> `unordered_map_` / `std_unordered_map_`
+- Mapping-aware associative family control now resolves through this dispatch
+  matcher.
+- Mapping-aware associative alias target derivation now:
+  1. matches family via dispatch table,
+  2. gets canonical prefix from parser-output mapping,
+  3. builds supported concrete alias target (`*_int__int` lane).
+- Legacy behavior without parser-output mapping context remains unchanged.
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-clang close_unresolved_type_reference_gaps_with_placeholder_mapping -- --nocapture`
+  - `cargo test -p fragile-clang parser_output_stl_placeholder_mapping -- --nocapture`
+- Added tests in `crates/fragile-clang/src/ast_codegen.rs`:
+  - `test_close_unresolved_type_reference_gaps_with_placeholder_mapping_dispatches_map_family_via_mapping_prefix`
+  - `test_close_unresolved_type_reference_gaps_with_placeholder_mapping_dispatches_unordered_map_family_via_mapping_prefix`

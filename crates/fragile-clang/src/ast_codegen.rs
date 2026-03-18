@@ -5830,59 +5830,69 @@ impl AstCodeGen {
             && (defined.contains(generic_base) || generic_base.starts_with("std::"))
     }
 
-    fn parser_output_controls_map_family_name(
-        name: &str,
-        placeholder_prefixes: &BTreeMap<String, String>,
-    ) -> bool {
-        (name.starts_with("map_") || name.starts_with("std_map_"))
-            && placeholder_prefixes.contains_key("stl_map_placeholder")
+    fn parser_output_associative_family_dispatch_specs(
+    ) -> [(&'static str, [&'static str; 2]); 2] {
+        [
+            ("stl_map_placeholder", ["map_", "std_map_"]),
+            (
+                "stl_unordered_map_placeholder",
+                ["unordered_map_", "std_unordered_map_"],
+            ),
+        ]
     }
 
-    fn parser_output_controls_unordered_map_family_name(
-        name: &str,
+    fn parser_output_associative_family_match_for_rust_name<'a>(
+        rust_name: &'a str,
         placeholder_prefixes: &BTreeMap<String, String>,
-    ) -> bool {
-        (name.starts_with("unordered_map_") || name.starts_with("std_unordered_map_"))
-            && placeholder_prefixes.contains_key("stl_unordered_map_placeholder")
+    ) -> Option<(&'static str, &'a str)> {
+        for (placeholder_kind, prefixes) in Self::parser_output_associative_family_dispatch_specs()
+        {
+            if !placeholder_prefixes.contains_key(placeholder_kind) {
+                continue;
+            }
+            for prefix in prefixes {
+                if let Some(suffix) = rust_name.strip_prefix(prefix) {
+                    return Some((placeholder_kind, suffix));
+                }
+            }
+        }
+        None
+    }
+
+    fn parser_output_associative_supported_concrete_suffix_from_lowered_map_suffix(
+        lowered_map_suffix: &str,
+    ) -> Option<&'static str> {
+        let (key, value) = Self::stl_simple_map_key_value_rust_types_from_suffix(lowered_map_suffix)?;
+        if key == "i32" && value == "i32" {
+            Some("int__int")
+        } else {
+            None
+        }
     }
 
     fn parser_output_controls_associative_family_name(
         name: &str,
         placeholder_prefixes: &BTreeMap<String, String>,
     ) -> bool {
-        Self::parser_output_controls_map_family_name(name, placeholder_prefixes)
-            || Self::parser_output_controls_unordered_map_family_name(name, placeholder_prefixes)
+        Self::parser_output_associative_family_match_for_rust_name(name, placeholder_prefixes)
+            .is_some()
     }
 
     fn parser_output_associative_alias_target_from_rust_name(
         rust_name: &str,
         placeholder_prefixes: &BTreeMap<String, String>,
     ) -> Option<String> {
-        if Self::parser_output_controls_map_family_name(rust_name, placeholder_prefixes) {
-            let canonical_prefix = placeholder_prefixes.get("stl_map_placeholder")?;
-            let suffix = rust_name
-                .strip_prefix("map_")
-                .or_else(|| rust_name.strip_prefix("std_map_"))?;
-            let (key, value) = Self::stl_simple_map_key_value_rust_types_from_suffix(suffix)?;
-            if key == "i32" && value == "i32" {
-                return Some(format!("{}_int__int", canonical_prefix));
-            }
-            return None;
-        }
-
-        if Self::parser_output_controls_unordered_map_family_name(rust_name, placeholder_prefixes) {
-            let canonical_prefix = placeholder_prefixes.get("stl_unordered_map_placeholder")?;
-            let suffix = rust_name
-                .strip_prefix("unordered_map_")
-                .or_else(|| rust_name.strip_prefix("std_unordered_map_"))?;
-            let (key, value) = Self::stl_simple_map_key_value_rust_types_from_suffix(suffix)?;
-            if key == "i32" && value == "i32" {
-                return Some(format!("{}_int__int", canonical_prefix));
-            }
-            return None;
-        }
-
-        None
+        let (placeholder_kind, suffix) =
+            Self::parser_output_associative_family_match_for_rust_name(
+                rust_name,
+                placeholder_prefixes,
+            )?;
+        let canonical_prefix = placeholder_prefixes.get(placeholder_kind)?;
+        let concrete_suffix =
+            Self::parser_output_associative_supported_concrete_suffix_from_lowered_map_suffix(
+                suffix,
+            )?;
+        Some(format!("{}_{}", canonical_prefix, concrete_suffix))
     }
 
     fn resolve_container_alias_target(
@@ -108202,6 +108212,70 @@ pub struct Holder {
         assert!(
             !output.contains("std::collections::BTreeMap"),
             "mapping-aware closure should avoid legacy std::collections alias lane for mapped map int/int families, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_close_unresolved_type_reference_gaps_with_placeholder_mapping_dispatches_map_family_via_mapping_prefix(
+    ) {
+        let input = r#"
+#[repr(C)]
+pub struct parser_owned_map_int__int {
+    _opaque: [u8; 8],
+}
+pub struct Holder {
+    pub pending: map_int__int,
+}
+"#;
+        let mut codegen = AstCodeGen::new();
+        codegen.set_parser_output_stl_placeholder_mappings(std::collections::BTreeMap::from([(
+            "stl_map_placeholder".to_string(),
+            "parser_owned_map".to_string(),
+        )]));
+        let output = codegen
+            .close_unresolved_type_reference_gaps_with_parser_output_placeholder_mappings(input);
+        assert!(
+            output.contains("pub type map_int__int = parser_owned_map_int__int;"),
+            "mapping-driven associative dispatch should honor parser-output canonical prefixes for mapped map families, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("pub type map_int__int = std_map_int__int;"),
+            "map family aliasing in mapping-aware closure should not hardcode std_map prefix when parser-output mapping provides a different canonical prefix, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_close_unresolved_type_reference_gaps_with_placeholder_mapping_dispatches_unordered_map_family_via_mapping_prefix(
+    ) {
+        let input = r#"
+#[repr(C)]
+pub struct parser_owned_unordered_map_int__int {
+    _opaque: [u8; 8],
+}
+pub struct Holder {
+    pub pending: unordered_map_int__int,
+}
+"#;
+        let mut codegen = AstCodeGen::new();
+        codegen.set_parser_output_stl_placeholder_mappings(std::collections::BTreeMap::from([(
+            "stl_unordered_map_placeholder".to_string(),
+            "parser_owned_unordered_map".to_string(),
+        )]));
+        let output = codegen
+            .close_unresolved_type_reference_gaps_with_parser_output_placeholder_mappings(input);
+        assert!(
+            output.contains(
+                "pub type unordered_map_int__int = parser_owned_unordered_map_int__int;"
+            ),
+            "mapping-driven associative dispatch should honor parser-output canonical prefixes for mapped unordered_map families, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("pub type unordered_map_int__int = std_unordered_map_int__int;"),
+            "unordered_map family aliasing in mapping-aware closure should not hardcode std_unordered_map prefix when parser-output mapping provides a different canonical prefix, got:\n{}",
             output
         );
     }
