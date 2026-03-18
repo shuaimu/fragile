@@ -31,6 +31,216 @@ pub static PARTIAL_ORDERING_EQUIVALENT: partial_ordering = partial_ordering { _M
 pub static PARTIAL_ORDERING_GREATER: partial_ordering = partial_ordering { _M_value: 1 };
 pub static PARTIAL_ORDERING_UNORDERED: partial_ordering = partial_ordering { _M_value: -127 };
 
+// Value-semantics surfaces for fixture-required STL families.
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct std_optional_int {
+    engaged: bool,
+    value: i32,
+}
+
+impl std_optional_int {
+    pub fn new_0() -> Self {
+        Self::default()
+    }
+
+    pub fn new_1(value: i32) -> Self {
+        Self {
+            engaged: true,
+            value,
+        }
+    }
+
+    pub fn has_value(&self) -> bool {
+        self.engaged
+    }
+
+    pub fn op_bool(&self) -> bool {
+        self.has_value()
+    }
+
+    pub fn value_or(&self, fallback: i32) -> i32 {
+        if self.engaged {
+            self.value
+        } else {
+            fallback
+        }
+    }
+
+    pub fn emplace(&mut self, value: i32) -> *mut i32 {
+        self.engaged = true;
+        self.value = value;
+        &mut self.value as *mut i32
+    }
+
+    pub fn reset(&mut self) {
+        self.engaged = false;
+        self.value = 0;
+    }
+
+    pub fn value_ptr(&mut self) -> *mut i32 {
+        if self.engaged {
+            &mut self.value as *mut i32
+        } else {
+            std::ptr::null_mut()
+        }
+    }
+
+    pub fn value_ptr_const(&self) -> *const i32 {
+        if self.engaged {
+            &self.value as *const i32
+        } else {
+            std::ptr::null()
+        }
+    }
+
+    pub fn assign(&mut self, value: i32) -> *mut i32 {
+        self.emplace(value)
+    }
+
+    pub fn op_deref(&mut self) -> &mut i32 {
+        if self.engaged {
+            &mut self.value
+        } else {
+            panic!("std_optional_int::op_deref called on disengaged optional")
+        }
+    }
+
+    pub fn op_deref_const(&self) -> &i32 {
+        if self.engaged {
+            &self.value
+        } else {
+            panic!("std_optional_int::op_deref_const called on disengaged optional")
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct std_tuple_int__int {
+    pub _0: i32,
+    pub _1: i32,
+}
+
+impl std_tuple_int__int {
+    pub fn new_0() -> Self {
+        Self::default()
+    }
+
+    pub fn new_2(v0: i32, v1: i32) -> Self {
+        Self { _0: v0, _1: v1 }
+    }
+
+    pub fn get_0(&mut self) -> *mut i32 {
+        &mut self._0 as *mut i32
+    }
+
+    pub fn get_1(&mut self) -> *mut i32 {
+        &mut self._1 as *mut i32
+    }
+
+    pub fn get_0_const(&self) -> *const i32 {
+        &self._0 as *const i32
+    }
+
+    pub fn get_1_const(&self) -> *const i32 {
+        &self._1 as *const i32
+    }
+
+    pub fn assign(&mut self, v0: i32, v1: i32) {
+        self._0 = v0;
+        self._1 = v1;
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct std_variant_int__long {
+    index: usize,
+    int_value: i32,
+    long_value: i64,
+}
+
+impl std_variant_int__long {
+    pub fn new_0() -> Self {
+        Self::default()
+    }
+
+    pub fn new_1(value: i32) -> Self {
+        Self {
+            index: 0,
+            int_value: value,
+            long_value: value as i64,
+        }
+    }
+
+    pub fn new_1_1(value: i64) -> Self {
+        Self {
+            index: 1,
+            int_value: value as i32,
+            long_value: value,
+        }
+    }
+
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    pub fn holds_alternative_int(&self) -> bool {
+        self.index == 0
+    }
+
+    pub fn holds_alternative_long(&self) -> bool {
+        self.index == 1
+    }
+
+    pub fn emplace_int(&mut self, value: i32) -> *mut i32 {
+        self.index = 0;
+        self.int_value = value;
+        self.long_value = value as i64;
+        &mut self.int_value as *mut i32
+    }
+
+    pub fn emplace_long(&mut self, value: i64) -> *mut i64 {
+        self.index = 1;
+        self.long_value = value;
+        self.int_value = value as i32;
+        &mut self.long_value as *mut i64
+    }
+
+    pub fn get_int_ptr(&mut self) -> *mut i32 {
+        if self.holds_alternative_int() {
+            &mut self.int_value as *mut i32
+        } else {
+            std::ptr::null_mut()
+        }
+    }
+
+    pub fn get_long_ptr(&mut self) -> *mut i64 {
+        if self.holds_alternative_long() {
+            &mut self.long_value as *mut i64
+        } else {
+            std::ptr::null_mut()
+        }
+    }
+
+    pub fn get_int_ptr_const(&self) -> *const i32 {
+        if self.holds_alternative_int() {
+            &self.int_value as *const i32
+        } else {
+            std::ptr::null()
+        }
+    }
+
+    pub fn get_long_ptr_const(&self) -> *const i64 {
+        if self.holds_alternative_long() {
+            &self.long_value as *const i64
+        } else {
+            std::ptr::null()
+        }
+    }
+}
+
 // Type trait stubs
 #[repr(C)]
 #[derive(Default, Copy, Clone)]

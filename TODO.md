@@ -89,7 +89,7 @@ Acceptance:
 - [ ] M4.2 Implement/port required operations used by current benchmarks/tests (container ops, iterators, value semantics).
   - [x] M4.2.a Port ordered-map core runtime surface (`std::map<int, int>`) into `fragile-stl` pre-generated module with deterministic insert/lookup/update/erase semantics and focused runtime tests.
   - [x] M4.2.b Port unordered-map core runtime surface (`std::unordered_map<int, int>`) into `fragile-stl` pre-generated module with deterministic insert/lookup/update/erase semantics and focused runtime tests.
-  - [ ] M4.2.c Port required value-semantics helper surfaces for current fixtures (`optional`, `tuple`, `variant`) with focused compile/runtime tests.
+  - [x] M4.2.c Port required value-semantics helper surfaces for current fixtures (`optional`, `tuple`, `variant`) with focused compile/runtime tests.
   - [ ] M4.2.d Port iterator boundary operations required by current benchmark/fixture usage and lock behavior with focused regressions.
 - [ ] M4.3 Add generation reproducibility checks and deterministic manifest for generated outputs.
 Acceptance:

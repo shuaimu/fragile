@@ -18,6 +18,7 @@
 - [2.10 M4.1 Pre-Generated STL Layout + Naming Contract](#210-m41-pre-generated-stl-layout--naming-contract)
 - [2.11 M4.2.a Ordered-Map Runtime Surface (Pre-Generated)](#211-m42a-ordered-map-runtime-surface-pre-generated)
 - [2.12 M4.2.b Unordered-Map Runtime Surface (Pre-Generated)](#212-m42b-unordered-map-runtime-surface-pre-generated)
+- [2.13 M4.2.c Value-Semantics Runtime Surface (Pre-Generated)](#213-m42c-value-semantics-runtime-surface-pre-generated)
 - [3. Internal Data Models](#3-internal-data-models)
 - [4. C++ Declaration to Rust Item Mapping](#4-c-declaration-to-rust-item-mapping)
 - [5. C++ Type to Rust Type Mapping](#5-c-type-to-rust-type-mapping)
@@ -551,6 +552,48 @@ Behavior contract:
 - deterministic fixed-bucket hashing for key placement
 - deterministic collision-chain insertion order within each bucket
 - deterministic insert/update/remove transitions with mutable value-slot access
+
+Cutover boundary:
+
+- this leaf ports runtime behavior into `fragile-stl` only
+- placeholder-to-pre-generated mapping cutover remains in `M5`
+
+Wrong-approach guard (Section 1.3):
+
+- no hardcoded success-return stubs
+- no target-specific special casing
+- no force-native fallback path
+
+### 2.13 M4.2.c Value-Semantics Runtime Surface (Pre-Generated)
+
+Leaf `M4.2.c` adds explicit pre-generated value-semantics runtime surfaces for
+fixture-required STL shapes in:
+
+- `crates/fragile-stl/src/comparison.rs`
+
+Implemented operation surfaces:
+
+- `std_optional_int`
+  - `new_0`, `new_1`
+  - `has_value`, `op_bool`, `value_or`
+  - `emplace`, `assign`, `reset`
+  - pointer/value accessors
+- `std_tuple_int__int`
+  - `new_0`, `new_2`
+  - mutable/const element accessors
+  - `assign`
+- `std_variant_int__long`
+  - `new_0`, `new_1` (`int`), `new_1_1` (`long`)
+  - `index`, alternative-holds checks
+  - `emplace_int`, `emplace_long`
+  - mutable/const typed accessors
+
+Behavior contract:
+
+- value semantics (copy/clone produce independent values)
+- deterministic optional engagement/disengagement transitions
+- deterministic tuple element update semantics
+- deterministic variant alternative index transitions
 
 Cutover boundary:
 
