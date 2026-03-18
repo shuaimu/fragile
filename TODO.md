@@ -86,15 +86,15 @@ Acceptance:
 
 ### M4) Pre-Generated STL Implementation Module
 - [x] M4.1 Create versioned pre-generated STL module layout and naming contract.
-- [ ] M4.2 Implement/port required operations used by current benchmarks/tests (container ops, iterators, value semantics).
+- [x] M4.2 Implement/port required operations used by current benchmarks/tests (container ops, iterators, value semantics).
   - [x] M4.2.a Port ordered-map core runtime surface (`std::map<int, int>`) into `fragile-stl` pre-generated module with deterministic insert/lookup/update/erase semantics and focused runtime tests.
   - [x] M4.2.b Port unordered-map core runtime surface (`std::unordered_map<int, int>`) into `fragile-stl` pre-generated module with deterministic insert/lookup/update/erase semantics and focused runtime tests.
   - [x] M4.2.c Port required value-semantics helper surfaces for current fixtures (`optional`, `tuple`, `variant`) with focused compile/runtime tests.
   - [x] M4.2.d Port iterator boundary operations required by current benchmark/fixture usage and lock behavior with focused regressions.
-- [ ] M4.3 Add generation reproducibility checks and deterministic manifest for generated outputs.
+- [x] M4.3 Add generation reproducibility checks and deterministic manifest for generated outputs.
 Acceptance:
-- [ ] M4.A1 Generated STL module is reproducible byte-for-byte from the same inputs.
-- [ ] M4.A2 Required STL operation fixtures compile and execute successfully.
+- [x] M4.A1 Generated STL module is reproducible byte-for-byte from the same inputs.
+- [x] M4.A2 Required STL operation fixtures compile and execute successfully.
 
 ### M5) Codegen Placeholder Mapping Layer
 - [ ] M5.1 Replace STL lowering paths with placeholder-to-pre-generated mapping in codegen.

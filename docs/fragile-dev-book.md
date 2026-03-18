@@ -20,6 +20,7 @@
 - [2.12 M4.2.b Unordered-Map Runtime Surface (Pre-Generated)](#212-m42b-unordered-map-runtime-surface-pre-generated)
 - [2.13 M4.2.c Value-Semantics Runtime Surface (Pre-Generated)](#213-m42c-value-semantics-runtime-surface-pre-generated)
 - [2.14 M4.2.d Iterator-Boundary Runtime Surface (Pre-Generated)](#214-m42d-iterator-boundary-runtime-surface-pre-generated)
+- [2.15 M4.3 Generation Reproducibility Manifest (Pre-Generated)](#215-m43-generation-reproducibility-manifest-pre-generated)
 - [3. Internal Data Models](#3-internal-data-models)
 - [4. C++ Declaration to Rust Item Mapping](#4-c-declaration-to-rust-item-mapping)
 - [5. C++ Type to Rust Type Mapping](#5-c-type-to-rust-type-mapping)
@@ -646,6 +647,53 @@ Wrong-approach guard (Section 1.3):
 - no fake/no-op fallback iterator body
 - no target-specific special casing
 - no force-native fallback path
+
+### 2.15 M4.3 Generation Reproducibility Manifest (Pre-Generated)
+
+Leaf `M4.3` adds deterministic generation metadata and reproducibility checks for
+the pre-generated STL surface in:
+
+- `crates/fragile-stl/src/layout_contract.rs`
+- `crates/fragile-clang/src/ast_codegen.rs`
+
+Implemented manifest surface:
+
+- `pre_generated_stl_module_manifest_v1`
+- `pre_generated_stl_module_manifest_text_v1`
+
+Manifest contract:
+
+- deterministic module-order traversal based on `PREGENERATED_STL_MODULES_V1`
+- stable per-module metadata:
+  - `module_id`
+  - `source_file`
+  - `source_byte_len`
+  - `source_line_count`
+  - deterministic `fnv1a64` source fingerprint
+- stable rendered text payload with layout headers and module count
+
+Codegen integration:
+
+- `AstCodeGen::emit_stl_preamble` now emits a manifest block in generated
+  output:
+  - `// fragile_stl module manifest:`
+  - comment lines from `pre_generated_stl_module_manifest_text_v1()`
+
+Reproducibility checks:
+
+- `crates/fragile-stl/tests/layout_contract_tests.rs`
+  - deterministic manifest entries across repeated generation
+  - deterministic rendered manifest text and completeness against contract
+- `crates/fragile-clang/src/ast_codegen.rs` tests
+  - preamble includes manifest block and all manifest lines
+  - preamble segment before placeholder synthesis is byte-reproducible for
+    identical input AST
+
+Wrong-approach guard (Section 1.3):
+
+- no fake/fallback runtime bodies were introduced
+- no target-specific conditionals
+- reproducibility uses deterministic contract traversal and stable hashing
 
 ## 3. Internal Data Models
 

@@ -22,6 +22,16 @@ pub struct PreGeneratedStlFamilyContract {
 pub const PREGENERATED_STL_LAYOUT_VERSION_V1: &str = "v1";
 pub const PREGENERATED_STL_LAYOUT_NAMESPACE_V1: &str = "fragile_stl::v1";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreGeneratedStlModuleManifestEntryV1 {
+    pub module_id: &'static str,
+    pub source_file: &'static str,
+    pub sentinel: &'static str,
+    pub source_byte_len: usize,
+    pub source_line_count: usize,
+    pub source_fnv1a64: u64,
+}
+
 pub const PREGENERATED_STL_MODULES_V1: &[PreGeneratedStlModuleContract] = &[
     PreGeneratedStlModuleContract {
         module_id: "file_header",
@@ -204,4 +214,56 @@ pub fn pre_generated_stl_module_source_v1(module_id: &str) -> Option<&'static st
         "runtime" => Some(include_str!("runtime.rs")),
         _ => None,
     }
+}
+
+fn fragile_fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3u64);
+    }
+    hash
+}
+
+pub fn pre_generated_stl_module_manifest_v1() -> Vec<PreGeneratedStlModuleManifestEntryV1> {
+    let mut entries = Vec::with_capacity(PREGENERATED_STL_MODULES_V1.len());
+    for module in PREGENERATED_STL_MODULES_V1 {
+        let source = pre_generated_stl_module_source_v1(module.module_id).unwrap_or_else(|| {
+            panic!(
+                "contract module `{}` should resolve to source text in {}",
+                module.module_id, PREGENERATED_STL_LAYOUT_VERSION_V1
+            )
+        });
+        entries.push(PreGeneratedStlModuleManifestEntryV1 {
+            module_id: module.module_id,
+            source_file: module.source_file,
+            sentinel: module.sentinel,
+            source_byte_len: source.len(),
+            source_line_count: source.lines().count(),
+            source_fnv1a64: fragile_fnv1a64(source.as_bytes()),
+        });
+    }
+    entries
+}
+
+pub fn pre_generated_stl_module_manifest_text_v1() -> String {
+    let entries = pre_generated_stl_module_manifest_v1();
+    let mut lines = Vec::with_capacity(entries.len() + 3);
+    lines.push(format!("layout_version={}", PREGENERATED_STL_LAYOUT_VERSION_V1));
+    lines.push(format!(
+        "layout_namespace={}",
+        PREGENERATED_STL_LAYOUT_NAMESPACE_V1
+    ));
+    lines.push(format!("module_count={}", entries.len()));
+    for entry in entries {
+        lines.push(format!(
+            "module={}|source_file={}|bytes={}|lines={}|fnv1a64={:016x}",
+            entry.module_id,
+            entry.source_file,
+            entry.source_byte_len,
+            entry.source_line_count,
+            entry.source_fnv1a64
+        ));
+    }
+    lines.join("\n")
 }

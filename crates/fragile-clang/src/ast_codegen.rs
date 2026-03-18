@@ -10,7 +10,8 @@ use crate::ast::{
 };
 use crate::types::{normalize_rusty_type_alias_to_std, parse_template_args, CppType};
 use fragile_stl::layout_contract::{
-    pre_generated_stl_module_source_v1, pre_generated_stl_modules_v1,
+    pre_generated_stl_module_manifest_text_v1, pre_generated_stl_module_source_v1,
+    pre_generated_stl_modules_v1,
     PREGENERATED_STL_LAYOUT_NAMESPACE_V1, PREGENERATED_STL_LAYOUT_VERSION_V1,
 };
 use std::borrow::Cow;
@@ -57777,6 +57778,10 @@ impl FragileAtomicBoolCompat for atomic_bool {
             "// fragile_stl layout contract: {} ({})",
             PREGENERATED_STL_LAYOUT_VERSION_V1, PREGENERATED_STL_LAYOUT_NAMESPACE_V1
         ));
+        self.writeln("// fragile_stl module manifest:");
+        for line in pre_generated_stl_module_manifest_text_v1().lines() {
+            self.writeln(&format!("// {}", line));
+        }
 
         // STL stub modules from the fragile-stl layout contract.
         // Each file is included as raw text and inlined into the generated preamble.
@@ -86313,6 +86318,19 @@ mod tests {
             "preamble should include fragile_stl layout contract marker, got:\n{}",
             code
         );
+        assert!(
+            code.contains("// fragile_stl module manifest:"),
+            "preamble should include fragile_stl module manifest marker, got:\n{}",
+            code
+        );
+        for line in pre_generated_stl_module_manifest_text_v1().lines() {
+            let manifest_line = format!("// {}", line);
+            assert!(
+                code.contains(manifest_line.as_str()),
+                "preamble should include manifest line `{}`",
+                manifest_line
+            );
+        }
 
         let mut last_pos = 0usize;
         for module in pre_generated_stl_modules_v1() {
@@ -86339,6 +86357,27 @@ mod tests {
                 module.module_id
             );
         }
+    }
+
+    #[test]
+    fn test_preamble_generation_is_byte_reproducible_for_same_input_ast() {
+        let ast = make_node(ClangNodeKind::TranslationUnit, vec![]);
+        let first = AstCodeGen::new().generate(&ast);
+        let second = AstCodeGen::new().generate(&ast);
+        let placeholder_marker =
+            "// ==========================================================\n// Placeholder structs for template instantiations";
+        let first_preamble = first
+            .split(placeholder_marker)
+            .next()
+            .unwrap_or(first.as_str());
+        let second_preamble = second
+            .split(placeholder_marker)
+            .next()
+            .unwrap_or(second.as_str());
+        assert_eq!(
+            first_preamble, second_preamble,
+            "STL preamble segment should be byte-reproducible for identical input AST"
+        );
     }
 
     #[test]
