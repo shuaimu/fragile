@@ -236,9 +236,89 @@ pub fn countl_zero_u8(x: u8) -> u32 { x.leading_zeros() as u32 - 24 }
 #[inline]
 pub fn __countl_zero_u64(x: u64) -> u32 { x.leading_zeros() }
 
-// Red-black tree internal functions for map/set iterators
-pub fn _Rb_tree_increment(_node: *mut std::ffi::c_void) -> *mut std::ffi::c_void { _node }
-pub fn _Rb_tree_decrement(_node: *mut std::ffi::c_void) -> *mut std::ffi::c_void { _node }
+// Red-black tree internal functions for map/set iterators.
+// These are boundary-navigation helpers used by iterator increment/decrement
+// paths and intentionally model in-order predecessor/successor traversal.
+#[inline]
+unsafe fn __rb_tree_min(mut node: *mut __tree_node_base) -> *mut __tree_node_base {
+    while !node.is_null() && !(*node).__left_.is_null() {
+        node = (*node).__left_;
+    }
+    node
+}
+
+#[inline]
+unsafe fn __rb_tree_max(mut node: *mut __tree_node_base) -> *mut __tree_node_base {
+    while !node.is_null() && !(*node).__right_.is_null() {
+        node = (*node).__right_;
+    }
+    node
+}
+
+#[inline]
+unsafe fn __rb_tree_is_header(node: *mut __tree_node_base) -> bool {
+    if node.is_null() || (*node).__is_black_ {
+        return false;
+    }
+    let parent = (*node).__parent_ as *mut __tree_node_base;
+    if parent.is_null() {
+        return false;
+    }
+    ((*parent).__parent_ as *mut __tree_node_base) == node
+}
+
+pub fn _Rb_tree_increment(node: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
+    if node.is_null() {
+        return std::ptr::null_mut();
+    }
+    unsafe {
+        let mut current = node as *mut __tree_node_base;
+        if !(*current).__right_.is_null() {
+            return __rb_tree_min((*current).__right_) as *mut std::ffi::c_void;
+        }
+
+        let mut parent = (*current).__parent_ as *mut __tree_node_base;
+        while !parent.is_null() && current == (*parent).__right_ {
+            current = parent;
+            parent = (*parent).__parent_ as *mut __tree_node_base;
+        }
+
+        if parent.is_null() {
+            return std::ptr::null_mut();
+        }
+        if (*current).__right_ != parent {
+            current = parent;
+        }
+        current as *mut std::ffi::c_void
+    }
+}
+
+pub fn _Rb_tree_decrement(node: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
+    if node.is_null() {
+        return std::ptr::null_mut();
+    }
+    unsafe {
+        let mut current = node as *mut __tree_node_base;
+        if __rb_tree_is_header(current) {
+            return (*current).__right_ as *mut std::ffi::c_void;
+        }
+
+        if !(*current).__left_.is_null() {
+            return __rb_tree_max((*current).__left_) as *mut std::ffi::c_void;
+        }
+
+        let mut parent = (*current).__parent_ as *mut __tree_node_base;
+        while !parent.is_null() && current == (*parent).__left_ {
+            current = parent;
+            parent = (*parent).__parent_ as *mut __tree_node_base;
+        }
+
+        if parent.is_null() {
+            return std::ptr::null_mut();
+        }
+        parent as *mut std::ffi::c_void
+    }
+}
 
 // iostream type aliases
 pub type basic_filebuf_char = std::ffi::c_void;
@@ -480,4 +560,3 @@ pub type __enable_if_t___is_duration_duration_long__ratio_1__1_value__time_point
 pub type __enable_if_is_duration_duration_long__ratio_1__1000000000 = i64;
 pub type _Digit__Base___Dig = u8;
 pub type _Val_int = i32;
-

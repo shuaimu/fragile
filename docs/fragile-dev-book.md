@@ -19,6 +19,7 @@
 - [2.11 M4.2.a Ordered-Map Runtime Surface (Pre-Generated)](#211-m42a-ordered-map-runtime-surface-pre-generated)
 - [2.12 M4.2.b Unordered-Map Runtime Surface (Pre-Generated)](#212-m42b-unordered-map-runtime-surface-pre-generated)
 - [2.13 M4.2.c Value-Semantics Runtime Surface (Pre-Generated)](#213-m42c-value-semantics-runtime-surface-pre-generated)
+- [2.14 M4.2.d Iterator-Boundary Runtime Surface (Pre-Generated)](#214-m42d-iterator-boundary-runtime-surface-pre-generated)
 - [3. Internal Data Models](#3-internal-data-models)
 - [4. C++ Declaration to Rust Item Mapping](#4-c-declaration-to-rust-item-mapping)
 - [5. C++ Type to Rust Type Mapping](#5-c-type-to-rust-type-mapping)
@@ -603,6 +604,46 @@ Cutover boundary:
 Wrong-approach guard (Section 1.3):
 
 - no hardcoded success-return stubs
+- no target-specific special casing
+- no force-native fallback path
+
+### 2.14 M4.2.d Iterator-Boundary Runtime Surface (Pre-Generated)
+
+Leaf `M4.2.d` ports iterator-boundary traversal behavior for rbtree iterator
+helpers in:
+
+- `crates/fragile-stl/src/io.rs`
+
+Implemented operation surface:
+
+- `_Rb_tree_increment`
+- `_Rb_tree_decrement`
+
+Behavior contract:
+
+- deterministic in-order successor traversal for increment
+- deterministic in-order predecessor traversal for decrement
+- explicit header/end sentinel handling for decrement(end)-style boundary
+- null/orphan chain handling returns null instead of silently looping
+
+Focused regressions:
+
+- `crates/fragile-stl/tests/iterator_boundary_tests.rs`
+
+Covered cases:
+
+- successor walk: left -> root -> right -> header
+- predecessor walk: header -> right -> root -> left -> header
+- null/orphan pointer behavior remains deterministic (null result)
+
+Cutover boundary:
+
+- this leaf ports runtime behavior into `fragile-stl` only
+- placeholder-to-pre-generated mapping cutover remains in `M5`
+
+Wrong-approach guard (Section 1.3):
+
+- no fake/no-op fallback iterator body
 - no target-specific special casing
 - no force-native fallback path
 
