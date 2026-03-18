@@ -19796,3 +19796,45 @@ Validation:
 - Added tests in `crates/fragile-clang/src/ast_codegen.rs`:
   - `test_close_unresolved_type_reference_gaps_with_placeholder_mapping_dispatches_map_family_via_mapping_prefix`
   - `test_close_unresolved_type_reference_gaps_with_placeholder_mapping_dispatches_unordered_map_family_via_mapping_prefix`
+
+## 2026-03-18: M5.1.b.iii Mapping-Driven Sequence/Smart-Pointer Dispatch
+
+Context:
+- After `M5.1.b.ii`, next top P0 leaf was `M5.1.b.iii`.
+- Goal: replace hardcoded sequence/smart-pointer family detection with
+  mapping-driven family dispatch for covered parser-output families.
+
+Wrong-approach check:
+- Re-checked section `1.3 Wrong Approaches (Do Not Do)` before implementation.
+- No target-specific branch logic, no force-native bypasses, and no synthetic
+  semantic fallback method bodies were introduced.
+
+Design update:
+- Added mapping-driven parser-output family dispatch specs for:
+  - `stl_vector_placeholder` -> `vector_` / `std_vector_`
+  - `stl_shared_ptr_placeholder` -> `shared_ptr_` / `std_shared_ptr_`
+  - `stl_unique_ptr_placeholder` -> `unique_ptr_` / `std_unique_ptr_`
+- Added mapping-driven sequence/smart-pointer alias target derivation:
+  - `parser_output_sequence_smart_pointer_alias_target_from_rust_name(...)`
+- Updated unresolved closure alias resolution:
+  - `resolve_container_alias_target(...)` now uses mapping-driven
+    sequence/smart-pointer dispatch in mapping-aware runs,
+  - mapping-controlled sequence/smart-pointer families no longer route through
+    legacy hardcoded family detection lanes.
+- Updated missing-stub alias resolution:
+  - `resolve_missing_stub_concrete_alias_target(...)` now prefers
+    mapping-driven sequence/smart-pointer alias derivation,
+  - skips legacy unqualified-vector/generic container fallback for
+    mapping-controlled sequence/smart-pointer families.
+- Legacy behavior without parser-output mapping context remains unchanged.
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-clang close_unresolved_type_reference_gaps_with_placeholder_mapping -- --nocapture`
+  - `cargo test -p fragile-clang resolve_missing_stub_concrete_alias_target_prefers_mapping_driven -- --nocapture`
+  - `cargo test -p fragile-clang parser_output_stl_placeholder_mapping -- --nocapture`
+- Added tests in `crates/fragile-clang/src/ast_codegen.rs`:
+  - `test_close_unresolved_type_reference_gaps_with_placeholder_mapping_dispatches_vector_family_via_mapping_prefix`
+  - `test_close_unresolved_type_reference_gaps_with_placeholder_mapping_dispatches_shared_ptr_family_via_mapping_prefix`
+  - `test_resolve_missing_stub_concrete_alias_target_prefers_mapping_driven_vector_prefix`
+  - `test_resolve_missing_stub_concrete_alias_target_prefers_mapping_driven_unique_ptr_prefix`

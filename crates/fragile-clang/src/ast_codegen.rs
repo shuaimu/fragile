@@ -5895,6 +5895,56 @@ impl AstCodeGen {
         Some(format!("{}_{}", canonical_prefix, concrete_suffix))
     }
 
+    fn parser_output_sequence_smart_pointer_family_dispatch_specs(
+    ) -> [(&'static str, [&'static str; 2]); 3] {
+        [
+            ("stl_vector_placeholder", ["vector_", "std_vector_"]),
+            ("stl_shared_ptr_placeholder", ["shared_ptr_", "std_shared_ptr_"]),
+            ("stl_unique_ptr_placeholder", ["unique_ptr_", "std_unique_ptr_"]),
+        ]
+    }
+
+    fn parser_output_sequence_smart_pointer_family_match_for_rust_name<'a>(
+        rust_name: &'a str,
+        placeholder_prefixes: &BTreeMap<String, String>,
+    ) -> Option<(&'static str, &'a str)> {
+        for (placeholder_kind, prefixes) in
+            Self::parser_output_sequence_smart_pointer_family_dispatch_specs()
+        {
+            if !placeholder_prefixes.contains_key(placeholder_kind) {
+                continue;
+            }
+            for prefix in prefixes {
+                if let Some(suffix) = rust_name.strip_prefix(prefix) {
+                    return Some((placeholder_kind, suffix));
+                }
+            }
+        }
+        None
+    }
+
+    fn parser_output_controls_sequence_smart_pointer_family_name(
+        name: &str,
+        placeholder_prefixes: &BTreeMap<String, String>,
+    ) -> bool {
+        Self::parser_output_sequence_smart_pointer_family_match_for_rust_name(name, placeholder_prefixes)
+            .is_some()
+    }
+
+    fn parser_output_sequence_smart_pointer_alias_target_from_rust_name(
+        rust_name: &str,
+        placeholder_prefixes: &BTreeMap<String, String>,
+    ) -> Option<String> {
+        let (placeholder_kind, suffix) =
+            Self::parser_output_sequence_smart_pointer_family_match_for_rust_name(
+                rust_name,
+                placeholder_prefixes,
+            )?;
+        let canonical_prefix = placeholder_prefixes.get(placeholder_kind)?;
+        let element_type = Self::stl_container_element_rust_type_from_suffix(suffix)?;
+        Some(format!("{}<{}>", canonical_prefix, element_type))
+    }
+
     fn resolve_container_alias_target(
         name: &str,
         defined: &HashSet<String>,
@@ -5909,12 +5959,16 @@ impl AstCodeGen {
                 }
             }
 
-            if Self::parser_output_controls_associative_family_name(name, prefixes) {
-                if let Some(target) = Self::stl_container_alias_target_from_rust_name(name) {
-                    if Self::container_alias_target_is_resolvable(&target, defined) {
-                        return Some(target);
-                    }
+            if let Some(target) = Self::parser_output_sequence_smart_pointer_alias_target_from_rust_name(name, prefixes)
+            {
+                if Self::container_alias_target_is_resolvable(&target, defined) {
+                    return Some(target);
                 }
+            }
+
+            if Self::parser_output_controls_associative_family_name(name, prefixes)
+                || Self::parser_output_controls_sequence_smart_pointer_family_name(name, prefixes)
+            {
                 return None;
             }
         }
@@ -59099,13 +59153,28 @@ impl FragileAtomicBoolCompat for atomic_bool {
         rust_name: &str,
         cpp_name: &str,
     ) -> Option<String> {
+        let parser_output_controls_sequence_or_smart_pointer_family =
+            Self::parser_output_controls_sequence_smart_pointer_family_name(
+                rust_name,
+                &self.parser_output_stl_placeholder_prefixes,
+            );
+        if !parser_output_controls_sequence_or_smart_pointer_family {
+            if let Some(container_alias_target) =
+                Self::unqualified_vector_alias_target_from_rust_cpp_name(rust_name, cpp_name)
+            {
+                return Some(container_alias_target);
+            }
+        }
         if let Some(container_alias_target) =
-            Self::unqualified_vector_alias_target_from_rust_cpp_name(rust_name, cpp_name)
+            Self::parser_output_associative_alias_target_from_rust_name(
+                rust_name,
+                &self.parser_output_stl_placeholder_prefixes,
+            )
         {
             return Some(container_alias_target);
         }
         if let Some(container_alias_target) =
-            Self::parser_output_associative_alias_target_from_rust_name(
+            Self::parser_output_sequence_smart_pointer_alias_target_from_rust_name(
                 rust_name,
                 &self.parser_output_stl_placeholder_prefixes,
             )
@@ -59122,10 +59191,12 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 return Some(container_alias_target);
             }
         }
-        if let Some(container_alias_target) =
-            Self::stl_container_alias_target_from_rust_name(rust_name)
-        {
-            return Some(container_alias_target);
+        if !parser_output_controls_sequence_or_smart_pointer_family {
+            if let Some(container_alias_target) =
+                Self::stl_container_alias_target_from_rust_name(rust_name)
+            {
+                return Some(container_alias_target);
+            }
         }
 
         // Treat qualifier-family variants as aliases of the canonical emitted
@@ -108277,6 +108348,103 @@ pub struct Holder {
             !output.contains("pub type unordered_map_int__int = std_unordered_map_int__int;"),
             "unordered_map family aliasing in mapping-aware closure should not hardcode std_unordered_map prefix when parser-output mapping provides a different canonical prefix, got:\n{}",
             output
+        );
+    }
+
+    #[test]
+    fn test_close_unresolved_type_reference_gaps_with_placeholder_mapping_dispatches_vector_family_via_mapping_prefix(
+    ) {
+        let input = r#"
+pub struct parser_owned_vector<T> {
+    _opaque: std::marker::PhantomData<T>,
+}
+pub struct Holder {
+    pub pending: vector_int,
+}
+"#;
+        let mut codegen = AstCodeGen::new();
+        codegen.set_parser_output_stl_placeholder_mappings(std::collections::BTreeMap::from([(
+            "stl_vector_placeholder".to_string(),
+            "parser_owned_vector".to_string(),
+        )]));
+        let output = codegen
+            .close_unresolved_type_reference_gaps_with_parser_output_placeholder_mappings(input);
+        assert!(
+            output.contains("pub type vector_int = parser_owned_vector<i32>;"),
+            "mapping-driven sequence dispatch should honor parser-output canonical prefixes for mapped vector families, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("pub type vector_int = std_vector<i32>;"),
+            "vector family aliasing in mapping-aware closure should not hardcode std_vector prefix when parser-output mapping provides a different canonical prefix, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_close_unresolved_type_reference_gaps_with_placeholder_mapping_dispatches_shared_ptr_family_via_mapping_prefix(
+    ) {
+        let input = r#"
+pub struct Node {
+    pub value: i32,
+}
+pub struct parser_owned_shared_ptr<T> {
+    _opaque: std::marker::PhantomData<T>,
+}
+pub struct Holder {
+    pub pending: shared_ptr_Node,
+}
+"#;
+        let mut codegen = AstCodeGen::new();
+        codegen.set_parser_output_stl_placeholder_mappings(std::collections::BTreeMap::from([(
+            "stl_shared_ptr_placeholder".to_string(),
+            "parser_owned_shared_ptr".to_string(),
+        )]));
+        let output = codegen
+            .close_unresolved_type_reference_gaps_with_parser_output_placeholder_mappings(input);
+        assert!(
+            output.contains("pub type shared_ptr_Node = parser_owned_shared_ptr<Node>;"),
+            "mapping-driven smart-pointer dispatch should honor parser-output canonical prefixes for mapped shared_ptr families, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("pub type shared_ptr_Node = std_shared_ptr<Node>;"),
+            "shared_ptr family aliasing in mapping-aware closure should not hardcode std_shared_ptr prefix when parser-output mapping provides a different canonical prefix, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_resolve_missing_stub_concrete_alias_target_prefers_mapping_driven_vector_prefix(
+    ) {
+        let mut codegen = AstCodeGen::new();
+        codegen.set_parser_output_stl_placeholder_mappings(std::collections::BTreeMap::from([(
+            "stl_vector_placeholder".to_string(),
+            "parser_owned_vector".to_string(),
+        )]));
+        let alias_target =
+            codegen.resolve_missing_stub_concrete_alias_target("vector_char", "vector<char>");
+        assert_eq!(
+            alias_target.as_deref(),
+            Some("parser_owned_vector<i8>"),
+            "missing-stub alias resolution should use mapping-driven vector prefixes when parser-output mapping controls the family"
+        );
+    }
+
+    #[test]
+    fn test_resolve_missing_stub_concrete_alias_target_prefers_mapping_driven_unique_ptr_prefix(
+    ) {
+        let mut codegen = AstCodeGen::new();
+        codegen.set_parser_output_stl_placeholder_mappings(std::collections::BTreeMap::from([(
+            "stl_unique_ptr_placeholder".to_string(),
+            "parser_owned_unique_ptr".to_string(),
+        )]));
+        let alias_target =
+            codegen.resolve_missing_stub_concrete_alias_target("unique_ptr_Node", "unique_ptr<Node>");
+        assert_eq!(
+            alias_target.as_deref(),
+            Some("parser_owned_unique_ptr<Node>"),
+            "missing-stub alias resolution should use mapping-driven unique_ptr prefixes when parser-output mapping controls the family"
         );
     }
 
