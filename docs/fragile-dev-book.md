@@ -19881,3 +19881,78 @@ Validation:
 - Full regression:
   - `cargo test --workspace --all-targets`
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+## 2026-03-18: M5.1.c Remove Active-Path Legacy Associative std::collections Fallback
+
+Context:
+- After `M5.1.b.iv`, next top P0 leaf was `M5.1.c`.
+- Goal: remove active parser-output handoff fallback emission of mapped
+  associative unresolved aliases to legacy `std::collections::*` lanes.
+
+Wrong-approach check:
+- Re-checked section `1.3 Wrong Approaches (Do Not Do)` before implementation.
+- No synthetic semantic method-body stubs, no force-native bypass, and no
+  target-specific shortcut paths were introduced.
+- Unsupported mapped associative shapes remain explicit unresolved
+  placeholders.
+
+Design update:
+- Added explicit parser-output mapping context tracking in `AstCodeGen`:
+  - `parser_output_stl_placeholder_mapping_context_enabled: bool`
+  - enabled by `set_parser_output_stl_placeholder_mappings(...)` even when
+    mappings are empty.
+- Added mapped-associative family matcher over parser-output contract lanes:
+  - `map_` / `std_map_`
+  - `unordered_map_` / `std_unordered_map_`
+- Removed active-path legacy associative fallback in both surfaces:
+  1. unresolved closure (`resolve_container_alias_target`)
+  2. missing-stub alias resolution (`resolve_missing_stub_concrete_alias_target`)
+- Result: in active parser-output context, mapped associative unresolved lanes
+  no longer emit `std::collections::{BTreeMap, HashMap}` aliases.
+- Non-parser-output behavior remains unchanged.
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-clang close_unresolved_type_reference_gaps_with_empty_parser_output_mapping_context_blocks_legacy_associative_std_collections_aliases -- --nocapture`
+  - `cargo test -p fragile-clang resolve_missing_stub_concrete_alias_target_with_empty_parser_output_mapping_context_blocks_legacy_associative_std_collections_aliases -- --nocapture`
+  - `cargo test -p fragile-clang parser_output_codegen_active_handoff_blocks_legacy_associative_std_collections_alias_lanes -- --nocapture`
+- Full regression:
+  - `cargo test --workspace --all-targets`
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+## 2026-03-18: M5.1.d Active Codegen Mapping Manifest Emission
+
+Context:
+- After `M5.1.c`, next top P0 leaf was `M5.1.d`.
+- Goal: emit a deterministic active-path mapping manifest for placeholder
+  families observed from parser-output handoff mappings.
+
+Wrong-approach check:
+- Re-checked section `1.3 Wrong Approaches (Do Not Do)` before implementation.
+- No synthetic semantic method-body stubs, no force-native bypasses, and no
+  target-specific hacks were introduced.
+
+Design update:
+- Added parser-output-only preamble manifest emission in `AstCodeGen`:
+  - `// parser_output_stl_placeholder_mapping_manifest_v1:` marker
+  - `parser_output_mapping_context_enabled=true`
+  - deterministic `parser_output_observed_family_count=<N>` summary
+  - explicit `parser_output_observed_families=<none>` marker for empty sets
+  - deterministic per-family entries with:
+    - placeholder kind
+    - canonical type prefix
+- Family labels are derived from placeholder node kinds by normalizing
+  `stl_<family>_placeholder` to `<family>`.
+- Emission is gated by
+  `parser_output_stl_placeholder_mapping_context_enabled` so non-handoff
+  generation remains unchanged.
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-clang test_preamble_omits_parser_output_placeholder_mapping_manifest_without_handoff_context -- --nocapture`
+  - `cargo test -p fragile-clang test_preamble_emits_empty_parser_output_placeholder_mapping_manifest_in_handoff_context -- --nocapture`
+  - `cargo test -p fragile-clang test_preamble_emits_deterministic_parser_output_placeholder_mapping_manifest_entries -- --nocapture`
+  - `cargo test -p fragile-clang parser_output_codegen_active_handoff_blocks_legacy_associative_std_collections_alias_lanes -- --nocapture`
+- Full regression:
+  - `cargo test --workspace --all-targets`
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`

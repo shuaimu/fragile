@@ -1955,7 +1955,8 @@ mod tests {
     }
 
     #[test]
-    fn parser_output_codegen_mapping_blocks_legacy_associative_std_collections_alias_lanes() {
+    fn parser_output_codegen_active_handoff_blocks_legacy_associative_std_collections_alias_lanes(
+    ) {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock should be monotonic")
@@ -1986,17 +1987,31 @@ mod tests {
         let unmapped = transpile_parser_output_to_rust(&unmapped_parser_output)
             .expect("unmapped parser-output handoff transpile should succeed");
         assert!(
-            unmapped.contains(
-                "pub type map_unsigned_int__bool = std::collections::BTreeMap<u32, bool>;"
-            ),
-            "unmapped active parser-output run should still use legacy ordered-map std::collections alias lane as baseline:\n{}",
+            unmapped.contains("// parser_output_stl_placeholder_mapping_manifest_v1:")
+                && unmapped.contains("// parser_output_mapping_context_enabled=true")
+                && unmapped.contains("// parser_output_observed_family_count=0")
+                && unmapped.contains("// parser_output_observed_families=<none>"),
+            "active parser-output handoff run should emit deterministic empty observed-family mapping manifest in handoff context:\n{}",
             unmapped
         );
         assert!(
-            unmapped.contains(
+            !unmapped.contains(
+                "pub type map_unsigned_int__bool = std::collections::BTreeMap<u32, bool>;"
+            ),
+            "active parser-output handoff run should block legacy ordered-map std::collections alias lane even when no placeholder mapping nodes are present:\n{}",
+            unmapped
+        );
+        assert!(
+            !unmapped.contains(
                 "pub type unordered_map_unsigned_int__bool = std::collections::HashMap<u32, bool>;"
             ),
-            "unmapped active parser-output run should still use legacy unordered-map std::collections alias lane as baseline:\n{}",
+            "active parser-output handoff run should block legacy unordered-map std::collections alias lane even when no placeholder mapping nodes are present:\n{}",
+            unmapped
+        );
+        assert!(
+            unmapped.contains("pub struct map_unsigned_int__bool {")
+                && unmapped.contains("pub struct unordered_map_unsigned_int__bool {"),
+            "active parser-output handoff run should keep unresolved mapped associative families explicit when no concrete mapping lane resolves:\n{}",
             unmapped
         );
 
@@ -2017,6 +2032,39 @@ mod tests {
         ));
         let mapped = transpile_parser_output_to_rust(&mapped_parser_output)
             .expect("mapped parser-output handoff transpile should succeed");
+        assert!(
+            mapped.contains("// parser_output_stl_placeholder_mapping_manifest_v1:")
+                && mapped.contains("// parser_output_mapping_context_enabled=true")
+                && mapped.contains("// parser_output_observed_family_count=2"),
+            "mapped active parser-output handoff run should emit deterministic observed-family mapping manifest summary:\n{}",
+            mapped
+        );
+        let map_manifest_line =
+            "// parser_output_observed_family.map.placeholder_kind=stl_map_placeholder";
+        let unordered_manifest_line = "// parser_output_observed_family.unordered_map.placeholder_kind=stl_unordered_map_placeholder";
+        assert!(
+            mapped.contains(map_manifest_line)
+                && mapped.contains(
+                    "// parser_output_observed_family.map.canonical_type_prefix=std_map"
+                )
+                && mapped.contains(unordered_manifest_line)
+                && mapped.contains(
+                    "// parser_output_observed_family.unordered_map.canonical_type_prefix=std_unordered_map"
+                ),
+            "mapped active parser-output handoff run should emit observed-family mapping entries with canonical prefixes:\n{}",
+            mapped
+        );
+        let map_pos = mapped
+            .find(map_manifest_line)
+            .expect("missing map mapping manifest line");
+        let unordered_pos = mapped
+            .find(unordered_manifest_line)
+            .expect("missing unordered_map mapping manifest line");
+        assert!(
+            map_pos < unordered_pos,
+            "mapped active parser-output manifest entries should be deterministic and key-ordered:\n{}",
+            mapped
+        );
         assert!(
             !mapped.contains(
                 "pub type map_unsigned_int__bool = std::collections::BTreeMap<u32, bool>;"

@@ -1266,6 +1266,9 @@ pub struct AstCodeGen {
     /// canonical pre-generated STL type prefix. Empty when not provided by
     /// parser-output handoff entry points.
     parser_output_stl_placeholder_prefixes: BTreeMap<String, String>,
+    /// True when parser-output handoff has explicitly provided placeholder
+    /// mapping context (including empty mapping sets).
+    parser_output_stl_placeholder_mapping_context_enabled: bool,
     /// Set of struct names that have been defined (to track for stub generation)
     defined_structs: HashSet<String>,
     /// Set of struct names that are referenced but not defined (need stub generation)
@@ -1451,6 +1454,7 @@ impl AstCodeGen {
             specialization_field_types: HashMap::new(),
             specialization_methods: HashMap::new(),
             parser_output_stl_placeholder_prefixes: BTreeMap::new(),
+            parser_output_stl_placeholder_mapping_context_enabled: false,
             defined_structs: HashSet::new(),
             referenced_but_undefined_structs: HashSet::new(),
             unsafe_function_names: HashSet::new(),
@@ -1484,6 +1488,7 @@ impl AstCodeGen {
         &mut self,
         mappings: BTreeMap<String, String>,
     ) {
+        self.parser_output_stl_placeholder_mapping_context_enabled = true;
         self.parser_output_stl_placeholder_prefixes = mappings;
     }
 
@@ -5841,6 +5846,13 @@ impl AstCodeGen {
         ]
     }
 
+    fn parser_output_placeholder_family_from_kind(placeholder_kind: &str) -> Option<&str> {
+        placeholder_kind
+            .strip_prefix("stl_")
+            .and_then(|suffix| suffix.strip_suffix("_placeholder"))
+            .filter(|family| !family.is_empty())
+    }
+
     fn parser_output_associative_family_match_for_rust_name<'a>(
         rust_name: &'a str,
         placeholder_prefixes: &BTreeMap<String, String>,
@@ -5876,6 +5888,17 @@ impl AstCodeGen {
     ) -> bool {
         Self::parser_output_associative_family_match_for_rust_name(name, placeholder_prefixes)
             .is_some()
+    }
+
+    fn parser_output_mapped_associative_family_name(name: &str) -> bool {
+        for (_, prefixes) in Self::parser_output_associative_family_dispatch_specs() {
+            for prefix in prefixes {
+                if name.starts_with(prefix) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     fn parser_output_associative_alias_target_from_rust_name(
@@ -5949,7 +5972,12 @@ impl AstCodeGen {
         name: &str,
         defined: &HashSet<String>,
         placeholder_prefixes: Option<&BTreeMap<String, String>>,
+        parser_output_handoff_context_enabled: bool,
     ) -> Option<String> {
+        let parser_output_blocks_legacy_associative_std_collections_fallback =
+            parser_output_handoff_context_enabled
+                && Self::parser_output_mapped_associative_family_name(name);
+
         if let Some(prefixes) = placeholder_prefixes {
             if let Some(target) =
                 Self::parser_output_associative_alias_target_from_rust_name(name, prefixes)
@@ -5971,6 +5999,10 @@ impl AstCodeGen {
             {
                 return None;
             }
+        }
+
+        if parser_output_blocks_legacy_associative_std_collections_fallback {
+            return None;
         }
 
         if let Some(target) = Self::stl_associative_container_alias_target_from_rust_name(name)
@@ -6396,23 +6428,25 @@ impl AstCodeGen {
         &self,
         code: &str,
     ) -> String {
-        let placeholder_prefixes =
-            (!self.parser_output_stl_placeholder_prefixes.is_empty())
-                .then_some(&self.parser_output_stl_placeholder_prefixes);
+        let placeholder_prefixes = self
+            .parser_output_stl_placeholder_mapping_context_enabled
+            .then_some(&self.parser_output_stl_placeholder_prefixes);
         Self::close_unresolved_type_reference_gaps_with_placeholder_mappings(
             code,
             placeholder_prefixes,
+            self.parser_output_stl_placeholder_mapping_context_enabled,
         )
     }
 
     #[cfg(test)]
     fn close_unresolved_type_reference_gaps(code: &str) -> String {
-        Self::close_unresolved_type_reference_gaps_with_placeholder_mappings(code, None)
+        Self::close_unresolved_type_reference_gaps_with_placeholder_mappings(code, None, false)
     }
 
     fn close_unresolved_type_reference_gaps_with_placeholder_mappings(
         code: &str,
         placeholder_prefixes: Option<&BTreeMap<String, String>>,
+        parser_output_handoff_context_enabled: bool,
     ) -> String {
         let mut output = code.to_string();
         for _ in 0..8 {
@@ -6428,8 +6462,12 @@ impl AstCodeGen {
                 if defined.contains(name) {
                     continue;
                 }
-                if let Some(target) =
-                    Self::resolve_container_alias_target(name, &defined, placeholder_prefixes)
+                if let Some(target) = Self::resolve_container_alias_target(
+                    name,
+                    &defined,
+                    placeholder_prefixes,
+                    parser_output_handoff_context_enabled,
+                )
                 {
                     let normalized_target = Self::normalize_namespace_alias_target(&target);
                     additions.push_str(
@@ -57951,6 +57989,39 @@ impl FragileAtomicBoolCompat for atomic_bool {
     /// Generate stub struct definitions for C++ comparison category types.
     /// These are internal types from libstdc++/libc++ that may be referenced
     /// but not fully defined in the transpiled code.
+    fn emit_parser_output_placeholder_mapping_manifest(&mut self) {
+        if !self.parser_output_stl_placeholder_mapping_context_enabled {
+            return;
+        }
+
+        self.writeln("// parser_output_stl_placeholder_mapping_manifest_v1:");
+        self.writeln("// parser_output_mapping_context_enabled=true");
+        self.writeln(&format!(
+            "// parser_output_observed_family_count={}",
+            self.parser_output_stl_placeholder_prefixes.len()
+        ));
+
+        if self.parser_output_stl_placeholder_prefixes.is_empty() {
+            self.writeln("// parser_output_observed_families=<none>");
+            return;
+        }
+
+        for (placeholder_kind, canonical_prefix) in
+            self.parser_output_stl_placeholder_prefixes.clone()
+        {
+            let family = Self::parser_output_placeholder_family_from_kind(&placeholder_kind)
+                .unwrap_or(placeholder_kind.as_str());
+            self.writeln(&format!(
+                "// parser_output_observed_family.{}.placeholder_kind={}",
+                family, placeholder_kind
+            ));
+            self.writeln(&format!(
+                "// parser_output_observed_family.{}.canonical_type_prefix={}",
+                family, canonical_prefix
+            ));
+        }
+    }
+
     fn emit_stl_preamble(&mut self) {
         // File-level attributes for the generated Rust file
         self.writeln("#![allow(dead_code)]");
@@ -57968,6 +58039,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
         for line in pre_generated_stl_module_manifest_text_v1().lines() {
             self.writeln(&format!("// {}", line));
         }
+        self.emit_parser_output_placeholder_mapping_manifest();
 
         // STL stub modules from the fragile-stl layout contract.
         // Each file is included as raw text and inlined into the generated preamble.
@@ -59153,6 +59225,9 @@ impl FragileAtomicBoolCompat for atomic_bool {
         rust_name: &str,
         cpp_name: &str,
     ) -> Option<String> {
+        let parser_output_blocks_legacy_associative_std_collections_fallback = self
+            .parser_output_stl_placeholder_mapping_context_enabled
+            && Self::parser_output_mapped_associative_family_name(rust_name);
         let parser_output_controls_sequence_or_smart_pointer_family =
             Self::parser_output_controls_sequence_smart_pointer_family_name(
                 rust_name,
@@ -59181,10 +59256,12 @@ impl FragileAtomicBoolCompat for atomic_bool {
         {
             return Some(container_alias_target);
         }
-        if !Self::parser_output_controls_associative_family_name(
-            rust_name,
-            &self.parser_output_stl_placeholder_prefixes,
-        ) {
+        if !parser_output_blocks_legacy_associative_std_collections_fallback
+            && !Self::parser_output_controls_associative_family_name(
+                rust_name,
+                &self.parser_output_stl_placeholder_prefixes,
+            )
+        {
             if let Some(container_alias_target) =
                 Self::stl_associative_container_alias_target_from_rust_name(rust_name)
             {
@@ -86576,6 +86653,95 @@ mod tests {
     }
 
     #[test]
+    fn test_preamble_omits_parser_output_placeholder_mapping_manifest_without_handoff_context() {
+        let code = AstCodeGen::new().generate(&make_node(ClangNodeKind::TranslationUnit, vec![]));
+        assert!(
+            !code.contains("// parser_output_stl_placeholder_mapping_manifest_v1:"),
+            "non-handoff codegen should not emit parser-output placeholder mapping manifest:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_preamble_emits_empty_parser_output_placeholder_mapping_manifest_in_handoff_context() {
+        let mut codegen = AstCodeGen::new();
+        codegen.set_parser_output_stl_placeholder_mappings(std::collections::BTreeMap::new());
+        let code = codegen.generate(&make_node(ClangNodeKind::TranslationUnit, vec![]));
+        assert!(
+            code.contains("// parser_output_stl_placeholder_mapping_manifest_v1:"),
+            "handoff codegen should emit parser-output mapping manifest marker:\n{}",
+            code
+        );
+        assert!(
+            code.contains("// parser_output_mapping_context_enabled=true"),
+            "handoff mapping manifest should record active mapping context:\n{}",
+            code
+        );
+        assert!(
+            code.contains("// parser_output_observed_family_count=0"),
+            "handoff mapping manifest should record zero observed families when mapping set is empty:\n{}",
+            code
+        );
+        assert!(
+            code.contains("// parser_output_observed_families=<none>"),
+            "handoff mapping manifest should include explicit empty-family marker:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_preamble_emits_deterministic_parser_output_placeholder_mapping_manifest_entries() {
+        let mut codegen = AstCodeGen::new();
+        codegen.set_parser_output_stl_placeholder_mappings(std::collections::BTreeMap::from([
+            ("stl_unordered_map_placeholder".to_string(), "std_unordered_map".to_string()),
+            ("stl_map_placeholder".to_string(), "std_map".to_string()),
+            ("stl_vector_placeholder".to_string(), "std_vector".to_string()),
+        ]));
+        let code = codegen.generate(&make_node(ClangNodeKind::TranslationUnit, vec![]));
+        assert!(
+            code.contains("// parser_output_observed_family_count=3"),
+            "handoff mapping manifest should record observed family count:\n{}",
+            code
+        );
+
+        let map_kind = "// parser_output_observed_family.map.placeholder_kind=stl_map_placeholder";
+        let map_prefix =
+            "// parser_output_observed_family.map.canonical_type_prefix=std_map";
+        let unordered_kind = "// parser_output_observed_family.unordered_map.placeholder_kind=stl_unordered_map_placeholder";
+        let unordered_prefix = "// parser_output_observed_family.unordered_map.canonical_type_prefix=std_unordered_map";
+        let vector_kind =
+            "// parser_output_observed_family.vector.placeholder_kind=stl_vector_placeholder";
+        let vector_prefix =
+            "// parser_output_observed_family.vector.canonical_type_prefix=std_vector";
+        for line in [
+            map_kind,
+            map_prefix,
+            unordered_kind,
+            unordered_prefix,
+            vector_kind,
+            vector_prefix,
+        ] {
+            assert!(
+                code.contains(line),
+                "handoff mapping manifest missing expected line `{}`:\n{}",
+                line,
+                code
+            );
+        }
+
+        let map_pos = code.find(map_kind).expect("missing map manifest line");
+        let unordered_pos = code
+            .find(unordered_kind)
+            .expect("missing unordered_map manifest line");
+        let vector_pos = code.find(vector_kind).expect("missing vector manifest line");
+        assert!(
+            map_pos < unordered_pos && unordered_pos < vector_pos,
+            "handoff mapping manifest entries should be emitted in deterministic key order:\n{}",
+            code
+        );
+    }
+
+    #[test]
     fn test_preamble_generation_is_byte_reproducible_for_same_input_ast() {
         let ast = make_node(ClangNodeKind::TranslationUnit, vec![]);
         let first = AstCodeGen::new().generate(&ast);
@@ -108257,6 +108423,41 @@ pub struct Holder {
     }
 
     #[test]
+    fn test_close_unresolved_type_reference_gaps_with_empty_parser_output_mapping_context_blocks_legacy_associative_std_collections_aliases(
+    ) {
+        let input = r#"
+pub struct Holder {
+    pub ordered: map_unsigned_int__bool,
+    pub unordered: unordered_map_unsigned_int__bool,
+}
+"#;
+        let mut codegen = AstCodeGen::new();
+        codegen.set_parser_output_stl_placeholder_mappings(std::collections::BTreeMap::new());
+        let output = codegen
+            .close_unresolved_type_reference_gaps_with_parser_output_placeholder_mappings(input);
+        assert!(
+            !output.contains(
+                "pub type map_unsigned_int__bool = std::collections::BTreeMap<u32, bool>;"
+            ),
+            "active parser-output closure should not emit legacy map std::collections fallback aliases even when mapping set is empty:\n{}",
+            output
+        );
+        assert!(
+            !output.contains(
+                "pub type unordered_map_unsigned_int__bool = std::collections::HashMap<u32, bool>;"
+            ),
+            "active parser-output closure should not emit legacy unordered_map std::collections fallback aliases even when mapping set is empty:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub struct map_unsigned_int__bool {")
+                && output.contains("pub struct unordered_map_unsigned_int__bool {"),
+            "active parser-output closure should keep unresolved mapped associative families explicit when no concrete mapping lane resolves:\n{}",
+            output
+        );
+    }
+
+    #[test]
     fn test_close_unresolved_type_reference_gaps_with_placeholder_mapping_uses_pre_generated_map_alias_when_available(
     ) {
         let input = r#"
@@ -108445,6 +108646,54 @@ pub struct Holder {
             alias_target.as_deref(),
             Some("parser_owned_unique_ptr<Node>"),
             "missing-stub alias resolution should use mapping-driven unique_ptr prefixes when parser-output mapping controls the family"
+        );
+    }
+
+    #[test]
+    fn test_resolve_missing_stub_concrete_alias_target_with_empty_parser_output_mapping_context_blocks_legacy_associative_std_collections_aliases(
+    ) {
+        let baseline_codegen = AstCodeGen::new();
+        assert_eq!(
+            baseline_codegen
+                .resolve_missing_stub_concrete_alias_target(
+                    "map_unsigned_int__bool",
+                    "map<unsigned int, bool>",
+                )
+                .as_deref(),
+            Some("std::collections::BTreeMap<u32, bool>"),
+            "non-parser-output context should preserve existing legacy map fallback behavior"
+        );
+        assert_eq!(
+            baseline_codegen
+                .resolve_missing_stub_concrete_alias_target(
+                    "unordered_map_unsigned_int__bool",
+                    "unordered_map<unsigned int, bool>",
+                )
+                .as_deref(),
+            Some("std::collections::HashMap<u32, bool>"),
+            "non-parser-output context should preserve existing legacy unordered_map fallback behavior"
+        );
+
+        let mut parser_output_codegen = AstCodeGen::new();
+        parser_output_codegen
+            .set_parser_output_stl_placeholder_mappings(std::collections::BTreeMap::new());
+        assert!(
+            parser_output_codegen
+                .resolve_missing_stub_concrete_alias_target(
+                    "map_unsigned_int__bool",
+                    "map<unsigned int, bool>",
+                )
+                .is_none(),
+            "active parser-output context should block legacy map std::collections fallback lanes when no concrete mapping lane resolves"
+        );
+        assert!(
+            parser_output_codegen
+                .resolve_missing_stub_concrete_alias_target(
+                    "unordered_map_unsigned_int__bool",
+                    "unordered_map<unsigned int, bool>",
+                )
+                .is_none(),
+            "active parser-output context should block legacy unordered_map std::collections fallback lanes when no concrete mapping lane resolves"
         );
     }
 
