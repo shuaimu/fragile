@@ -16,6 +16,7 @@
 - [2.8 M2.3 Parser Entry Wiring Cutover Boundary](#28-m23-parser-entry-wiring-cutover-boundary)
 - [2.9 M3.3 STL Family Fixture Coverage Contract](#29-m33-stl-family-fixture-coverage-contract)
 - [2.10 M4.1 Pre-Generated STL Layout + Naming Contract](#210-m41-pre-generated-stl-layout--naming-contract)
+- [2.11 M4.2.a Ordered-Map Runtime Surface (Pre-Generated)](#211-m42a-ordered-map-runtime-surface-pre-generated)
 - [3. Internal Data Models](#3-internal-data-models)
 - [4. C++ Declaration to Rust Item Mapping](#4-c-declaration-to-rust-item-mapping)
 - [5. C++ Type to Rust Type Mapping](#5-c-type-to-rust-type-mapping)
@@ -495,6 +496,39 @@ Wrong-approach guard (Section 1.3):
 - no semantic fallback method bodies were introduced for planned families
 - planned families are marked explicitly in the contract instead of hidden
   stubs or silent remaps
+
+### 2.11 M4.2.a Ordered-Map Runtime Surface (Pre-Generated)
+
+Leaf `M4.2.a` adds an explicit pre-generated ordered-map runtime surface for
+`std::map<int, int>` in:
+
+- `crates/fragile-stl/src/ordered_map.rs`
+
+Implemented operation surface:
+
+- `std_map_int__int::new_0`
+- `size`, `empty`, `clear`
+- `op_index` (insert-on-miss mutable slot)
+- `insert_or_assign`
+- `find`, `count`, `erase`
+- `begin`, `end`
+
+Behavior contract:
+
+- deterministic key ordering (sorted by key)
+- mutable value-slot semantics for operator[]-style access
+- deterministic insert/update/remove transitions
+
+Cutover boundary:
+
+- this leaf ports runtime behavior into `fragile-stl` only
+- placeholder-to-pre-generated mapping cutover remains in `M5`
+
+Wrong-approach guard (Section 1.3):
+
+- no hardcoded success-return stubs
+- no target-specific special casing
+- no force-native fallback path
 
 ## 3. Internal Data Models
 

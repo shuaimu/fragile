@@ -33,6 +33,7 @@ include!("string.rs");
 include!("smart_ptr.rs");
 include!("algorithm.rs");
 include!("tree.rs");
+include!("ordered_map.rs");
 include!("hash.rs");
 include!("numeric.rs");
 include!("locale.rs");
