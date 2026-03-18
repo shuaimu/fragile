@@ -1054,4 +1054,105 @@ mod tests {
         };
         assert!(diag.payload.is_none());
     }
+
+    // =========================================================================
+    // M6.3: Regression tests — failure is explicit and non-silent (parser-core)
+    // =========================================================================
+
+    #[test]
+    fn m6_3_all_error_codes_impl_error_trait() {
+        // UnsupportedStlShapeError must implement std::error::Error for propagation.
+        fn assert_error<T: std::error::Error>() {}
+        assert_error::<super::UnsupportedStlShapeError>();
+    }
+
+    #[test]
+    fn m6_3_e001_display_never_empty_or_whitespace_only() {
+        let err = super::UnsupportedStlShapeError::unrecognized_placeholder_kind(
+            "std::deque<int>",
+            "stl_deque_placeholder",
+            vec!["vector".to_string()],
+        );
+        let text = err.to_string();
+        assert!(!text.trim().is_empty(), "E001 Display must not be empty");
+    }
+
+    #[test]
+    fn m6_3_e002_display_never_empty_or_whitespace_only() {
+        let err = super::UnsupportedStlShapeError::missing_family_mapping(
+            "std::multiset<int>",
+            "stl_multiset_placeholder",
+            "multiset",
+        );
+        let text = err.to_string();
+        assert!(!text.trim().is_empty(), "E002 Display must not be empty");
+    }
+
+    #[test]
+    fn m6_3_e003_display_never_empty_or_whitespace_only() {
+        let err = super::UnsupportedStlShapeError::unsupported_concrete_shape(
+            "std::map<std::string, int>",
+            "stl_map_placeholder",
+            "map",
+            "map(std::string, int)",
+            "map_string__int",
+        );
+        let text = err.to_string();
+        assert!(!text.trim().is_empty(), "E003 Display must not be empty");
+    }
+
+    #[test]
+    fn m6_3_to_parser_diagnostic_payload_symbol_matches_error_symbol() {
+        // The payload symbol must match the error symbol — no data loss in conversion.
+        let err = super::UnsupportedStlShapeError::unrecognized_placeholder_kind(
+            "std::deque<int>",
+            "stl_deque_placeholder",
+            vec![],
+        )
+        .with_location(super::StlShapeSourceLocation {
+            file: Some("x.cc".to_string()),
+            line: Some(1),
+            column: None,
+        });
+
+        let diag = err.to_parser_diagnostic();
+        let payload = diag.payload.expect("payload must be present");
+        assert_eq!(payload.symbol, err.symbol, "payload symbol must match error symbol");
+        assert_eq!(
+            payload.shape_fingerprint, err.shape_fingerprint,
+            "payload fingerprint must match error fingerprint"
+        );
+        assert_eq!(
+            payload.missing_mapping_key, err.missing_mapping_key,
+            "payload missing_mapping_key must match error missing_mapping_key"
+        );
+        assert_eq!(
+            payload.location, err.location,
+            "payload location must match error location"
+        );
+    }
+
+    #[test]
+    fn m6_3_with_location_and_with_supported_families_are_composable() {
+        // Builder methods must compose without dropping fields.
+        let err = super::UnsupportedStlShapeError::unrecognized_placeholder_kind(
+            "sym",
+            "stl_x_placeholder",
+            vec![],
+        )
+        .with_location(super::StlShapeSourceLocation {
+            file: Some("a.cc".to_string()),
+            line: Some(10),
+            column: Some(20),
+        })
+        .with_supported_families(vec!["vector".to_string(), "map".to_string()]);
+
+        assert_eq!(err.location.file.as_deref(), Some("a.cc"));
+        assert_eq!(err.location.line, Some(10));
+        assert_eq!(err.location.column, Some(20));
+        assert_eq!(err.supported_families, vec!["vector", "map"]);
+        // Original fields preserved.
+        assert_eq!(err.symbol, "sym");
+        assert_eq!(err.placeholder_kind, "stl_x_placeholder");
+    }
 }

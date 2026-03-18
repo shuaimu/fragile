@@ -1679,10 +1679,12 @@ mod tests {
         IncludeDirective as ParserCoreIncludeDirective,
         IncludeDirectiveKind as ParserCoreIncludeDirectiveKind,
         ParserDiagnostic,
+        ParserDiagnosticLevel,
         ParserLanguage as ParserCoreLanguage,
         ParserNode,
         ParserOutputV1,
         ParserTranslationUnit,
+        UnsupportedStlShapeErrorCode,
     };
 
     fn span(
@@ -3206,5 +3208,471 @@ pub struct unique_ptr_unsigned_int__bool {
         );
 
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    // =========================================================================
+    // M6.3: Regression tests asserting failure is explicit and non-silent
+    // =========================================================================
+
+    // --- M6.3 / M6.A1: Unknown STL shapes fail with deterministic error class and metadata ---
+
+    #[test]
+    fn m6_3_e001_unknown_placeholder_fails_explicitly_not_silent_ok() {
+        // An unknown placeholder kind must return Err, never Ok with degraded/empty mappings.
+        let mut parser_output = parser_output_fixture(
+            PathBuf::from("m6_3_test.cc"),
+            ParserCoreLanguage::Cpp,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let mut deque_node = parser_node_fixture("n1", "stl_deque_placeholder");
+        deque_node.name = Some("std::deque<int>".to_string());
+        deque_node.cpp_type = Some("std::deque<int>".to_string());
+        deque_node.source_file = Some("user_code.cc".to_string());
+        deque_node.source_line = Some(42);
+        deque_node.source_column = Some(5);
+        parser_output.nodes = vec![
+            parser_node_fixture("n0", "translation_unit"),
+            deque_node,
+        ];
+
+        let result = resolve_parser_output_stl_placeholder_mappings(&parser_output);
+        assert!(
+            result.is_err(),
+            "unknown placeholder kind must return Err, not a degraded Ok"
+        );
+        let err_text = result.unwrap_err().to_string();
+        // Assert all required diagnostic fields are present in the error message.
+        assert!(
+            err_text.contains("FRAGILE_STL_E001"),
+            "error must contain stable error code FRAGILE_STL_E001, got: {err_text}"
+        );
+        assert!(
+            err_text.contains("`std::deque<int>`"),
+            "error must contain the C++ symbol, got: {err_text}"
+        );
+        assert!(
+            err_text.contains("user_code.cc:42:5"),
+            "error must contain the source location, got: {err_text}"
+        );
+        assert!(
+            err_text.contains("stl_deque_placeholder"),
+            "error must contain the placeholder_kind, got: {err_text}"
+        );
+        assert!(
+            err_text.contains("shape=`deque(std::deque<int>)`"),
+            "error must contain the shape fingerprint, got: {err_text}"
+        );
+        assert!(
+            err_text.contains("missing_key=`stl_deque_placeholder`"),
+            "error must contain the missing mapping key, got: {err_text}"
+        );
+        assert!(
+            err_text.contains("supported=["),
+            "error must contain the supported families list, got: {err_text}"
+        );
+    }
+
+    #[test]
+    fn m6_3_e001_error_format_is_deterministic_across_invocations() {
+        // Same inputs must produce byte-identical error text.
+        let mut parser_output = parser_output_fixture(
+            PathBuf::from("determinism.cc"),
+            ParserCoreLanguage::Cpp,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let mut node = parser_node_fixture("n1", "stl_list_placeholder");
+        node.name = Some("std::list<double>".to_string());
+        node.cpp_type = Some("std::list<double>".to_string());
+        node.source_file = Some("header.h".to_string());
+        node.source_line = Some(10);
+        node.source_column = Some(1);
+        parser_output.nodes = vec![
+            parser_node_fixture("n0", "translation_unit"),
+            node.clone(),
+        ];
+
+        let err1 = resolve_parser_output_stl_placeholder_mappings(&parser_output)
+            .unwrap_err()
+            .to_string();
+
+        // Re-run with identical input.
+        let err2 = resolve_parser_output_stl_placeholder_mappings(&parser_output)
+            .unwrap_err()
+            .to_string();
+
+        assert_eq!(
+            err1, err2,
+            "error text must be deterministic across invocations"
+        );
+    }
+
+    #[test]
+    fn m6_3_e001_fail_fast_on_first_unsupported_placeholder() {
+        // When multiple unsupported placeholders exist, the resolver must fail on the first one
+        // encountered (fail-fast), not accumulate or silently skip.
+        let mut parser_output = parser_output_fixture(
+            PathBuf::from("multi.cc"),
+            ParserCoreLanguage::Cpp,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let mut deque_node = parser_node_fixture("n1", "stl_deque_placeholder");
+        deque_node.name = Some("std::deque<int>".to_string());
+        deque_node.cpp_type = Some("std::deque<int>".to_string());
+        let mut stack_node = parser_node_fixture("n2", "stl_stack_placeholder");
+        stack_node.name = Some("std::stack<int>".to_string());
+        stack_node.cpp_type = Some("std::stack<int>".to_string());
+        parser_output.nodes = vec![
+            parser_node_fixture("n0", "translation_unit"),
+            deque_node,
+            stack_node,
+        ];
+
+        let err_text = resolve_parser_output_stl_placeholder_mappings(&parser_output)
+            .unwrap_err()
+            .to_string();
+        // Must fail on the first unsupported placeholder (deque), not the second (stack).
+        assert!(
+            err_text.contains("stl_deque_placeholder"),
+            "must fail-fast on first unsupported placeholder: {err_text}"
+        );
+        assert!(
+            !err_text.contains("stl_stack_placeholder"),
+            "must not mention second unsupported placeholder (fail-fast): {err_text}"
+        );
+    }
+
+    #[test]
+    fn m6_3_e001_mixed_supported_and_unsupported_fails_on_unsupported() {
+        // A mix of supported and unsupported placeholders must still fail on the unsupported one.
+        let mut parser_output = parser_output_fixture(
+            PathBuf::from("mixed.cc"),
+            ParserCoreLanguage::Cpp,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let mut deque_node = parser_node_fixture("n2", "stl_deque_placeholder");
+        deque_node.name = Some("std::deque<int>".to_string());
+        deque_node.cpp_type = Some("std::deque<int>".to_string());
+        parser_output.nodes = vec![
+            parser_node_fixture("n0", "translation_unit"),
+            parser_node_fixture("n1", "stl_vector_placeholder"),
+            deque_node,
+        ];
+
+        let err_text = resolve_parser_output_stl_placeholder_mappings(&parser_output)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err_text.contains("FRAGILE_STL_E001") && err_text.contains("stl_deque_placeholder"),
+            "must fail on unsupported placeholder even when supported ones precede it: {err_text}"
+        );
+    }
+
+    // --- M6.3 / M6.A1: Error code stability and constructor correctness ---
+
+    #[test]
+    fn m6_3_e002_missing_family_mapping_has_deterministic_error_class_and_metadata() {
+        let err = UnsupportedStlShapeError::missing_family_mapping(
+            "std::multiset<int>",
+            "stl_multiset_placeholder",
+            "multiset",
+        )
+        .with_location(StlShapeSourceLocation {
+            file: Some("container.cc".to_string()),
+            line: Some(15),
+            column: Some(8),
+        });
+
+        let err_text = err.to_string();
+        assert!(
+            err_text.contains("FRAGILE_STL_E002"),
+            "E002 must be present: {err_text}"
+        );
+        assert!(
+            err_text.contains("missing STL family mapping"),
+            "E002 label must be present: {err_text}"
+        );
+        assert!(
+            err_text.contains("`std::multiset<int>`"),
+            "symbol must be present: {err_text}"
+        );
+        assert!(
+            err_text.contains("container.cc:15:8"),
+            "location must be present: {err_text}"
+        );
+        assert!(
+            err_text.contains("stl_multiset_placeholder"),
+            "placeholder_kind must be present: {err_text}"
+        );
+        assert!(
+            err_text.contains("missing_key=`multiset`"),
+            "missing_mapping_key must be present: {err_text}"
+        );
+
+        assert_eq!(err.code, UnsupportedStlShapeErrorCode::MissingFamilyMapping);
+        assert_eq!(err.family.as_deref(), Some("multiset"));
+        assert_eq!(err.missing_mapping_key.as_deref(), Some("multiset"));
+    }
+
+    #[test]
+    fn m6_3_e003_unsupported_concrete_shape_has_deterministic_error_class_and_metadata() {
+        let err = UnsupportedStlShapeError::unsupported_concrete_shape(
+            "std::map<std::string, std::vector<int>>",
+            "stl_map_placeholder",
+            "map",
+            "map(std::string, std::vector<int>)",
+            "map_string__vector_int",
+        )
+        .with_location(StlShapeSourceLocation {
+            file: Some("complex.cc".to_string()),
+            line: Some(99),
+            column: Some(12),
+        });
+
+        let err_text = err.to_string();
+        assert!(
+            err_text.contains("FRAGILE_STL_E003"),
+            "E003 must be present: {err_text}"
+        );
+        assert!(
+            err_text.contains("unsupported STL concrete shape"),
+            "E003 label must be present: {err_text}"
+        );
+        assert!(
+            err_text.contains("`std::map<std::string, std::vector<int>>`"),
+            "symbol must be present: {err_text}"
+        );
+        assert!(
+            err_text.contains("complex.cc:99:12"),
+            "location must be present: {err_text}"
+        );
+        assert!(
+            err_text.contains("shape=`map(std::string, std::vector<int>)`"),
+            "shape fingerprint must be present: {err_text}"
+        );
+        assert!(
+            err_text.contains("missing_key=`map_string__vector_int`"),
+            "missing mapping key must be present: {err_text}"
+        );
+
+        assert_eq!(
+            err.code,
+            UnsupportedStlShapeErrorCode::UnsupportedConcreteShape
+        );
+    }
+
+    #[test]
+    fn m6_3_all_error_codes_produce_parser_diagnostic_with_error_level_and_payload() {
+        // Every error code class must convert to a ParserDiagnostic with Error level
+        // and a non-None payload containing actionable metadata.
+        let errors = vec![
+            UnsupportedStlShapeError::unrecognized_placeholder_kind(
+                "std::deque<int>",
+                "stl_deque_placeholder",
+                vec!["vector".to_string(), "map".to_string()],
+            ),
+            UnsupportedStlShapeError::missing_family_mapping(
+                "std::multiset<int>",
+                "stl_multiset_placeholder",
+                "multiset",
+            ),
+            UnsupportedStlShapeError::unsupported_concrete_shape(
+                "std::map<std::string, int>",
+                "stl_map_placeholder",
+                "map",
+                "map(std::string, int)",
+                "map_string__int",
+            ),
+        ];
+        let expected_codes = ["FRAGILE_STL_E001", "FRAGILE_STL_E002", "FRAGILE_STL_E003"];
+
+        for (err, expected_code) in errors.iter().zip(expected_codes.iter()) {
+            let diag = err.to_parser_diagnostic();
+            assert_eq!(
+                diag.level,
+                ParserDiagnosticLevel::Error,
+                "diagnostic level must be Error for {expected_code}"
+            );
+            assert_eq!(
+                diag.code, *expected_code,
+                "diagnostic code must be {expected_code}"
+            );
+            assert!(
+                !diag.message.is_empty(),
+                "diagnostic message must not be empty for {expected_code}"
+            );
+            let payload = diag.payload.as_ref().unwrap_or_else(|| {
+                panic!("diagnostic payload must be present for {expected_code}")
+            });
+            assert!(
+                !payload.symbol.is_empty(),
+                "payload symbol must not be empty for {expected_code}"
+            );
+            assert!(
+                !payload.shape_fingerprint.is_empty(),
+                "payload shape_fingerprint must not be empty for {expected_code}"
+            );
+            assert!(
+                payload.placeholder_kind.is_some(),
+                "payload placeholder_kind must be present for {expected_code}"
+            );
+        }
+    }
+
+    // --- M6.3 / M6.A2: No semantic stub/fake body is produced for unsupported shapes ---
+
+    #[test]
+    fn m6_3_transpile_returns_error_not_code_for_unknown_placeholder() {
+        // The full transpile pipeline must return Err (not produce Rust source with stubs)
+        // when an unsupported STL placeholder is encountered.
+        let temp_dir = std::env::temp_dir().join(format!(
+            "fragile_m6_3_no_stub_test_{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&temp_dir);
+        let source_path = temp_dir.join("test.cc");
+        fs::write(&source_path, "// empty TU").unwrap();
+
+        let mut parser_output = parser_output_fixture(
+            source_path,
+            ParserCoreLanguage::Cpp,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let mut deque_node = parser_node_fixture("n1", "stl_deque_placeholder");
+        deque_node.name = Some("std::deque<int>".to_string());
+        deque_node.cpp_type = Some("std::deque<int>".to_string());
+        deque_node.source_file = Some("test.cc".to_string());
+        deque_node.source_line = Some(1);
+        parser_output.nodes = vec![
+            parser_node_fixture("n0", "translation_unit"),
+            deque_node,
+        ];
+
+        let result = transpile_parser_output_to_rust(&parser_output);
+        assert!(
+            result.is_err(),
+            "transpile must return Err for unsupported STL placeholder, not produce stub code"
+        );
+        let err_text = result.unwrap_err().to_string();
+        assert!(
+            err_text.contains("FRAGILE_STL_E001"),
+            "transpile error must propagate the deterministic error code: {err_text}"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn m6_3_no_semantic_stub_for_unsupported_stl_with_known_placeholders_only() {
+        // When only known/supported placeholders are present, transpile succeeds
+        // (this is the positive control ensuring the failure tests above are not
+        // caused by a general transpile bug).
+        let temp_dir = std::env::temp_dir().join(format!(
+            "fragile_m6_3_positive_control_{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&temp_dir);
+        let source_path = temp_dir.join("ok.cc");
+        fs::write(&source_path, "// empty TU with supported STL").unwrap();
+
+        let mut parser_output = parser_output_fixture(
+            source_path,
+            ParserCoreLanguage::Cpp,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        parser_output.nodes = vec![
+            parser_node_fixture("n0", "translation_unit"),
+            parser_node_fixture("n1", STL_VECTOR_PLACEHOLDER_KIND),
+        ];
+
+        // This should either succeed or fail for reasons OTHER than STL placeholder rejection.
+        // The key assertion: if it fails, it must NOT be E001/E002/E003.
+        let result = transpile_parser_output_to_rust(&parser_output);
+        if let Err(ref e) = result {
+            let err_text = e.to_string();
+            assert!(
+                !err_text.contains("FRAGILE_STL_E001")
+                    && !err_text.contains("FRAGILE_STL_E002")
+                    && !err_text.contains("FRAGILE_STL_E003"),
+                "supported placeholder must not trigger STL shape errors: {err_text}"
+            );
+        }
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn m6_3_error_code_prefix_is_stable_for_programmatic_parsing() {
+        // Consumers may parse error codes programmatically. Assert the prefix contract.
+        let e001 = UnsupportedStlShapeErrorCode::UnrecognizedPlaceholderKind;
+        let e002 = UnsupportedStlShapeErrorCode::MissingFamilyMapping;
+        let e003 = UnsupportedStlShapeErrorCode::UnsupportedConcreteShape;
+
+        for code in [e001, e002, e003] {
+            let code_str = code.code_str();
+            assert!(
+                code_str.starts_with("FRAGILE_STL_E"),
+                "all error codes must start with FRAGILE_STL_E prefix: {code_str}"
+            );
+            // Assert the numeric suffix is a 3-digit zero-padded number.
+            let numeric_suffix = code_str.strip_prefix("FRAGILE_STL_E").unwrap();
+            assert_eq!(
+                numeric_suffix.len(),
+                3,
+                "error code numeric suffix must be 3 digits: {code_str}"
+            );
+            assert!(
+                numeric_suffix.chars().all(|c| c.is_ascii_digit()),
+                "error code numeric suffix must be all digits: {code_str}"
+            );
+        }
+
+        // Assert ordering: E001 < E002 < E003.
+        assert!(e001 < e002);
+        assert!(e002 < e003);
+    }
+
+    #[test]
+    fn m6_3_error_display_format_matches_stable_pattern() {
+        // Assert the Display format matches the documented pattern:
+        // [CODE] label: `symbol` at location (placeholder_kind=`...`, shape=`...`, missing_key=`...`, supported=[...])
+        let err = UnsupportedStlShapeError::unrecognized_placeholder_kind(
+            "std::forward_list<int>",
+            "stl_forward_list_placeholder",
+            vec!["map".to_string(), "vector".to_string()],
+        )
+        .with_location(StlShapeSourceLocation {
+            file: Some("test.cc".to_string()),
+            line: Some(7),
+            column: Some(3),
+        });
+
+        let text = err.to_string();
+        // Validate structured format with regex-like assertions.
+        assert!(text.starts_with("[FRAGILE_STL_E001] "), "must start with [CODE]: {text}");
+        assert!(text.contains("unrecognized STL placeholder kind"), "must contain label: {text}");
+        assert!(text.contains(": `std::forward_list<int>` at "), "must contain symbol and 'at': {text}");
+        assert!(text.contains("test.cc:7:3"), "must contain location: {text}");
+        assert!(text.contains("placeholder_kind=`stl_forward_list_placeholder`"), "must contain placeholder_kind: {text}");
+        assert!(text.contains("shape=`"), "must contain shape fingerprint: {text}");
+        assert!(text.contains("supported=["), "must contain supported families: {text}");
+        assert!(text.ends_with(')'), "must end with closing paren: {text}");
     }
 }
