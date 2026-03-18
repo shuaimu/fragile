@@ -123,7 +123,7 @@ Acceptance:
   - [x] M5.A2.c Add corpus-level mapped-family audit gate in active parser-output replay tests that fails on any covered-family legacy deep STL alias fallback marker and records deterministic fixture evidence.
 
 ### M6) Diagnostic and Failure Policy for Unknown STL Shapes
-- [ ] M6.1 Add deterministic error class for unsupported STL placeholder shapes. [WIP - claude/parser]
+- [x] M6.1 Add deterministic error class for unsupported STL placeholder shapes.
 - [ ] M6.2 Add actionable diagnostics payload (location, symbol, shape fingerprint, missing mapping key).
 - [ ] M6.3 Add regression tests that assert failure is explicit and non-silent.
 Acceptance:
