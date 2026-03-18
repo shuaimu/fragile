@@ -116,7 +116,7 @@ Acceptance:
 - [ ] M5.A1 All placeholder nodes in corpus resolve to generated STL targets.
   - [x] M5.A1.a Add active parser-output handoff acceptance regression for mapped associative/sequence/smart-pointer families (`map`, `unordered_map`, `vector`, `shared_ptr`, `unique_ptr`) proving canonical pre-generated target resolution with no unresolved placeholder structs.
   - [x] M5.A1.b Expand mapping-completeness covered-family enforcement to remaining mapped placeholder families (`string`, `optional`, `variant`, `tuple`) with deterministic positive/negative regressions.
-  - [ ] M5.A1.c Add parser-core fixture-corpus replay gate that audits observed STL placeholder kinds and asserts no unresolved mapped-family placeholders remain in active parser-output handoff transpiled output.
+  - [x] M5.A1.c Add parser-core fixture-corpus replay gate that audits observed STL placeholder kinds and asserts no unresolved mapped-family placeholders remain in active parser-output handoff transpiled output.
 - [ ] M5.A2 No legacy deep STL translation path is invoked in active backend runs.
 
 ### M6) Diagnostic and Failure Policy for Unknown STL Shapes

@@ -19882,6 +19882,56 @@ Validation:
   - `cargo test --workspace --all-targets`
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
 
+## 2026-03-18: M5.A1.c Parser-Core Fixture-Corpus Replay Gate for Mapped Placeholder Resolution
+
+Context:
+- After `M5.A1.b`, the next top unfinished P0 leaf was `M5.A1.c`.
+- Goal: add parser-core fixture replay coverage that audits observed STL
+  placeholder kinds and verifies active parser-output handoff output has no
+  unresolved mapped-family placeholder surfaces.
+
+Wrong-approach check:
+- Re-checked section `1.3 Wrong Approaches (Do Not Do)` and
+  `docs/dev/wrong.md` before implementation.
+- No target-specific hacks, force-native bypasses, or fake semantic fallback
+  method bodies were introduced.
+
+Design update:
+- Added parser-core replay gate in
+  `crates/fragile-parser-clang/tests/stl_symbol_detection_fixture_tests.rs`:
+  - `parser_core_fixture_replay_gate_keeps_mapped_placeholder_families_resolved_in_active_handoff_output`
+- Gate behavior:
+  1. parse fixture `m3_1_d/src/stl_symbol_detection.cpp` through parser-core
+     backend,
+  2. audit boundary placeholder manifest under `consume_symbols`,
+  3. assert observed placeholder kinds cover all mapped families
+     (`map`, `unordered_map`, `vector`, `string`, `optional`, `variant`,
+     `tuple`, `shared_ptr`, `unique_ptr`),
+  4. replay active handoff with `transpile_parser_output_to_rust`,
+  5. assert deterministic observed-family manifest lines in transpiled output,
+  6. assert no unresolved mapped-family placeholder structs remain in final
+     transpiled output.
+
+Completeness hardening discovered during replay:
+- Replay gate exposed false positives in mapped-family completeness checks from
+  non-placeholder helper surfaces:
+  - `basic_string_view_*`
+  - tuple helper artifacts (`tuple_element_*`, `tuple_size_*`, `tuple_`)
+- Added `parser_output_lowered_name_is_covered_family_candidate(...)` and wired
+  it into `parser_output_covered_family_spec_for_lowered_name(...)` so helper
+  artifacts are excluded from mapped-family completeness enforcement.
+- Added focused regression:
+  - `parser_output_mapping_completeness_validation_ignores_string_view_and_tuple_helper_surfaces`
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-clang parser_output_mapping_completeness_validation_ignores_string_view_and_tuple_helper_surfaces -- --nocapture`
+  - `cargo test -p fragile-parser-clang parser_core_fixture_replay_gate_keeps_mapped_placeholder_families_resolved_in_active_handoff_output -- --nocapture`
+  - `cargo test -p fragile-parser-clang stl_symbol_detection_fixture_ -- --nocapture`
+- Full regression:
+  - `cargo test --workspace --all-targets`
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
 ## 2026-03-18: M5.1.c Remove Active-Path Legacy Associative std::collections Fallback
 
 Context:

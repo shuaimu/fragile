@@ -693,11 +693,49 @@ fn parser_output_covered_family_spec_for_lowered_name<'a>(
         let Some(canonical_prefix) = placeholder_mappings.get(*placeholder_kind) else {
             continue;
         };
-        if prefixes.iter().any(|prefix| lowered_name.starts_with(prefix)) {
+        if prefixes.iter().any(|prefix| lowered_name.starts_with(prefix))
+            && parser_output_lowered_name_is_covered_family_candidate(lowered_name, family)
+        {
             return Some((placeholder_kind, family, canonical_prefix.as_str()));
         }
     }
     None
+}
+
+fn parser_output_lowered_name_is_covered_family_candidate(
+    lowered_name: &str,
+    family: &str,
+) -> bool {
+    if lowered_name.is_empty() {
+        return false;
+    }
+
+    if lowered_name.contains('<') || lowered_name.contains('>') {
+        return false;
+    }
+
+    match family {
+        // `basic_string_view*` helper surfaces are not placeholder-lowered
+        // mapped-family aliases and should not participate in mapped string
+        // completeness enforcement.
+        "string" => {
+            !lowered_name.starts_with("basic_string_view_")
+                && !lowered_name.starts_with("std_basic_string_view_")
+                && !lowered_name.starts_with("string_view_")
+                && !lowered_name.starts_with("std_string_view_")
+        }
+        // Tuple trait/helper artifacts from pre-generated/runtime lanes are not
+        // placeholder-lowered tuple targets and must not trip mapped-family
+        // unresolved checks.
+        "tuple" => {
+            lowered_name != "tuple_"
+                && !lowered_name.starts_with("tuple_element_")
+                && !lowered_name.starts_with("std_tuple_element_")
+                && !lowered_name.starts_with("tuple_size_")
+                && !lowered_name.starts_with("std_tuple_size_")
+        }
+        _ => true,
+    }
 }
 
 fn parser_output_first_legacy_deep_stl_alias_violation(
@@ -2341,6 +2379,42 @@ pub struct tuple_unsigned_int__bool {
                 && err_text.contains("variant_unsigned_int__bool__bool")
                 && err_text.contains("tuple_unsigned_int__bool"),
             "unexpected string/optional/variant/tuple placeholder mapping completeness error: {err_text}"
+        );
+    }
+
+    #[test]
+    fn parser_output_mapping_completeness_validation_ignores_string_view_and_tuple_helper_surfaces(
+    ) {
+        let transpiled = r#"
+pub type basic_string_view_char16 = basic_string_view_char16_t;
+pub type string_view_char = string_view_char_t;
+#[repr(C)]
+pub struct basic_string_view_char16_t {
+    _opaque: [u8; 64],
+}
+#[repr(C)]
+pub struct string_view_char_t {
+    _opaque: [u8; 64],
+}
+#[repr(C)]
+pub struct tuple_ {
+    _opaque: [u8; 64],
+}
+#[repr(C)]
+pub struct tuple_element_1<T> {
+    _opaque: [u8; 64],
+}
+"#;
+        let mappings = BTreeMap::from([
+            (STL_STRING_PLACEHOLDER_KIND.to_string(), "std_string".to_string()),
+            (STL_TUPLE_PLACEHOLDER_KIND.to_string(), "std_tuple".to_string()),
+        ]);
+        validate_parser_output_handoff_mapping_completeness_for_covered_families(
+            transpiled,
+            &mappings,
+        )
+        .expect(
+            "string-view and tuple helper surfaces should not be treated as mapped-family completeness violations",
         );
     }
 

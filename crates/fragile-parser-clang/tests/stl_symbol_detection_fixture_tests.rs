@@ -1,4 +1,6 @@
-use fragile_clang::{ClangParser, ParserLanguage as ClangParserLanguage};
+use fragile_clang::{
+    transpile_parser_output_to_rust, ClangParser, ParserLanguage as ClangParserLanguage,
+};
 use fragile_parser_clang::{
     detect_direct_std_stl_family, extract_stl_type_alias_symbol_table, FragileParserClangBackend,
 };
@@ -111,6 +113,124 @@ fn descendants_for_node<'a>(nodes: &'a [ParserNode], root_id: &str) -> Vec<&'a P
         }
     }
     descendants
+}
+
+fn collect_boundary_placeholder_manifest(
+    nodes: &[ParserNode],
+    boundary_function_name: &str,
+) -> BTreeMap<String, String> {
+    let boundary_function_id = nodes
+        .iter()
+        .find(|node| {
+            node.node_kind == "function_decl"
+                && node.name.as_deref() == Some(boundary_function_name)
+        })
+        .map(|node| node.node_id.clone())
+        .unwrap_or_else(|| panic!("expected `{}` function node", boundary_function_name));
+    let boundary_descendant_ids = collect_descendant_ids(nodes, boundary_function_id.as_str());
+    collect_placeholder_manifest(nodes)
+        .into_iter()
+        .filter(|(name, _)| {
+            nodes.iter().any(|node| {
+                node.name.as_deref() == Some(name.as_str())
+                    && boundary_descendant_ids.contains(node.node_id.as_str())
+            })
+        })
+        .collect::<BTreeMap<_, _>>()
+}
+
+fn unresolved_mapped_family_placeholder_struct_violations(transpiled: &str) -> Vec<String> {
+    const PREFIX_SPECS: &[(&str, &[&str], &str)] = &[
+        ("map", &["map_", "std_map_"], "std_map"),
+        (
+            "unordered_map",
+            &["unordered_map_", "std_unordered_map_"],
+            "std_unordered_map",
+        ),
+        ("vector", &["vector_", "std_vector_"], "std_vector"),
+        (
+            "string",
+            &[
+                "string_",
+                "std_string_",
+                "basic_string_",
+                "std_basic_string_",
+            ],
+            "std_string",
+        ),
+        ("optional", &["optional_", "std_optional_"], "std_optional"),
+        ("variant", &["variant_", "std_variant_"], "std_variant"),
+        ("tuple", &["tuple_", "std_tuple_"], "std_tuple"),
+        (
+            "shared_ptr",
+            &["shared_ptr_", "std_shared_ptr_"],
+            "std_shared_ptr",
+        ),
+        (
+            "unique_ptr",
+            &["unique_ptr_", "std_unique_ptr_"],
+            "std_unique_ptr",
+        ),
+    ];
+
+    fn is_candidate_mapped_placeholder_struct_name(name: &str, family: &str) -> bool {
+        if name.is_empty() {
+            return false;
+        }
+        if name.contains('<') || name.contains('>') {
+            return false;
+        }
+        match family {
+            "string" => {
+                !name.starts_with("basic_string_view_")
+                    && !name.starts_with("std_basic_string_view_")
+                    && !name.starts_with("string_view_")
+                    && !name.starts_with("std_string_view_")
+            }
+            "tuple" => {
+                name != "tuple_"
+                    && !name.starts_with("tuple_element_")
+                    && !name.starts_with("std_tuple_element_")
+                    && !name.starts_with("tuple_size_")
+                    && !name.starts_with("std_tuple_size_")
+            }
+            _ => true,
+        }
+    }
+
+    let mut violations = BTreeMap::new();
+    for line in transpiled.lines() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix("pub struct ") else {
+            continue;
+        };
+        let Some(struct_name) = rest.split_whitespace().next() else {
+            continue;
+        };
+        let struct_name = struct_name.trim_end_matches('{').trim();
+        if struct_name.is_empty() {
+            continue;
+        }
+        for (family, prefixes, canonical_prefix) in PREFIX_SPECS {
+            if !prefixes.iter().any(|prefix| struct_name.starts_with(prefix)) {
+                continue;
+            }
+            if !is_candidate_mapped_placeholder_struct_name(struct_name, family) {
+                continue;
+            }
+            if struct_name.starts_with(canonical_prefix) {
+                continue;
+            }
+            violations.insert(
+                struct_name.to_string(),
+                format!(
+                    "family `{}` unresolved placeholder struct `{}` does not resolve to canonical prefix `{}`",
+                    family, struct_name, canonical_prefix
+                ),
+            );
+        }
+    }
+    violations.into_values().collect()
 }
 
 #[test]
@@ -382,4 +502,83 @@ fn stl_symbol_detection_fixture_emits_placeholder_node_kinds_for_detected_bounda
             placeholder_name
         );
     }
+}
+
+#[test]
+fn parser_core_fixture_replay_gate_keeps_mapped_placeholder_families_resolved_in_active_handoff_output(
+) {
+    let source_path = fixture_source("stl_symbol_detection.cpp");
+    assert!(
+        source_path.is_file(),
+        "expected fixture source at {}",
+        source_path.display()
+    );
+
+    let parser_output = parse_fixture_with_backend(&source_path);
+    let placeholder_manifest =
+        collect_boundary_placeholder_manifest(&parser_output.nodes, "consume_symbols");
+
+    let observed_placeholder_kinds = placeholder_manifest
+        .values()
+        .cloned()
+        .collect::<HashSet<_>>();
+    let expected_placeholder_kinds = HashSet::from([
+        "stl_map_placeholder".to_string(),
+        "stl_unordered_map_placeholder".to_string(),
+        "stl_vector_placeholder".to_string(),
+        "stl_string_placeholder".to_string(),
+        "stl_optional_placeholder".to_string(),
+        "stl_variant_placeholder".to_string(),
+        "stl_tuple_placeholder".to_string(),
+        "stl_shared_ptr_placeholder".to_string(),
+        "stl_unique_ptr_placeholder".to_string(),
+    ]);
+    assert_eq!(
+        observed_placeholder_kinds, expected_placeholder_kinds,
+        "fixture replay should deterministically observe all mapped STL placeholder kinds in consume_symbols boundary"
+    );
+
+    let transpiled = transpile_parser_output_to_rust(&parser_output)
+        .expect("active parser-output handoff replay should transpile fixture output");
+    assert!(
+        transpiled.contains("// parser_output_stl_placeholder_mapping_manifest_v1:")
+            && transpiled.contains("// parser_output_observed_family_count=9")
+            && transpiled.contains(
+                "// parser_output_observed_family.map.placeholder_kind=stl_map_placeholder"
+            )
+            && transpiled.contains(
+                "// parser_output_observed_family.unordered_map.placeholder_kind=stl_unordered_map_placeholder"
+            )
+            && transpiled.contains(
+                "// parser_output_observed_family.vector.placeholder_kind=stl_vector_placeholder"
+            )
+            && transpiled.contains(
+                "// parser_output_observed_family.string.placeholder_kind=stl_string_placeholder"
+            )
+            && transpiled.contains(
+                "// parser_output_observed_family.optional.placeholder_kind=stl_optional_placeholder"
+            )
+            && transpiled.contains(
+                "// parser_output_observed_family.variant.placeholder_kind=stl_variant_placeholder"
+            )
+            && transpiled.contains(
+                "// parser_output_observed_family.tuple.placeholder_kind=stl_tuple_placeholder"
+            )
+            && transpiled.contains(
+                "// parser_output_observed_family.shared_ptr.placeholder_kind=stl_shared_ptr_placeholder"
+            )
+            && transpiled.contains(
+                "// parser_output_observed_family.unique_ptr.placeholder_kind=stl_unique_ptr_placeholder"
+            ),
+        "active parser-output handoff output should include deterministic observed-family manifest entries for all mapped families:\n{}",
+        transpiled
+    );
+
+    let unresolved_placeholder_violations =
+        unresolved_mapped_family_placeholder_struct_violations(&transpiled);
+    assert!(
+        unresolved_placeholder_violations.is_empty(),
+        "active parser-output handoff fixture replay should not leave unresolved mapped-family placeholder structs:\n{}",
+        unresolved_placeholder_violations.join("\n")
+    );
 }
