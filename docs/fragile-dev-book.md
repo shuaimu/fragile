@@ -19882,6 +19882,45 @@ Validation:
   - `cargo test --workspace --all-targets`
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
 
+## 2026-03-18: M5.A2.a Parser-Core Fixture Replay Gate for Covered Associative Legacy Fallback Alias Lanes
+
+Context:
+- After decomposing `M5.A2`, the first leaf `M5.A2.a` was selected.
+- Goal: harden parser-core fixture replay so mapped-family manifest evidence is
+  deterministic and covered associative-family alias closure does not regress
+  to legacy deep STL fallback lanes.
+
+Wrong-approach check:
+- Re-checked section `1.3 Wrong Approaches (Do Not Do)` and
+  `docs/dev/wrong.md` before implementation.
+- No target-specific hacks, force-native bypasses, or semantic stubs were
+  introduced.
+
+Design update:
+- Strengthened parser-core fixture replay regression:
+  - `parser_core_fixture_replay_gate_keeps_mapped_placeholder_families_resolved_in_active_handoff_output`
+- Added deterministic manifest checks for covered associative canonical mapping
+  prefixes:
+  - `parser_output_observed_family.map.canonical_type_prefix=std_map`
+  - `parser_output_observed_family.unordered_map.canonical_type_prefix=std_unordered_map`
+- Replaced over-broad output-wide `std::collections::*` substring rejection with
+  alias-shape-aware violation scanning over `pub type` lines:
+  - map-family violation: `map_` / `std_map_` alias targeting
+    `std::collections::BTreeMap<...>`
+  - unordered-map-family violation: `unordered_map_` / `std_unordered_map_`
+    alias targeting `std::collections::HashMap<...>`
+- This avoids false positives from legitimate runtime/support usage of
+  `std::collections::HashMap`/`BTreeMap` outside mapped-family alias fallback
+  closure lanes.
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-parser-clang parser_core_fixture_replay_gate_keeps_mapped_placeholder_families_resolved_in_active_handoff_output -- --nocapture`
+  - `cargo test -p fragile-parser-clang --test stl_symbol_detection_fixture_tests -- --nocapture`
+- Full regression (run after leaf implementation):
+  - `cargo test --workspace --all-targets`
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
 ## 2026-03-18: M5.A1.c Parser-Core Fixture-Corpus Replay Gate for Mapped Placeholder Resolution
 
 Context:

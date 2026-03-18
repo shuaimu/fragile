@@ -233,6 +233,54 @@ fn unresolved_mapped_family_placeholder_struct_violations(transpiled: &str) -> V
     violations.into_values().collect()
 }
 
+fn legacy_deep_stl_fallback_alias_violations_for_mapped_associative_families(
+    transpiled: &str,
+) -> Vec<String> {
+    let mut violations = BTreeMap::new();
+
+    for line in transpiled.lines() {
+        let trimmed = line.trim();
+        let Some(alias_decl) = trimmed.strip_prefix("pub type ") else {
+            continue;
+        };
+        let Some((alias_name, target)) = alias_decl.split_once('=') else {
+            continue;
+        };
+
+        let alias_name = alias_name.trim();
+        let target = target.trim().trim_end_matches(';').trim();
+
+        let is_map_alias = alias_name.starts_with("map_") || alias_name.starts_with("std_map_");
+        let is_unordered_map_alias = alias_name.starts_with("unordered_map_")
+            || alias_name.starts_with("std_unordered_map_");
+        if !is_map_alias && !is_unordered_map_alias {
+            continue;
+        }
+
+        if is_map_alias && target.starts_with("std::collections::BTreeMap<") {
+            violations.insert(
+                alias_name.to_string(),
+                format!(
+                    "covered map-family alias `{}` resolved through legacy deep STL fallback target `{}`",
+                    alias_name, target
+                ),
+            );
+        }
+
+        if is_unordered_map_alias && target.starts_with("std::collections::HashMap<") {
+            violations.insert(
+                alias_name.to_string(),
+                format!(
+                    "covered unordered_map-family alias `{}` resolved through legacy deep STL fallback target `{}`",
+                    alias_name, target
+                ),
+            );
+        }
+    }
+
+    violations.into_values().collect()
+}
+
 #[test]
 fn stl_symbol_detection_fixture_covers_direct_std_detection_deterministically() {
     let source_path = fixture_source("stl_symbol_detection.cpp");
@@ -547,7 +595,13 @@ fn parser_core_fixture_replay_gate_keeps_mapped_placeholder_families_resolved_in
                 "// parser_output_observed_family.map.placeholder_kind=stl_map_placeholder"
             )
             && transpiled.contains(
+                "// parser_output_observed_family.map.canonical_type_prefix=std_map"
+            )
+            && transpiled.contains(
                 "// parser_output_observed_family.unordered_map.placeholder_kind=stl_unordered_map_placeholder"
+            )
+            && transpiled.contains(
+                "// parser_output_observed_family.unordered_map.canonical_type_prefix=std_unordered_map"
             )
             && transpiled.contains(
                 "// parser_output_observed_family.vector.placeholder_kind=stl_vector_placeholder"
@@ -580,5 +634,13 @@ fn parser_core_fixture_replay_gate_keeps_mapped_placeholder_families_resolved_in
         unresolved_placeholder_violations.is_empty(),
         "active parser-output handoff fixture replay should not leave unresolved mapped-family placeholder structs:\n{}",
         unresolved_placeholder_violations.join("\n")
+    );
+
+    let legacy_fallback_violations =
+        legacy_deep_stl_fallback_alias_violations_for_mapped_associative_families(&transpiled);
+    assert!(
+        legacy_fallback_violations.is_empty(),
+        "active parser-output handoff fixture replay should not resolve covered mapped-family associative aliases through legacy deep STL fallback lanes:\n{}",
+        legacy_fallback_violations.join("\n")
     );
 }
