@@ -19720,3 +19720,45 @@ Validation:
   - `parser_output_stl_placeholder_mapping_resolves_known_placeholder_kinds`
   - `parser_output_stl_placeholder_mapping_rejects_unknown_placeholder_kind`
   - `parser_output_codegen_rejects_unknown_stl_placeholder_kind_before_parse`
+
+## 2026-03-18: M5.1.b.i Mapping-Aware Codegen Alias Closure Wiring
+
+Context:
+- After closing `M5.1.a`, the next top P0 leaf was `M5.1.b`.
+- `M5.1.b` was decomposed into `M5.1.b.i` through `M5.1.b.iv` to keep each
+  leaf below ~1000 LOC and executable independently.
+- This entry records closure of `M5.1.b.i`.
+
+Wrong-approach check:
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` before implementation.
+- No target-specific conditionals, no force-native bypasses, and no synthetic
+  semantic fallback method bodies were introduced.
+- For mapped associative families, unsupported shapes no longer silently route
+  through legacy `std::collections::*` aliases in the mapping-aware lane.
+
+Design update:
+- Added parser-output placeholder mapping state to `AstCodeGen`:
+  - `parser_output_stl_placeholder_prefixes: BTreeMap<String, String>`
+  - `set_parser_output_stl_placeholder_mappings(...)`
+- Parser-output handoff now injects resolved placeholder mappings into
+  `AstCodeGen` before generation.
+- Added mapping-aware unresolved closure entry:
+  - `close_unresolved_type_reference_gaps_with_parser_output_placeholder_mappings(...)`
+  - active generate path now uses this entry.
+- Associative-family behavior when mapping is present:
+  - `map` / `unordered_map` lanes are mapping-controlled,
+  - concrete mapped lane currently supported for `int/int` to pre-generated
+    surfaces (`std_map_int__int`, `std_unordered_map_int__int`),
+  - unsupported mapped associative shapes stay explicit unresolved placeholders
+    instead of falling back to `std::collections::{BTreeMap, HashMap}`.
+- Legacy behavior remains unchanged when no parser-output mapping context exists
+  (non-handoff paths and existing static closure tests remain stable).
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-clang close_unresolved_type_reference_gaps_with_placeholder_mapping -- --nocapture`
+  - `cargo test -p fragile-clang parser_output_codegen_uses_handoff_metadata_without_libtooling_export -- --nocapture`
+  - `cargo test -p fragile-clang parser_output_stl_placeholder_mapping -- --nocapture`
+- Added tests in `crates/fragile-clang/src/ast_codegen.rs`:
+  - `test_close_unresolved_type_reference_gaps_with_placeholder_mapping_blocks_legacy_associative_std_collections_aliases`
+  - `test_close_unresolved_type_reference_gaps_with_placeholder_mapping_uses_pre_generated_map_alias_when_available`

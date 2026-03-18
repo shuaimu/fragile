@@ -1231,7 +1231,7 @@ pub fn transpile_parser_output_to_rust_with_options(
     );
     let mut timings = TranspileStageTimings::default();
     let transpile_result: Result<String> = (|| {
-        let _placeholder_mappings = resolve_parser_output_stl_placeholder_mappings(parser_output)?;
+        let placeholder_mappings = resolve_parser_output_stl_placeholder_mappings(parser_output)?;
         let parser = ClangParser::with_paths_defines_language_and_ignored_errors(
             parser_output_effective_include_paths(parser_output),
             parser_output_effective_defines(parser_output),
@@ -1255,7 +1255,11 @@ pub fn transpile_parser_output_to_rust_with_options(
             trace_path,
             TRANSPILE_STAGE_CODEGEN,
             &mut timings.codegen,
-            || Ok(AstCodeGen::new().generate(&ast.translation_unit)),
+            || {
+                let mut codegen = AstCodeGen::new();
+                codegen.set_parser_output_stl_placeholder_mappings(placeholder_mappings.clone());
+                Ok(codegen.generate(&ast.translation_unit))
+            },
         )
     })();
 

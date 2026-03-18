@@ -1262,6 +1262,10 @@ pub struct AstCodeGen {
     /// Resolved method signatures from LibTooling template specializations
     /// Key: qualified type name (e.g., "std::unique_ptr<int, std::default_delete<int>>")
     specialization_methods: HashMap<String, Vec<crate::libtooling::MethodSignature>>,
+    /// Parser-output handoff placeholder mappings: placeholder node kind ->
+    /// canonical pre-generated STL type prefix. Empty when not provided by
+    /// parser-output handoff entry points.
+    parser_output_stl_placeholder_prefixes: BTreeMap<String, String>,
     /// Set of struct names that have been defined (to track for stub generation)
     defined_structs: HashSet<String>,
     /// Set of struct names that are referenced but not defined (need stub generation)
@@ -1446,6 +1450,7 @@ impl AstCodeGen {
             libtooling_method_bodies: HashMap::new(),
             specialization_field_types: HashMap::new(),
             specialization_methods: HashMap::new(),
+            parser_output_stl_placeholder_prefixes: BTreeMap::new(),
             defined_structs: HashSet::new(),
             referenced_but_undefined_structs: HashSet::new(),
             unsafe_function_names: HashSet::new(),
@@ -1471,6 +1476,15 @@ impl AstCodeGen {
         bodies: HashMap<(String, String), Vec<crate::libtooling::MethodInfo>>,
     ) {
         self.libtooling_method_bodies = bodies;
+    }
+
+    /// Set parser-output placeholder mappings for mapping-aware codegen closure
+    /// paths in parser-output handoff mode.
+    pub fn set_parser_output_stl_placeholder_mappings(
+        &mut self,
+        mappings: BTreeMap<String, String>,
+    ) {
+        self.parser_output_stl_placeholder_prefixes = mappings;
     }
 
     /// Return true when a nested union declaration corresponds to a named field type
@@ -5810,14 +5824,95 @@ impl AstCodeGen {
         siblings
     }
 
-    fn resolve_container_alias_target(name: &str, defined: &HashSet<String>) -> Option<String> {
+    fn container_alias_target_is_resolvable(target: &str, defined: &HashSet<String>) -> bool {
+        let generic_base = target.split('<').next().unwrap_or("").trim();
+        !generic_base.is_empty()
+            && (defined.contains(generic_base) || generic_base.starts_with("std::"))
+    }
+
+    fn parser_output_controls_map_family_name(
+        name: &str,
+        placeholder_prefixes: &BTreeMap<String, String>,
+    ) -> bool {
+        (name.starts_with("map_") || name.starts_with("std_map_"))
+            && placeholder_prefixes.contains_key("stl_map_placeholder")
+    }
+
+    fn parser_output_controls_unordered_map_family_name(
+        name: &str,
+        placeholder_prefixes: &BTreeMap<String, String>,
+    ) -> bool {
+        (name.starts_with("unordered_map_") || name.starts_with("std_unordered_map_"))
+            && placeholder_prefixes.contains_key("stl_unordered_map_placeholder")
+    }
+
+    fn parser_output_controls_associative_family_name(
+        name: &str,
+        placeholder_prefixes: &BTreeMap<String, String>,
+    ) -> bool {
+        Self::parser_output_controls_map_family_name(name, placeholder_prefixes)
+            || Self::parser_output_controls_unordered_map_family_name(name, placeholder_prefixes)
+    }
+
+    fn parser_output_associative_alias_target_from_rust_name(
+        rust_name: &str,
+        placeholder_prefixes: &BTreeMap<String, String>,
+    ) -> Option<String> {
+        if Self::parser_output_controls_map_family_name(rust_name, placeholder_prefixes) {
+            let canonical_prefix = placeholder_prefixes.get("stl_map_placeholder")?;
+            let suffix = rust_name
+                .strip_prefix("map_")
+                .or_else(|| rust_name.strip_prefix("std_map_"))?;
+            let (key, value) = Self::stl_simple_map_key_value_rust_types_from_suffix(suffix)?;
+            if key == "i32" && value == "i32" {
+                return Some(format!("{}_int__int", canonical_prefix));
+            }
+            return None;
+        }
+
+        if Self::parser_output_controls_unordered_map_family_name(rust_name, placeholder_prefixes) {
+            let canonical_prefix = placeholder_prefixes.get("stl_unordered_map_placeholder")?;
+            let suffix = rust_name
+                .strip_prefix("unordered_map_")
+                .or_else(|| rust_name.strip_prefix("std_unordered_map_"))?;
+            let (key, value) = Self::stl_simple_map_key_value_rust_types_from_suffix(suffix)?;
+            if key == "i32" && value == "i32" {
+                return Some(format!("{}_int__int", canonical_prefix));
+            }
+            return None;
+        }
+
+        None
+    }
+
+    fn resolve_container_alias_target(
+        name: &str,
+        defined: &HashSet<String>,
+        placeholder_prefixes: Option<&BTreeMap<String, String>>,
+    ) -> Option<String> {
+        if let Some(prefixes) = placeholder_prefixes {
+            if let Some(target) =
+                Self::parser_output_associative_alias_target_from_rust_name(name, prefixes)
+            {
+                if Self::container_alias_target_is_resolvable(&target, defined) {
+                    return Some(target);
+                }
+            }
+
+            if Self::parser_output_controls_associative_family_name(name, prefixes) {
+                if let Some(target) = Self::stl_container_alias_target_from_rust_name(name) {
+                    if Self::container_alias_target_is_resolvable(&target, defined) {
+                        return Some(target);
+                    }
+                }
+                return None;
+            }
+        }
+
         if let Some(target) = Self::stl_associative_container_alias_target_from_rust_name(name)
             .or_else(|| Self::stl_container_alias_target_from_rust_name(name))
         {
-            let generic_base = target.split('<').next().unwrap_or("").trim();
-            if !generic_base.is_empty()
-                && (defined.contains(generic_base) || generic_base.starts_with("std::"))
-            {
+            if Self::container_alias_target_is_resolvable(&target, defined) {
                 return Some(target);
             }
         }
@@ -6233,7 +6328,28 @@ impl AstCodeGen {
             || name.starts_with("std_shared_ptr_")
     }
 
+    fn close_unresolved_type_reference_gaps_with_parser_output_placeholder_mappings(
+        &self,
+        code: &str,
+    ) -> String {
+        let placeholder_prefixes =
+            (!self.parser_output_stl_placeholder_prefixes.is_empty())
+                .then_some(&self.parser_output_stl_placeholder_prefixes);
+        Self::close_unresolved_type_reference_gaps_with_placeholder_mappings(
+            code,
+            placeholder_prefixes,
+        )
+    }
+
+    #[cfg(test)]
     fn close_unresolved_type_reference_gaps(code: &str) -> String {
+        Self::close_unresolved_type_reference_gaps_with_placeholder_mappings(code, None)
+    }
+
+    fn close_unresolved_type_reference_gaps_with_placeholder_mappings(
+        code: &str,
+        placeholder_prefixes: Option<&BTreeMap<String, String>>,
+    ) -> String {
         let mut output = code.to_string();
         for _ in 0..8 {
             let unresolved = Self::collect_unresolved_type_like_names(&output);
@@ -6248,7 +6364,9 @@ impl AstCodeGen {
                 if defined.contains(name) {
                     continue;
                 }
-                if let Some(target) = Self::resolve_container_alias_target(name, &defined) {
+                if let Some(target) =
+                    Self::resolve_container_alias_target(name, &defined, placeholder_prefixes)
+                {
                     let normalized_target = Self::normalize_namespace_alias_target(&target);
                     additions.push_str(
                         "\n/// Container/smart-pointer alias fallback for unresolved lowered type spelling\n",
@@ -28334,7 +28452,7 @@ impl AstCodeGen {
             self.output.len(),
         );
 
-        let mut output = self.output;
+        let mut output = std::mem::take(&mut self.output);
         Self::write_problematic_callshape_codegen_checkpoint(
             problematic_callshape_profile_path.as_deref(),
             "not_invoked",
@@ -28694,7 +28812,9 @@ impl AstCodeGen {
         // Final fixed-point closure over unresolved named type references.
         // This appends qualifier-family aliases and opaque placeholders until
         // every referenced type position resolves to a definition.
-        output = Self::close_unresolved_type_reference_gaps(&output);
+        output = self.close_unresolved_type_reference_gaps_with_parser_output_placeholder_mappings(
+            &output,
+        );
         // Re-run module/type disambiguation after unresolved-closure synthesis,
         // which can append top-level placeholder types (e.g. `thread`) late.
         output = Self::normalize_module_type_name_shadowing(&output);
@@ -28791,7 +28911,9 @@ impl AstCodeGen {
         output = Self::normalize_invalid_item_declaration_namespaced_identifiers(&output);
         // Late alias/c_void normalizers can still synthesize unresolved lowered
         // container spellings; run one last fixed-point closure before return.
-        output = Self::close_unresolved_type_reference_gaps(&output);
+        output = self.close_unresolved_type_reference_gaps_with_parser_output_placeholder_mappings(
+            &output,
+        );
         // Add generic aliases for uniquely-instantiated lowered base type names
         // (for example `leaf -> leaf_masstree_single_threaded_params`) and
         // collapse surviving namespace-qualified lowercase item paths.
@@ -58973,9 +59095,22 @@ impl FragileAtomicBoolCompat for atomic_bool {
             return Some(container_alias_target);
         }
         if let Some(container_alias_target) =
-            Self::stl_associative_container_alias_target_from_rust_name(rust_name)
+            Self::parser_output_associative_alias_target_from_rust_name(
+                rust_name,
+                &self.parser_output_stl_placeholder_prefixes,
+            )
         {
             return Some(container_alias_target);
+        }
+        if !Self::parser_output_controls_associative_family_name(
+            rust_name,
+            &self.parser_output_stl_placeholder_prefixes,
+        ) {
+            if let Some(container_alias_target) =
+                Self::stl_associative_container_alias_target_from_rust_name(rust_name)
+            {
+                return Some(container_alias_target);
+            }
         }
         if let Some(container_alias_target) =
             Self::stl_container_alias_target_from_rust_name(rust_name)
@@ -108009,6 +108144,64 @@ pub struct Holder {
                     "pub struct std_unordered_map_long__constclass_rusty_Arc_class_rrr_Future_ {"
                 ),
             "simple lowered std_unordered_map aliases should not degrade into opaque placeholders when std HashMap targets can be formed, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_close_unresolved_type_reference_gaps_with_placeholder_mapping_blocks_legacy_associative_std_collections_aliases(
+    ) {
+        let input = r#"
+pub struct Holder {
+    pub pending: map_unsigned_int__bool,
+}
+"#;
+        let mut codegen = AstCodeGen::new();
+        codegen.set_parser_output_stl_placeholder_mappings(std::collections::BTreeMap::from([(
+            "stl_map_placeholder".to_string(),
+            "std_map".to_string(),
+        )]));
+        let output = codegen
+            .close_unresolved_type_reference_gaps_with_parser_output_placeholder_mappings(input);
+        assert!(
+            !output.contains("std::collections::BTreeMap"),
+            "mapping-aware closure should not route mapped map families through legacy std::collections::BTreeMap fallbacks, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub struct map_unsigned_int__bool {"),
+            "mapping-aware closure should keep unsupported mapped map shapes explicit as unresolved placeholders, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_close_unresolved_type_reference_gaps_with_placeholder_mapping_uses_pre_generated_map_alias_when_available(
+    ) {
+        let input = r#"
+#[repr(C)]
+pub struct std_map_int__int {
+    _opaque: [u8; 8],
+}
+pub struct Holder {
+    pub pending: map_int__int,
+}
+"#;
+        let mut codegen = AstCodeGen::new();
+        codegen.set_parser_output_stl_placeholder_mappings(std::collections::BTreeMap::from([(
+            "stl_map_placeholder".to_string(),
+            "std_map".to_string(),
+        )]));
+        let output = codegen
+            .close_unresolved_type_reference_gaps_with_parser_output_placeholder_mappings(input);
+        assert!(
+            output.contains("pub type map_int__int = std_map_int__int;"),
+            "mapping-aware closure should alias mapped map int/int lanes to pre-generated std_map surface when available, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("std::collections::BTreeMap"),
+            "mapping-aware closure should avoid legacy std::collections alias lane for mapped map int/int families, got:\n{}",
             output
         );
     }
