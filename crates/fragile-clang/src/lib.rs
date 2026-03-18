@@ -39,7 +39,7 @@ use fragile_parser_core::{
 };
 use fragile_stl::layout_contract::pre_generated_stl_family_contract_entry_v1;
 use miette::Result;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -160,6 +160,8 @@ const STL_PLACEHOLDER_KIND_FAMILY_MAP: &[(&str, &str)] = &[
     ("stl_shared_ptr_placeholder", "shared_ptr"),
     ("stl_unique_ptr_placeholder", "unique_ptr"),
 ];
+const STL_MAP_PLACEHOLDER_KIND: &str = "stl_map_placeholder";
+const STL_UNORDERED_MAP_PLACEHOLDER_KIND: &str = "stl_unordered_map_placeholder";
 
 fn parser_backend_label(backend: ParserBackend) -> &'static str {
     match backend {
@@ -600,6 +602,101 @@ fn resolve_parser_output_stl_placeholder_mappings(
             .or_insert_with(|| contract_entry.canonical_type_prefix.to_string());
     }
     Ok(mappings)
+}
+
+fn parser_output_type_alias_binding_from_line(line: &str) -> Option<(&str, &str)> {
+    let trimmed = line.trim();
+    let rest = trimmed.strip_prefix("pub type ")?;
+    let (alias, target) = rest.split_once('=')?;
+    let alias = alias.trim();
+    let target = target.trim().trim_end_matches(';').trim();
+    if alias.is_empty() || target.is_empty() {
+        return None;
+    }
+    Some((alias, target))
+}
+
+fn parser_output_first_legacy_deep_stl_alias_violation(
+    transpiled: &str,
+    alias_prefixes: &[&str],
+    legacy_target_prefix: &str,
+) -> Option<(String, String)> {
+    for alias_prefix in alias_prefixes {
+        for (idx, _) in transpiled.match_indices(alias_prefix) {
+            let line_start = transpiled[..idx].rfind('\n').map_or(0, |pos| pos + 1);
+            let line_end = transpiled[idx..]
+                .find('\n')
+                .map_or(transpiled.len(), |offset| idx + offset);
+            let line = &transpiled[line_start..line_end];
+            let Some((alias, target)) = parser_output_type_alias_binding_from_line(line) else {
+                continue;
+            };
+            if target.starts_with(legacy_target_prefix) {
+                return Some((alias.to_string(), target.to_string()));
+            }
+        }
+    }
+    None
+}
+
+fn parser_output_legacy_deep_stl_translation_path_violations_for_covered_families(
+    transpiled: &str,
+    placeholder_mappings: &BTreeMap<String, String>,
+) -> Vec<String> {
+    let map_family_covered = placeholder_mappings.contains_key(STL_MAP_PLACEHOLDER_KIND);
+    let unordered_map_family_covered =
+        placeholder_mappings.contains_key(STL_UNORDERED_MAP_PLACEHOLDER_KIND);
+    if !(map_family_covered || unordered_map_family_covered) {
+        return Vec::new();
+    }
+
+    let mut violations = BTreeSet::new();
+
+    if map_family_covered {
+        if let Some((alias, target)) = parser_output_first_legacy_deep_stl_alias_violation(
+            transpiled,
+            &["pub type map_", "pub type std_map_"],
+            "std::collections::BTreeMap<",
+        ) {
+            violations.insert(format!(
+                "covered family `map` resolved `{}` through legacy deep STL fallback target `{}`",
+                alias, target
+            ));
+        }
+    }
+
+    if unordered_map_family_covered {
+        if let Some((alias, target)) = parser_output_first_legacy_deep_stl_alias_violation(
+            transpiled,
+            &["pub type unordered_map_", "pub type std_unordered_map_"],
+            "std::collections::HashMap<",
+        ) {
+            violations.insert(format!(
+                "covered family `unordered_map` resolved `{}` through legacy deep STL fallback target `{}`",
+                alias, target
+            ));
+        }
+    }
+
+    violations.into_iter().collect()
+}
+
+fn validate_parser_output_handoff_no_legacy_deep_stl_translation_path_for_covered_families(
+    transpiled: &str,
+    placeholder_mappings: &BTreeMap<String, String>,
+) -> Result<()> {
+    let violations = parser_output_legacy_deep_stl_translation_path_violations_for_covered_families(
+        transpiled,
+        placeholder_mappings,
+    );
+    if violations.is_empty() {
+        return Ok(());
+    }
+
+    Err(miette::miette!(
+        "active parser-output handoff run relied on legacy deep STL translation path for covered placeholder families:\n- {}",
+        violations.join("\n- ")
+    ))
 }
 
 fn extract_missing_header_name_from_line(line: &str) -> Option<String> {
@@ -1258,7 +1355,12 @@ pub fn transpile_parser_output_to_rust_with_options(
             || {
                 let mut codegen = AstCodeGen::new();
                 codegen.set_parser_output_stl_placeholder_mappings(placeholder_mappings.clone());
-                Ok(codegen.generate(&ast.translation_unit))
+                let transpiled = codegen.generate(&ast.translation_unit);
+                validate_parser_output_handoff_no_legacy_deep_stl_translation_path_for_covered_families(
+                    &transpiled,
+                    &placeholder_mappings,
+                )?;
+                Ok(transpiled)
             },
         )
     })();
@@ -1852,6 +1954,47 @@ mod tests {
     }
 
     #[test]
+    fn parser_output_legacy_deep_stl_translation_path_validation_rejects_covered_fallback_aliases()
+    {
+        let transpiled = r#"
+pub type map_unsigned_int__bool = std::collections::BTreeMap<u32, bool>;
+pub type unordered_map_unsigned_int__bool = std::collections::HashMap<u32, bool>;
+"#;
+        let mappings = BTreeMap::from([
+            (STL_MAP_PLACEHOLDER_KIND.to_string(), "std_map".to_string()),
+            (
+                STL_UNORDERED_MAP_PLACEHOLDER_KIND.to_string(),
+                "std_unordered_map".to_string(),
+            ),
+        ]);
+        let err = validate_parser_output_handoff_no_legacy_deep_stl_translation_path_for_covered_families(
+            transpiled,
+            &mappings,
+        )
+        .expect_err("covered associative families should reject legacy deep STL fallback aliases");
+        let err_text = err.to_string();
+        assert!(
+            err_text.contains("covered family `map`")
+                && err_text.contains("covered family `unordered_map`")
+                && err_text.contains("legacy deep STL translation path"),
+            "unexpected covered-family deep STL validation error: {err_text}"
+        );
+    }
+
+    #[test]
+    fn parser_output_legacy_deep_stl_translation_path_validation_allows_noncovered_aliases() {
+        let transpiled = r#"
+pub type map_unsigned_int__bool = std::collections::BTreeMap<u32, bool>;
+pub type unordered_map_unsigned_int__bool = std::collections::HashMap<u32, bool>;
+"#;
+        validate_parser_output_handoff_no_legacy_deep_stl_translation_path_for_covered_families(
+            transpiled,
+            &BTreeMap::new(),
+        )
+        .expect("non-covered families should not fail deep STL fallback validation");
+    }
+
+    #[test]
     fn parser_output_codegen_rejects_unknown_schema_version() {
         let parser_output = ParserOutputV1 {
             schema_version: "0.0.0".to_string(),
@@ -2084,6 +2227,67 @@ mod tests {
                 && mapped.contains("pub struct unordered_map_unsigned_int__bool {"),
             "mapped active parser-output run should keep unsupported mapped associative families explicit as unresolved placeholders:\n{}",
             mapped
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn parser_output_codegen_active_handoff_mapped_associative_supported_families_use_pre_generated_alias_targets(
+    ) {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("fragile_parser_output_assoc_supported_{stamp}"));
+        fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
+        let source = temp_dir.join("assoc_supported_probe.cc");
+        fs::write(
+            &source,
+            "class map_int__int;\n\
+             class unordered_map_int__int;\n\
+             struct Holder {\n\
+             \tmap_int__int* ordered;\n\
+             \tunordered_map_int__int* unordered;\n\
+             };\n\
+             int probe(Holder* h) { return h == 0 ? 0 : 1; }\n",
+        )
+        .expect("failed to write source");
+
+        let mut parser_output = parser_output_fixture(
+            source,
+            ParserCoreLanguage::Cpp,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        parser_output
+            .nodes
+            .push(parser_node_fixture("n1", STL_MAP_PLACEHOLDER_KIND));
+        parser_output.nodes.push(parser_node_fixture(
+            "n2",
+            STL_UNORDERED_MAP_PLACEHOLDER_KIND,
+        ));
+        let transpiled = transpile_parser_output_to_rust(&parser_output)
+            .expect("mapped parser-output handoff transpile should succeed");
+        assert!(
+            transpiled.contains("pub type map_int__int = std_map_int__int;"),
+            "mapped active parser-output run should alias supported map family to pre-generated canonical target:\n{}",
+            transpiled
+        );
+        assert!(
+            transpiled.contains("pub type unordered_map_int__int = std_unordered_map_int__int;"),
+            "mapped active parser-output run should alias supported unordered_map family to pre-generated canonical target:\n{}",
+            transpiled
+        );
+        assert!(
+            !transpiled.contains("pub type map_int__int = std::collections::BTreeMap<i32, i32>;")
+                && !transpiled.contains(
+                    "pub type unordered_map_int__int = std::collections::HashMap<i32, i32>;"
+                ),
+            "mapped active parser-output run should not rely on legacy deep STL std::collections fallback aliases for covered supported associative families:\n{}",
+            transpiled
         );
 
         let _ = fs::remove_dir_all(&temp_dir);

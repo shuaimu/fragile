@@ -19956,3 +19956,47 @@ Validation:
 - Full regression:
   - `cargo test --workspace --all-targets`
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+## 2026-03-18: M5.1.e Validate Active Backend Avoids Legacy Deep STL Translation Path
+
+Context:
+- After `M5.1.d`, next top P0 leaf was `M5.1.e`.
+- Goal: enforce and validate that active parser-output handoff runs do not
+  rely on legacy deep STL translation path fallback lanes for covered
+  placeholder families.
+
+Wrong-approach check:
+- Re-checked section `1.3 Wrong Approaches (Do Not Do)` before implementation.
+- No semantic fake stubs, force-native bypasses, or target-specific hacks were
+  introduced.
+
+Design update:
+- Added deterministic active-path validator in `fragile-clang` handoff:
+  - `validate_parser_output_handoff_no_legacy_deep_stl_translation_path_for_covered_families(...)`
+- Validator is executed after parser-output codegen emission and before result
+  return in `transpile_parser_output_to_rust_with_options(...)`.
+- Added deterministic covered-family violation detector over emitted `pub type`
+  aliases:
+  - `stl_map_placeholder` coverage rejects `map_*` / `std_map_*` alias
+    fallback to `std::collections::BTreeMap<...>`
+  - `stl_unordered_map_placeholder` coverage rejects
+    `unordered_map_*` / `std_unordered_map_*` alias fallback to
+    `std::collections::HashMap<...>`
+- Final detector implementation is prefix-indexed (`match_indices` over
+  associative alias prefixes) and validates only matched alias lines to avoid
+  whole-output per-line allocation scans on very large generated handoff
+  outputs.
+- Added active handoff integration coverage proving supported covered
+  associative family spellings (`map_int__int`, `unordered_map_int__int`) map
+  to pre-generated canonical aliases (`std_map_int__int`,
+  `std_unordered_map_int__int`) rather than legacy `std::collections` fallback.
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-clang parser_output_legacy_deep_stl_translation_path_validation_rejects_covered_fallback_aliases -- --nocapture`
+  - `cargo test -p fragile-clang parser_output_legacy_deep_stl_translation_path_validation_allows_noncovered_aliases -- --nocapture`
+  - `cargo test -p fragile-clang parser_output_codegen_active_handoff_mapped_associative_supported_families_use_pre_generated_alias_targets -- --nocapture`
+  - `cargo test -p fragile-clang parser_output_codegen_active_handoff_blocks_legacy_associative_std_collections_alias_lanes -- --nocapture`
+- Full regression:
+  - `cargo test --workspace --all-targets`
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`

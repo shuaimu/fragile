@@ -97,7 +97,7 @@ Acceptance:
 - [x] M4.A2 Required STL operation fixtures compile and execute successfully.
 
 ### M5) Codegen Placeholder Mapping Layer
-- [ ] M5.1 Replace STL lowering paths with placeholder-to-pre-generated mapping in codegen.
+- [x] M5.1 Replace STL lowering paths with placeholder-to-pre-generated mapping in codegen.
   - [x] M5.1.a Add deterministic parser-output STL placeholder family resolver + pre-generated contract mapping validation in handoff codegen path.
   - [x] M5.1.b Wire codegen lowering decisions to resolved placeholder-family mappings (family -> canonical pre-generated type prefix) instead of legacy name-shape heuristics.
     - [x] M5.1.b.i Plumb parser-output placeholder mappings into `AstCodeGen` state and use mapping-aware unresolved-associative alias closure in the active generate pipeline.
@@ -106,7 +106,7 @@ Acceptance:
     - [x] M5.1.b.iv Add deterministic diagnostics/tests proving mapped families no longer use legacy `std::collections::*` fallback lanes in active parser-output runs.
   - [x] M5.1.c Remove active-path legacy unresolved STL alias fallback emission to `std::collections::*` for mapped placeholder families.
   - [x] M5.1.d Add deterministic mapping manifest emission from active codegen path for placeholder families observed in parser output.
-  - [ ] M5.1.e Validate active backend runs do not rely on legacy deep STL translation path for covered families.
+  - [x] M5.1.e Validate active backend runs do not rely on legacy deep STL translation path for covered families.
 - [ ] M5.2 Enforce mapping completeness checks (no silent fallback to legacy STL translation).
 - [ ] M5.3 Add focused regressions for method/operator mapping correctness.
 Acceptance:
