@@ -160,8 +160,38 @@ const STL_PLACEHOLDER_KIND_FAMILY_MAP: &[(&str, &str)] = &[
     ("stl_shared_ptr_placeholder", "shared_ptr"),
     ("stl_unique_ptr_placeholder", "unique_ptr"),
 ];
+const STL_VECTOR_PLACEHOLDER_KIND: &str = "stl_vector_placeholder";
 const STL_MAP_PLACEHOLDER_KIND: &str = "stl_map_placeholder";
 const STL_UNORDERED_MAP_PLACEHOLDER_KIND: &str = "stl_unordered_map_placeholder";
+const STL_SHARED_PTR_PLACEHOLDER_KIND: &str = "stl_shared_ptr_placeholder";
+const STL_UNIQUE_PTR_PLACEHOLDER_KIND: &str = "stl_unique_ptr_placeholder";
+const PARSER_OUTPUT_MAPPED_FAMILY_ALIAS_PREFIX_SPECS: &[(&str, &str, &[&str])] = &[
+    (
+        STL_MAP_PLACEHOLDER_KIND,
+        "map",
+        &["map_", "std_map_"],
+    ),
+    (
+        STL_UNORDERED_MAP_PLACEHOLDER_KIND,
+        "unordered_map",
+        &["unordered_map_", "std_unordered_map_"],
+    ),
+    (
+        STL_VECTOR_PLACEHOLDER_KIND,
+        "vector",
+        &["vector_", "std_vector_"],
+    ),
+    (
+        STL_SHARED_PTR_PLACEHOLDER_KIND,
+        "shared_ptr",
+        &["shared_ptr_", "std_shared_ptr_"],
+    ),
+    (
+        STL_UNIQUE_PTR_PLACEHOLDER_KIND,
+        "unique_ptr",
+        &["unique_ptr_", "std_unique_ptr_"],
+    ),
+];
 
 fn parser_backend_label(backend: ParserBackend) -> &'static str {
     match backend {
@@ -616,6 +646,31 @@ fn parser_output_type_alias_binding_from_line(line: &str) -> Option<(&str, &str)
     Some((alias, target))
 }
 
+fn parser_output_struct_name_from_line(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    let rest = trimmed.strip_prefix("pub struct ")?;
+    let token = rest.split_whitespace().next()?.trim_end_matches('{').trim();
+    if token.is_empty() {
+        return None;
+    }
+    Some(token)
+}
+
+fn parser_output_covered_family_spec_for_lowered_name<'a>(
+    lowered_name: &str,
+    placeholder_mappings: &'a BTreeMap<String, String>,
+) -> Option<(&'static str, &'static str, &'a str)> {
+    for (placeholder_kind, family, prefixes) in PARSER_OUTPUT_MAPPED_FAMILY_ALIAS_PREFIX_SPECS {
+        let Some(canonical_prefix) = placeholder_mappings.get(*placeholder_kind) else {
+            continue;
+        };
+        if prefixes.iter().any(|prefix| lowered_name.starts_with(prefix)) {
+            return Some((placeholder_kind, family, canonical_prefix.as_str()));
+        }
+    }
+    None
+}
+
 fn parser_output_first_legacy_deep_stl_alias_violation(
     transpiled: &str,
     alias_prefixes: &[&str],
@@ -695,6 +750,88 @@ fn validate_parser_output_handoff_no_legacy_deep_stl_translation_path_for_covere
 
     Err(miette::miette!(
         "active parser-output handoff run relied on legacy deep STL translation path for covered placeholder families:\n- {}",
+        violations.join("\n- ")
+    ))
+}
+
+fn parser_output_mapping_completeness_violations_for_covered_families(
+    transpiled: &str,
+    placeholder_mappings: &BTreeMap<String, String>,
+) -> Vec<String> {
+    let mut violations = BTreeSet::new();
+    let mut unresolved_placeholder_block = false;
+
+    for line in transpiled.lines() {
+        let trimmed = line.trim_start();
+
+        if trimmed == "/// Final unresolved type placeholder" {
+            unresolved_placeholder_block = true;
+            continue;
+        }
+
+        if let Some((alias, target)) = parser_output_type_alias_binding_from_line(trimmed) {
+            let Some((_, family, canonical_prefix)) =
+                parser_output_covered_family_spec_for_lowered_name(alias, placeholder_mappings)
+            else {
+                continue;
+            };
+            if !target.starts_with(canonical_prefix) {
+                violations.insert(format!(
+                    "covered family `{}` alias `{}` resolved non-canonical target `{}` (expected prefix `{}`)",
+                    family, alias, target, canonical_prefix
+                ));
+            }
+            continue;
+        }
+
+        if !unresolved_placeholder_block {
+            continue;
+        }
+
+        if trimmed.is_empty() || trimmed.starts_with("#[") {
+            continue;
+        }
+
+        let Some(struct_name) = parser_output_struct_name_from_line(trimmed) else {
+            unresolved_placeholder_block = false;
+            continue;
+        };
+        let Some((_, family, canonical_prefix)) =
+            parser_output_covered_family_spec_for_lowered_name(struct_name, placeholder_mappings)
+        else {
+            unresolved_placeholder_block = false;
+            continue;
+        };
+        if struct_name.starts_with(canonical_prefix) {
+            unresolved_placeholder_block = false;
+            continue;
+        }
+
+        violations.insert(format!(
+            "covered family `{}` remained unresolved as placeholder struct `{}` instead of resolving to mapped pre-generated target",
+            family, struct_name
+        ));
+        unresolved_placeholder_block = false;
+    }
+
+    violations.into_iter().collect()
+}
+
+fn validate_parser_output_handoff_mapping_completeness_for_covered_families(
+    transpiled: &str,
+    placeholder_mappings: &BTreeMap<String, String>,
+) -> Result<()> {
+    let violations =
+        parser_output_mapping_completeness_violations_for_covered_families(
+            transpiled,
+            placeholder_mappings,
+        );
+    if violations.is_empty() {
+        return Ok(());
+    }
+
+    Err(miette::miette!(
+        "active parser-output handoff mapping completeness checks failed for covered placeholder families:\n- {}",
         violations.join("\n- ")
     ))
 }
@@ -1360,6 +1497,10 @@ pub fn transpile_parser_output_to_rust_with_options(
                     &transpiled,
                     &placeholder_mappings,
                 )?;
+                validate_parser_output_handoff_mapping_completeness_for_covered_families(
+                    &transpiled,
+                    &placeholder_mappings,
+                )?;
                 Ok(transpiled)
             },
         )
@@ -1995,6 +2136,88 @@ pub type unordered_map_unsigned_int__bool = std::collections::HashMap<u32, bool>
     }
 
     #[test]
+    fn parser_output_mapping_completeness_validation_rejects_covered_placeholder_structs() {
+        let transpiled = r#"
+/// Final unresolved type placeholder
+#[repr(C)]
+pub struct map_unsigned_int__bool {
+    _opaque: [u8; 64],
+}
+"#;
+        let mappings = BTreeMap::from([(STL_MAP_PLACEHOLDER_KIND.to_string(), "std_map".to_string())]);
+        let err = validate_parser_output_handoff_mapping_completeness_for_covered_families(
+            transpiled,
+            &mappings,
+        )
+        .expect_err(
+            "covered placeholder families should reject unresolved placeholder structs in active handoff output",
+        );
+        let err_text = err.to_string();
+        assert!(
+            err_text.contains("mapping completeness")
+                && err_text.contains("covered family `map`")
+                && err_text.contains("map_unsigned_int__bool"),
+            "unexpected covered-family mapping completeness error: {err_text}"
+        );
+    }
+
+    #[test]
+    fn parser_output_mapping_completeness_validation_rejects_noncanonical_covered_alias_target() {
+        let transpiled = r#"
+pub type vector_int = fallback_vector_impl<i32>;
+"#;
+        let mappings =
+            BTreeMap::from([(STL_VECTOR_PLACEHOLDER_KIND.to_string(), "std_vector".to_string())]);
+        let err = validate_parser_output_handoff_mapping_completeness_for_covered_families(
+            transpiled,
+            &mappings,
+        )
+        .expect_err(
+            "covered placeholder families should reject non-canonical alias targets in active handoff output",
+        );
+        let err_text = err.to_string();
+        assert!(
+            err_text.contains("mapping completeness")
+                && err_text.contains("covered family `vector`")
+                && err_text.contains("fallback_vector_impl<i32>")
+                && err_text.contains("std_vector"),
+            "unexpected non-canonical covered-family alias mapping completeness error: {err_text}"
+        );
+    }
+
+    #[test]
+    fn parser_output_mapping_completeness_validation_allows_canonical_covered_alias_targets() {
+        let transpiled = r#"
+pub type map_int__int = std_map_int__int;
+pub type unordered_map_int__int = std_unordered_map_int__int;
+pub type vector_int = std_vector<i32>;
+pub type shared_ptr_int = std_shared_ptr<i32>;
+pub type unique_ptr_int = std_unique_ptr<i32>;
+"#;
+        let mappings = BTreeMap::from([
+            (STL_MAP_PLACEHOLDER_KIND.to_string(), "std_map".to_string()),
+            (
+                STL_UNORDERED_MAP_PLACEHOLDER_KIND.to_string(),
+                "std_unordered_map".to_string(),
+            ),
+            (STL_VECTOR_PLACEHOLDER_KIND.to_string(), "std_vector".to_string()),
+            (
+                STL_SHARED_PTR_PLACEHOLDER_KIND.to_string(),
+                "std_shared_ptr".to_string(),
+            ),
+            (
+                STL_UNIQUE_PTR_PLACEHOLDER_KIND.to_string(),
+                "std_unique_ptr".to_string(),
+            ),
+        ]);
+        validate_parser_output_handoff_mapping_completeness_for_covered_families(
+            transpiled,
+            &mappings,
+        )
+        .expect("covered families with canonical mapped alias targets should pass mapping completeness validation");
+    }
+
+    #[test]
     fn parser_output_codegen_rejects_unknown_schema_version() {
         let parser_output = ParserOutputV1 {
             schema_version: "0.0.0".to_string(),
@@ -2173,60 +2396,18 @@ pub type unordered_map_unsigned_int__bool = std::collections::HashMap<u32, bool>
             "n2",
             "stl_unordered_map_placeholder",
         ));
-        let mapped = transpile_parser_output_to_rust(&mapped_parser_output)
-            .expect("mapped parser-output handoff transpile should succeed");
-        assert!(
-            mapped.contains("// parser_output_stl_placeholder_mapping_manifest_v1:")
-                && mapped.contains("// parser_output_mapping_context_enabled=true")
-                && mapped.contains("// parser_output_observed_family_count=2"),
-            "mapped active parser-output handoff run should emit deterministic observed-family mapping manifest summary:\n{}",
-            mapped
+        let err = transpile_parser_output_to_rust(&mapped_parser_output).expect_err(
+            "mapped parser-output handoff should fail mapping-completeness validation when covered associative families remain unresolved",
         );
-        let map_manifest_line =
-            "// parser_output_observed_family.map.placeholder_kind=stl_map_placeholder";
-        let unordered_manifest_line = "// parser_output_observed_family.unordered_map.placeholder_kind=stl_unordered_map_placeholder";
+        let err_text = err.to_string();
         assert!(
-            mapped.contains(map_manifest_line)
-                && mapped.contains(
-                    "// parser_output_observed_family.map.canonical_type_prefix=std_map"
-                )
-                && mapped.contains(unordered_manifest_line)
-                && mapped.contains(
-                    "// parser_output_observed_family.unordered_map.canonical_type_prefix=std_unordered_map"
-                ),
-            "mapped active parser-output handoff run should emit observed-family mapping entries with canonical prefixes:\n{}",
-            mapped
-        );
-        let map_pos = mapped
-            .find(map_manifest_line)
-            .expect("missing map mapping manifest line");
-        let unordered_pos = mapped
-            .find(unordered_manifest_line)
-            .expect("missing unordered_map mapping manifest line");
-        assert!(
-            map_pos < unordered_pos,
-            "mapped active parser-output manifest entries should be deterministic and key-ordered:\n{}",
-            mapped
-        );
-        assert!(
-            !mapped.contains(
-                "pub type map_unsigned_int__bool = std::collections::BTreeMap<u32, bool>;"
-            ),
-            "mapped active parser-output run should not use legacy ordered-map std::collections alias lane:\n{}",
-            mapped
-        );
-        assert!(
-            !mapped.contains(
-                "pub type unordered_map_unsigned_int__bool = std::collections::HashMap<u32, bool>;"
-            ),
-            "mapped active parser-output run should not use legacy unordered-map std::collections alias lane:\n{}",
-            mapped
-        );
-        assert!(
-            mapped.contains("pub struct map_unsigned_int__bool {")
-                && mapped.contains("pub struct unordered_map_unsigned_int__bool {"),
-            "mapped active parser-output run should keep unsupported mapped associative families explicit as unresolved placeholders:\n{}",
-            mapped
+            err_text.contains("mapping completeness")
+                && err_text.contains("covered family `map`")
+                && err_text.contains("covered family `unordered_map`")
+                && err_text.contains("map_unsigned_int__bool")
+                && err_text.contains("unordered_map_unsigned_int__bool"),
+            "mapped active parser-output handoff should report covered-family completeness failures for unresolved associative placeholders:\n{}",
+            err_text
         );
 
         let _ = fs::remove_dir_all(&temp_dir);

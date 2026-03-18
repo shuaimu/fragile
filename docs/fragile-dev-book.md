@@ -20000,3 +20000,37 @@ Validation:
 - Full regression:
   - `cargo test --workspace --all-targets`
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+## 2026-03-18: M5.2 Enforce Mapping Completeness Checks
+
+Context:
+- After `M5.1.e`, next top P0 leaf was `M5.2`.
+- Goal: enforce active parser-output handoff mapping completeness for covered
+  placeholder families and block silent fallback behavior.
+
+Wrong-approach check:
+- Re-checked section `1.3 Wrong Approaches (Do Not Do)` before implementation.
+- No target-specific hacks, force-native bypasses, or fake semantic stubs were
+  introduced.
+
+Design update:
+- Added active handoff completeness validator in `fragile-clang`:
+  - `validate_parser_output_handoff_mapping_completeness_for_covered_families(...)`
+- Validator executes after active handoff codegen emission and enforces:
+  - covered-family alias lines must resolve to canonical mapped target prefixes
+  - covered-family unresolved placeholder-struct fallback blocks are rejected
+- Added covered-family dispatch specs for mapped alias-prefix families:
+  - `map`, `unordered_map`, `vector`, `shared_ptr`, `unique_ptr`
+- Retained allowance for canonical mapped target type definitions themselves
+  (for example `std_map_*`) so completeness checks apply to covered-family
+  lowered aliases and unresolved fallback blocks, not to canonical type item
+  declarations.
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-clang parser_output_mapping_completeness -- --nocapture`
+  - `cargo test -p fragile-clang parser_output_codegen_active_handoff_blocks_legacy_associative_std_collections_alias_lanes -- --nocapture`
+  - `cargo test -p fragile-clang parser_output_codegen_active_handoff_mapped_associative_supported_families_use_pre_generated_alias_targets -- --nocapture`
+- Full regression:
+  - `cargo test --workspace --all-targets`
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`

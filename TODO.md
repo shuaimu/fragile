@@ -107,7 +107,7 @@ Acceptance:
   - [x] M5.1.c Remove active-path legacy unresolved STL alias fallback emission to `std::collections::*` for mapped placeholder families.
   - [x] M5.1.d Add deterministic mapping manifest emission from active codegen path for placeholder families observed in parser output.
   - [x] M5.1.e Validate active backend runs do not rely on legacy deep STL translation path for covered families.
-- [ ] M5.2 Enforce mapping completeness checks (no silent fallback to legacy STL translation).
+- [x] M5.2 Enforce mapping completeness checks (no silent fallback to legacy STL translation).
 - [ ] M5.3 Add focused regressions for method/operator mapping correctness.
 Acceptance:
 - [ ] M5.A1 All placeholder nodes in corpus resolve to generated STL targets.
