@@ -17,6 +17,7 @@
 - [2.9 M3.3 STL Family Fixture Coverage Contract](#29-m33-stl-family-fixture-coverage-contract)
 - [2.10 M4.1 Pre-Generated STL Layout + Naming Contract](#210-m41-pre-generated-stl-layout--naming-contract)
 - [2.11 M4.2.a Ordered-Map Runtime Surface (Pre-Generated)](#211-m42a-ordered-map-runtime-surface-pre-generated)
+- [2.12 M4.2.b Unordered-Map Runtime Surface (Pre-Generated)](#212-m42b-unordered-map-runtime-surface-pre-generated)
 - [3. Internal Data Models](#3-internal-data-models)
 - [4. C++ Declaration to Rust Item Mapping](#4-c-declaration-to-rust-item-mapping)
 - [5. C++ Type to Rust Type Mapping](#5-c-type-to-rust-type-mapping)
@@ -518,6 +519,38 @@ Behavior contract:
 - deterministic key ordering (sorted by key)
 - mutable value-slot semantics for operator[]-style access
 - deterministic insert/update/remove transitions
+
+Cutover boundary:
+
+- this leaf ports runtime behavior into `fragile-stl` only
+- placeholder-to-pre-generated mapping cutover remains in `M5`
+
+Wrong-approach guard (Section 1.3):
+
+- no hardcoded success-return stubs
+- no target-specific special casing
+- no force-native fallback path
+
+### 2.12 M4.2.b Unordered-Map Runtime Surface (Pre-Generated)
+
+Leaf `M4.2.b` adds an explicit pre-generated unordered-map runtime surface for
+`std::unordered_map<int, int>` in:
+
+- `crates/fragile-stl/src/unordered_map.rs`
+
+Implemented operation surface:
+
+- `std_unordered_map_int__int::new_0`
+- `size`, `empty`, `clear`, `bucket_count`
+- `op_index` (insert-on-miss mutable slot)
+- `insert`, `insert_or_assign`
+- `find`, `find_const`, `count`, `contains`, `erase`
+
+Behavior contract:
+
+- deterministic fixed-bucket hashing for key placement
+- deterministic collision-chain insertion order within each bucket
+- deterministic insert/update/remove transitions with mutable value-slot access
 
 Cutover boundary:
 
