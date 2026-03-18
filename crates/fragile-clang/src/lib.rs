@@ -1953,4 +1953,91 @@ mod tests {
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
+
+    #[test]
+    fn parser_output_codegen_mapping_blocks_legacy_associative_std_collections_alias_lanes() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("fragile_parser_output_mapping_lanes_{stamp}"));
+        fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
+        let source = temp_dir.join("assoc_lane_probe.cc");
+        fs::write(
+            &source,
+            "class map_unsigned_int__bool;\n\
+             class unordered_map_unsigned_int__bool;\n\
+             struct Holder {\n\
+             \tmap_unsigned_int__bool* ordered;\n\
+             \tunordered_map_unsigned_int__bool* unordered;\n\
+             };\n\
+             int probe(Holder* h) { return h == 0 ? 0 : 1; }\n",
+        )
+        .expect("failed to write source");
+
+        let unmapped_parser_output = parser_output_fixture(
+            source.clone(),
+            ParserCoreLanguage::Cpp,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let unmapped = transpile_parser_output_to_rust(&unmapped_parser_output)
+            .expect("unmapped parser-output handoff transpile should succeed");
+        assert!(
+            unmapped.contains(
+                "pub type map_unsigned_int__bool = std::collections::BTreeMap<u32, bool>;"
+            ),
+            "unmapped active parser-output run should still use legacy ordered-map std::collections alias lane as baseline:\n{}",
+            unmapped
+        );
+        assert!(
+            unmapped.contains(
+                "pub type unordered_map_unsigned_int__bool = std::collections::HashMap<u32, bool>;"
+            ),
+            "unmapped active parser-output run should still use legacy unordered-map std::collections alias lane as baseline:\n{}",
+            unmapped
+        );
+
+        let mut mapped_parser_output = parser_output_fixture(
+            source,
+            ParserCoreLanguage::Cpp,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        mapped_parser_output.nodes.push(parser_node_fixture(
+            "n1",
+            "stl_map_placeholder",
+        ));
+        mapped_parser_output.nodes.push(parser_node_fixture(
+            "n2",
+            "stl_unordered_map_placeholder",
+        ));
+        let mapped = transpile_parser_output_to_rust(&mapped_parser_output)
+            .expect("mapped parser-output handoff transpile should succeed");
+        assert!(
+            !mapped.contains(
+                "pub type map_unsigned_int__bool = std::collections::BTreeMap<u32, bool>;"
+            ),
+            "mapped active parser-output run should not use legacy ordered-map std::collections alias lane:\n{}",
+            mapped
+        );
+        assert!(
+            !mapped.contains(
+                "pub type unordered_map_unsigned_int__bool = std::collections::HashMap<u32, bool>;"
+            ),
+            "mapped active parser-output run should not use legacy unordered-map std::collections alias lane:\n{}",
+            mapped
+        );
+        assert!(
+            mapped.contains("pub struct map_unsigned_int__bool {")
+                && mapped.contains("pub struct unordered_map_unsigned_int__bool {"),
+            "mapped active parser-output run should keep unsupported mapped associative families explicit as unresolved placeholders:\n{}",
+            mapped
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
 }

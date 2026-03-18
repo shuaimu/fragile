@@ -19838,3 +19838,46 @@ Validation:
   - `test_close_unresolved_type_reference_gaps_with_placeholder_mapping_dispatches_shared_ptr_family_via_mapping_prefix`
   - `test_resolve_missing_stub_concrete_alias_target_prefers_mapping_driven_vector_prefix`
   - `test_resolve_missing_stub_concrete_alias_target_prefers_mapping_driven_unique_ptr_prefix`
+
+## 2026-03-18: M5.1.b.iv Active Parser-Output Legacy Associative Fallback Guard
+
+Context:
+- After `M5.1.b.iii`, next top P0 leaf was `M5.1.b.iv`.
+- Goal: add deterministic active parser-output handoff diagnostics/tests proving
+  mapping-controlled associative families no longer use legacy
+  `std::collections::*` fallback alias lanes.
+
+Wrong-approach check:
+- Re-checked section `1.3 Wrong Approaches (Do Not Do)` before implementation.
+- No target-specific bypass logic, no force-native shortcuts, and no fake
+  semantic method-body stubs were introduced.
+- Unsupported mapped associative shapes remain explicit unresolved placeholders
+  instead of silently routing through semantic std fallback aliases.
+
+Design update:
+- Added end-to-end parser-output handoff coverage in
+  `crates/fragile-clang/src/lib.rs`:
+  - `parser_output_codegen_mapping_blocks_legacy_associative_std_collections_alias_lanes`
+- The test uses one deterministic minimal C++ fixture with unresolved lowered
+  names:
+  - `map_unsigned_int__bool`
+  - `unordered_map_unsigned_int__bool`
+- It runs two active parser-output transpiles over the same source:
+  1. unmapped parser-output nodes (baseline)
+  2. mapped parser-output nodes including:
+     - `stl_map_placeholder`
+     - `stl_unordered_map_placeholder`
+- Assertions prove:
+  - baseline path still emits legacy alias fallbacks to
+    `std::collections::{BTreeMap, HashMap}`,
+  - mapped path suppresses those legacy alias lines for the mapped families,
+  - unsupported mapped associative shapes stay explicit unresolved placeholder
+    structs.
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-clang parser_output_codegen_mapping_blocks_legacy_associative_std_collections_alias_lanes -- --nocapture`
+  - `cargo test -p fragile-clang parser_output_codegen_uses_handoff_metadata_without_libtooling_export -- --nocapture`
+- Full regression:
+  - `cargo test --workspace --all-targets`
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
