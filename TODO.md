@@ -119,7 +119,7 @@ Acceptance:
   - [x] M5.A1.c Add parser-core fixture-corpus replay gate that audits observed STL placeholder kinds and asserts no unresolved mapped-family placeholders remain in active parser-output handoff transpiled output.
 - [ ] M5.A2 No legacy deep STL translation path is invoked in active backend runs.
   - [x] M5.A2.a Add parser-core fixture replay regression that verifies active parser-output handoff output for mapped placeholder families emits canonical observed-family mapping manifests and never emits legacy deep STL fallback alias targets (`std::collections::BTreeMap` / `std::collections::HashMap`) for covered lanes.
-  - [ ] M5.A2.b Add deterministic negative/positive parser-output handoff regressions that prove legacy deep STL fallback alias forms are rejected for covered families under mapped context while canonical pre-generated alias forms remain accepted.
+  - [x] M5.A2.b Add deterministic negative/positive parser-output handoff regressions that prove legacy deep STL fallback alias forms are rejected for covered families under mapped context while canonical pre-generated alias forms remain accepted.
   - [ ] M5.A2.c Add corpus-level mapped-family audit gate in active parser-output replay tests that fails on any covered-family legacy deep STL alias fallback marker and records deterministic fixture evidence.
 
 ### M6) Diagnostic and Failure Policy for Unknown STL Shapes

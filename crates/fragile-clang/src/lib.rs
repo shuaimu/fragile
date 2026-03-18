@@ -2720,6 +2720,104 @@ pub struct unique_ptr_unsigned_int__bool {
     }
 
     #[test]
+    fn parser_output_codegen_active_handoff_mapped_associative_legacy_fallback_alias_forms_are_rejected_while_canonical_forms_are_accepted(
+    ) {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir()
+            .join(format!("fragile_parser_output_assoc_legacy_reject_accept_{stamp}"));
+        fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
+        let source = temp_dir.join("assoc_legacy_reject_accept_probe.cc");
+        fs::write(
+            &source,
+            "class map_int__int;\n\
+             class unordered_map_int__int;\n\
+             struct Holder {\n\
+             \tmap_int__int* ordered;\n\
+             \tunordered_map_int__int* unordered;\n\
+             };\n\
+             int probe(Holder* h) { return h == 0 ? 0 : 1; }\n",
+        )
+        .expect("failed to write source");
+
+        let mut parser_output = parser_output_fixture(
+            source,
+            ParserCoreLanguage::Cpp,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        parser_output
+            .nodes
+            .push(parser_node_fixture("n1", STL_MAP_PLACEHOLDER_KIND));
+        parser_output.nodes.push(parser_node_fixture(
+            "n2",
+            STL_UNORDERED_MAP_PLACEHOLDER_KIND,
+        ));
+        let transpiled = transpile_parser_output_to_rust(&parser_output)
+            .expect("mapped parser-output handoff transpile should succeed");
+        assert!(
+            transpiled.contains("pub type map_int__int = std_map_int__int;")
+                && transpiled.contains(
+                    "pub type unordered_map_int__int = std_unordered_map_int__int;"
+                ),
+            "mapped active parser-output run should emit canonical associative alias targets:\n{}",
+            transpiled
+        );
+
+        let mappings = resolve_parser_output_stl_placeholder_mappings(&parser_output)
+            .expect("known mapped associative placeholders should resolve to canonical prefixes");
+        validate_parser_output_handoff_no_legacy_deep_stl_translation_path_for_covered_families(
+            &transpiled,
+            &mappings,
+        )
+        .expect(
+            "mapped associative canonical alias forms should pass legacy deep STL fallback validation",
+        );
+
+        let legacy_map = transpiled.replacen(
+            "pub type map_int__int = std_map_int__int;",
+            "pub type map_int__int = std::collections::BTreeMap<i32, i32>;",
+            1,
+        );
+        assert_ne!(
+            legacy_map, transpiled,
+            "expected canonical map alias lane to be present for deterministic legacy fallback injection"
+        );
+        let legacy_associative = legacy_map.replacen(
+            "pub type unordered_map_int__int = std_unordered_map_int__int;",
+            "pub type unordered_map_int__int = std::collections::HashMap<i32, i32>;",
+            1,
+        );
+        assert_ne!(
+            legacy_associative, legacy_map,
+            "expected canonical unordered_map alias lane to be present for deterministic legacy fallback injection"
+        );
+
+        let err = validate_parser_output_handoff_no_legacy_deep_stl_translation_path_for_covered_families(
+            &legacy_associative,
+            &mappings,
+        )
+        .expect_err(
+            "mapped associative legacy fallback alias forms should be rejected deterministically under covered-family context",
+        );
+        let err_text = err.to_string();
+        assert!(
+            err_text.contains("legacy deep STL translation path")
+                && err_text.contains("covered family `map`")
+                && err_text.contains("covered family `unordered_map`")
+                && err_text.contains("std::collections::BTreeMap")
+                && err_text.contains("std::collections::HashMap"),
+            "unexpected mapped associative legacy fallback rejection error:\n{}",
+            err_text
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
     fn parser_output_codegen_active_handoff_mapped_supported_associative_sequence_smart_pointer_families_resolve_to_pre_generated_targets(
     ) {
         let stamp = SystemTime::now()

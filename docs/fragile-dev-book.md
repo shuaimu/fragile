@@ -19882,6 +19882,42 @@ Validation:
   - `cargo test --workspace --all-targets`
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
 
+## 2026-03-18: M5.A2.b Mapped-Context Legacy Fallback Alias Reject/Accept Regressions
+
+Context:
+- After `M5.A2.a`, next top unfinished P0 leaf was `M5.A2.b`.
+- Goal: add deterministic negative/positive parser-output handoff regressions
+  proving covered mapped associative families reject legacy deep STL fallback
+  alias forms while canonical pre-generated alias forms remain accepted.
+
+Wrong-approach check:
+- Re-checked section `1.3 Wrong Approaches (Do Not Do)` and
+  `docs/dev/wrong.md` before implementation.
+- No target-specific hacks, force-native bypasses, or fake semantic stubs were
+  introduced.
+
+Design update:
+- Added focused active handoff regression:
+  - `parser_output_codegen_active_handoff_mapped_associative_legacy_fallback_alias_forms_are_rejected_while_canonical_forms_are_accepted`
+- Regression path:
+  1. Build mapped parser-output handoff output for associative families and
+     assert canonical alias lanes (`std_map_*`, `std_unordered_map_*`).
+  2. Validate canonical mapped output passes
+     `validate_parser_output_handoff_no_legacy_deep_stl_translation_path_for_covered_families`.
+  3. Deterministically inject legacy alias fallback forms
+     (`std::collections::BTreeMap` / `std::collections::HashMap`) into those
+     associative alias lanes and assert the same validator rejects them under
+     covered-family mapped context.
+
+Validation:
+- Focused:
+  - `cargo test -p fragile-clang parser_output_codegen_active_handoff_mapped_associative_legacy_fallback_alias_forms_are_rejected_while_canonical_forms_are_accepted -- --nocapture`
+  - `cargo test -p fragile-clang parser_output_codegen_active_handoff_mapped_associative_supported_families_use_pre_generated_alias_targets -- --nocapture`
+  - `cargo test -p fragile-clang parser_output_legacy_deep_stl_translation_path_validation_rejects_covered_fallback_aliases -- --nocapture`
+- Full regression (run after leaf implementation):
+  - `cargo test --workspace --all-targets`
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
 ## 2026-03-18: M5.A2.a Parser-Core Fixture Replay Gate for Covered Associative Legacy Fallback Alias Lanes
 
 Context:
