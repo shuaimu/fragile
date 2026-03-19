@@ -86,6 +86,8 @@ class HarnessConfig:
     base_port: int
     lanes: tuple[str, ...]
     build_only: bool
+    skip_masstree_perf_target: bool
+    skip_clean_step: bool
     rpcbench: RpcBenchConfig
 
 
@@ -144,6 +146,16 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         "--build-only",
         action="store_true",
         help="run configure/clean/build only and skip test_rpc/rpcbench runtime steps",
+    )
+    parser.add_argument(
+        "--skip-masstree-perf-target",
+        action="store_true",
+        help="exclude masstree_perf from build target list",
+    )
+    parser.add_argument(
+        "--skip-clean-step",
+        action="store_true",
+        help="skip clean target before build (resumable replay helper)",
     )
     parser.add_argument(
         "--plan-only",
@@ -273,6 +285,8 @@ def to_harness_config(ns: argparse.Namespace) -> HarnessConfig:
         base_port=ns.base_port,
         lanes=lanes,
         build_only=bool(ns.build_only),
+        skip_masstree_perf_target=bool(ns.skip_masstree_perf_target),
+        skip_clean_step=bool(ns.skip_clean_step),
         rpcbench=RpcBenchConfig(
             duration_seconds=ns.rpc_duration_seconds,
             client_threads=ns.rpc_client_threads,
@@ -324,6 +338,9 @@ def clean_command(cfg: HarnessConfig, lane: str) -> list[str]:
 
 
 def build_command(cfg: HarnessConfig, lane: str) -> list[str]:
+    targets = ["test_rpc", "rpcbench"]
+    if not cfg.skip_masstree_perf_target:
+        targets.append("masstree_perf")
     return [
         cfg.cmake_bin,
         "--build",
@@ -331,9 +348,7 @@ def build_command(cfg: HarnessConfig, lane: str) -> list[str]:
         "-j",
         str(cfg.jobs),
         "--target",
-        "test_rpc",
-        "rpcbench",
-        "masstree_perf",
+        *targets,
     ]
 
 
@@ -429,12 +444,19 @@ def command_plan_lines(cfg: HarnessConfig) -> list[str]:
     lines.append(f"run_root={cfg.run_root}")
     lines.append(f"trials={cfg.trials}")
     lines.append(f"jobs={cfg.jobs}")
+    lines.append(
+        f"skip_masstree_perf_target={str(cfg.skip_masstree_perf_target).lower()}"
+    )
+    lines.append(f"skip_clean_step={str(cfg.skip_clean_step).lower()}")
 
     for lane in cfg.lanes:
         lines.append("")
         lines.append(f"[lane:{lane}]")
         lines.append(f"configure={shell_join(configure_command(cfg, lane))}")
-        lines.append(f"clean={shell_join(clean_command(cfg, lane))}")
+        if cfg.skip_clean_step:
+            lines.append("clean=<skipped --skip-clean-step>")
+        else:
+            lines.append(f"clean={shell_join(clean_command(cfg, lane))}")
         lines.append(f"build={shell_join(build_command(cfg, lane))}")
         lines.append(f"test_rpc={shell_join(test_rpc_command(cfg, lane))}")
         for trial in range(1, cfg.trials + 1):
@@ -558,6 +580,8 @@ def manifest_lines(
         f"plan_only={str(plan_only).lower()}",
         f"lanes={','.join(cfg.lanes)}",
         f"build_only={str(cfg.build_only).lower()}",
+        f"skip_masstree_perf_target={str(cfg.skip_masstree_perf_target).lower()}",
+        f"skip_clean_step={str(cfg.skip_clean_step).lower()}",
         f"trials={cfg.trials}",
         f"jobs={cfg.jobs}",
         f"build_type={cfg.build_type}",
@@ -886,15 +910,17 @@ def classify_lane_failure(
     runtime_failure_class: str,
     *,
     build_only: bool,
+    skip_clean_step: bool,
 ) -> str:
     if configure_result.timed_out:
         return "configure_timeout"
     if configure_result.status != 0:
         return "configure_failed"
-    if clean_result.timed_out:
-        return "clean_timeout"
-    if clean_result.status != 0:
-        return "clean_failed"
+    if not skip_clean_step:
+        if clean_result.timed_out:
+            return "clean_timeout"
+        if clean_result.status != 0:
+            return "clean_failed"
     if build_result.timed_out:
         return "build_timeout"
     if build_result.status != 0:
@@ -928,13 +954,23 @@ def execute_harness_capture(
             clean_result = skipped_step_result("configure step failed")
             build_result = skipped_step_result("configure step failed")
         else:
-            clean_result = run_command_capture(clean_command(cfg, lane), cfg.clean_timeout_seconds)
-            if clean_result.status != 0:
-                build_result = skipped_step_result("clean step failed")
-            else:
+            if cfg.skip_clean_step:
+                clean_result = skipped_step_result(
+                    "clean step skipped by --skip-clean-step"
+                )
                 build_result = run_command_capture(
                     build_command(cfg, lane), cfg.build_timeout_seconds
                 )
+            else:
+                clean_result = run_command_capture(
+                    clean_command(cfg, lane), cfg.clean_timeout_seconds
+                )
+                if clean_result.status != 0:
+                    build_result = skipped_step_result("clean step failed")
+                else:
+                    build_result = run_command_capture(
+                        build_command(cfg, lane), cfg.build_timeout_seconds
+                    )
 
         write_step_result(lane_dir, "clean", clean_result)
         write_step_result(lane_dir, "build", build_result)
@@ -1006,6 +1042,7 @@ def execute_harness_capture(
             test_rpc_result,
             runtime_failure_class,
             build_only=cfg.build_only,
+            skip_clean_step=cfg.skip_clean_step,
         )
         write_text_file(lane_dir / "failure_class.txt", [failure_class])
         avg_qps = compute_average_qps(trial_qps_values)

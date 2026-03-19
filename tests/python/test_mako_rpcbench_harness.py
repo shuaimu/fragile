@@ -268,6 +268,31 @@ class MakoRpcBenchHarnessPlanTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("unsupported lane(s)", result.stderr)
 
+    def test_plan_mode_can_skip_masstree_perf_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            workspace, mako_root = self._create_workspace_fixture(tmp_path)
+            run_root = tmp_path / "run"
+
+            result = self._run_harness(
+                workspace,
+                mako_root,
+                run_root,
+                extra_args=["--skip-masstree-perf-target"],
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            plan = (run_root / "benchmark_harness_command_plan.txt").read_text(
+                encoding="utf-8"
+            )
+            manifest_pairs = self._parse_key_value_file(
+                run_root / "benchmark_harness_manifest.txt"
+            )
+            self.assertIn("--target test_rpc rpcbench", plan)
+            self.assertNotIn("--target test_rpc rpcbench masstree_perf", plan)
+            self.assertEqual(manifest_pairs["skip_masstree_perf_target"], "true")
+            self.assertEqual(manifest_pairs["skip_clean_step"], "false")
+
     def test_execution_mode_build_only_fragilec_lane_skips_runtime_and_qps_gate(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -321,6 +346,45 @@ class MakoRpcBenchHarnessPlanTests(unittest.TestCase):
             self.assertNotIn("lane_clang/configure.status", expected_artifacts)
             self.assertIn("[lane:fragilec]", command_plan)
             self.assertNotIn("[lane:clang]", command_plan)
+
+    def test_execution_mode_can_skip_clean_step_and_still_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            workspace, mako_root = self._create_workspace_fixture(tmp_path)
+            run_root = tmp_path / "run"
+            fake_cmake = self._create_fake_cmake(tmp_path)
+
+            result = self._run_harness(
+                workspace,
+                mako_root,
+                run_root,
+                plan_only=False,
+                cmake_bin=fake_cmake,
+                extra_args=["--lanes", "fragilec", "--build-only", "--skip-clean-step"],
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            manifest_pairs = self._parse_key_value_file(
+                run_root / "benchmark_harness_manifest.txt"
+            )
+            fragile_dir = run_root / "lane_fragilec"
+            self.assertEqual(manifest_pairs["skip_clean_step"], "true")
+            self.assertEqual(
+                (fragile_dir / "clean.status").read_text(encoding="utf-8").strip(),
+                "-1",
+            )
+            self.assertIn(
+                "skipped: clean step skipped by --skip-clean-step",
+                (fragile_dir / "clean.stderr").read_text(encoding="utf-8"),
+            )
+            self.assertEqual(
+                (fragile_dir / "build.status").read_text(encoding="utf-8").strip(),
+                "0",
+            )
+            self.assertEqual(
+                (fragile_dir / "failure_class.txt").read_text(encoding="utf-8").strip(),
+                "none",
+            )
 
     def test_execution_mode_captures_configure_clean_build_for_both_lanes(self):
         with tempfile.TemporaryDirectory() as tmp:

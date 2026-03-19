@@ -32,6 +32,8 @@ class MakoRpcStrictRuntimeReplayTests(unittest.TestCase):
                     "test_rpc_status = os.environ.get('FAKE_TEST_RPC_STATUS', '0')",
                     "completed_trials = os.environ.get('FAKE_COMPLETED_TRIALS', str(trials))",
                     "failure_class = os.environ.get('FAKE_FAILURE_CLASS', 'none')",
+                    "skip_masstree = os.environ.get('FAKE_SKIP_MASSTREE_PERF_TARGET', 'true')",
+                    "skip_clean = os.environ.get('FAKE_SKIP_CLEAN_STEP', 'true')",
                     "no_regression = os.environ.get('FAKE_NO_REGRESSION_VERDICT', 'insufficient_data')",
                     "comparison_verdict = os.environ.get('FAKE_COMPARISON_VERDICT', no_regression)",
                     "",
@@ -54,6 +56,8 @@ class MakoRpcStrictRuntimeReplayTests(unittest.TestCase):
                     "    f'lane_{lane}_test_rpc_status={test_rpc_status}',",
                     "    f'lane_{lane}_completed_trials={completed_trials}',",
                     "    f'lane_{lane}_failure_class={failure_class}',",
+                    "    f'skip_masstree_perf_target={skip_masstree}',",
+                    "    f'skip_clean_step={skip_clean}',",
                     "]",
                     "(run_root / 'benchmark_harness_manifest.txt').write_text('\\n'.join(manifest_lines) + '\\n', encoding='utf-8')",
                     "",
@@ -182,6 +186,8 @@ class MakoRpcStrictRuntimeReplayTests(unittest.TestCase):
             self.assertEqual(manifest["runtime_trial_failed_count"], "0")
             self.assertEqual(manifest["harness_no_regression_verdict"], "insufficient_data")
             self.assertEqual(manifest["comparison_no_regression_verdict"], "insufficient_data")
+            self.assertEqual(manifest["skip_masstree_perf_target"], "true")
+            self.assertEqual(manifest["skip_clean_step"], "true")
             self.assertEqual(manifest["missing_required_artifact_count"], "0")
 
             commands = (run_root / "strict_runtime_replay_commands.txt").read_text(
@@ -193,6 +199,8 @@ class MakoRpcStrictRuntimeReplayTests(unittest.TestCase):
             )
             self.assertIn("strict_env_force_native_sources=unset", commands)
             self.assertIn("--lanes fragilec", commands)
+            self.assertIn("--skip-masstree-perf-target", commands)
+            self.assertIn("--skip-clean-step", commands)
 
     def test_runtime_replay_rejects_lane_failure_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -255,6 +263,34 @@ class MakoRpcStrictRuntimeReplayTests(unittest.TestCase):
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("without insufficient_data verdict", result.stderr)
+
+    def test_runtime_replay_rejects_harness_skip_flag_manifest_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            workspace_root = tmp_path / "workspace"
+            mako_root = workspace_root / "vendor" / "mako"
+            mako_root.mkdir(parents=True, exist_ok=True)
+            (mako_root / "CMakeLists.txt").write_text(
+                "cmake_minimum_required(VERSION 3.16)\n",
+                encoding="utf-8",
+            )
+            run_root = tmp_path / "run"
+            harness_script = tmp_path / "fake_harness.py"
+            self._write_fake_harness(harness_script)
+
+            result = self._run_script(
+                run_root=run_root,
+                workspace_root=workspace_root,
+                mako_root=mako_root,
+                harness_script=harness_script,
+                trials=1,
+                extra_env={
+                    "FAKE_HARNESS_EXIT": "1",
+                    "FAKE_SKIP_MASSTREE_PERF_TARGET": "false",
+                },
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("skip_masstree_perf_target mismatch", result.stderr)
 
     def test_force_native_sources_truthy_parent_env_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
