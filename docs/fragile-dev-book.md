@@ -20797,3 +20797,36 @@ Rationale:
   degraded type spelling `byte___memory_order_modifier`.
 - This shape is a type-normalization artifact and should resolve to known primitive/generated lanes
   (`byte` or `i32`) rather than propagate as unknown unresolved named type.
+
+## 2026-03-19: M9.2.c.iv.d.3 iostream lowercase fallback (`fmtflags`/`ios_base`) to non-`u128` lanes
+
+Task sizing analysis:
+- Small, bounded normalization change (<1000 LOC) in one function plus focused regressions.
+- No decomposition needed beyond existing `M9.2.c.iv.d.3` leaf.
+
+Plan before execution:
+- reproduce the leaf root cause in normalization pass behavior;
+- patch fallback handling generically (no mako-specific branch logic);
+- add deterministic regressions for both iostream flag aliases and nested `ios_base` signatures;
+- run focused tests, then full-suite regressions.
+
+Wrong-approach check:
+- Re-checked section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific hacks, no native fallback delegation, and no fake semantic stubs were introduced.
+- Change is generic transpiled-signature normalization behavior for all inputs.
+
+Implemented:
+- `crates/fragile-clang/src/ast_codegen.rs`
+  - Updated `normalize_unresolved_lowercase_item_type_tokens`:
+    - preserve nested iostream type spellings `ios` / `ios_base` from generic `u128` collapse;
+    - map unresolved iostream bitflag aliases `fmtflags` / `iostate` / `openmode` to `u32` fallback;
+    - keep existing generic `u128` fallback for other unresolved lowercase type tokens.
+  - Added regressions:
+    - `test_normalize_unresolved_lowercase_item_type_tokens_maps_iostream_flag_aliases_to_u32`
+    - `test_normalize_unresolved_lowercase_item_type_tokens_preserves_nested_ios_base_types`
+- `TODO.md`
+  - Marked `M9.2.c.iv.d.3` done with root-cause/fix evidence and updated blocker taxonomy text.
+
+Validation:
+- `cargo test -p fragile-clang normalize_unresolved_lowercase_item_type_tokens -- --nocapture`
+- `cargo test -p fragile-clang m9_2c_iv_d -- --nocapture`

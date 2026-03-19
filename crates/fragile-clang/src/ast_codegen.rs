@@ -7374,7 +7374,16 @@ impl AstCodeGen {
                     && !RESERVED_C_NETWORK_TYPE_NAMES.contains(&name.as_str())
                     // Common C typedef spellings used by zlib/tinyxml fixtures.
                     // Keep these unresolved names intact instead of collapsing to `u128`.
-                    && !matches!(name.as_str(), "ush" | "uch" | "ulg")
+                    && !matches!(
+                        name.as_str(),
+                        "ush"
+                            | "uch"
+                            | "ulg"
+                            // iostream family spellings can be defined in nested modules and
+                            // should never collapse to scalar fallbacks.
+                            | "ios"
+                            | "ios_base"
+                    )
             })
             .collect();
         unresolved_lowercase.sort();
@@ -7387,8 +7396,12 @@ impl AstCodeGen {
         for line in code.lines() {
             let mut rewritten = line.to_string();
             for unresolved in &unresolved_lowercase {
+                let fallback = match unresolved.as_str() {
+                    "fmtflags" | "iostate" | "openmode" => "u32",
+                    _ => "u128",
+                };
                 rewritten = Self::rewrite_shadowed_ident_in_item_type_positions(
-                    &rewritten, unresolved, "u128",
+                    &rewritten, unresolved, fallback,
                 );
             }
             out.push_str(&rewritten);
@@ -107194,6 +107207,70 @@ pub fn consume(
                 && !output.contains("-> u128")
                 && !output.contains("= u128;"),
             "lowered composite/container names should not collapse to u128 fallback lanes, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_unresolved_lowercase_item_type_tokens_maps_iostream_flag_aliases_to_u32() {
+        let input = r#"
+pub type bad_fmt = fmtflags;
+pub struct stream_state {
+    pub flags: fmtflags,
+    pub state: iostate,
+    pub mode: openmode,
+}
+pub fn setf(mask: fmtflags, mode: openmode) -> iostate {
+    0
+}
+"#;
+        let output = AstCodeGen::normalize_unresolved_lowercase_item_type_tokens(input);
+        assert!(
+            output.contains("pub type bad_fmt = u32;"),
+            "fmtflags alias should normalize to u32 fallback, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub flags: u32,")
+                && output.contains("pub state: u32,")
+                && output.contains("pub mode: u32,"),
+            "iostream flag fields should normalize to u32 fallback, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn setf(mask: u32, mode: u32) -> u32")
+                || output.contains("pub fn setf(mask: u32, mode: u32) -> u32 {"),
+            "iostream flag function signatures should normalize to u32 fallback, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_unresolved_lowercase_item_type_tokens_preserves_nested_ios_base_types() {
+        let input = r#"
+pub mod std {
+    pub struct ios_base {
+        _opaque: [u8; 1],
+    }
+    pub struct num_get {
+    }
+    impl num_get {
+        pub fn do_get(__io: &mut ios_base) -> i32 {
+            0
+        }
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_unresolved_lowercase_item_type_tokens(input);
+        assert!(
+            output.contains("pub fn do_get(__io: &mut ios_base) -> i32")
+                || output.contains("pub fn do_get(__io: &mut ios_base) -> i32 {"),
+            "nested ios_base type slots should be preserved, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("__io: &mut u128"),
+            "ios_base should not degrade to u128 in nested module signatures, got:\n{}",
             output
         );
     }
