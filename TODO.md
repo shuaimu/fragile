@@ -148,7 +148,7 @@ Acceptance:
 
 ### M9) Deferred RPC Target Closure (Lower Priority)
 - [x] M9.0 Start only after M0-M8 acceptance is complete. Done 2026-03-19. Evidence: M0-M8 acceptance items all closed (M8.A1, M8.A2 confirmed green).
-- [ ] M9.1 [WIP on claude/parser] Rebuild strict `test_rpc` + `rpcbench` with new parser backend and no force-native paths.
+- [x] M9.1 Rebuild strict `test_rpc` + `rpcbench` with new parser backend and no force-native paths. Done 2026-03-19. Evidence: both targets build and link with fragilec using default `fragile-parser-clang` backend (no FRAGILEC_PARSER_BACKEND override, no FRAGILEC_FORCE_NATIVE_SOURCES); `test_rpc` passes all 17 gtest cases; 13 regression tests added to `crates/fragile-clang/tests/m9_rpc_closure_tests.rs` covering unit compile gates, environment contract, policy enforcement, and CMake integration; all workspace tests pass (11 suites, 60 Python tests).
 - [ ] M9.2 Run full strict runtime replay and capture deterministic runtime manifests.
 - [ ] M9.3 Run deterministic clang vs fragile benchmark comparison and enforce no-regression gate.
 Acceptance:
