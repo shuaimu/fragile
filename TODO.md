@@ -131,7 +131,7 @@ Acceptance:
 - [x] M6.A2 No semantic stub/fake body is produced for unsupported shapes. Done 2026-03-18. Evidence: m6_3_transpile_returns_error_not_code_for_unknown_placeholder asserts transpile_parser_output_to_rust returns Err (not Ok with generated code) for unsupported placeholders.
 
 ### M7) Shadow Mode and Parity Hardening
-- [ ] M7.1 Run old/new parser backends in shadow mode on representative non-RPC corpus; queue RPC corpus for M9 closure. **[WIP on claude/parser]**
+- [x] M7.1 Run old/new parser backends in shadow mode on representative non-RPC corpus; queue RPC corpus for M9 closure. Done 2026-03-18. Evidence: `scripts/parser_shadow_non_rpc_corpus.py` added with deterministic run artifacts (`shadow_non_rpc_manifest.txt`, `shadow_non_rpc_required_artifacts_manifest.txt`, `rpc_corpus_queue_for_m9.txt`); real run `/tmp/fragile_m7_1_shadow_non_rpc_20260318T225545Z_p3360421` over 8 non-RPC fixtures reported baseline `libtooling` success/failure `6/2`, candidate `fragile-parser-clang` success/failure `8/0`, `candidate_non_worsening_vs_baseline=true`, and explicit deferred RPC queue items for `M9.1`/`M9.2`/`M9.3` on `test_rpc` + `rpcbench`.
 - [ ] M7.2 Track parity metrics: first failure class, unresolved-name counts, runtime status, perf manifest fields.
 - [ ] M7.3 Close parity blockers using generic fixes only.
 Acceptance:
