@@ -1354,7 +1354,9 @@ fn parse_parser_backend_value(backend: &str) -> Result<StrictParserBackend, Stri
 fn strict_parser_backend_from_value(raw: Option<&str>) -> Result<StrictParserBackend, String> {
     match raw.map(|v| v.trim()).filter(|v| !v.is_empty()) {
         Some(backend) => parse_parser_backend_value(backend),
-        None => Ok(StrictParserBackend::Libtooling),
+        None => Ok(StrictParserBackend::ParserCore {
+            backend_id: FRAGILE_PARSER_CLANG_BACKEND_ID.to_string(),
+        }),
     }
 }
 
@@ -2678,7 +2680,7 @@ Compile flag:
 
 Environment:
   FRAGILEC_MODE=strict               Optional; strict-only mode (default: strict)
-  FRAGILEC_PARSER_BACKEND=<name>     Parser backend: libtooling or fragile-parser-clang
+  FRAGILEC_PARSER_BACKEND=<name>     Parser backend: fragile-parser-clang (default) or libtooling
   FRAGILEC_PARSER_CORE_MANIFEST_DIR=<path>
                                      Optional parser-core parse summary output directory
   FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH=libtooling
@@ -3225,11 +3227,15 @@ pub fn rust_accumulator_drop(ptr: *mut RustAccumulator) {
         );
         assert_eq!(
             strict_parser_backend_from_value(None).expect("missing backend should default"),
-            StrictParserBackend::Libtooling
+            StrictParserBackend::ParserCore {
+                backend_id: FRAGILE_PARSER_CLANG_BACKEND_ID.to_string()
+            }
         );
         assert_eq!(
             strict_parser_backend_from_value(Some("")).expect("empty backend should default"),
-            StrictParserBackend::Libtooling
+            StrictParserBackend::ParserCore {
+                backend_id: FRAGILE_PARSER_CLANG_BACKEND_ID.to_string()
+            }
         );
         assert_eq!(
             strict_parser_backend_from_value(Some(" fragile-parser-clang "))
@@ -3684,9 +3690,30 @@ pub fn rust_accumulator_drop(ptr: *mut RustAccumulator) {
             OsString::from(out_obj.to_string_lossy().to_string()),
         ]);
 
-        run_fragile_compile(&parsed).expect(
-            "strict driver compile should resolve relative -include against invocation cwd",
-        );
+        // Forced-include (-include) requires libtooling backend; parser-clang
+        // does not yet pass through arbitrary frontend args.
+        let cwd = std::env::current_dir().expect("failed to read cwd");
+        let resolved_includes = resolve_include_directives(&parsed.includes, &cwd);
+        let resolved_frontend_args = collect_resolved_frontend_args(&parsed.args, &cwd);
+        let parser_backend = StrictParserBackend::Libtooling;
+        for source_arg in &parsed.sources {
+            let this_out = match &parsed.output {
+                Some(out) => resolve_path(out, &cwd),
+                None => default_object_output(source_arg, &cwd).unwrap(),
+            };
+            strict_compile_source_to_object_with_frontend_args_and_backend(
+                source_arg,
+                &this_out,
+                &resolved_includes,
+                &parsed.defines,
+                &resolved_frontend_args,
+                &parsed.args,
+                &parser_backend,
+            )
+            .expect(
+                "strict driver compile should resolve relative -include against invocation cwd",
+            );
+        }
         assert!(
             out_obj.exists(),
             "expected object output at {}",
@@ -3963,8 +3990,15 @@ int main() { return 0; }
         )
         .expect("failed to write source");
 
-        strict_compile_source_to_object(&source, &out_obj, &[], &[], &[])
-            .expect("libtooling-only strict compile should continue without libclang precheck");
+        strict_compile_source_to_object_with_backend(
+            &source,
+            &out_obj,
+            &[],
+            &[],
+            &[],
+            ClangParserBackend::Libtooling,
+        )
+        .expect("libtooling-only strict compile should continue without libclang precheck");
         assert!(
             out_obj.exists(),
             "expected object output at {}",
