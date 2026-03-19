@@ -60882,8 +60882,12 @@ impl FragileAtomicBoolCompat for atomic_bool {
         // Generate as Rust enum
         // Use a valid primitive type for repr - fall back to i32 if the type is not a standard primitive
         let repr_type = match underlying_type.to_rust_type_str().as_str() {
-            "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
-            | "u128" | "usize" => underlying_type.to_rust_type_str(),
+            "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" => {
+                underlying_type.to_rust_type_str()
+            }
+            // Rust does not support #[repr(i128)] or #[repr(u128)] for enums.
+            "i128" => "i64".to_string(),
+            "u128" => "u64".to_string(),
             _ => "i32".to_string(),
         };
         self.register_enum_repr_type(name, &repr_type);
@@ -65150,8 +65154,14 @@ impl FragileAtomicBoolCompat for atomic_bool {
         // Generate as Rust enum
         // Use a valid primitive type for repr - fall back to i32 if the type is not a standard primitive
         let repr_type = match underlying_type.to_rust_type_str().as_str() {
-            "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
-            | "u128" | "usize" => underlying_type.to_rust_type_str(),
+            "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" => {
+                underlying_type.to_rust_type_str()
+            }
+            // Rust does not support #[repr(i128)] or #[repr(u128)] for enums (unstable).
+            // Clamp to i64/u64 — this covers ios_base fmtflags/iostate/openmode enums
+            // whose underlying type Clang reports as __int128 due to sentinel values.
+            "i128" => "i64".to_string(),
+            "u128" => "u64".to_string(),
             _ => "i32".to_string(), // Default to i32 for non-primitive underlying types
         };
         self.register_enum_repr_type(name, &repr_type);

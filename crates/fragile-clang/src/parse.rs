@@ -1956,6 +1956,14 @@ impl ClangParser {
                 clang_sys::CXType_ULong => CppType::Long { signed: false },
                 clang_sys::CXType_LongLong => CppType::LongLong { signed: true },
                 clang_sys::CXType_ULongLong => CppType::LongLong { signed: false },
+                // 128-bit integers: Rust has i128/u128 but #[repr(i128/u128)] is not
+                // stable for enums. Map to LongLong as a safe approximation; enum
+                // generation will use this for the repr type. For non-enum contexts,
+                // i128/u128 would be more precise, but LongLong covers the actual
+                // value ranges used by libc++ ios_base enums (fmtflags, iostate, etc.)
+                // which are the primary source of these types.
+                clang_sys::CXType_Int128 => CppType::LongLong { signed: true },
+                clang_sys::CXType_UInt128 => CppType::LongLong { signed: false },
                 clang_sys::CXType_Float => CppType::Float,
                 clang_sys::CXType_Double | clang_sys::CXType_LongDouble => CppType::Double,
 
