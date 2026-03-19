@@ -31,9 +31,11 @@ use fragile_parser_core::{
     BackendRegistry, ParseRequest, ParserBackend as ParserBackendTrait,
     ParserLanguage as ParserCoreLanguage,
 };
+use std::ffi::OsString;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp_dir(label: &str) -> PathBuf {
@@ -57,6 +59,40 @@ fn workspace_root_dir() -> PathBuf {
         .and_then(|p| p.parent())
         .expect("workspace root should exist")
         .to_path_buf()
+}
+
+struct EscapeHatchLogPathEnvRestore {
+    previous: Option<OsString>,
+}
+
+impl Drop for EscapeHatchLogPathEnvRestore {
+    fn drop(&mut self) {
+        if let Some(previous) = &self.previous {
+            std::env::set_var(FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV, previous);
+        } else {
+            std::env::remove_var(FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV);
+        }
+    }
+}
+
+fn escape_hatch_log_path_env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn with_escape_hatch_log_path_env<R>(value: Option<&str>, f: impl FnOnce() -> R) -> R {
+    let _env_lock = escape_hatch_log_path_env_lock()
+        .lock()
+        .expect("escape hatch log path env lock poisoned");
+    let _restore = EscapeHatchLogPathEnvRestore {
+        previous: std::env::var_os(FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV),
+    };
+    if let Some(value) = value {
+        std::env::set_var(FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV, value);
+    } else {
+        std::env::remove_var(FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV);
+    }
+    f()
 }
 
 fn parse_with_new_backend(source_path: &std::path::Path, language: ParserCoreLanguage) -> fragile_parser_core::ParserOutputV1 {
@@ -546,13 +582,12 @@ fn m8_2_escape_hatch_log_writes_usage_entry() {
     let dir = temp_dir("escape_log");
     let log_path = dir.join("escape_hatch.log");
 
-    // Set the log path env var, call the log function, then unset.
-    std::env::set_var(FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV, log_path.to_str().unwrap());
-    fragile_driver::log_escape_hatch_usage(
-        "FRAGILEC_PARSER_BACKEND=libtooling",
-        "example.cpp",
-    );
-    std::env::remove_var(FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV);
+    with_escape_hatch_log_path_env(Some(log_path.to_str().unwrap()), || {
+        fragile_driver::log_escape_hatch_usage(
+            "FRAGILEC_PARSER_BACKEND=libtooling",
+            "example.cpp",
+        );
+    });
 
     assert!(
         log_path.exists(),
@@ -588,10 +623,10 @@ fn m8_2_escape_hatch_log_appends_multiple_entries() {
     let dir = temp_dir("escape_log_multi");
     let log_path = dir.join("escape_hatch.log");
 
-    std::env::set_var(FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV, log_path.to_str().unwrap());
-    fragile_driver::log_escape_hatch_usage("backend-escape", "a.cpp");
-    fragile_driver::log_escape_hatch_usage("codegen-escape", "b.cpp");
-    std::env::remove_var(FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV);
+    with_escape_hatch_log_path_env(Some(log_path.to_str().unwrap()), || {
+        fragile_driver::log_escape_hatch_usage("backend-escape", "a.cpp");
+        fragile_driver::log_escape_hatch_usage("codegen-escape", "b.cpp");
+    });
 
     let contents = fs::read_to_string(&log_path).expect("should read log file");
     let lines: Vec<&str> = contents.lines().collect();
@@ -610,9 +645,9 @@ fn m8_2_no_log_when_env_unset() {
     let dir = temp_dir("escape_log_noop");
     let log_path = dir.join("should_not_exist.log");
 
-    // Ensure the env var is not set.
-    std::env::remove_var(FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV);
-    fragile_driver::log_escape_hatch_usage("test-escape", "noop.cpp");
+    with_escape_hatch_log_path_env(None, || {
+        fragile_driver::log_escape_hatch_usage("test-escape", "noop.cpp");
+    });
 
     assert!(
         !log_path.exists(),
@@ -1059,17 +1094,14 @@ fn m8_a2_current_default_pipeline_produces_zero_escape_hatch_usage() {
     fs::write(&source_file, "int add(int a, int b) { return a + b; }\n")
         .expect("write test source");
 
-    // Set escape hatch log path so any usage would be recorded.
-    std::env::set_var(FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV, log_path.to_str().unwrap());
-
     // Parse through the default pipeline (fragile-parser-clang backend).
-    let opts = TranspileOptions {
-        language: fragile_clang::ParserLanguage::C,
-        ..Default::default()
-    };
-    let result = transpile_cpp_to_rust_with_options(source_file.as_path(), &opts);
-
-    std::env::remove_var(FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV);
+    let result = with_escape_hatch_log_path_env(Some(log_path.to_str().unwrap()), || {
+        let opts = TranspileOptions {
+            language: fragile_clang::ParserLanguage::C,
+            ..Default::default()
+        };
+        transpile_cpp_to_rust_with_options(source_file.as_path(), &opts)
+    });
 
     assert!(
         result.is_ok(),
@@ -1101,16 +1133,16 @@ fn m8_a2_report_round_trip_log_write_parse() {
     let dir = temp_dir("m8a2_roundtrip");
     let log_path = dir.join("roundtrip.log");
 
-    std::env::set_var(FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV, log_path.to_str().unwrap());
-    fragile_driver::log_escape_hatch_usage(
-        "FRAGILEC_PARSER_BACKEND=libtooling",
-        "roundtrip_a.cpp",
-    );
-    fragile_driver::log_escape_hatch_usage(
-        "FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH=libtooling",
-        "roundtrip_b.cpp",
-    );
-    std::env::remove_var(FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV);
+    with_escape_hatch_log_path_env(Some(log_path.to_str().unwrap()), || {
+        fragile_driver::log_escape_hatch_usage(
+            "FRAGILEC_PARSER_BACKEND=libtooling",
+            "roundtrip_a.cpp",
+        );
+        fragile_driver::log_escape_hatch_usage(
+            "FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH=libtooling",
+            "roundtrip_b.cpp",
+        );
+    });
 
     let contents = fs::read_to_string(&log_path).expect("read log");
     let entries = parse_escape_hatch_log(&contents);

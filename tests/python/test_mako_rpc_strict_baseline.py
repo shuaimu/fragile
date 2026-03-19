@@ -27,7 +27,14 @@ class MakoRpcStrictBaselineTests(unittest.TestCase):
                     "run_root = Path(args.run_root)",
                     "run_root.mkdir(parents=True, exist_ok=True)",
                     "lanes = [lane for lane in args.lanes.split(',') if lane]",
-                    "lines = ['version=1', f'lanes={args.lanes}']",
+                    "lines = [",
+                    "    'version=1',",
+                    "    f'lanes={args.lanes}',",
+                    "    f'env_fragilec_mode={os.environ.get(\"FRAGILEC_MODE\", \"\")}',",
+                    "    f'env_parser_backend={os.environ.get(\"FRAGILEC_PARSER_BACKEND\", \"\")}',",
+                    "    f'env_force_native_sources={os.environ.get(\"FRAGILEC_FORCE_NATIVE_SOURCES\", \"__unset__\")}',",
+                    "    f'env_parser_core_codegen_escape_hatch={os.environ.get(\"FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH\", \"__unset__\")}',",
+                    "]",
                     "for lane in lanes:",
                     "    if lane == 'fragilec':",
                     "        build_status = '124'",
@@ -229,6 +236,14 @@ class MakoRpcStrictBaselineTests(unittest.TestCase):
             manifest = self._parse_manifest(run_root / "strict_baseline_manifest.txt")
             self.assertEqual(manifest["task_leaf"], "M0.1")
             self.assertEqual(manifest["lanes"], "clang,fragilec")
+            self.assertEqual(manifest["strict_env_mode"], "strict")
+            self.assertEqual(
+                manifest["strict_env_parser_backend"], "fragile-parser-clang"
+            )
+            self.assertEqual(manifest["strict_env_force_native_sources"], "unset")
+            self.assertEqual(
+                manifest["strict_env_parser_core_codegen_escape_hatch"], "unset"
+            )
             self.assertEqual(manifest["harness_status"], "1")
             self.assertEqual(manifest["inventory_status"], "0")
             self.assertEqual(manifest["replay_status"], "0")
@@ -277,11 +292,32 @@ class MakoRpcStrictBaselineTests(unittest.TestCase):
             commands = (run_root / "strict_baseline_commands.txt").read_text(
                 encoding="utf-8"
             )
-            self.assertIn("strict_env=FRAGILEC_MODE=strict", commands)
+            self.assertIn(
+                (
+                    "strict_env=FRAGILEC_MODE=strict "
+                    "FRAGILEC_PARSER_BACKEND=fragile-parser-clang"
+                ),
+                commands,
+            )
+            self.assertIn("strict_env_force_native_sources=unset", commands)
+            self.assertIn("strict_env_parser_core_codegen_escape_hatch=unset", commands)
             self.assertIn("replay_stage_timing_path=", commands)
             self.assertIn("harness_command=", commands)
             self.assertIn("inventory_command=", commands)
             self.assertIn("replay_command=", commands)
+
+            harness_manifest = self._parse_manifest(
+                run_root / "benchmark_harness_manifest.txt"
+            )
+            self.assertEqual(harness_manifest["env_fragilec_mode"], "strict")
+            self.assertEqual(
+                harness_manifest["env_parser_backend"], "fragile-parser-clang"
+            )
+            self.assertEqual(harness_manifest["env_force_native_sources"], "__unset__")
+            self.assertEqual(
+                harness_manifest["env_parser_core_codegen_escape_hatch"],
+                "__unset__",
+            )
 
     def test_missing_stage_timing_file_is_recorded_as_none(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -369,6 +405,90 @@ class MakoRpcStrictBaselineTests(unittest.TestCase):
                 manifest_one["comparable_manifest_key_count"],
                 manifest_two["comparable_manifest_key_count"],
             )
+
+    def test_force_native_sources_truthy_parent_env_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            workspace_root = tmp_path / "workspace"
+            mako_root = workspace_root / "vendor" / "mako"
+            mako_root.mkdir(parents=True, exist_ok=True)
+            run_root = tmp_path / "run"
+            harness_script = tmp_path / "fake_harness.py"
+            inventory_script = tmp_path / "fake_inventory.py"
+            replay_script = tmp_path / "fake_replay.py"
+            self._write_fake_harness(harness_script)
+            self._write_fake_inventory(inventory_script)
+            self._write_fake_replay(replay_script)
+
+            result = self._run_script(
+                run_root=run_root,
+                workspace_root=workspace_root,
+                mako_root=mako_root,
+                harness_script=harness_script,
+                inventory_script=inventory_script,
+                replay_script=replay_script,
+                lanes="fragilec",
+                extra_env={"FRAGILEC_FORCE_NATIVE_SOURCES": "1"},
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("FRAGILEC_FORCE_NATIVE_SOURCES", result.stderr)
+
+    def test_parser_core_codegen_escape_hatch_parent_env_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            workspace_root = tmp_path / "workspace"
+            mako_root = workspace_root / "vendor" / "mako"
+            mako_root.mkdir(parents=True, exist_ok=True)
+            run_root = tmp_path / "run"
+            harness_script = tmp_path / "fake_harness.py"
+            inventory_script = tmp_path / "fake_inventory.py"
+            replay_script = tmp_path / "fake_replay.py"
+            self._write_fake_harness(harness_script)
+            self._write_fake_inventory(inventory_script)
+            self._write_fake_replay(replay_script)
+
+            result = self._run_script(
+                run_root=run_root,
+                workspace_root=workspace_root,
+                mako_root=mako_root,
+                harness_script=harness_script,
+                inventory_script=inventory_script,
+                replay_script=replay_script,
+                lanes="fragilec",
+                extra_env={"FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH": "libtooling"},
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH",
+                result.stderr,
+            )
+
+    def test_non_parser_core_backend_parent_env_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            workspace_root = tmp_path / "workspace"
+            mako_root = workspace_root / "vendor" / "mako"
+            mako_root.mkdir(parents=True, exist_ok=True)
+            run_root = tmp_path / "run"
+            harness_script = tmp_path / "fake_harness.py"
+            inventory_script = tmp_path / "fake_inventory.py"
+            replay_script = tmp_path / "fake_replay.py"
+            self._write_fake_harness(harness_script)
+            self._write_fake_inventory(inventory_script)
+            self._write_fake_replay(replay_script)
+
+            result = self._run_script(
+                run_root=run_root,
+                workspace_root=workspace_root,
+                mako_root=mako_root,
+                harness_script=harness_script,
+                inventory_script=inventory_script,
+                replay_script=replay_script,
+                lanes="fragilec",
+                extra_env={"FRAGILEC_PARSER_BACKEND": "libtooling"},
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("FRAGILEC_PARSER_BACKEND", result.stderr)
 
     def test_inventory_failure_causes_nonzero_exit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

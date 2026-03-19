@@ -32,6 +32,12 @@ from mako_rpc_milestone_contract import (
 
 SUPPORTED_LANES: tuple[str, str] = ("clang", "fragilec")
 COMMAND_NOT_FOUND_STATUS = 127
+STRICT_MODE_ENV = "FRAGILEC_MODE"
+STRICT_MODE_VALUE = "strict"
+PARSER_BACKEND_ENV = "FRAGILEC_PARSER_BACKEND"
+STRICT_PARSER_BACKEND = "fragile-parser-clang"
+FORCE_NATIVE_SOURCES_ENV = "FRAGILEC_FORCE_NATIVE_SOURCES"
+PARSER_CORE_CODEGEN_ESCAPE_HATCH_ENV = "FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH"
 NON_COMPARABLE_KEYS: tuple[str, ...] = (
     "run_root",
     "harness_manifest",
@@ -239,6 +245,58 @@ def required_key(manifest: dict[str, str], key: str, *, source: str) -> str:
     return manifest[key]
 
 
+def normalized_nonempty(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    return normalized
+
+
+def env_value_is_truthy(value: str | None) -> bool:
+    normalized = normalized_nonempty(value)
+    if normalized is None:
+        return False
+    return normalized.lower() in {"1", "true", "yes", "on"}
+
+
+def assert_parent_env_is_strict_contract_compatible(
+    base_env: Mapping[str, str],
+) -> None:
+    parser_backend = normalized_nonempty(base_env.get(PARSER_BACKEND_ENV))
+    if parser_backend is not None and parser_backend != STRICT_PARSER_BACKEND:
+        raise ValueError(
+            f"{PARSER_BACKEND_ENV}={parser_backend} is incompatible with strict RPC "
+            f"baseline contract; expected `{STRICT_PARSER_BACKEND}` when set"
+        )
+
+    if env_value_is_truthy(base_env.get(FORCE_NATIVE_SOURCES_ENV)):
+        raise ValueError(
+            f"{FORCE_NATIVE_SOURCES_ENV} enables forbidden native bypass; unset it "
+            "or set it to a falsey value before running strict baseline capture"
+        )
+
+    parser_core_escape_hatch = normalized_nonempty(
+        base_env.get(PARSER_CORE_CODEGEN_ESCAPE_HATCH_ENV)
+    )
+    if parser_core_escape_hatch is not None:
+        raise ValueError(
+            f"{PARSER_CORE_CODEGEN_ESCAPE_HATCH_ENV}={parser_core_escape_hatch} is "
+            "incompatible with strict RPC baseline contract; escape hatch must be unset"
+        )
+
+
+def strict_rpc_baseline_env(base_env: Mapping[str, str]) -> dict[str, str]:
+    assert_parent_env_is_strict_contract_compatible(base_env)
+    strict_env = dict(base_env)
+    strict_env[STRICT_MODE_ENV] = STRICT_MODE_VALUE
+    strict_env[PARSER_BACKEND_ENV] = STRICT_PARSER_BACKEND
+    strict_env.pop(FORCE_NATIVE_SOURCES_ENV, None)
+    strict_env.pop(PARSER_CORE_CODEGEN_ESCAPE_HATCH_ENV, None)
+    return strict_env
+
+
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     script_dir = Path(__file__).resolve().parent
     workspace_root = script_dir.parent
@@ -345,8 +403,7 @@ def main(argv: Sequence[str]) -> int:
             stage_timing_path.unlink()
 
         base_env = dict(os.environ)
-        strict_env = dict(base_env)
-        strict_env["FRAGILEC_MODE"] = "strict"
+        strict_env = strict_rpc_baseline_env(base_env)
 
         harness_cmd = [
             "python3",
@@ -409,7 +466,9 @@ def main(argv: Sequence[str]) -> int:
                 "version=1",
                 "task_leaf=M0.1",
                 f"run_root={run_root}",
-                "strict_env=FRAGILEC_MODE=strict",
+                "strict_env=FRAGILEC_MODE=strict FRAGILEC_PARSER_BACKEND=fragile-parser-clang",
+                "strict_env_force_native_sources=unset",
+                "strict_env_parser_core_codegen_escape_hatch=unset",
                 f"replay_stage_timing_path={stage_timing_path}",
                 f"harness_command={shell_join(harness_cmd)}",
                 f"inventory_command={shell_join(inventory_cmd)}",
@@ -460,6 +519,10 @@ def main(argv: Sequence[str]) -> int:
             "task_leaf=M0.1",
             f"run_root={run_root}",
             "strict_mode=true",
+            f"strict_env_mode={strict_env.get(STRICT_MODE_ENV, 'none')}",
+            f"strict_env_parser_backend={strict_env.get(PARSER_BACKEND_ENV, 'none')}",
+            "strict_env_force_native_sources=unset",
+            "strict_env_parser_core_codegen_escape_hatch=unset",
             f"lanes={','.join(lanes)}",
             f"harness_status={harness_result.status}",
             f"inventory_status={inventory_result.status}",

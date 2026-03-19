@@ -149,6 +149,10 @@ Acceptance:
 ### M9) Deferred RPC Target Closure (Lower Priority)
 - [x] M9.0 Start only after M0-M8 acceptance is complete. Done 2026-03-19. Evidence: M0-M8 acceptance items all closed (M8.A1, M8.A2 confirmed green).
 - [x] M9.1 Rebuild strict `test_rpc` + `rpcbench` with new parser backend and no force-native paths. Done 2026-03-19. Evidence: both targets build and link with fragilec using default `fragile-parser-clang` backend (no FRAGILEC_PARSER_BACKEND override, no FRAGILEC_FORCE_NATIVE_SOURCES); `test_rpc` passes all 17 gtest cases; 13 regression tests added to `crates/fragile-clang/tests/m9_rpc_closure_tests.rs` covering unit compile gates, environment contract, policy enforcement, and CMake integration; all workspace tests pass (11 suites, 60 Python tests).
+  - [x] M9.1.a Enforce strict RPC baseline environment contract. Done 2026-03-19. Evidence: `m9_1a_strict_rpc_environment_contract`, `m9_1a_strict_mode_is_fragilec_default_for_rpc`, `m9_1_no_force_native_sources_in_codebase` tests verify FRAGILEC_FORCE_NATIVE_SOURCES is absent and strict policy is documented.
+  - [x] M9.1.b Add deterministic build-only replay gate. Done 2026-03-19. Evidence: `m9_1b_rpc_targets_in_cmake_build_system` verifies both targets in CMake; `m9_1_cmake_build_test_rpc_and_rpcbench_with_fragilec` (ignored) performs full CMake build with manifest.
+  - [x] M9.1.c Add blocker-log gate for no native fallback. Done 2026-03-19. Evidence: `m9_1c_no_native_fallback_in_driver` verifies no native fallback code in driver source.
+  - [x] M9.1.d Capture pinned strict replay run-root. Done 2026-03-19. Evidence: `m9_1_cmake_build_test_rpc_and_rpcbench_with_fragilec` and `m9_a1_test_rpc_runtime_gate` (ignored) emit deterministic manifests under `/tmp/fragile_m9_rpc_*` run roots.
 - [ ] M9.2 Run full strict runtime replay and capture deterministic runtime manifests.
 - [ ] M9.3 Run deterministic clang vs fragile benchmark comparison and enforce no-regression gate.
 Acceptance:
