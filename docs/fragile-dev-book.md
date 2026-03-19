@@ -20595,3 +20595,42 @@ Validation:
   - `cargo test -p fragile-clang --test integration_test test_libcxx_vector_transpilation`
 - Python regression:
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+## 2026-03-19: M9.2.c strict runtime replay blocker taxonomy and decomposition
+
+Task sizing analysis:
+- M9.2.c is not a small one-off fix once strict replay enters parser-output mapping-completeness failures.
+- The blocker spans multiple covered STL families and compile units, so the work was decomposed into smaller leaves in `TODO.md` (`M9.2.c.i`..`M9.2.c.iv`).
+
+Plan before execution:
+- exercise runtime replay orchestration so build/runtime evidence is deterministic;
+- attempt strict replay with both debug/release fragilec lanes while keeping strict env contract;
+- capture a pinned blocker run-root and classify first failure family;
+- run full Rust/Python regression suites after replay attempts and plan updates.
+
+Wrong-approach check:
+- Re-reviewed Section 1.3 and `docs/dev/wrong.md` before changes.
+- No target-specific hacks, no force-native bypass, no escape-hatch bypass, and no fake semantic stubs were introduced.
+
+Implemented this iteration:
+- Executed strict runtime replay attempts in strict fragilec lane using existing committed orchestration scripts.
+- Captured deterministic blocker evidence in pinned run-root `/tmp/fragile_m9_2_strict_runtime_replay_20260319T123532Z_p1154760`.
+- Updated `TODO.md` to decompose oversized leaf `M9.2.c` into smaller leaves (`M9.2.c.i`..`M9.2.c.iv`) and mark `M9.2.c.i` done with evidence.
+- Added design/rationale doc `docs/m9_2_strict_runtime_replay_blocker_breakdown_2026_03_19.md`.
+
+Pinned strict replay evidence:
+- `/tmp/fragile_m9_2_strict_runtime_replay_20260319T123532Z_p1154760`
+  - `lane_fragilec_build_status=2`
+  - `lane_fragilec_failure_class=build_failed`
+  - `lane_fragilec_test_rpc_status=-1`
+  - `runtime_all_trials_passed=false`
+  - `missing_required_artifact_count=0`
+- Primary failing class from `lane_fragilec/build.stderr`:
+  parser-output mapping-completeness failures for covered families (`optional`, `string`, `tuple`, `variant`, `map`) due non-canonical alias targets and unresolved placeholder structs.
+
+Validation:
+- `cargo test --workspace --all-targets -- --skip test_libcxx_iostream_transpilation --skip test_libcxx_thread_transpilation --skip test_libcxx_vector_transpilation`
+- `cargo test -p fragile-clang --test integration_test test_libcxx_iostream_transpilation -- --nocapture`
+- `cargo test -p fragile-clang --test integration_test test_libcxx_thread_transpilation -- --nocapture`
+- `cargo test -p fragile-clang --test integration_test test_libcxx_vector_transpilation -- --nocapture`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
