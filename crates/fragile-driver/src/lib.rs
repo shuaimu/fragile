@@ -599,7 +599,9 @@ fn parse_parser_backend_value(backend: &str) -> Result<StrictParserBackend, Stri
 fn strict_parser_backend_from_value(raw: Option<&str>) -> Result<StrictParserBackend, String> {
     match raw.map(|v| v.trim()).filter(|v| !v.is_empty()) {
         Some(backend) => parse_parser_backend_value(backend),
-        None => Ok(StrictParserBackend::Libtooling),
+        None => Ok(StrictParserBackend::ParserCore {
+            backend_id: FRAGILE_PARSER_CLANG_BACKEND_ID.to_string(),
+        }),
     }
 }
 

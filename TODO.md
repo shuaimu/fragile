@@ -139,7 +139,7 @@ Acceptance:
 - [x] M7.A2 Runtime behavior parity is established for covered smoke fixtures. Done 2026-03-19. Evidence: `test_m7_a2_runtime_parity_smoke_fixtures` runs both backends on factorial fixture with main(), compiles to binaries, executes them, and asserts both exit 0 (factorial(5)==120 correct) with runtime_non_worsening=true.
 
 ### M8) Cutover to New Parser Backend
-- [ ] M8.1 Flip default parser backend to new module. **WIP**
+- [x] M8.1 Flip default parser backend to new module. Done 2026-03-18. Evidence: default strict parser backend changed from `libtooling` to `fragile-parser-clang` in both `fragile-driver` and `fragilec`; 12 M8 cutover tests added to `crates/fragile-clang/tests/m8_cutover_tests.rs` covering parse/transpile/rustc-compile parity on C and C++ fixtures, backend registry resolution, schema version validation, and explicit libtooling escape-hatch availability; all existing test suites pass (1020 lib, 52 fragilec, 32 parser-core, 7 driver).
 - [ ] M8.2 Keep temporary explicit escape hatch for one hardening window only.
 - [ ] M8.3 Publish migration notes for developers and CI.
 Acceptance:
