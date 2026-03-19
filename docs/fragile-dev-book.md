@@ -20766,3 +20766,34 @@ Implemented:
 
 Validation:
 - `python3 -m unittest tests.python.test_mako_rpc_strict_runtime_replay`
+
+## 2026-03-19: M9.2.c.iv.d.1 basetypes unresolved-type invariant (`byte___memory_order_modifier`)
+
+Task sizing analysis:
+- Small, bounded type-normalization fix (<1000 LOC).
+- No additional decomposition needed beyond existing `M9.2.c.iv.d.1` leaf.
+
+Plan before execution:
+- patch named-type normalization for degraded `std::byte` + `__memory_order_modifier` spellings;
+- keep fix generic (type normalization), not mako-targeted;
+- add deterministic unit regression in `types.rs`;
+- re-run focused and full regression suites.
+
+Wrong-approach check:
+- Re-checked section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific hacks or native-bypass paths were introduced.
+- No fake semantic stubs were added.
+
+Implemented:
+- `crates/fragile-clang/src/types.rs`
+  - Added normalization rules:
+    - `byte___memory_order_modifier` / `std::byte::__memory_order_modifier` variants -> `byte`
+    - `std::__memory_order_modifier` variants (including `std___memory_order_modifier`) -> `i32`
+  - Added unit regression:
+    - `test_memory_order_modifier_and_byte_suffix_aliases_normalize_to_expected_lanes`
+
+Rationale:
+- The blocker taxonomy for `M9.2.c.iv.d` identified a basetypes unresolved-type invariant with
+  degraded type spelling `byte___memory_order_modifier`.
+- This shape is a type-normalization artifact and should resolve to known primitive/generated lanes
+  (`byte` or `i32`) rather than propagate as unknown unresolved named type.
