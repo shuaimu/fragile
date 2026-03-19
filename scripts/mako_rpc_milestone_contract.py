@@ -5,6 +5,7 @@ This module defines the naming contract and required artifact sets for:
 - M0.1 strict baseline capture
 - M0.2 parser backend A/B harness
 - M9.2 strict runtime replay
+- M9.3 benchmark comparison (clang vs fragile)
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from typing import Iterable
 
 RUN_ROOT_CONTRACT_VERSION = "1"
 RUN_ROOT_NAME_PATTERN = (
-    r"^fragile_(m0_1_strict_baseline|m0_2_parser_backend_ab|m9_2_strict_runtime_replay)_\d{8}T\d{6}Z_p\d+$"
+    r"^fragile_(m0_1_strict_baseline|m0_2_parser_backend_ab|m9_2_strict_runtime_replay|m9_3_benchmark_comparison)_\d{8}T\d{6}Z_p\d+$"
 )
 _RUN_ROOT_RE = re.compile(RUN_ROOT_NAME_PATTERN)
 
@@ -148,6 +149,66 @@ def required_artifacts_m9_2(
                 f"{trial_prefix}/rpc_client.stderr",
             ]
         )
+
+    return tuple(entries)
+
+
+def required_artifacts_m9_3(
+    *,
+    trials: int,
+    lanes: tuple[str, ...] = ("clang", "fragilec"),
+) -> tuple[str, ...]:
+    if trials <= 0:
+        raise ValueError(f"trials must be > 0, got {trials}")
+    if not lanes:
+        raise ValueError("lanes must be non-empty")
+
+    entries: list[str] = [
+        "benchmark_comparison_commands.txt",
+        "benchmark_comparison_fragilec_build.status",
+        "benchmark_comparison_fragilec_build.stdout.log",
+        "benchmark_comparison_fragilec_build.stderr.log",
+        "benchmark_comparison_harness.status",
+        "benchmark_comparison_harness.stdout.log",
+        "benchmark_comparison_harness.stderr.log",
+        "benchmark_harness_manifest.txt",
+        "benchmark_harness_command_plan.txt",
+        "benchmark_expected_artifacts.txt",
+        "benchmark_qps_comparison_manifest.txt",
+        "benchmark_comparison_manifest.txt",
+    ]
+
+    for lane in lanes:
+        lane_prefix = f"lane_{lane}"
+        entries.extend(
+            [
+                f"{lane_prefix}/configure.status",
+                f"{lane_prefix}/configure.stdout",
+                f"{lane_prefix}/configure.stderr",
+                f"{lane_prefix}/clean.status",
+                f"{lane_prefix}/clean.stdout",
+                f"{lane_prefix}/clean.stderr",
+                f"{lane_prefix}/build.status",
+                f"{lane_prefix}/build.stdout",
+                f"{lane_prefix}/build.stderr",
+                f"{lane_prefix}/failure_class.txt",
+                f"{lane_prefix}/test_rpc.status",
+                f"{lane_prefix}/test_rpc.stdout",
+                f"{lane_prefix}/test_rpc.stderr",
+            ]
+        )
+        for trial_index in range(1, trials + 1):
+            trial_prefix = f"{lane_prefix}/trial_{trial_index:02d}"
+            entries.extend(
+                [
+                    f"{trial_prefix}/rpc_server.status",
+                    f"{trial_prefix}/rpc_server.stdout",
+                    f"{trial_prefix}/rpc_server.stderr",
+                    f"{trial_prefix}/rpc_client.status",
+                    f"{trial_prefix}/rpc_client.stdout",
+                    f"{trial_prefix}/rpc_client.stderr",
+                ]
+            )
 
     return tuple(entries)
 
