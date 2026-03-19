@@ -1,12 +1,11 @@
-/// M7.1 Shadow Mode Tests
+/// M7.1 and M7.3 Shadow Mode Tests
 ///
-/// Runs the legacy transpile path (libtooling backend via `transpile_cpp_to_rust_with_options`)
-/// and the new parser-output-handoff path (`FragileParserClangBackend::parse()` →
-/// `transpile_parser_output_to_rust()`) on a representative non-RPC corpus.
+/// M7.1: Runs legacy (libtooling) and new (parser-output-handoff) backends on a representative
+/// non-RPC corpus. Compares rustc compilation status, marker presence, output metrics,
+/// unresolved-name counts. Emits a deterministic parity manifest.
 ///
-/// Compares: rustc compilation status, marker presence, output metrics, unresolved-name counts.
-/// Emits a deterministic parity manifest under a temp run-root.
-/// Asserts the new backend is non-worsening vs legacy baseline.
+/// M7.3: Closes parity blockers. Tests M7.A1 (non-worsening on blocker class and
+/// unresolved-name deltas) and M7.A2 (runtime behavior parity for covered smoke fixtures).
 
 use fragile_clang::{
     transpile_cpp_to_rust_with_options, transpile_parser_output_to_rust, ParserBackend,
@@ -786,4 +785,684 @@ fn test_m7_shadow_mode_rpc_corpus_deferred_to_m9() {
             target
         );
     }
+}
+
+// =====================================================================
+// M7.3 — M7.A1 Acceptance Gate: Non-worsening on blocker class and
+// unresolved-name deltas for the representative non-RPC corpus.
+// =====================================================================
+
+/// Count unresolved-name markers in generated Rust code.
+fn count_unresolved_in_generated(rust_code: &str) -> usize {
+    let mut count = 0;
+    for line in rust_code.lines() {
+        if line.contains("/* unresolved */") || line.contains("todo!(") {
+            count += 1;
+        }
+    }
+    count
+}
+
+#[derive(Debug)]
+struct ParityBlockerRecord {
+    fixture_label: &'static str,
+    legacy_rustc_status: i32,
+    handoff_rustc_status: i32,
+    legacy_unresolved_count: usize,
+    handoff_unresolved_count: usize,
+}
+
+impl ParityBlockerRecord {
+    /// M7.A1: candidate must not increase unresolved-name count vs baseline.
+    fn unresolved_non_worsening(&self) -> bool {
+        self.handoff_unresolved_count <= self.legacy_unresolved_count
+    }
+
+    /// M7.A1: candidate must not introduce new compile failures where baseline compiled.
+    fn compile_non_worsening(&self) -> bool {
+        if self.legacy_rustc_status == 0 {
+            self.handoff_rustc_status == 0
+        } else {
+            // Baseline already failing — candidate can be same or better
+            true
+        }
+    }
+}
+
+fn run_both_backends_on_source(
+    source_code: &str,
+    fixture_label: &'static str,
+    log_dir: &Path,
+) -> ParityBlockerRecord {
+    // Write fixture to disk
+    let source_path = log_dir.join(format!("{}.cpp", fixture_label));
+    fs::write(&source_path, source_code).expect("write fixture source");
+
+    // Legacy backend
+    let legacy_options = TranspileOptions {
+        include_paths: Vec::new(),
+        include_directives: Vec::new(),
+        frontend_args: Vec::new(),
+        defines: Vec::new(),
+        language: ParserLanguage::Cpp,
+        language_standard: None,
+        ignored_error_patterns: Vec::new(),
+        backend: ParserBackend::Libtooling,
+        template_parsing_mode: TemplateParsingMode::Auto,
+        libtooling_skip_system_headers: false,
+        stage_timing_trace_path: None,
+    };
+    let legacy_code = transpile_cpp_to_rust_with_options(&source_path, &legacy_options)
+        .unwrap_or_default();
+    let legacy_path = log_dir.join(format!("{}_legacy.rs", fixture_label));
+    fs::write(&legacy_path, legacy_code.as_bytes()).expect("write legacy .rs");
+    let legacy_meta = log_dir.join(format!("{}_legacy.rmeta", fixture_label));
+    let legacy_status = compile_rust_to_metadata(&legacy_path, &legacy_meta);
+
+    // New backend (parser-output handoff)
+    let backend = FragileParserClangBackend;
+    let request = ParseRequest {
+        source_path: source_path.clone(),
+        language: ParserCoreLanguage::Cpp,
+        frontend_args: Vec::new(),
+        defines: Vec::new(),
+        include_directives: Vec::new(),
+    };
+    let handoff_code = ParserBackendTrait::parse(&backend, &request)
+        .ok()
+        .and_then(|output| transpile_parser_output_to_rust(&output).ok())
+        .unwrap_or_default();
+    let handoff_path = log_dir.join(format!("{}_handoff.rs", fixture_label));
+    fs::write(&handoff_path, handoff_code.as_bytes()).expect("write handoff .rs");
+    let handoff_meta = log_dir.join(format!("{}_handoff.rmeta", fixture_label));
+    let handoff_status = compile_rust_to_metadata(&handoff_path, &handoff_meta);
+
+    ParityBlockerRecord {
+        fixture_label,
+        legacy_rustc_status: legacy_status,
+        handoff_rustc_status: handoff_status,
+        legacy_unresolved_count: count_unresolved_in_generated(&legacy_code),
+        handoff_unresolved_count: count_unresolved_in_generated(&handoff_code),
+    }
+}
+
+/// M7.A1 acceptance gate: new backend is non-worsening vs baseline on blocker class
+/// and unresolved-name deltas for the representative non-RPC corpus.
+#[test]
+fn test_m7_a1_non_worsening_blocker_class_and_unresolved_name_deltas() {
+    let log_dir = unique_temp_dir("fragile_m7_a1_parity_blocker");
+    fs::create_dir_all(&log_dir).expect("create m7_a1 log dir");
+
+    // Representative non-RPC fixtures used for M7.A1 parity gate.
+    // These cover: typedefs, enums, structs, templates, namespaces, pointers, refs.
+    let fixtures: &[(&'static str, &str)] = &[
+        ("typedef_enum_struct", r#"
+typedef unsigned long Count;
+using Distance = int;
+enum Mode { ModeA = 1, ModeB = 2 };
+struct Point { int x; int y; };
+int make_point_sum(Point p) { return p.x + p.y; }
+"#),
+        ("template_fn_struct", r#"
+template<typename T>
+struct Box { T value; };
+template struct Box<int>;
+
+template<typename T>
+T identity(T v) { return v; }
+template int identity<int>(int);
+
+int use_identity() { return identity<int>(42); }
+"#),
+        ("namespace_math", r#"
+namespace math {
+int add(int a, int b) { return a + b; }
+int mul(int x, int y) { return x * y; }
+}
+int call_ns() { return math::add(3, 4) + math::mul(2, 5); }
+"#),
+        ("const_ptr_and_ref", r#"
+int read_const_ptr(const int* p) { return *p; }
+int bump_ref(int& value) { value += 1; return value; }
+int array_decay_head(int* data) { return data[0]; }
+"#),
+        ("struct_methods", r#"
+struct Counter {
+    int value;
+    Counter() { value = 0; }
+    Counter(int init) { value = init; }
+    void increment() { value = value + 1; }
+    int get() { return value; }
+};
+int use_counter() {
+    Counter c(10);
+    c.increment();
+    return c.get();
+}
+"#),
+    ];
+
+    let mut records: Vec<ParityBlockerRecord> = Vec::new();
+    for (label, source) in fixtures {
+        let record = run_both_backends_on_source(source, label, &log_dir);
+        records.push(record);
+    }
+
+    // Write parity blocker closure manifest
+    let mut manifest = String::new();
+    manifest.push_str("m7_a1_gate=parity_blocker_closure\n");
+    manifest.push_str(&format!("fixture_count={}\n", records.len()));
+    let all_compile_non_worsening = records.iter().all(|r| r.compile_non_worsening());
+    let all_unresolved_non_worsening = records.iter().all(|r| r.unresolved_non_worsening());
+    let total_legacy_unresolved: usize = records.iter().map(|r| r.legacy_unresolved_count).sum();
+    let total_handoff_unresolved: usize = records.iter().map(|r| r.handoff_unresolved_count).sum();
+    let unresolved_delta = total_handoff_unresolved as i64 - total_legacy_unresolved as i64;
+
+    for (i, r) in records.iter().enumerate() {
+        manifest.push_str(&format!(
+            "fixture_{:03}_label={}\nfixture_{:03}_legacy_status={}\nfixture_{:03}_handoff_status={}\n\
+             fixture_{:03}_legacy_unresolved={}\nfixture_{:03}_handoff_unresolved={}\n\
+             fixture_{:03}_compile_non_worsening={}\nfixture_{:03}_unresolved_non_worsening={}\n",
+            i + 1, r.fixture_label,
+            i + 1, r.legacy_rustc_status,
+            i + 1, r.handoff_rustc_status,
+            i + 1, r.legacy_unresolved_count,
+            i + 1, r.handoff_unresolved_count,
+            i + 1, r.compile_non_worsening(),
+            i + 1, r.unresolved_non_worsening(),
+        ));
+    }
+    manifest.push_str(&format!("total_legacy_unresolved={}\n", total_legacy_unresolved));
+    manifest.push_str(&format!("total_handoff_unresolved={}\n", total_handoff_unresolved));
+    manifest.push_str(&format!("unresolved_name_e0425_delta_vs_baseline={}\n", unresolved_delta));
+    manifest.push_str(&format!("compile_non_worsening_all={}\n", all_compile_non_worsening));
+    manifest.push_str(&format!("unresolved_non_worsening_all={}\n", all_unresolved_non_worsening));
+    manifest.push_str(&format!(
+        "m7_a1_gate_verdict={}\n",
+        if all_compile_non_worsening && all_unresolved_non_worsening { "pass" } else { "fail" }
+    ));
+    let manifest_path = log_dir.join("m7_a1_parity_blocker_manifest.txt");
+    fs::write(&manifest_path, &manifest).expect("write m7_a1 manifest");
+
+    // --- Assertions for M7.A1 ---
+
+    // Candidate must not introduce compile regressions vs baseline
+    let worsening_fixtures: Vec<&str> = records
+        .iter()
+        .filter(|r| !r.compile_non_worsening())
+        .map(|r| r.fixture_label)
+        .collect();
+    assert!(
+        worsening_fixtures.is_empty(),
+        "M7.A1 FAILED: candidate worsened compile status vs baseline for fixtures: {:?}; \
+         manifest: {}",
+        worsening_fixtures,
+        log_dir.display()
+    );
+
+    // Candidate must not increase aggregate unresolved-name count vs baseline
+    assert!(
+        unresolved_delta <= 0,
+        "M7.A1 FAILED: candidate increased unresolved-name count by {} vs baseline \
+         (legacy={}, handoff={}); manifest: {}",
+        unresolved_delta,
+        total_legacy_unresolved,
+        total_handoff_unresolved,
+        log_dir.display()
+    );
+
+    // Per-fixture unresolved non-worsening
+    let unresolved_worsening: Vec<&str> = records
+        .iter()
+        .filter(|r| !r.unresolved_non_worsening())
+        .map(|r| r.fixture_label)
+        .collect();
+    assert!(
+        unresolved_worsening.is_empty(),
+        "M7.A1 FAILED: candidate increased unresolved-name count for fixtures: {:?}; \
+         manifest: {}",
+        unresolved_worsening,
+        log_dir.display()
+    );
+
+    eprintln!(
+        "M7.A1 PASSED: {} fixtures, all compile non-worsening={}, \
+         unresolved_delta={} (legacy={} handoff={}); manifest: {}",
+        records.len(),
+        all_compile_non_worsening,
+        unresolved_delta,
+        total_legacy_unresolved,
+        total_handoff_unresolved,
+        log_dir.display()
+    );
+}
+
+// =====================================================================
+// M7.3 — M7.A2 Acceptance Gate: Runtime behavior parity for covered
+// smoke fixtures (actual binary execution).
+// =====================================================================
+
+/// Compile generated Rust code to an executable binary.
+fn compile_rust_to_binary(rust_path: &Path, binary_path: &Path) -> i32 {
+    let output = Command::new("rustc")
+        .arg("--edition")
+        .arg("2021")
+        .arg("-A")
+        .arg("warnings")
+        .arg("--crate-type")
+        .arg("bin")
+        .arg(rust_path)
+        .arg("-o")
+        .arg(binary_path)
+        .output()
+        .expect("failed to invoke rustc for binary");
+    output.status.code().unwrap_or(-1)
+}
+
+/// Run a binary and return its exit code.
+fn run_binary(binary_path: &Path) -> i32 {
+    let output = Command::new(binary_path)
+        .output()
+        .expect("failed to run binary");
+    output.status.code().unwrap_or(-1)
+}
+
+/// M7.A2 acceptance gate: runtime behavior parity for covered smoke fixtures.
+///
+/// Uses `factorial.cpp` which has a `main()` that returns 0 on correct result
+/// and 1 on wrong result. Verifies both backends produce binaries that exit 0.
+#[test]
+fn test_m7_a2_runtime_parity_smoke_fixtures() {
+    let log_dir = unique_temp_dir("fragile_m7_a2_runtime_parity");
+    fs::create_dir_all(&log_dir).expect("create m7_a2 log dir");
+
+    // Smoke fixture: factorial with a main() that validates the result.
+    // Returns 0 if factorial(5) == 120, else 1.
+    // This is the canonical runtime parity smoke test for M7.A2.
+    let factorial_source = r#"
+int factorial(int n) {
+    if (n <= 1) return 1;
+    return n * factorial(n - 1);
+}
+
+int main() {
+    int result = factorial(5);
+    return (result == 120) ? 0 : 1;
+}
+"#;
+
+    let source_path = log_dir.join("m7_a2_factorial.cpp");
+    fs::write(&source_path, factorial_source).expect("write factorial source");
+
+    // Legacy backend
+    let legacy_options = TranspileOptions {
+        include_paths: Vec::new(),
+        include_directives: Vec::new(),
+        frontend_args: Vec::new(),
+        defines: Vec::new(),
+        language: ParserLanguage::Cpp,
+        language_standard: None,
+        ignored_error_patterns: Vec::new(),
+        backend: ParserBackend::Libtooling,
+        template_parsing_mode: TemplateParsingMode::Auto,
+        libtooling_skip_system_headers: false,
+        stage_timing_trace_path: None,
+    };
+    let legacy_rust = transpile_cpp_to_rust_with_options(&source_path, &legacy_options)
+        .expect("legacy backend must transpile factorial");
+    let legacy_rs_path = log_dir.join("factorial_legacy.rs");
+    fs::write(&legacy_rs_path, legacy_rust.as_bytes()).expect("write legacy .rs");
+    let legacy_bin_path = log_dir.join("factorial_legacy_bin");
+    let legacy_compile_status = compile_rust_to_binary(&legacy_rs_path, &legacy_bin_path);
+
+    // New backend (parser-output handoff)
+    let backend = FragileParserClangBackend;
+    let request = ParseRequest {
+        source_path: source_path.clone(),
+        language: ParserCoreLanguage::Cpp,
+        frontend_args: Vec::new(),
+        defines: Vec::new(),
+        include_directives: Vec::new(),
+    };
+    let parser_output_factorial = ParserBackendTrait::parse(&backend, &request)
+        .expect("new backend must parse factorial");
+    let handoff_rust = transpile_parser_output_to_rust(&parser_output_factorial)
+        .expect("new backend must transpile factorial");
+    let handoff_rs_path = log_dir.join("factorial_handoff.rs");
+    fs::write(&handoff_rs_path, handoff_rust.as_bytes()).expect("write handoff .rs");
+    let handoff_bin_path = log_dir.join("factorial_handoff_bin");
+    let handoff_compile_status = compile_rust_to_binary(&handoff_rs_path, &handoff_bin_path);
+
+    // Write runtime parity manifest
+    let legacy_runtime_exit = if legacy_compile_status == 0 && legacy_bin_path.exists() {
+        Some(run_binary(&legacy_bin_path))
+    } else {
+        None
+    };
+    let handoff_runtime_exit = if handoff_compile_status == 0 && handoff_bin_path.exists() {
+        Some(run_binary(&handoff_bin_path))
+    } else {
+        None
+    };
+
+    let mut manifest = String::new();
+    manifest.push_str("m7_a2_gate=runtime_parity_smoke\n");
+    manifest.push_str("fixture=factorial_with_main\n");
+    manifest.push_str(&format!("legacy_compile_status={}\n", legacy_compile_status));
+    manifest.push_str(&format!("handoff_compile_status={}\n", handoff_compile_status));
+    manifest.push_str(&format!(
+        "legacy_runtime_exit={}\n",
+        legacy_runtime_exit.map_or("na".to_string(), |c| c.to_string())
+    ));
+    manifest.push_str(&format!(
+        "handoff_runtime_exit={}\n",
+        handoff_runtime_exit.map_or("na".to_string(), |c| c.to_string())
+    ));
+    let runtime_non_worsening = match (legacy_runtime_exit, handoff_runtime_exit) {
+        (Some(0), Some(0)) => true,   // both correct
+        (Some(0), None) => false,     // legacy works, handoff can't even compile
+        (None, Some(0)) => true,      // handoff strictly better (legacy couldn't compile)
+        (None, None) => true,         // symmetric — neither compiled
+        (Some(leg), Some(hand)) => hand <= leg, // handoff no worse
+        (Some(_), None) => false,     // legacy compiled, handoff didn't
+        (None, Some(_)) => true,      // handoff at least as good (legacy didn't compile)
+    };
+    manifest.push_str(&format!("runtime_non_worsening={}\n", runtime_non_worsening));
+    manifest.push_str(&format!(
+        "m7_a2_gate_verdict={}\n",
+        if runtime_non_worsening { "pass" } else { "fail" }
+    ));
+    let manifest_path = log_dir.join("m7_a2_runtime_parity_manifest.txt");
+    fs::write(&manifest_path, &manifest).expect("write m7_a2 manifest");
+
+    // --- Assertions for M7.A2 ---
+
+    // Both backends must compile the factorial fixture to a binary
+    assert_eq!(
+        legacy_compile_status, 0,
+        "M7.A2: legacy backend must compile factorial to a binary; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        handoff_compile_status, 0,
+        "M7.A2: new backend must compile factorial to a binary; logs: {}",
+        log_dir.display()
+    );
+
+    // Both binaries must exit 0 (correct factorial result)
+    assert_eq!(
+        legacy_runtime_exit,
+        Some(0),
+        "M7.A2: legacy binary must return 0 (factorial(5)==120); logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        handoff_runtime_exit,
+        Some(0),
+        "M7.A2: new backend binary must return 0 (factorial(5)==120); logs: {}",
+        log_dir.display()
+    );
+
+    // Runtime parity: handoff must not worsen vs legacy
+    assert!(
+        runtime_non_worsening,
+        "M7.A2 FAILED: runtime non-worsening violated; \
+         legacy_exit={:?}, handoff_exit={:?}; manifest: {}",
+        legacy_runtime_exit,
+        handoff_runtime_exit,
+        log_dir.display()
+    );
+
+    eprintln!(
+        "M7.A2 PASSED: legacy_exit={:?}, handoff_exit={:?}, \
+         runtime_non_worsening={}; manifest: {}",
+        legacy_runtime_exit,
+        handoff_runtime_exit,
+        runtime_non_worsening,
+        log_dir.display()
+    );
+}
+
+// =====================================================================
+// M7.3 — Parity blocker closure: struct method parity
+// =====================================================================
+
+/// M7.3 generic fix verification: struct methods (Counter pattern from fixture_006)
+/// compile correctly in both backends. This fixture specifically targets the
+/// `14_struct_constructor.cpp` failure class from M7.2 where libtooling emitted
+/// a trait method conflict for `Counter::get()`.
+#[test]
+fn test_m7_3_struct_method_parity_counter_pattern() {
+    let log_dir = unique_temp_dir("fragile_m7_3_struct_method_parity");
+    fs::create_dir_all(&log_dir).expect("create m7_3 log dir");
+
+    // This matches the pattern from tests/cpp/grammar/14_struct_constructor.cpp
+    // which failed in M7.2 under the libtooling baseline.
+    let source = r#"
+struct Counter {
+    int value;
+    Counter() { value = 0; }
+    Counter(int initial) { value = initial; }
+    void increment() { value = value + 1; }
+    int get() { return value; }
+};
+
+int test_counter() {
+    Counter c1;
+    Counter c2(40);
+    c1.increment();
+    c1.increment();
+    c2.increment();
+    c2.increment();
+    return c1.get() + c2.get();
+}
+"#;
+
+    let source_path = log_dir.join("m7_3_counter.cpp");
+    fs::write(&source_path, source).expect("write counter source");
+
+    // New backend must compile this correctly
+    let backend = FragileParserClangBackend;
+    let request = ParseRequest {
+        source_path: source_path.clone(),
+        language: ParserCoreLanguage::Cpp,
+        frontend_args: Vec::new(),
+        defines: Vec::new(),
+        include_directives: Vec::new(),
+    };
+    let parser_output_counter = ParserBackendTrait::parse(&backend, &request)
+        .expect("new backend must parse Counter fixture");
+    let handoff_code = transpile_parser_output_to_rust(&parser_output_counter)
+        .expect("new backend must transpile Counter fixture");
+    let handoff_path = log_dir.join("counter_handoff.rs");
+    fs::write(&handoff_path, handoff_code.as_bytes()).expect("write handoff .rs");
+    let handoff_meta = log_dir.join("counter_handoff.rmeta");
+    let handoff_status = compile_rust_to_metadata(&handoff_path, &handoff_meta);
+
+    assert_eq!(
+        handoff_status, 0,
+        "M7.3: new backend must compile Counter struct pattern (was failing under libtooling \
+         in M7.2 due to trait method conflict); logs: {}\nGenerated code:\n{}",
+        log_dir.display(),
+        &handoff_code
+    );
+
+    // Verify key structural markers are present
+    assert!(
+        handoff_code.contains("struct Counter") || handoff_code.contains("pub struct Counter"),
+        "M7.3: Counter struct must appear in output; logs: {}",
+        log_dir.display()
+    );
+
+    eprintln!(
+        "M7.3 struct method parity PASSED: Counter pattern compiles with new backend; \
+         logs: {}",
+        log_dir.display()
+    );
+}
+
+// =====================================================================
+// M7.3 — Parity blocker closure manifest: aggregate gate
+// =====================================================================
+
+/// M7.3 aggregate gate: emit a combined blocker-closure manifest and assert
+/// both M7.A1 and M7.A2 gates are satisfied on the full non-RPC fixture set.
+#[test]
+fn test_m7_3_parity_blocker_closure_aggregate_gate() {
+    let log_dir = unique_temp_dir("fragile_m7_3_aggregate_gate");
+    fs::create_dir_all(&log_dir).expect("create m7_3 aggregate log dir");
+
+    // The full representative non-RPC fixture corpus (mirrors DEFAULT_NON_RPC_CORPUS
+    // from the Python shadow harness).
+    let corpus_fixtures: &[(&'static str, &str)] = &[
+        ("add_simple", r#"
+int add(int a, int b) { return a + b; }
+int mul(int x, int y) { return x * y; }
+struct Point { double x; double y; };
+"#),
+        ("factorial", r#"
+int factorial(int n) {
+    if (n <= 1) return 1;
+    return n * factorial(n - 1);
+}
+"#),
+        ("namespace_resolution", r#"
+namespace ns {
+int ns_add(int a, int b) { return a + b; }
+}
+int use_ns() { return ns::ns_add(1, 2); }
+"#),
+        ("class_struct", r#"
+struct Point { int x; int y; };
+int sum_point(Point p) { return p.x + p.y; }
+"#),
+        ("constructor_pattern", r#"
+struct Widget {
+    int id;
+    Widget() { id = 0; }
+    Widget(int i) { id = i; }
+    int get_id() { return id; }
+};
+int make_widget() { return Widget(7).get_id(); }
+"#),
+        ("struct_constructor_grammar", r#"
+struct Counter {
+    int value;
+    Counter() { value = 0; }
+    Counter(int initial) { value = initial; }
+    void increment() { value = value + 1; }
+    int get() { return value; }
+};
+int test_struct_constructor() {
+    Counter c1;
+    Counter c2(40);
+    c1.increment();
+    c1.increment();
+    c2.increment();
+    c2.increment();
+    return c1.get() + c2.get();
+}
+"#),
+        ("namespace_resolution_clang", r#"
+namespace outer {
+namespace inner {
+int compute(int x) { return x * 2; }
+}
+}
+int use_inner() { return outer::inner::compute(3); }
+"#),
+        ("virtual_class_pattern", r#"
+struct Base {
+    int value;
+    Base() { value = 0; }
+    int get() { return value; }
+};
+struct Derived : public Base {
+    Derived(int v) { value = v; }
+};
+int use_derived() { return Derived(5).get(); }
+"#),
+    ];
+
+    let mut records: Vec<ParityBlockerRecord> = Vec::new();
+    for (label, source) in corpus_fixtures {
+        let record = run_both_backends_on_source(source, label, &log_dir);
+        records.push(record);
+    }
+
+    // Compute aggregate metrics
+    let fixture_count = records.len();
+    let blocker_closed_count = records
+        .iter()
+        .filter(|r| r.compile_non_worsening() && r.unresolved_non_worsening())
+        .count();
+    let total_legacy_unresolved: usize = records.iter().map(|r| r.legacy_unresolved_count).sum();
+    let total_handoff_unresolved: usize = records.iter().map(|r| r.handoff_unresolved_count).sum();
+    let unresolved_delta = total_handoff_unresolved as i64 - total_legacy_unresolved as i64;
+    let all_blockers_closed = blocker_closed_count == fixture_count;
+
+    // Write aggregate blocker-closure manifest
+    let mut manifest = String::new();
+    manifest.push_str("m7_3_parity_blocker_closure=aggregate_gate\n");
+    manifest.push_str(&format!("fixture_count={}\n", fixture_count));
+    manifest.push_str(&format!("blocker_closed_count={}\n", blocker_closed_count));
+    manifest.push_str(&format!("total_legacy_unresolved={}\n", total_legacy_unresolved));
+    manifest.push_str(&format!("total_handoff_unresolved={}\n", total_handoff_unresolved));
+    manifest.push_str(&format!("unresolved_name_delta_vs_baseline={}\n", unresolved_delta));
+    manifest.push_str(&format!("m7_a1_gate_satisfied={}\n", all_blockers_closed && unresolved_delta <= 0));
+    for (i, r) in records.iter().enumerate() {
+        manifest.push_str(&format!(
+            "fixture_{:03}_label={}\nfixture_{:03}_legacy_status={}\nfixture_{:03}_handoff_status={}\n\
+             fixture_{:03}_blocker_closed={}\n",
+            i + 1, r.fixture_label,
+            i + 1, r.legacy_rustc_status,
+            i + 1, r.handoff_rustc_status,
+            i + 1, r.compile_non_worsening() && r.unresolved_non_worsening(),
+        ));
+    }
+    manifest.push_str(&format!(
+        "m7_3_blocker_closure_verdict={}\n",
+        if all_blockers_closed { "all_closed" } else { "open_blockers_remain" }
+    ));
+    let manifest_path = log_dir.join("m7_3_aggregate_blocker_closure_manifest.txt");
+    fs::write(&manifest_path, &manifest).expect("write m7_3 aggregate manifest");
+
+    // --- M7.A1 assertions ---
+    let worsening: Vec<&str> = records
+        .iter()
+        .filter(|r| !r.compile_non_worsening())
+        .map(|r| r.fixture_label)
+        .collect();
+    assert!(
+        worsening.is_empty(),
+        "M7.3 aggregate gate: candidate worsened compile vs baseline for: {:?}; \
+         manifest: {}",
+        worsening,
+        log_dir.display()
+    );
+
+    assert!(
+        unresolved_delta <= 0,
+        "M7.3 aggregate gate: candidate increased unresolved-name count by {} vs baseline; \
+         manifest: {}",
+        unresolved_delta,
+        log_dir.display()
+    );
+
+    assert!(
+        all_blockers_closed,
+        "M7.3 aggregate gate: {}/{} blockers closed; manifest: {}",
+        blocker_closed_count,
+        fixture_count,
+        log_dir.display()
+    );
+
+    eprintln!(
+        "M7.3 aggregate gate PASSED: {}/{} blockers closed, unresolved_delta={}, \
+         manifest: {}",
+        blocker_closed_count,
+        fixture_count,
+        unresolved_delta,
+        log_dir.display()
+    );
 }

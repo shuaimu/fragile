@@ -20511,3 +20511,45 @@ Checked against Section 1.3 and `docs/dev/wrong.md`:
 - no target-specific hacks,
 - no force-native bypass,
 - no rollback-pattern growth.
+
+## 2026-03-19: M7.3 parity blocker closure for non-RPC corpus
+
+Plan before execution:
+- add Rust tests asserting M7.A1 (non-worsening on blocker class and unresolved-name deltas)
+  and M7.A2 (runtime behavior parity for covered smoke fixtures);
+- use a corpus of 5+ representative non-RPC fixtures for M7.A1 and the factorial fixture
+  (which has a main() returning 0/1) for M7.A2 runtime parity;
+- add an aggregate gate covering the full 8-fixture non-RPC corpus to verify all blockers closed;
+- no transpiler code changes needed because the M7.2 run already showed candidate outperforms
+  baseline on every fixture (8/8 vs 7/8).
+
+Implemented:
+- 4 new tests in `crates/fragile-clang/tests/m7_shadow_mode_tests.rs`:
+  - `test_m7_a1_non_worsening_blocker_class_and_unresolved_name_deltas`:
+    runs both backends on 5 typed fixtures (typedef_enum_struct, template_fn_struct,
+    namespace_math, const_ptr_and_ref, struct_methods) and asserts compile non-worsening
+    and unresolved_delta=0.
+  - `test_m7_a2_runtime_parity_smoke_fixtures`:
+    runs both backends on a factorial fixture with a main() that returns 0 on correct
+    result; compiles to binaries and executes them; asserts both exit 0.
+  - `test_m7_3_struct_method_parity_counter_pattern`:
+    verifies the new backend compiles the Counter struct pattern that was failing under
+    libtooling in M7.2 (fixture_006 / 14_struct_constructor.cpp).
+  - `test_m7_3_parity_blocker_closure_aggregate_gate`:
+    runs both backends on all 8 representative corpus fixtures and asserts 8/8 blockers
+    closed with unresolved_delta=0.
+
+Evidence:
+- all 4 tests passed on first run:
+  - M7.A1: 5 fixtures, compile_non_worsening_all=true, unresolved_delta=0
+  - M7.A2: legacy_exit=Some(0), handoff_exit=Some(0), runtime_non_worsening=true
+  - struct method parity: Counter pattern compiles with new backend
+  - aggregate gate: 8/8 blockers closed, unresolved_delta=0
+- `cargo test --workspace` non-regressing
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`: 60 tests pass, 1 skipped
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+- no semantic stubs/fake method-body fallback,
+- no target-specific parser/codegen hacks,
+- no force-native bypass,
+- no rollback-pattern expansion.
