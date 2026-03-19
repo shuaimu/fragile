@@ -118,6 +118,7 @@ def required_artifacts_m9_2(
         "strict_runtime_replay_harness.status",
         "strict_runtime_replay_harness.stdout.log",
         "strict_runtime_replay_harness.stderr.log",
+        "strict_runtime_replay_blocker_inventory_manifest.txt",
         "benchmark_harness_manifest.txt",
         "benchmark_harness_command_plan.txt",
         "benchmark_expected_artifacts.txt",

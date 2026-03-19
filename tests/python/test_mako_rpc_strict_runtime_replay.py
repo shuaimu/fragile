@@ -65,13 +65,15 @@ class MakoRpcStrictRuntimeReplayTests(unittest.TestCase):
                     "lane_dir.mkdir(parents=True, exist_ok=True)",
                     "for step in ('configure', 'clean', 'build', 'test_rpc'):",
                     "    status = '0'",
+                    "    stderr = f'{step} stderr\\n'",
                     "    if step == 'build':",
                     "        status = build_status",
+                    "        stderr = os.environ.get('FAKE_BUILD_STDERR', stderr)",
                     "    if step == 'test_rpc':",
                     "        status = test_rpc_status",
                     "    (lane_dir / f'{step}.status').write_text(status + '\\n', encoding='utf-8')",
                     "    (lane_dir / f'{step}.stdout').write_text(f'{step} stdout\\n', encoding='utf-8')",
-                    "    (lane_dir / f'{step}.stderr').write_text(f'{step} stderr\\n', encoding='utf-8')",
+                    "    (lane_dir / f'{step}.stderr').write_text(stderr, encoding='utf-8')",
                     "",
                     "for trial in range(1, trials + 1):",
                     "    trial_dir = lane_dir / f'trial_{trial:02d}'",
@@ -111,6 +113,7 @@ class MakoRpcStrictRuntimeReplayTests(unittest.TestCase):
         harness_script: Path,
         trials: int = 2,
         extra_env: dict[str, str] | None = None,
+        extra_args: list[str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         cmd = [
             "python3",
@@ -135,6 +138,8 @@ class MakoRpcStrictRuntimeReplayTests(unittest.TestCase):
             "--rpc-duration-seconds",
             "1",
         ]
+        if extra_args:
+            cmd.extend(extra_args)
         env = os.environ.copy()
         if extra_env:
             env.update(extra_env)
@@ -188,6 +193,11 @@ class MakoRpcStrictRuntimeReplayTests(unittest.TestCase):
             self.assertEqual(manifest["comparison_no_regression_verdict"], "insufficient_data")
             self.assertEqual(manifest["skip_masstree_perf_target"], "true")
             self.assertEqual(manifest["skip_clean_step"], "true")
+            self.assertIn("strict_runtime_replay_blocker_inventory_manifest.txt", manifest["blocker_inventory_manifest"])
+            self.assertEqual(manifest["blocker_error_total_count"], "0")
+            self.assertEqual(manifest["blocker_error_unique_count"], "0")
+            self.assertEqual(manifest["blocker_first_error_key"], "none")
+            self.assertEqual(manifest["blocker_non_increase_verdict"], "unknown")
             self.assertEqual(manifest["missing_required_artifact_count"], "0")
 
             commands = (run_root / "strict_runtime_replay_commands.txt").read_text(
@@ -230,10 +240,19 @@ class MakoRpcStrictRuntimeReplayTests(unittest.TestCase):
                     "FAKE_FAILURE_CLASS": "build_failed",
                     "FAKE_RPC_SERVER_STATUS": "-1",
                     "FAKE_RPC_CLIENT_STATUS": "-1",
+                    "FAKE_BUILD_STDERR": "error[E0428]: duplicate definition\n",
                 },
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("lane contract failed", result.stderr)
+            blocker_manifest = self._parse_manifest(
+                run_root / "strict_runtime_replay_blocker_inventory_manifest.txt"
+            )
+            self.assertGreater(int(blocker_manifest["rustc_error_total_count"]), 0)
+            self.assertEqual(
+                blocker_manifest["first_error_key"],
+                "E0428:duplicate definition",
+            )
 
     def test_runtime_replay_rejects_non_insufficient_data_nonzero_harness(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -291,6 +310,83 @@ class MakoRpcStrictRuntimeReplayTests(unittest.TestCase):
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("skip_masstree_perf_target mismatch", result.stderr)
+
+    def test_runtime_replay_blocker_inventory_non_increase_vs_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            workspace_root = tmp_path / "workspace"
+            mako_root = workspace_root / "vendor" / "mako"
+            mako_root.mkdir(parents=True, exist_ok=True)
+            (mako_root / "CMakeLists.txt").write_text(
+                "cmake_minimum_required(VERSION 3.16)\n",
+                encoding="utf-8",
+            )
+            baseline_run_root = tmp_path / "baseline_run"
+            run_root = tmp_path / "run"
+            harness_script = tmp_path / "fake_harness.py"
+            self._write_fake_harness(harness_script)
+
+            baseline_result = self._run_script(
+                run_root=baseline_run_root,
+                workspace_root=workspace_root,
+                mako_root=mako_root,
+                harness_script=harness_script,
+                trials=1,
+                extra_env={
+                    "FAKE_HARNESS_EXIT": "1",
+                    "FAKE_LANE_BUILD_STATUS": "2",
+                    "FAKE_TEST_RPC_STATUS": "-1",
+                    "FAKE_COMPLETED_TRIALS": "0",
+                    "FAKE_FAILURE_CLASS": "build_failed",
+                    "FAKE_RPC_SERVER_STATUS": "-1",
+                    "FAKE_RPC_CLIENT_STATUS": "-1",
+                    "FAKE_BUILD_STDERR": (
+                        "error[E0428]: duplicate definition\n"
+                        "error[E0433]: failed to resolve\n"
+                        "error: fragile: unresolved non-C-ABI external C++ calls detected\n"
+                    ),
+                },
+            )
+            self.assertNotEqual(baseline_result.returncode, 0)
+            baseline_inventory = self._parse_manifest(
+                baseline_run_root / "strict_runtime_replay_blocker_inventory_manifest.txt"
+            )
+            self.assertEqual(baseline_inventory["rustc_error_total_count"], "3")
+            self.assertEqual(baseline_inventory["rustc_error_unique_count"], "3")
+
+            result = self._run_script(
+                run_root=run_root,
+                workspace_root=workspace_root,
+                mako_root=mako_root,
+                harness_script=harness_script,
+                trials=1,
+                extra_env={
+                    "FAKE_HARNESS_EXIT": "1",
+                    "FAKE_LANE_BUILD_STATUS": "2",
+                    "FAKE_TEST_RPC_STATUS": "-1",
+                    "FAKE_COMPLETED_TRIALS": "0",
+                    "FAKE_FAILURE_CLASS": "build_failed",
+                    "FAKE_RPC_SERVER_STATUS": "-1",
+                    "FAKE_RPC_CLIENT_STATUS": "-1",
+                    "FAKE_BUILD_STDERR": (
+                        "error[E0428]: duplicate definition\n"
+                        "error[E0428]: duplicate definition\n"
+                    ),
+                },
+                extra_args=["--baseline-run-root", str(baseline_run_root)],
+            )
+            self.assertNotEqual(result.returncode, 0)
+
+            inventory = self._parse_manifest(
+                run_root / "strict_runtime_replay_blocker_inventory_manifest.txt"
+            )
+            self.assertEqual(inventory["rustc_error_total_count"], "2")
+            self.assertEqual(inventory["rustc_error_unique_count"], "1")
+            self.assertEqual(inventory["baseline_error_total_count"], "3")
+            self.assertEqual(inventory["baseline_error_unique_count"], "3")
+            self.assertEqual(inventory["non_increase_total_vs_baseline"], "true")
+            self.assertEqual(inventory["non_increase_unique_vs_baseline"], "true")
+            self.assertEqual(inventory["non_increase_verdict"], "true")
 
     def test_force_native_sources_truthy_parent_env_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

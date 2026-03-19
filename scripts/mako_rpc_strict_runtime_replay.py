@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shlex
 import subprocess
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -40,6 +42,8 @@ PARSER_BACKEND_ENV = "FRAGILEC_PARSER_BACKEND"
 STRICT_PARSER_BACKEND = "fragile-parser-clang"
 FORCE_NATIVE_SOURCES_ENV = "FRAGILEC_FORCE_NATIVE_SOURCES"
 PARSER_CORE_CODEGEN_ESCAPE_HATCH_ENV = "FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH"
+RUSTC_ERROR_RE = re.compile(r"^error(?:\[(E\d{4})\])?:\s*(.+)$")
+GMAKE_ERROR_RE = re.compile(r"^gmake(?:\[\d+\])?:\s+\*\*\*\s+(.+)$")
 
 
 @dataclass(frozen=True)
@@ -55,6 +59,19 @@ class RuntimeStatusSummary:
     passed_trials: int
     failed_trials: int
     all_trials_passed: bool
+
+
+@dataclass(frozen=True)
+class BlockerInventorySummary:
+    manifest_path: Path
+    total_count: int
+    unique_count: int
+    first_error_key: str
+    baseline_total_count: int | None
+    baseline_unique_count: int | None
+    non_increase_total_vs_baseline: str
+    non_increase_unique_vs_baseline: str
+    non_increase_verdict: str
 
 
 def shell_join(argv: Sequence[str]) -> str:
@@ -77,6 +94,149 @@ def parse_key_value_file(path: Path) -> dict[str, str]:
         key, value = line.split("=", 1)
         values[key.strip()] = value.strip()
     return values
+
+
+def normalize_error_key(error_code: str | None, message: str) -> str:
+    normalized_message = " ".join(message.split())
+    if error_code:
+        return f"{error_code}:{normalized_message}"
+    return f"error:{normalized_message}"
+
+
+def collect_rustc_error_keys(stderr_text: str) -> list[str]:
+    keys: list[str] = []
+    for line in stderr_text.splitlines():
+        normalized = line.strip()
+        match = RUSTC_ERROR_RE.match(normalized)
+        if match is None:
+            if normalized.startswith("[fragilec]"):
+                keys.append(normalize_error_key(None, f"fragilec:{normalized}"))
+                continue
+            gmake_match = GMAKE_ERROR_RE.match(normalized)
+            if gmake_match is not None:
+                keys.append(
+                    normalize_error_key(
+                        None, f"gmake:{gmake_match.group(1)}"
+                    )
+                )
+            continue
+        keys.append(normalize_error_key(match.group(1), match.group(2)))
+    return keys
+
+
+def parse_inventory_counts(path: Path) -> tuple[int, int]:
+    values = parse_key_value_file(path)
+    return (
+        parse_any_int(
+            required_key(values, "rustc_error_total_count", source=str(path)),
+            field=f"{path} rustc_error_total_count",
+        ),
+        parse_any_int(
+            required_key(values, "rustc_error_unique_count", source=str(path)),
+            field=f"{path} rustc_error_unique_count",
+        ),
+    )
+
+
+def baseline_inventory_counts(
+    *,
+    baseline_run_root: Path,
+    lane: str,
+) -> tuple[int, int]:
+    manifest = baseline_run_root / "strict_runtime_replay_blocker_inventory_manifest.txt"
+    if manifest.exists():
+        return parse_inventory_counts(manifest)
+
+    fallback_build_stderr = baseline_run_root / f"lane_{lane}" / "build.stderr"
+    if fallback_build_stderr.exists():
+        keys = collect_rustc_error_keys(
+            fallback_build_stderr.read_text(encoding="utf-8", errors="replace")
+        )
+        return (len(keys), len(set(keys)))
+
+    raise FileNotFoundError(
+        "baseline run root is missing blocker inventory and build stderr: "
+        f"{baseline_run_root}"
+    )
+
+
+def write_blocker_inventory_manifest(
+    *,
+    run_root: Path,
+    lane: str,
+    baseline_run_root: Path | None,
+) -> BlockerInventorySummary:
+    build_stderr_path = run_root / f"lane_{lane}" / "build.stderr"
+    if build_stderr_path.exists():
+        build_stderr = build_stderr_path.read_text(encoding="utf-8", errors="replace")
+    else:
+        build_stderr = ""
+
+    error_keys = collect_rustc_error_keys(build_stderr)
+    counts = Counter(error_keys)
+    unique_keys = sorted(counts.keys())
+    first_error_key = error_keys[0] if error_keys else "none"
+
+    baseline_total: int | None = None
+    baseline_unique: int | None = None
+    non_increase_total = "unknown"
+    non_increase_unique = "unknown"
+    non_increase_verdict = "unknown"
+    if baseline_run_root is not None:
+        baseline_total, baseline_unique = baseline_inventory_counts(
+            baseline_run_root=baseline_run_root,
+            lane=lane,
+        )
+        total_ok = len(error_keys) <= baseline_total
+        unique_ok = len(unique_keys) <= baseline_unique
+        non_increase_total = "true" if total_ok else "false"
+        non_increase_unique = "true" if unique_ok else "false"
+        non_increase_verdict = "true" if total_ok and unique_ok else "false"
+
+    lines = [
+        "version=1",
+        "task_leaf=M9.2.c.iv.a",
+        f"run_root={run_root}",
+        f"lane={lane}",
+        f"source_build_stderr={build_stderr_path}",
+        f"source_build_stderr_exists={'true' if build_stderr_path.exists() else 'false'}",
+        f"rustc_error_total_count={len(error_keys)}",
+        f"rustc_error_unique_count={len(unique_keys)}",
+        f"first_error_key={first_error_key}",
+        (
+            "baseline_run_root="
+            f"{baseline_run_root if baseline_run_root is not None else 'none'}"
+        ),
+        f"baseline_error_total_count={baseline_total if baseline_total is not None else -1}",
+        (
+            "baseline_error_unique_count="
+            f"{baseline_unique if baseline_unique is not None else -1}"
+        ),
+        f"non_increase_total_vs_baseline={non_increase_total}",
+        f"non_increase_unique_vs_baseline={non_increase_unique}",
+        f"non_increase_verdict={non_increase_verdict}",
+    ]
+    for index, key in enumerate(unique_keys, start=1):
+        lines.extend(
+            [
+                f"error_key_{index:03d}={key}",
+                f"error_key_{index:03d}_count={counts[key]}",
+            ]
+        )
+
+    manifest_path = run_root / "strict_runtime_replay_blocker_inventory_manifest.txt"
+    write_lines(manifest_path, lines)
+    return BlockerInventorySummary(
+        manifest_path=manifest_path,
+        total_count=len(error_keys),
+        unique_count=len(unique_keys),
+        first_error_key=first_error_key,
+        baseline_total_count=baseline_total,
+        baseline_unique_count=baseline_unique,
+        non_increase_total_vs_baseline=non_increase_total,
+        non_increase_unique_vs_baseline=non_increase_unique,
+        non_increase_verdict=non_increase_verdict,
+    )
 
 
 def run_capture(
@@ -212,6 +372,15 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--trials", type=int, default=1)
+    parser.add_argument(
+        "--baseline-run-root",
+        type=Path,
+        default=None,
+        help=(
+            "optional prior strict runtime replay run root used for deterministic "
+            "blocker non-increase comparison"
+        ),
+    )
     parser.add_argument("--base-port", type=int, default=23900)
     parser.add_argument("--build-timeout-seconds", type=int, default=3600)
     parser.add_argument("--test-rpc-timeout-seconds", type=int, default=120)
@@ -344,6 +513,9 @@ def main(argv: Sequence[str]) -> int:
         workspace_root = ns.workspace_root.resolve()
         mako_root = ns.mako_root.resolve()
         run_root = ns.run_root.resolve()
+        baseline_run_root = (
+            ns.baseline_run_root.resolve() if ns.baseline_run_root is not None else None
+        )
         run_root.mkdir(parents=True, exist_ok=True)
 
         if not workspace_root.exists():
@@ -450,6 +622,10 @@ def main(argv: Sequence[str]) -> int:
                     f"{'true' if ns.skip_masstree_perf_target else 'false'}"
                 ),
                 f"skip_clean_step={'true' if ns.skip_clean_step else 'false'}",
+                (
+                    "baseline_run_root="
+                    f"{baseline_run_root if baseline_run_root is not None else 'none'}"
+                ),
                 f"harness_command={shell_join(harness_cmd)}",
             ],
         )
@@ -540,6 +716,11 @@ def main(argv: Sequence[str]) -> int:
             lane="fragilec",
             trials=ns.trials,
         )
+        blocker_inventory = write_blocker_inventory_manifest(
+            run_root=run_root,
+            lane="fragilec",
+            baseline_run_root=baseline_run_root,
+        )
 
         lines = [
             "version=1",
@@ -563,6 +744,19 @@ def main(argv: Sequence[str]) -> int:
             f"lane_fragilec_failure_class={lane_failure_class}",
             f"skip_masstree_perf_target={harness_skip_masstree_perf_target}",
             f"skip_clean_step={harness_skip_clean_step}",
+            f"blocker_inventory_manifest={blocker_inventory.manifest_path}",
+            f"blocker_error_total_count={blocker_inventory.total_count}",
+            f"blocker_error_unique_count={blocker_inventory.unique_count}",
+            f"blocker_first_error_key={blocker_inventory.first_error_key}",
+            (
+                "blocker_non_increase_total_vs_baseline="
+                f"{blocker_inventory.non_increase_total_vs_baseline}"
+            ),
+            (
+                "blocker_non_increase_unique_vs_baseline="
+                f"{blocker_inventory.non_increase_unique_vs_baseline}"
+            ),
+            f"blocker_non_increase_verdict={blocker_inventory.non_increase_verdict}",
             (
                 "runtime_all_trials_passed="
                 f"{'true' if trial_summary.all_trials_passed else 'false'}"

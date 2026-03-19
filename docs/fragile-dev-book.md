@@ -20674,3 +20674,61 @@ Validation:
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/python -p 'test_*.py'`
 - Full Rust workspace suite:
   - `cargo test --workspace --all-targets`
+
+## 2026-03-19: M9.2.c.iv.a deterministic blocker inventory + non-increase contract
+
+Task sizing analysis:
+- The original `M9.2.c.iv` leaf is oversized for one iteration (>1000 LOC likely) because strict replay currently fails across multiple compile units and error families.
+- `TODO.md` was decomposed into smaller leaves (`M9.2.c.iv.a`..`M9.2.c.iv.e`).
+- This iteration executes the first decomposed leaf only: deterministic blocker inventory + baseline non-increase contract.
+
+Plan before execution:
+- add strict replay blocker inventory extraction from `lane_fragilec/build.stderr`;
+- persist deterministic inventory artifact and summary fields in strict replay manifest;
+- add optional baseline run-root comparison contract (`non_increase_*`);
+- add focused Python regression coverage;
+- capture one real strict replay run-root using the new baseline comparison path.
+
+Wrong-approach check:
+- Re-reviewed Section 1.3 and `docs/dev/wrong.md` before implementation.
+- No target-specific hacks, no force-native bypasses, and no fake semantic stubs were introduced.
+
+Implemented:
+- `scripts/mako_rpc_strict_runtime_replay.py`
+  - Added deterministic blocker inventory extraction for strict replay failures from:
+    - `error[E*]` rustc lines,
+    - `[fragilec] ...` strict transpile failures,
+    - `gmake ...` build failure wrappers.
+  - Added `--baseline-run-root` for optional baseline comparison.
+  - Added inventory artifact:
+    - `strict_runtime_replay_blocker_inventory_manifest.txt`
+    - includes `rustc_error_total_count`, `rustc_error_unique_count`, `first_error_key`,
+      `baseline_*`, `non_increase_total_vs_baseline`,
+      `non_increase_unique_vs_baseline`, `non_increase_verdict`, and per-key counts.
+  - Added blocker summary fields to `strict_runtime_replay_manifest.txt`.
+- `scripts/mako_rpc_milestone_contract.py`
+  - Added `strict_runtime_replay_blocker_inventory_manifest.txt` to `required_artifacts_m9_2(...)`.
+- `tests/python/test_mako_rpc_strict_runtime_replay.py`
+  - Added fake-harness support for deterministic build stderr injection.
+  - Added regression coverage for inventory extraction and baseline non-increase comparison.
+- `TODO.md`
+  - Decomposed oversized `M9.2.c.iv`.
+  - Marked `M9.2.c.iv.a` done with run-root evidence.
+  - Marked cross-gate `R4` done with recorded non-increase evidence.
+
+Pinned strict replay evidence:
+- `/tmp/fragile_m9_2_strict_runtime_replay_20260319T160717Z_p1608468`
+  - `harness_status=1`
+  - `lane_fragilec_build_status=2`
+  - `lane_fragilec_failure_class=build_failed`
+  - `missing_required_artifact_count=0`
+  - `blocker_error_total_count=12`
+  - `blocker_error_unique_count=12`
+  - baseline `/tmp/fragile_m9_2_strict_runtime_replay_20260319T153002Z_p1482329`
+  - `blocker_non_increase_verdict=true`
+
+Validation:
+- `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.python.test_mako_rpc_strict_runtime_replay`
+- `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.python.test_mako_rpc_strict_runtime_replay tests.python.test_mako_rpc_milestone_contract`
+- `cargo test -p fragile-clang --test m9_rpc_closure_tests m9_2`
+- `python3 scripts/mako_rpc_strict_runtime_replay.py --baseline-run-root /tmp/fragile_m9_2_strict_runtime_replay_20260319T153002Z_p1482329`
