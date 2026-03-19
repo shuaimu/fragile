@@ -1210,3 +1210,489 @@ fn m9_2_task_documented_in_todo() {
         "TODO.md should contain M9.2 subtask breakdown"
     );
 }
+
+// ===========================================================================
+// M9.3 — Benchmark Comparison (clang vs fragile)
+// ===========================================================================
+
+/// M9.3.a: Verify the benchmark comparison script exists and has correct imports.
+#[test]
+fn m9_3a_benchmark_comparison_script_exists() {
+    let workspace_root = workspace_root_dir();
+    let script = workspace_root.join("scripts/mako_rpc_benchmark_comparison.py");
+    assert!(
+        script.exists(),
+        "scripts/mako_rpc_benchmark_comparison.py must exist"
+    );
+
+    let content = fs::read_to_string(&script).expect("read benchmark comparison script");
+
+    // Must import from milestone contract
+    assert!(
+        content.contains("from mako_rpc_milestone_contract import"),
+        "script must import from mako_rpc_milestone_contract"
+    );
+
+    // Must import required_artifacts_m9_3
+    assert!(
+        content.contains("required_artifacts_m9_3"),
+        "script must use required_artifacts_m9_3 from milestone contract"
+    );
+
+    // Must have main function
+    assert!(
+        content.contains("def main("),
+        "script must have main function"
+    );
+
+    // Must enforce strict environment
+    assert!(
+        content.contains("assert_parent_env_is_strict_contract_compatible"),
+        "script must enforce strict environment contract"
+    );
+}
+
+/// M9.3.a: Verify the milestone contract defines M9.3 artifacts.
+#[test]
+fn m9_3a_milestone_contract_defines_m9_3_artifacts() {
+    let workspace_root = workspace_root_dir();
+    let contract = workspace_root.join("scripts/mako_rpc_milestone_contract.py");
+    let content = fs::read_to_string(&contract).expect("read milestone contract");
+
+    // Must have required_artifacts_m9_3 function
+    assert!(
+        content.contains("def required_artifacts_m9_3("),
+        "milestone contract must define required_artifacts_m9_3 function"
+    );
+
+    // Must include m9_3 in run root name pattern
+    assert!(
+        content.contains("m9_3_benchmark_comparison"),
+        "milestone contract run root pattern must include m9_3_benchmark_comparison"
+    );
+}
+
+/// M9.3.a: Verify the milestone contract M9.3 artifacts are importable and non-empty.
+#[test]
+fn m9_3a_milestone_contract_m9_3_artifacts_are_valid() {
+    let workspace_root = workspace_root_dir();
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg(
+            "from mako_rpc_milestone_contract import required_artifacts_m9_3, \
+             run_root_name_is_contract_valid; \
+             arts = required_artifacts_m9_3(trials=3); \
+             assert len(arts) > 0, f'expected non-empty artifacts, got {len(arts)}'; \
+             assert 'benchmark_comparison_manifest.txt' in arts, \
+             'must include benchmark_comparison_manifest.txt'; \
+             assert 'benchmark_qps_comparison_manifest.txt' in arts, \
+             'must include benchmark_qps_comparison_manifest.txt'; \
+             assert any('lane_clang' in a for a in arts), \
+             'must include clang lane artifacts'; \
+             assert any('lane_fragilec' in a for a in arts), \
+             'must include fragilec lane artifacts'; \
+             assert run_root_name_is_contract_valid(\
+             'fragile_m9_3_benchmark_comparison_20260319T120000Z_p12345'), \
+             'm9_3 run root name must be contract valid'; \
+             print(f'OK: {len(arts)} artifacts')",
+        )
+        .env("PYTHONPATH", workspace_root.join("scripts").to_str().unwrap())
+        .output()
+        .expect("run Python check");
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        output.status.success(),
+        "M9.3 milestone contract artifacts must be valid\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
+    assert!(
+        stdout.contains("OK:"),
+        "should print OK with artifact count\nstdout: {}",
+        stdout
+    );
+}
+
+/// M9.3.a: Verify the benchmark comparison script rejects incompatible environment.
+#[test]
+fn m9_3a_benchmark_comparison_rejects_incompatible_env() {
+    let workspace_root = workspace_root_dir();
+    let script = workspace_root.join("scripts/mako_rpc_benchmark_comparison.py");
+    let content = fs::read_to_string(&script).expect("read script");
+
+    // Must check FRAGILEC_FORCE_NATIVE_SOURCES
+    assert!(
+        content.contains("FRAGILEC_FORCE_NATIVE_SOURCES"),
+        "script must reject FRAGILEC_FORCE_NATIVE_SOURCES"
+    );
+
+    // Must check FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH
+    assert!(
+        content.contains("FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH"),
+        "script must reject FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH"
+    );
+
+    // Must check FRAGILEC_PARSER_BACKEND
+    assert!(
+        content.contains("FRAGILEC_PARSER_BACKEND"),
+        "script must validate FRAGILEC_PARSER_BACKEND"
+    );
+}
+
+/// M9.3.a: Verify the benchmark comparison manifest field contract.
+#[test]
+fn m9_3a_benchmark_comparison_manifest_field_contract() {
+    let workspace_root = workspace_root_dir();
+    let script = workspace_root.join("scripts/mako_rpc_benchmark_comparison.py");
+    let content = fs::read_to_string(&script).expect("read script");
+
+    // Required manifest fields for M9.3
+    let required_fields = [
+        "version=1",
+        "task_leaf=M9.3",
+        "strict_mode=true",
+        "lanes=",
+        "requested_trials=",
+        "harness_status=",
+        "no_regression_verdict=",
+        "clang_avg_qps=",
+        "fragile_avg_qps=",
+        "fragile_minus_clang_qps=",
+        "fragile_over_clang_ratio=",
+        "m9_a1_test_rpc_gate=",
+        "m9_a2_rpcbench_runtime_gate=",
+        "m9_a3_performance_gate=",
+    ];
+
+    for field in &required_fields {
+        assert!(
+            content.contains(field),
+            "benchmark comparison manifest must include field: {}",
+            field
+        );
+    }
+}
+
+/// M9.3.a: Verify the benchmark comparison script enforces all three M9 gates.
+#[test]
+fn m9_3a_benchmark_comparison_enforces_gates() {
+    let workspace_root = workspace_root_dir();
+    let script = workspace_root.join("scripts/mako_rpc_benchmark_comparison.py");
+    let content = fs::read_to_string(&script).expect("read script");
+
+    // M9.A1 gate
+    assert!(
+        content.contains("m9_a1") && content.contains("test_rpc"),
+        "script must enforce M9.A1 test_rpc gate"
+    );
+
+    // M9.A2 gate
+    assert!(
+        content.contains("m9_a2") && content.contains("rpcbench"),
+        "script must enforce M9.A2 rpcbench runtime gate"
+    );
+
+    // M9.A3 gate
+    assert!(
+        content.contains("m9_a3") && content.contains("performance"),
+        "script must enforce M9.A3 performance gate"
+    );
+}
+
+/// M9.3.b: Verify fake-harness integration with the benchmark comparison script.
+///
+/// This test creates a fake harness that produces all required artifacts with
+/// deterministic QPS values, then invokes the benchmark comparison script and
+/// validates the full manifest round-trip.
+#[test]
+#[ignore] // Requires Python + creates temp files
+fn m9_3b_benchmark_comparison_fake_harness_integration() {
+    let workspace_root = workspace_root_dir();
+    let run_root = temp_dir("m9_3b_fake_harness");
+    fs::create_dir_all(&run_root).expect("create run root");
+
+    // Create a fake harness script that produces deterministic artifacts
+    let fake_harness_path = run_root.join("fake_harness.py");
+    let fake_harness_content = r##"#!/usr/bin/env python3
+"""Fake harness that produces deterministic benchmark artifacts for M9.3 testing."""
+import argparse
+import os
+import sys
+from pathlib import Path
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--workspace-root", type=Path)
+    parser.add_argument("--mako-root", type=Path)
+    parser.add_argument("--run-root", type=Path)
+    parser.add_argument("--fragile-cxx", type=Path)
+    parser.add_argument("--clang-cxx", default="clang++")
+    parser.add_argument("--lanes", default="clang,fragilec")
+    parser.add_argument("--jobs", type=int, default=4)
+    parser.add_argument("--trials", type=int, default=3)
+    parser.add_argument("--base-port", type=int, default=24900)
+    parser.add_argument("--configure-timeout-seconds", type=int, default=900)
+    parser.add_argument("--clean-timeout-seconds", type=int, default=300)
+    parser.add_argument("--build-timeout-seconds", type=int, default=3600)
+    parser.add_argument("--test-rpc-timeout-seconds", type=int, default=120)
+    parser.add_argument("--rpc-client-timeout-seconds", type=int, default=120)
+    parser.add_argument("--rpc-server-startup-wait-seconds", type=float, default=1.0)
+    parser.add_argument("--rpc-server-shutdown-timeout-seconds", type=int, default=15)
+    parser.add_argument("--rpc-duration-seconds", type=int, default=10)
+    parser.add_argument("--rpc-client-threads", type=int, default=8)
+    parser.add_argument("--rpc-outstanding", type=int, default=1000)
+    parser.add_argument("--rpc-worker-threads", type=int, default=16)
+    parser.add_argument("--rpc-epoll-instances", type=int, default=2)
+    parser.add_argument("--rpc-payload-bytes", type=int, default=10)
+    ns = parser.parse_args()
+
+    run_root = ns.run_root.resolve()
+    trials = ns.trials
+    lanes = ns.lanes.split(",")
+
+    # Create lane directories and artifacts
+    for lane in lanes:
+        lane_dir = run_root / f"lane_{lane}"
+        lane_dir.mkdir(parents=True, exist_ok=True)
+        for step in ("configure", "clean", "build", "test_rpc"):
+            (lane_dir / f"{step}.status").write_text("0\n")
+            (lane_dir / f"{step}.stdout").write_text("ok\n")
+            (lane_dir / f"{step}.stderr").write_text("\n")
+        (lane_dir / "failure_class.txt").write_text("none\n")
+
+        # Deterministic QPS: clang=1000.0, fragilec=1100.0
+        qps = 1000.0 if lane == "clang" else 1100.0
+        for trial in range(1, trials + 1):
+            trial_dir = lane_dir / f"trial_{trial:02d}"
+            trial_dir.mkdir(parents=True, exist_ok=True)
+            (trial_dir / "rpc_server.status").write_text("0\n")
+            (trial_dir / "rpc_server.stdout").write_text("server ok\n")
+            (trial_dir / "rpc_server.stderr").write_text("\n")
+            (trial_dir / "rpc_client.status").write_text("0\n")
+            (trial_dir / "rpc_client.stdout").write_text(f"QPS: {qps}\n")
+            (trial_dir / "rpc_client.stderr").write_text("\n")
+
+    # Emit harness manifest
+    harness_lines = [
+        "version=1",
+        "task_leaf=1.4",
+        f"workspace_root={ns.workspace_root}",
+        f"mako_root={ns.mako_root}",
+        f"run_root={run_root}",
+        "plan_only=false",
+        f"lanes={ns.lanes}",
+        "build_only=false",
+        f"trials={trials}",
+        f"clang_avg_qps=1000.000000",
+        f"fragile_avg_qps=1100.000000",
+        f"fragile_minus_clang_qps=100.000000",
+        f"fragile_over_clang_ratio=1.100000",
+        f"no_regression_verdict=pass",
+    ]
+    for lane in lanes:
+        harness_lines.extend([
+            f"lane_{lane}_configure_status=0",
+            f"lane_{lane}_clean_status=0",
+            f"lane_{lane}_build_status=0",
+            f"lane_{lane}_test_rpc_status=0",
+            f"lane_{lane}_completed_trials={trials}",
+            f"lane_{lane}_avg_qps={'1000.000000' if lane == 'clang' else '1100.000000'}",
+            f"lane_{lane}_failure_class=none",
+        ])
+        for trial in range(1, trials + 1):
+            qps_val = 1000.0 if lane == "clang" else 1100.0
+            harness_lines.append(f"lane_{lane}_trial_{trial:02d}_qps={qps_val:.6f}")
+    (run_root / "benchmark_harness_manifest.txt").write_text(
+        "\n".join(harness_lines) + "\n"
+    )
+
+    # Emit comparison manifest
+    comparison_lines = [
+        "version=1",
+        "task_leaf=1.4",
+        f"run_root={run_root}",
+        "plan_only=false",
+        f"trials={trials}",
+        "clang_avg_qps=1000.000000",
+        "fragile_avg_qps=1100.000000",
+        "fragile_minus_clang_qps=100.000000",
+        "fragile_over_clang_ratio=1.100000",
+        "no_regression_verdict=pass",
+    ]
+    for lane in lanes:
+        for trial in range(1, trials + 1):
+            qps_val = 1000.0 if lane == "clang" else 1100.0
+            comparison_lines.append(f"lane_{lane}_trial_{trial:02d}_qps={qps_val:.6f}")
+    (run_root / "benchmark_qps_comparison_manifest.txt").write_text(
+        "\n".join(comparison_lines) + "\n"
+    )
+
+    # Emit command plan and expected artifacts
+    (run_root / "benchmark_harness_command_plan.txt").write_text("# fake\n")
+    (run_root / "benchmark_expected_artifacts.txt").write_text("# fake\n")
+
+    print(str(run_root))
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+"##;
+    fs::write(&fake_harness_path, fake_harness_content).expect("write fake harness");
+
+    // Create fake fragilec binary
+    let fake_fragilec = run_root.join("fake_fragilec");
+    fs::write(&fake_fragilec, "#!/bin/sh\necho fake fragilec\n").expect("write fake fragilec");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&fake_fragilec, fs::Permissions::from_mode(0o755))
+            .expect("chmod fake fragilec");
+    }
+
+    // Create fake mako root with CMakeLists.txt
+    let fake_mako = run_root.join("fake_mako");
+    fs::create_dir_all(&fake_mako).expect("create fake mako");
+    fs::write(
+        fake_mako.join("CMakeLists.txt"),
+        "cmake_minimum_required(VERSION 3.10)\nproject(fake)\n",
+    )
+    .expect("write CMakeLists.txt");
+
+    // Run the benchmark comparison script
+    let script_path = workspace_root.join("scripts/mako_rpc_benchmark_comparison.py");
+    let output = Command::new("python3")
+        .arg(script_path.to_str().unwrap())
+        .arg("--workspace-root")
+        .arg(workspace_root.to_str().unwrap())
+        .arg("--mako-root")
+        .arg(fake_mako.to_str().unwrap())
+        .arg("--run-root")
+        .arg(run_root.to_str().unwrap())
+        .arg("--fragile-cxx")
+        .arg(fake_fragilec.to_str().unwrap())
+        .arg("--skip-fragilec-build")
+        .arg("--harness-script")
+        .arg(fake_harness_path.to_str().unwrap())
+        .arg("--trials")
+        .arg("3")
+        .env("PYTHONPATH", workspace_root.join("scripts").to_str().unwrap())
+        .output()
+        .expect("run benchmark comparison script");
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        output.status.success(),
+        "benchmark comparison script should succeed with fake harness\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
+
+    // Verify manifest was written
+    let manifest_path = run_root.join("benchmark_comparison_manifest.txt");
+    assert!(
+        manifest_path.exists(),
+        "benchmark_comparison_manifest.txt must exist"
+    );
+
+    let manifest = fs::read_to_string(&manifest_path).expect("read manifest");
+    assert!(manifest.contains("task_leaf=M9.3"), "manifest must contain task_leaf=M9.3");
+    assert!(manifest.contains("no_regression_verdict=pass"), "manifest must contain pass verdict");
+    assert!(manifest.contains("m9_a1_test_rpc_gate=pass"), "manifest must contain M9.A1 pass");
+    assert!(manifest.contains("m9_a2_rpcbench_runtime_gate=pass"), "manifest must contain M9.A2 pass");
+    assert!(manifest.contains("m9_a3_performance_gate=pass"), "manifest must contain M9.A3 pass");
+    assert!(manifest.contains("clang_avg_qps=1000"), "manifest must contain clang QPS");
+    assert!(manifest.contains("fragile_avg_qps=1100"), "manifest must contain fragile QPS");
+    assert!(manifest.contains("lanes=clang,fragilec"), "manifest must contain both lanes");
+
+    eprintln!("M9.3.b fake harness integration test PASSED");
+
+    // Clean up
+    let _ = fs::remove_dir_all(&run_root);
+}
+
+/// M9.3.c: Verify Python test suite exists for benchmark comparison.
+#[test]
+fn m9_3c_python_test_suite_covers_benchmark_comparison() {
+    let workspace_root = workspace_root_dir();
+    let test_file =
+        workspace_root.join("tests/python/test_mako_rpc_benchmark_comparison.py");
+    assert!(
+        test_file.exists(),
+        "tests/python/test_mako_rpc_benchmark_comparison.py must exist"
+    );
+
+    let content = fs::read_to_string(&test_file).expect("read Python test file");
+
+    // Must have positive test (pass verdict)
+    assert!(
+        content.contains("pass") && content.contains("verdict"),
+        "Python tests must cover positive case: pass verdict when fragile >= clang"
+    );
+
+    // Must have negative test (fail verdict)
+    assert!(
+        content.contains("fail") && (content.contains("regression") || content.contains("gate")),
+        "Python tests must cover negative case: fail verdict when fragile < clang"
+    );
+
+    // Must have env rejection test
+    assert!(
+        content.contains("FRAGILEC_FORCE_NATIVE_SOURCES"),
+        "Python tests must cover env rejection: FRAGILEC_FORCE_NATIVE_SOURCES"
+    );
+}
+
+/// M9.3.c: Run the Python benchmark comparison tests and verify they pass.
+#[test]
+fn m9_3c_python_benchmark_comparison_tests_pass() {
+    let workspace_root = workspace_root_dir();
+    let test_file =
+        workspace_root.join("tests/python/test_mako_rpc_benchmark_comparison.py");
+    if !test_file.exists() {
+        eprintln!("skipping: Python benchmark comparison test file not found");
+        return;
+    }
+
+    let output = Command::new("python3")
+        .arg("-m")
+        .arg("unittest")
+        .arg(test_file.to_str().unwrap())
+        .env("PYTHONPATH", workspace_root.join("scripts").to_str().unwrap())
+        .current_dir(&workspace_root)
+        .output()
+        .expect("run Python tests");
+
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        output.status.success(),
+        "Python benchmark comparison tests must pass\nstderr:\n{}",
+        stderr
+    );
+
+    assert!(
+        stderr.contains("Ran ") && stderr.contains(" tests"),
+        "Python test output should show test count\nstderr:\n{}",
+        stderr
+    );
+
+    eprintln!(
+        "M9.3.c Python benchmark comparison tests PASSED:\n{}",
+        stderr.lines().last().unwrap_or("(no output)")
+    );
+}
+
+/// M9.3: Verify TODO.md documents M9.3 task and its subtasks.
+#[test]
+fn m9_3_task_documented_in_todo() {
+    let todo = fs::read_to_string(workspace_root_dir().join("TODO.md")).expect("read TODO.md");
+
+    assert!(todo.contains("M9.3"), "TODO.md must document M9.3 task");
+
+    assert!(
+        todo.contains("M9.3.a") || todo.contains("M9.3.b") || todo.contains("M9.3.c"),
+        "TODO.md should contain M9.3 subtask breakdown"
+    );
+}

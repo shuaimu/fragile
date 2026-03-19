@@ -158,6 +158,9 @@ Acceptance:
   - [x] M9.2.b Add ignored integration test that invokes the replay script with fake harness and validates full manifest round-trip. Done 2026-03-19. Evidence: `m9_2b_replay_script_fake_harness_integration` (ignored) test validates full Python replay script with fake harness, verifies all manifest fields, artifact contract, and commands artifact.
   - [x] M9.2.c Validate Python test suite coverage for runtime replay end-to-end (positive/negative/env rejection). Done 2026-03-19. Evidence: `m9_2c_python_test_suite_covers_runtime_replay`, `m9_2c_python_runtime_replay_tests_pass`, `m9_2c_python_milestone_contract_tests_pass` tests added; all Python tests pass.
 - [ ] M9.3 Run deterministic clang vs fragile benchmark comparison and enforce no-regression gate.
+  - [ ] M9.3.a Add milestone contract support for M9.3 (run root name pattern, required artifacts function) and create benchmark comparison orchestration script wrapping dual-lane harness with strict environment enforcement and performance gate.
+  - [ ] M9.3.b Add Rust regression tests for M9.3 script contract, manifest field contract, environment enforcement, and fake-harness integration gate.
+  - [ ] M9.3.c Add Python tests for benchmark comparison script (positive/negative/env rejection paths) and validate M9.A1/M9.A2/M9.A3 acceptance gate closure.
 Acceptance:
 - [ ] M9.A1 `test_rpc` build/run pass gate is green.
 - [ ] M9.A2 `rpcbench` server/client runtime gate is green.
