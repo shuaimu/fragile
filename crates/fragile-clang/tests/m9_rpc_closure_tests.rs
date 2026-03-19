@@ -2310,3 +2310,212 @@ fn m9_2c_iv_d2_task_documented_in_todo() {
         "logging.cpp should be mentioned in M9.2.c.iv.d.2 TODO entry"
     );
 }
+
+// ---------------------------------------------------------------------------
+// M9.2.c.iv.d.3: ios_base fmtflags type mapping (u128 → proper integer)
+// ---------------------------------------------------------------------------
+
+/// M9.2.c.iv.d.3: Verify that transpiling a C++ file with ios_base fmtflags
+/// does not produce `#[repr(u128)]` or `#[repr(i128)]` in the output.
+/// These repr types are unsupported for Rust enums and previously caused
+/// 200+ E0308 type mismatch errors in debugging.cpp and misc.cpp.
+#[test]
+fn m9_2c_iv_d3_no_repr_u128_or_i128_in_transpiled_output() {
+    use fragile_clang::{AstCodeGen, ClangParser};
+
+    // Simple C++ file that includes ios_base types
+    let source = r#"
+#include <ios>
+void test_fmtflags() {
+    std::ios_base::fmtflags f = std::ios_base::dec;
+    (void)f;
+}
+"#;
+    let parser = ClangParser::new().expect("parser should init");
+    let ast = parser
+        .parse_string(source, "test_ios_repr.cpp")
+        .expect("should parse");
+    let code = AstCodeGen::new().generate(&ast.translation_unit);
+
+    // The transpiled output should NOT contain #[repr(u128)] or #[repr(i128)]
+    assert!(
+        !code.contains("#[repr(u128)]"),
+        "Transpiled output should not contain #[repr(u128)] — \
+         ios_base enum repr types should be clamped to i64/u64. \
+         Found #[repr(u128)] in output."
+    );
+    assert!(
+        !code.contains("#[repr(i128)]"),
+        "Transpiled output should not contain #[repr(i128)] — \
+         ios_base enum repr types should be clamped to i64/u64. \
+         Found #[repr(i128)] in output."
+    );
+}
+
+/// M9.2.c.iv.d.3: Verify that transpiling a C++ file with a __int128 enum
+/// produces valid Rust enum repr types (not u128/i128).
+/// Uses a minimal test case that doesn't require heavy STL headers.
+#[test]
+fn m9_2c_iv_d3_enum_with_large_values_uses_valid_repr() {
+    use fragile_clang::{AstCodeGen, ClangParser};
+
+    // Use a simple enum — Clang may or may not report __int128 depending on
+    // sentinel values, but we can at least verify no u128/i128 repr leaks through
+    let source = r#"
+enum TestFlags {
+    Flag1 = 1,
+    Flag2 = 2,
+    Flag3 = 4,
+    FlagMax = 0x7FFFFFFF,
+    FlagMin = -1
+};
+void test() { TestFlags f = Flag1; (void)f; }
+"#;
+    let parser = ClangParser::new().expect("parser should init");
+    let ast = parser
+        .parse_string(source, "test_enum_repr.cpp")
+        .expect("should parse");
+    let code = AstCodeGen::new().generate(&ast.translation_unit);
+
+    // No #[repr(u128)] or #[repr(i128)] should appear
+    assert!(
+        !code.contains("#[repr(u128)]"),
+        "Transpiled output should not contain #[repr(u128)]"
+    );
+    assert!(
+        !code.contains("#[repr(i128)]"),
+        "Transpiled output should not contain #[repr(i128)]"
+    );
+}
+
+/// M9.2.c.iv.d.3: Verify that the parse.rs convert_type handler for
+/// CXType_Int128/CXType_UInt128 exists by checking the source code.
+#[test]
+fn m9_2c_iv_d3_convert_type_handles_int128() {
+    let parse_rs = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/parse.rs"),
+    )
+    .expect("parse.rs should be readable");
+
+    assert!(
+        parse_rs.contains("CXType_Int128"),
+        "parse.rs convert_type should handle CXType_Int128"
+    );
+    assert!(
+        parse_rs.contains("CXType_UInt128"),
+        "parse.rs convert_type should handle CXType_UInt128"
+    );
+}
+
+/// M9.2.c.iv.d.3: Verify that generate_enum and generate_enum_stub both
+/// clamp i128/u128 repr types to i64/u64.
+#[test]
+fn m9_2c_iv_d3_enum_generation_clamps_128bit_repr() {
+    let codegen_rs = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/ast_codegen.rs"),
+    )
+    .expect("ast_codegen.rs should be readable");
+
+    // Both generate_enum and generate_enum_stub should have the i128→i64 clamp
+    let i128_clamp_count = codegen_rs.matches("\"i128\" => \"i64\"").count();
+    assert!(
+        i128_clamp_count >= 2,
+        "Expected at least 2 occurrences of i128→i64 clamping \
+         (generate_enum + generate_enum_stub), found {}",
+        i128_clamp_count
+    );
+
+    let u128_clamp_count = codegen_rs.matches("\"u128\" => \"u64\"").count();
+    assert!(
+        u128_clamp_count >= 2,
+        "Expected at least 2 occurrences of u128→u64 clamping \
+         (generate_enum + generate_enum_stub), found {}",
+        u128_clamp_count
+    );
+}
+
+/// M9.2.c.iv.d.3: Verify task documented in TODO.md
+#[test]
+fn m9_2c_iv_d3_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("M9.2.c.iv.d.3"),
+        "M9.2.c.iv.d.3 should be documented in TODO.md"
+    );
+    assert!(
+        todo.contains("fmtflags") || todo.contains("ios_base"),
+        "ios_base/fmtflags should be mentioned in M9.2.c.iv.d.3 TODO entry"
+    );
+}
+
+/// M9.2.c.iv.d.3: Verify that transpiling debugging.cpp (if mako source
+/// is available) does not produce u128-related rustc errors.
+#[test]
+fn m9_2c_iv_d3_live_debugging_cpp_no_u128_errors() {
+    let mako_root = match mako_root_dir() {
+        Some(r) => r,
+        None => {
+            eprintln!("SKIP: mako source not found");
+            return;
+        }
+    };
+    let debugging_cpp = mako_root.join("rrr/base/debugging.cpp");
+    if !debugging_cpp.exists() {
+        eprintln!("SKIP: debugging.cpp not found at {:?}", debugging_cpp);
+        return;
+    }
+
+    let fragilec = match ensure_fragilec_binary() {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("SKIP: fragilec not available: {}", e);
+            return;
+        }
+    };
+
+    let compile_args = mako_compile_args(&mako_root);
+    let temp = temp_dir("m9_2c_iv_d3_debugging");
+
+    // Run fragilec — it will still fail with other rustc errors, but the
+    // u128-specific patterns should be gone
+    let output = Command::new(&fragilec)
+        .args(&compile_args)
+        .arg("-c")
+        .arg(&debugging_cpp)
+        .arg("-o")
+        .arg(temp.join("debugging.o"))
+        .env("FRAGILEC_MODE", "strict")
+        .output();
+
+    if let Ok(out) = output {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+
+        // The u128 type should not appear in rustc error messages.
+        // Before the fix, debugging.cpp had ~200 E0308 errors mentioning u128.
+        let u128_error_count = stderr.matches("u128").count();
+        eprintln!(
+            "debugging.cpp u128 mentions in stderr: {} (was ~200+ before fix)",
+            u128_error_count
+        );
+
+        // With the fix, there should be zero or very few u128 mentions
+        // (could still appear in unrelated contexts, so allow small count)
+        assert!(
+            u128_error_count < 10,
+            "debugging.cpp should have very few u128 mentions after fix, \
+             got {} (was ~200+ before fix). The ios_base fmtflags u128 → u64 \
+             fix should eliminate the majority of u128 type errors.",
+            u128_error_count
+        );
+    }
+}
