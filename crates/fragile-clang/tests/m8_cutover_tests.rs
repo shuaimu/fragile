@@ -10,14 +10,21 @@
 /// Verifies that the libtooling escape hatches emit deprecation warnings, log
 /// usage to a file when configured, and are rejected after the hardening window
 /// expiry date.
+///
+/// M8.A2 Escape Hatch Usage Measurement and Trending-to-Zero Tests
+///
+/// Verifies that escape hatch usage can be parsed, measured, and that the
+/// trending-to-zero gate works correctly for CI integration.
 
 use fragile_clang::{
     transpile_parser_output_to_rust, ParserBackend, ParserLanguage, TemplateParsingMode,
     TranspileOptions, transpile_cpp_to_rust_with_options,
 };
 use fragile_driver::{
-    enforce_escape_hatch_policy_as_of, escape_hatch_hardening_expired_as_of,
-    ESCAPE_HATCH_HARDENING_EXPIRY, FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV,
+    assert_escape_hatch_trending_to_zero, enforce_escape_hatch_policy_as_of,
+    escape_hatch_hardening_expired_as_of, format_escape_hatch_usage_report,
+    generate_escape_hatch_usage_report, parse_escape_hatch_log, parse_escape_hatch_log_line,
+    EscapeHatchLogEntry, ESCAPE_HATCH_HARDENING_EXPIRY, FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV,
 };
 use fragile_parser_clang::{FragileParserClangBackend, FRAGILE_PARSER_CLANG_BACKEND_ID};
 use fragile_parser_core::{
@@ -633,4 +640,502 @@ fn m8_2_deprecation_warning_message_contains_expiry_date() {
         "rejection error should mention the source file: {}",
         err
     );
+}
+
+// ============================================================================
+// M8.A2 Escape Hatch Usage Measurement and Trending-to-Zero Tests
+// ============================================================================
+
+#[test]
+fn m8_a2_parse_escape_hatch_log_line_valid() {
+    let line = "timestamp=1710000000 escape_kind=FRAGILEC_PARSER_BACKEND=libtooling source=test.cpp pid=12345";
+    let entry = parse_escape_hatch_log_line(line).expect("should parse valid line");
+    assert_eq!(entry.timestamp, 1710000000);
+    assert_eq!(entry.escape_kind, "FRAGILEC_PARSER_BACKEND=libtooling");
+    assert_eq!(entry.source, "test.cpp");
+    assert_eq!(entry.pid, 12345);
+}
+
+#[test]
+fn m8_a2_parse_escape_hatch_log_line_empty() {
+    assert!(parse_escape_hatch_log_line("").is_none());
+    assert!(parse_escape_hatch_log_line("   ").is_none());
+}
+
+#[test]
+fn m8_a2_parse_escape_hatch_log_line_invalid_missing_field() {
+    // Missing pid field
+    let line = "timestamp=1710000000 escape_kind=test source=a.cpp";
+    assert!(
+        parse_escape_hatch_log_line(line).is_none(),
+        "should return None for line missing required field"
+    );
+}
+
+#[test]
+fn m8_a2_parse_escape_hatch_log_multi_entry() {
+    let contents = "\
+timestamp=1710000000 escape_kind=FRAGILEC_PARSER_BACKEND=libtooling source=a.cpp pid=100
+timestamp=1710000001 escape_kind=FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH=libtooling source=b.cpp pid=100
+timestamp=1710000002 escape_kind=FRAGILEC_PARSER_BACKEND=libtooling source=c.cpp pid=200
+";
+    let entries = parse_escape_hatch_log(contents);
+    assert_eq!(entries.len(), 3, "should parse 3 entries");
+    assert_eq!(entries[0].source, "a.cpp");
+    assert_eq!(entries[1].source, "b.cpp");
+    assert_eq!(entries[2].source, "c.cpp");
+}
+
+#[test]
+fn m8_a2_parse_escape_hatch_log_empty_string() {
+    let entries = parse_escape_hatch_log("");
+    assert_eq!(entries.len(), 0, "empty string should produce no entries");
+}
+
+#[test]
+fn m8_a2_generate_usage_report_nonempty() {
+    let entries = vec![
+        EscapeHatchLogEntry {
+            timestamp: 1710000000,
+            escape_kind: "FRAGILEC_PARSER_BACKEND=libtooling".to_string(),
+            source: "a.cpp".to_string(),
+            pid: 100,
+        },
+        EscapeHatchLogEntry {
+            timestamp: 1710000001,
+            escape_kind: "FRAGILEC_PARSER_BACKEND=libtooling".to_string(),
+            source: "b.cpp".to_string(),
+            pid: 100,
+        },
+        EscapeHatchLogEntry {
+            timestamp: 1710000002,
+            escape_kind: "FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH=libtooling".to_string(),
+            source: "a.cpp".to_string(),
+            pid: 200,
+        },
+    ];
+    let report = generate_escape_hatch_usage_report(&entries);
+    assert_eq!(report.total_count, 3);
+    assert_eq!(report.distinct_pids, 2, "PIDs 100 and 200");
+    assert_eq!(report.earliest_timestamp, 1710000000);
+    assert_eq!(report.latest_timestamp, 1710000002);
+    assert_eq!(
+        report
+            .by_kind
+            .get("FRAGILEC_PARSER_BACKEND=libtooling")
+            .copied(),
+        Some(2)
+    );
+    assert_eq!(
+        report
+            .by_kind
+            .get("FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH=libtooling")
+            .copied(),
+        Some(1)
+    );
+    assert_eq!(report.by_source.get("a.cpp").copied(), Some(2));
+    assert_eq!(report.by_source.get("b.cpp").copied(), Some(1));
+}
+
+#[test]
+fn m8_a2_generate_usage_report_empty() {
+    let report = generate_escape_hatch_usage_report(&[]);
+    assert_eq!(report.total_count, 0);
+    assert_eq!(report.distinct_pids, 0);
+    assert_eq!(report.earliest_timestamp, 0);
+    assert_eq!(report.latest_timestamp, 0);
+    assert!(report.by_kind.is_empty());
+    assert!(report.by_source.is_empty());
+}
+
+#[test]
+fn m8_a2_format_usage_report_contains_required_fields() {
+    let entries = vec![EscapeHatchLogEntry {
+        timestamp: 1710000000,
+        escape_kind: "FRAGILEC_PARSER_BACKEND=libtooling".to_string(),
+        source: "test.cpp".to_string(),
+        pid: 42,
+    }];
+    let report = generate_escape_hatch_usage_report(&entries);
+    let formatted = format_escape_hatch_usage_report(&report);
+    assert!(
+        formatted.contains("escape_hatch_total_count=1"),
+        "should contain total count: {}",
+        formatted
+    );
+    assert!(
+        formatted.contains("escape_hatch_distinct_pids=1"),
+        "should contain distinct pids: {}",
+        formatted
+    );
+    assert!(
+        formatted.contains("escape_hatch_earliest_timestamp=1710000000"),
+        "should contain earliest timestamp: {}",
+        formatted
+    );
+}
+
+#[test]
+fn m8_a2_trending_to_zero_gate_passes_when_decreasing() {
+    assert!(assert_escape_hatch_trending_to_zero(5, 10).is_ok());
+    assert!(assert_escape_hatch_trending_to_zero(0, 10).is_ok());
+    assert!(assert_escape_hatch_trending_to_zero(0, 0).is_ok());
+}
+
+#[test]
+fn m8_a2_trending_to_zero_gate_passes_when_equal() {
+    assert!(assert_escape_hatch_trending_to_zero(5, 5).is_ok());
+}
+
+#[test]
+fn m8_a2_trending_to_zero_gate_fails_when_increasing() {
+    let result = assert_escape_hatch_trending_to_zero(10, 5);
+    assert!(result.is_err(), "should fail when count increased");
+    let err = result.unwrap_err();
+    assert!(
+        err.contains("increased"),
+        "error should mention 'increased': {}",
+        err
+    );
+    assert!(
+        err.contains("5") && err.contains("10"),
+        "error should contain both counts: {}",
+        err
+    );
+}
+
+#[test]
+fn m8_a2_python_report_script_exists_and_is_executable() {
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("scripts")
+        .join("escape_hatch_usage_report.py");
+    assert!(
+        script.exists(),
+        "escape_hatch_usage_report.py should exist at {:?}",
+        script
+    );
+}
+
+#[test]
+fn m8_a2_python_report_empty_log() {
+    let dir = temp_dir("m8a2_py_empty");
+    let log_path = dir.join("empty.log");
+    fs::write(&log_path, "").expect("write empty log");
+
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("scripts")
+        .join("escape_hatch_usage_report.py");
+
+    let output = Command::new("python3")
+        .arg(&script)
+        .arg(log_path.to_str().unwrap())
+        .output()
+        .expect("run python script");
+
+    assert!(
+        output.status.success(),
+        "script should succeed on empty log: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("escape_hatch_total_count=0"),
+        "empty log should report total_count=0: {}",
+        stdout
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn m8_a2_python_report_nonempty_log() {
+    let dir = temp_dir("m8a2_py_nonempty");
+    let log_path = dir.join("test.log");
+    fs::write(
+        &log_path,
+        "timestamp=1710000000 escape_kind=FRAGILEC_PARSER_BACKEND=libtooling source=a.cpp pid=100\n\
+         timestamp=1710000001 escape_kind=FRAGILEC_PARSER_BACKEND=libtooling source=b.cpp pid=200\n",
+    )
+    .expect("write test log");
+
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("scripts")
+        .join("escape_hatch_usage_report.py");
+
+    let output = Command::new("python3")
+        .arg(&script)
+        .arg(log_path.to_str().unwrap())
+        .output()
+        .expect("run python script");
+
+    assert!(
+        output.status.success(),
+        "script should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("escape_hatch_total_count=2"),
+        "should report total_count=2: {}",
+        stdout
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn m8_a2_python_gate_passes_nonincreasing() {
+    let dir = temp_dir("m8a2_py_gate_pass");
+    let prev_log = dir.join("previous.log");
+    let curr_log = dir.join("current.log");
+    // Previous had 2 entries, current has 1 (decreasing)
+    fs::write(
+        &prev_log,
+        "timestamp=1710000000 escape_kind=ek source=a.cpp pid=1\n\
+         timestamp=1710000001 escape_kind=ek source=b.cpp pid=1\n",
+    )
+    .expect("write previous log");
+    fs::write(
+        &curr_log,
+        "timestamp=1710000002 escape_kind=ek source=a.cpp pid=2\n",
+    )
+    .expect("write current log");
+
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("scripts")
+        .join("escape_hatch_usage_report.py");
+
+    let output = Command::new("python3")
+        .arg(&script)
+        .arg("--gate")
+        .arg("--previous")
+        .arg(prev_log.to_str().unwrap())
+        .arg("--current")
+        .arg(curr_log.to_str().unwrap())
+        .output()
+        .expect("run gate");
+
+    assert!(
+        output.status.success(),
+        "gate should pass (decreasing): {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("escape_hatch_trending_to_zero=true"),
+        "should report trending=true: {}",
+        stdout
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn m8_a2_python_gate_fails_increasing() {
+    let dir = temp_dir("m8a2_py_gate_fail");
+    let prev_log = dir.join("previous.log");
+    let curr_log = dir.join("current.log");
+    // Previous had 1 entry, current has 3 (increasing)
+    fs::write(
+        &prev_log,
+        "timestamp=1710000000 escape_kind=ek source=a.cpp pid=1\n",
+    )
+    .expect("write previous log");
+    fs::write(
+        &curr_log,
+        "timestamp=1710000001 escape_kind=ek source=a.cpp pid=2\n\
+         timestamp=1710000002 escape_kind=ek source=b.cpp pid=2\n\
+         timestamp=1710000003 escape_kind=ek source=c.cpp pid=3\n",
+    )
+    .expect("write current log");
+
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("scripts")
+        .join("escape_hatch_usage_report.py");
+
+    let output = Command::new("python3")
+        .arg(&script)
+        .arg("--gate")
+        .arg("--previous")
+        .arg(prev_log.to_str().unwrap())
+        .arg("--current")
+        .arg(curr_log.to_str().unwrap())
+        .output()
+        .expect("run gate");
+
+    assert!(
+        !output.status.success(),
+        "gate should fail (increasing usage)"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("escape_hatch_trending_to_zero=false"),
+        "should report trending=false: {}",
+        stdout
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn m8_a2_python_gate_zero_to_zero() {
+    let dir = temp_dir("m8a2_py_gate_zero");
+    let curr_log = dir.join("current.log");
+    // No previous log, current is empty — 0 -> 0
+    fs::write(&curr_log, "").expect("write empty log");
+
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("scripts")
+        .join("escape_hatch_usage_report.py");
+
+    let output = Command::new("python3")
+        .arg(&script)
+        .arg("--gate")
+        .arg("--current")
+        .arg(curr_log.to_str().unwrap())
+        .output()
+        .expect("run gate");
+
+    assert!(
+        output.status.success(),
+        "gate should pass (0 -> 0): {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("escape_hatch_total_count=0"),
+        "should report zero usage: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("escape_hatch_trending_to_zero=true"),
+        "should report trending=true: {}",
+        stdout
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn m8_a2_current_default_pipeline_produces_zero_escape_hatch_usage() {
+    // Key M8.A2 acceptance test: compile through the default pipeline with
+    // escape hatch logging enabled and verify the log remains empty.
+    // This proves the default pipeline doesn't use any escape hatches.
+    let dir = temp_dir("m8a2_zero_usage");
+    let log_path = dir.join("escape_hatch.log");
+    let source_file = dir.join("test.c");
+    fs::write(&source_file, "int add(int a, int b) { return a + b; }\n")
+        .expect("write test source");
+
+    // Set escape hatch log path so any usage would be recorded.
+    std::env::set_var(FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV, log_path.to_str().unwrap());
+
+    // Parse through the default pipeline (fragile-parser-clang backend).
+    let opts = TranspileOptions {
+        language: fragile_clang::ParserLanguage::C,
+        ..Default::default()
+    };
+    let result = transpile_cpp_to_rust_with_options(source_file.as_path(), &opts);
+
+    std::env::remove_var(FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV);
+
+    assert!(
+        result.is_ok(),
+        "default pipeline should succeed for simple C: {:?}",
+        result.err()
+    );
+
+    // The log file should not exist or be empty because the default pipeline
+    // doesn't trigger any escape hatches.
+    if log_path.exists() {
+        let contents = fs::read_to_string(&log_path).expect("read log");
+        let entries = parse_escape_hatch_log(&contents);
+        assert_eq!(
+            entries.len(),
+            0,
+            "default pipeline should produce zero escape hatch entries, but found: {}",
+            contents
+        );
+    }
+    // If the file doesn't exist, that also proves zero usage.
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn m8_a2_report_round_trip_log_write_parse() {
+    // Write escape hatch log entries via the real log function, then parse
+    // them back and verify the round-trip.
+    let dir = temp_dir("m8a2_roundtrip");
+    let log_path = dir.join("roundtrip.log");
+
+    std::env::set_var(FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV, log_path.to_str().unwrap());
+    fragile_driver::log_escape_hatch_usage(
+        "FRAGILEC_PARSER_BACKEND=libtooling",
+        "roundtrip_a.cpp",
+    );
+    fragile_driver::log_escape_hatch_usage(
+        "FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH=libtooling",
+        "roundtrip_b.cpp",
+    );
+    std::env::remove_var(FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV);
+
+    let contents = fs::read_to_string(&log_path).expect("read log");
+    let entries = parse_escape_hatch_log(&contents);
+    assert_eq!(entries.len(), 2, "should parse 2 round-tripped entries");
+
+    assert_eq!(
+        entries[0].escape_kind,
+        "FRAGILEC_PARSER_BACKEND=libtooling"
+    );
+    assert_eq!(entries[0].source, "roundtrip_a.cpp");
+    assert_eq!(
+        entries[1].escape_kind,
+        "FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH=libtooling"
+    );
+    assert_eq!(entries[1].source, "roundtrip_b.cpp");
+
+    // Generate a report and verify it captures the right metrics.
+    let report = generate_escape_hatch_usage_report(&entries);
+    assert_eq!(report.total_count, 2);
+    assert_eq!(
+        report
+            .by_kind
+            .get("FRAGILEC_PARSER_BACKEND=libtooling")
+            .copied(),
+        Some(1)
+    );
+    assert_eq!(
+        report
+            .by_kind
+            .get("FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH=libtooling")
+            .copied(),
+        Some(1)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
 }

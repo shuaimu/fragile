@@ -772,6 +772,138 @@ pub fn enforce_escape_hatch_policy_as_of(
     Ok(())
 }
 
+/// A parsed escape hatch log entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EscapeHatchLogEntry {
+    pub timestamp: u64,
+    pub escape_kind: String,
+    pub source: String,
+    pub pid: u64,
+}
+
+/// Parse a single escape hatch log line.
+/// Format: `timestamp={secs} escape_kind={kind} source={source} pid={pid}`
+pub fn parse_escape_hatch_log_line(line: &str) -> Option<EscapeHatchLogEntry> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+    let mut timestamp = None;
+    let mut escape_kind = None;
+    let mut source = None;
+    let mut pid = None;
+    for part in line.split_whitespace() {
+        if let Some(val) = part.strip_prefix("timestamp=") {
+            timestamp = val.parse::<u64>().ok();
+        } else if let Some(val) = part.strip_prefix("escape_kind=") {
+            escape_kind = Some(val.to_string());
+        } else if let Some(val) = part.strip_prefix("source=") {
+            source = Some(val.to_string());
+        } else if let Some(val) = part.strip_prefix("pid=") {
+            pid = val.parse::<u64>().ok();
+        }
+    }
+    Some(EscapeHatchLogEntry {
+        timestamp: timestamp?,
+        escape_kind: escape_kind?,
+        source: source?,
+        pid: pid?,
+    })
+}
+
+/// Parse all entries from an escape hatch log file.
+pub fn parse_escape_hatch_log(contents: &str) -> Vec<EscapeHatchLogEntry> {
+    contents
+        .lines()
+        .filter_map(parse_escape_hatch_log_line)
+        .collect()
+}
+
+/// Summary of escape hatch usage from a log file.
+#[derive(Debug, Clone)]
+pub struct EscapeHatchUsageReport {
+    /// Total number of escape hatch invocations.
+    pub total_count: usize,
+    /// Breakdown by escape_kind (e.g. "FRAGILEC_PARSER_BACKEND=libtooling" => count).
+    pub by_kind: BTreeMap<String, usize>,
+    /// Breakdown by source file.
+    pub by_source: BTreeMap<String, usize>,
+    /// Distinct PIDs that used escape hatches.
+    pub distinct_pids: usize,
+    /// Earliest timestamp in the log (0 if empty).
+    pub earliest_timestamp: u64,
+    /// Latest timestamp in the log (0 if empty).
+    pub latest_timestamp: u64,
+}
+
+/// Generate a usage report from parsed log entries.
+pub fn generate_escape_hatch_usage_report(entries: &[EscapeHatchLogEntry]) -> EscapeHatchUsageReport {
+    let mut by_kind: BTreeMap<String, usize> = BTreeMap::new();
+    let mut by_source: BTreeMap<String, usize> = BTreeMap::new();
+    let mut pids = std::collections::BTreeSet::new();
+    let mut earliest = u64::MAX;
+    let mut latest = 0u64;
+
+    for entry in entries {
+        *by_kind.entry(entry.escape_kind.clone()).or_insert(0) += 1;
+        *by_source.entry(entry.source.clone()).or_insert(0) += 1;
+        pids.insert(entry.pid);
+        if entry.timestamp < earliest {
+            earliest = entry.timestamp;
+        }
+        if entry.timestamp > latest {
+            latest = entry.timestamp;
+        }
+    }
+
+    EscapeHatchUsageReport {
+        total_count: entries.len(),
+        by_kind,
+        by_source,
+        distinct_pids: pids.len(),
+        earliest_timestamp: if entries.is_empty() { 0 } else { earliest },
+        latest_timestamp: if entries.is_empty() { 0 } else { latest },
+    }
+}
+
+/// Format the usage report as a human-readable string.
+pub fn format_escape_hatch_usage_report(report: &EscapeHatchUsageReport) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("escape_hatch_total_count={}\n", report.total_count));
+    out.push_str(&format!("escape_hatch_distinct_pids={}\n", report.distinct_pids));
+    out.push_str(&format!(
+        "escape_hatch_earliest_timestamp={}\n",
+        report.earliest_timestamp
+    ));
+    out.push_str(&format!(
+        "escape_hatch_latest_timestamp={}\n",
+        report.latest_timestamp
+    ));
+    for (kind, count) in &report.by_kind {
+        out.push_str(&format!("escape_hatch_kind_{}={}\n", kind, count));
+    }
+    for (source, count) in &report.by_source {
+        out.push_str(&format!("escape_hatch_source_{}={}\n", source, count));
+    }
+    out
+}
+
+/// Check if escape hatch usage is trending to zero.
+/// Returns Ok(()) if `current_count` <= `previous_count` (non-increasing).
+/// Returns Err with details if usage has increased.
+pub fn assert_escape_hatch_trending_to_zero(
+    current_count: usize,
+    previous_count: usize,
+) -> Result<(), String> {
+    if current_count > previous_count {
+        return Err(format!(
+            "escape hatch usage increased: {} -> {} (expected non-increasing trend toward zero)",
+            previous_count, current_count
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 fn strict_parser_backend_from_legacy_backend(
     backend: ClangParserBackend,
