@@ -23,5 +23,6 @@ smol_str.workspace = true
 rustc-hash.workspace = true
 
 [dev-dependencies]
+fragile-driver = { workspace = true }
 fragile-parser-clang = { path = "../fragile-parser-clang" }
 fragile-parser-core = { workspace = true }

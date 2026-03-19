@@ -4,10 +4,20 @@
 /// fragile-parser-clang, and that explicit override to libtooling still works.
 /// Also verifies end-to-end compilation through the new default backend for
 /// representative C and C++ fixtures.
+///
+/// M8.2 Escape Hatch Hardening Window Tests
+///
+/// Verifies that the libtooling escape hatches emit deprecation warnings, log
+/// usage to a file when configured, and are rejected after the hardening window
+/// expiry date.
 
 use fragile_clang::{
     transpile_parser_output_to_rust, ParserBackend, ParserLanguage, TemplateParsingMode,
     TranspileOptions, transpile_cpp_to_rust_with_options,
+};
+use fragile_driver::{
+    enforce_escape_hatch_policy_as_of, escape_hatch_hardening_expired_as_of,
+    ESCAPE_HATCH_HARDENING_EXPIRY, FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV,
 };
 use fragile_parser_clang::{FragileParserClangBackend, FRAGILE_PARSER_CLANG_BACKEND_ID};
 use fragile_parser_core::{
@@ -407,4 +417,220 @@ extern "C" int sum_pair(Pair p) { return p.first + p.second; }
     );
 
     let _ = fs::remove_dir_all(&dir);
+}
+
+// ---------------------------------------------------------------------------
+// M8.2 Escape Hatch Hardening Window Tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn m8_2_hardening_expiry_date_is_defined_and_future_format() {
+    // The expiry date must be a valid YYYY-MM-DD string.
+    assert_eq!(
+        ESCAPE_HATCH_HARDENING_EXPIRY.len(),
+        10,
+        "expiry date must be YYYY-MM-DD format"
+    );
+    assert_eq!(
+        &ESCAPE_HATCH_HARDENING_EXPIRY[4..5],
+        "-",
+        "expiry date must have dash at position 4"
+    );
+    assert_eq!(
+        &ESCAPE_HATCH_HARDENING_EXPIRY[7..8],
+        "-",
+        "expiry date must have dash at position 7"
+    );
+    // The expiry date must be 2026-04-18.
+    assert_eq!(
+        ESCAPE_HATCH_HARDENING_EXPIRY, "2026-04-18",
+        "hardening window expiry must be 2026-04-18"
+    );
+}
+
+#[test]
+fn m8_2_escape_hatch_not_expired_before_expiry_date() {
+    assert!(
+        !escape_hatch_hardening_expired_as_of("2026-03-18"),
+        "escape hatch should not be expired on 2026-03-18 (before expiry)"
+    );
+    assert!(
+        !escape_hatch_hardening_expired_as_of("2026-04-18"),
+        "escape hatch should not be expired on 2026-04-18 (expiry day itself)"
+    );
+}
+
+#[test]
+fn m8_2_escape_hatch_expired_after_expiry_date() {
+    assert!(
+        escape_hatch_hardening_expired_as_of("2026-04-19"),
+        "escape hatch should be expired on 2026-04-19 (day after expiry)"
+    );
+    assert!(
+        escape_hatch_hardening_expired_as_of("2026-05-01"),
+        "escape hatch should be expired on 2026-05-01 (well after expiry)"
+    );
+}
+
+#[test]
+fn m8_2_enforce_policy_allows_within_window() {
+    // Within the hardening window, the policy should succeed (return Ok).
+    let result = enforce_escape_hatch_policy_as_of(
+        "FRAGILEC_PARSER_BACKEND=libtooling",
+        "test.cpp",
+        "2026-03-20",
+    );
+    assert!(
+        result.is_ok(),
+        "escape hatch should be allowed within hardening window: {:?}",
+        result
+    );
+}
+
+#[test]
+fn m8_2_enforce_policy_rejects_after_window() {
+    // After the hardening window, the policy should fail (return Err).
+    let result = enforce_escape_hatch_policy_as_of(
+        "FRAGILEC_PARSER_BACKEND=libtooling",
+        "test.cpp",
+        "2026-04-19",
+    );
+    assert!(
+        result.is_err(),
+        "escape hatch should be rejected after hardening window expiry"
+    );
+    let err = result.unwrap_err();
+    assert!(
+        err.contains("rejected") && err.contains("2026-04-18"),
+        "error message should mention rejection and expiry date: {}",
+        err
+    );
+}
+
+#[test]
+fn m8_2_enforce_policy_rejects_codegen_escape_hatch_after_window() {
+    let result = enforce_escape_hatch_policy_as_of(
+        "FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH=libtooling",
+        "unit.cpp",
+        "2026-05-01",
+    );
+    assert!(
+        result.is_err(),
+        "codegen escape hatch should be rejected after hardening window expiry"
+    );
+    let err = result.unwrap_err();
+    assert!(
+        err.contains("FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH"),
+        "error should reference the codegen escape hatch: {}",
+        err
+    );
+}
+
+#[test]
+fn m8_2_escape_hatch_log_writes_usage_entry() {
+    let dir = temp_dir("escape_log");
+    let log_path = dir.join("escape_hatch.log");
+
+    // Set the log path env var, call the log function, then unset.
+    std::env::set_var(FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV, log_path.to_str().unwrap());
+    fragile_driver::log_escape_hatch_usage(
+        "FRAGILEC_PARSER_BACKEND=libtooling",
+        "example.cpp",
+    );
+    std::env::remove_var(FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV);
+
+    assert!(
+        log_path.exists(),
+        "escape hatch log file should be created"
+    );
+    let contents = fs::read_to_string(&log_path).expect("should read log file");
+    assert!(
+        contents.contains("escape_kind=FRAGILEC_PARSER_BACKEND=libtooling"),
+        "log should contain escape kind: {}",
+        contents
+    );
+    assert!(
+        contents.contains("source=example.cpp"),
+        "log should contain source file: {}",
+        contents
+    );
+    assert!(
+        contents.contains("timestamp="),
+        "log should contain timestamp: {}",
+        contents
+    );
+    assert!(
+        contents.contains("pid="),
+        "log should contain pid: {}",
+        contents
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn m8_2_escape_hatch_log_appends_multiple_entries() {
+    let dir = temp_dir("escape_log_multi");
+    let log_path = dir.join("escape_hatch.log");
+
+    std::env::set_var(FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV, log_path.to_str().unwrap());
+    fragile_driver::log_escape_hatch_usage("backend-escape", "a.cpp");
+    fragile_driver::log_escape_hatch_usage("codegen-escape", "b.cpp");
+    std::env::remove_var(FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV);
+
+    let contents = fs::read_to_string(&log_path).expect("should read log file");
+    let lines: Vec<&str> = contents.lines().collect();
+    assert!(
+        lines.len() >= 2,
+        "log should contain at least 2 entries, got {}: {}",
+        lines.len(),
+        contents
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn m8_2_no_log_when_env_unset() {
+    let dir = temp_dir("escape_log_noop");
+    let log_path = dir.join("should_not_exist.log");
+
+    // Ensure the env var is not set.
+    std::env::remove_var(FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV);
+    fragile_driver::log_escape_hatch_usage("test-escape", "noop.cpp");
+
+    assert!(
+        !log_path.exists(),
+        "log file should not be created when env var is unset"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn m8_2_deprecation_warning_message_contains_expiry_date() {
+    // The deprecation warning function writes to stderr. We verify its content
+    // indirectly by checking the enforce_policy_as_of error message, which
+    // includes the expiry date and migration guidance.
+    let err = enforce_escape_hatch_policy_as_of(
+        "FRAGILEC_PARSER_BACKEND=libtooling",
+        "file.cpp",
+        "2026-12-01",
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("2026-04-18"),
+        "rejection error should reference hardening expiry date: {}",
+        err
+    );
+    assert!(
+        err.contains("fragile-parser-clang"),
+        "rejection error should mention migration target: {}",
+        err
+    );
+    assert!(
+        err.contains("file.cpp"),
+        "rejection error should mention the source file: {}",
+        err
+    );
 }

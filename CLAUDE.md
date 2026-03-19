@@ -21,6 +21,9 @@ C++ Source -> Clang AST -> Rust Source (unsafe) -> rustc -> Binary
 - M8.1 cutover date: **2026-03-18**.
   - strict default parser backend is now `fragile-parser-clang` (`FRAGILEC_PARSER_BACKEND` unset/empty -> `fragile-parser-clang`).
   - explicit escape hatch to legacy backend: `FRAGILEC_PARSER_BACKEND=libtooling`.
+- M8.2 escape hatch hardening window: expires **2026-04-18**.
+  - escape hatches emit deprecation warnings and are rejected after expiry.
+  - usage logging via `FRAGILEC_ESCAPE_HATCH_LOG_PATH` env var.
 - Latest strict backend-matrix parity evidence (run root: `/tmp/fragile_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_484423_1772259242504942926`):
   - `backend=libtooling` and baseline both report `configure_status=0`, `build_status=2`, `build_timed_out=false`, `first_failure_class=other_rustc_error`, `first_failure_e0425_count=0`.
   - runtime parity markers are locked: `runtime_parity_vs_baseline=true`, `condense_run_status_delta_vs_baseline=0`, `pretty_run_status_delta_vs_baseline=0`.

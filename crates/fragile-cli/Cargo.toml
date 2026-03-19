@@ -15,6 +15,7 @@ path = "src/bin/fragilec.rs"
 fragile-common.workspace = true
 fragile-build.workspace = true
 fragile-clang.workspace = true
+fragile-driver.workspace = true
 fragile-parser-clang.workspace = true
 fragile-parser-core.workspace = true
 clap.workspace = true

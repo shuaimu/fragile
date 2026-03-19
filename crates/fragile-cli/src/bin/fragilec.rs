@@ -1986,6 +1986,14 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
         Ok(())
     };
 
+    // Enforce escape hatch policy for explicit libtooling backend override.
+    if matches!(parser_backend, StrictParserBackend::Libtooling) {
+        fragile_driver::enforce_escape_hatch_policy(
+            "FRAGILEC_PARSER_BACKEND=libtooling",
+            &source.display().to_string(),
+        )?;
+    }
+
     if let StrictParserBackend::ParserCore { backend_id } = parser_backend {
         let parser_output = run_parser_core_backend_parse(
             &source,
@@ -2000,6 +2008,11 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
             parser_core_codegen_escape_hatch,
             Some(ParserCoreCodegenEscapeHatch::Libtooling)
         ) {
+            // Enforce escape hatch policy for codegen escape hatch.
+            fragile_driver::enforce_escape_hatch_policy(
+                "FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH=libtooling",
+                &source.display().to_string(),
+            )?;
             use_libtooling_codegen_escape_hatch = true;
             eprintln!(
                 "[fragilec] parser-core codegen escape hatch enabled; routing {} through legacy libtooling codegen",

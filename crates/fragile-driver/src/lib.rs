@@ -24,6 +24,13 @@ pub const FRAGILEC_PARSER_CORE_MANIFEST_DIR_ENV: &str = "FRAGILEC_PARSER_CORE_MA
 pub const FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH_ENV: &str =
     "FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH";
 pub const FRAGILEC_TRANSPILE_STAGE_TIMING_PATH_ENV: &str = "FRAGILEC_TRANSPILE_STAGE_TIMING_PATH";
+pub const FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV: &str = "FRAGILEC_ESCAPE_HATCH_LOG_PATH";
+
+/// Hardening window expiry: escape hatches are deprecated immediately and will
+/// be rejected after this date (YYYY-MM-DD).  The window gives downstream users
+/// one release cycle to migrate away from `FRAGILEC_PARSER_BACKEND=libtooling`
+/// and `FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH=libtooling`.
+pub const ESCAPE_HATCH_HARDENING_EXPIRY: &str = "2026-04-18";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum StrictParserBackend {
@@ -650,6 +657,121 @@ fn parser_core_codegen_escape_hatch_from_env(
     parser_core_codegen_escape_hatch_from_value(raw.as_deref())
 }
 
+/// Returns true if today's date is past the hardening window expiry.
+pub fn escape_hatch_hardening_expired() -> bool {
+    escape_hatch_hardening_expired_as_of(today_date_string().as_str())
+}
+
+/// Testable variant: returns true if `today` (YYYY-MM-DD) is strictly after the
+/// hardening expiry date.
+pub fn escape_hatch_hardening_expired_as_of(today: &str) -> bool {
+    today > ESCAPE_HATCH_HARDENING_EXPIRY
+}
+
+fn today_date_string() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    // 86400 seconds per day; epoch is 1970-01-01 (Thursday).
+    let days = secs / 86400;
+    // Simple Gregorian calendar conversion.
+    let (year, month, day) = days_since_epoch_to_ymd(days);
+    format!("{:04}-{:02}-{:02}", year, month, day)
+}
+
+fn days_since_epoch_to_ymd(days: u64) -> (u64, u64, u64) {
+    // Algorithm from Howard Hinnant's civil_from_days.
+    let z = days + 719468;
+    let era = z / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
+}
+
+/// Emit a deprecation warning to stderr for escape hatch usage.
+pub fn emit_escape_hatch_deprecation_warning(escape_kind: &str, source: &str) {
+    eprintln!(
+        "[fragilec] DEPRECATION WARNING: {} escape hatch is deprecated and will be \
+         removed after {}. Migrate to the default fragile-parser-clang backend. \
+         (source: {})",
+        escape_kind, ESCAPE_HATCH_HARDENING_EXPIRY, source
+    );
+}
+
+/// Log escape hatch usage to the file at `FRAGILEC_ESCAPE_HATCH_LOG_PATH` if set.
+pub fn log_escape_hatch_usage(escape_kind: &str, source: &str) {
+    let log_path = match std::env::var(FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV).ok() {
+        Some(p) if !p.trim().is_empty() => PathBuf::from(p.trim()),
+        _ => return,
+    };
+    if let Some(parent) = log_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let entry = format!(
+        "timestamp={} escape_kind={} source={} pid={}\n",
+        timestamp,
+        escape_kind,
+        source,
+        std::process::id()
+    );
+    // Append; ignore errors (best-effort telemetry).
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .and_then(|mut f| {
+            use std::io::Write;
+            f.write_all(entry.as_bytes())
+        });
+}
+
+/// Enforce escape hatch policy: emit deprecation warning, log usage, and reject
+/// if the hardening window has expired.  Returns `Ok(())` if the escape hatch
+/// is still allowed (within the hardening window) or `Err` if expired.
+pub fn enforce_escape_hatch_policy(escape_kind: &str, source: &str) -> Result<(), String> {
+    emit_escape_hatch_deprecation_warning(escape_kind, source);
+    log_escape_hatch_usage(escape_kind, source);
+    if escape_hatch_hardening_expired() {
+        return Err(format!(
+            "escape hatch `{}` rejected: hardening window expired on {}. \
+             Remove the escape hatch environment variable and use the default \
+             fragile-parser-clang backend. (source: {})",
+            escape_kind, ESCAPE_HATCH_HARDENING_EXPIRY, source
+        ));
+    }
+    Ok(())
+}
+
+/// Testable variant with explicit date.
+pub fn enforce_escape_hatch_policy_as_of(
+    escape_kind: &str,
+    source: &str,
+    today: &str,
+) -> Result<(), String> {
+    emit_escape_hatch_deprecation_warning(escape_kind, source);
+    log_escape_hatch_usage(escape_kind, source);
+    if escape_hatch_hardening_expired_as_of(today) {
+        return Err(format!(
+            "escape hatch `{}` rejected: hardening window expired on {}. \
+             Remove the escape hatch environment variable and use the default \
+             fragile-parser-clang backend. (source: {})",
+            escape_kind, ESCAPE_HATCH_HARDENING_EXPIRY, source
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 fn strict_parser_backend_from_legacy_backend(
     backend: ClangParserBackend,
@@ -1012,6 +1134,14 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
         Ok(())
     };
 
+    // Enforce escape hatch policy for explicit libtooling backend override.
+    if matches!(parser_backend, StrictParserBackend::Libtooling) {
+        enforce_escape_hatch_policy(
+            "FRAGILEC_PARSER_BACKEND=libtooling",
+            &source.display().to_string(),
+        )?;
+    }
+
     if let StrictParserBackend::ParserCore { backend_id } = parser_backend {
         let parser_output = run_parser_core_backend_parse(
             &source,
@@ -1026,6 +1156,11 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
             parser_core_codegen_escape_hatch,
             Some(ParserCoreCodegenEscapeHatch::Libtooling)
         ) {
+            // Enforce escape hatch policy for codegen escape hatch.
+            enforce_escape_hatch_policy(
+                "FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH=libtooling",
+                &source.display().to_string(),
+            )?;
             use_libtooling_codegen_escape_hatch = true;
         } else {
             let transpiled = with_current_dir(cwd, || {
@@ -1566,5 +1701,48 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn escape_hatch_hardening_expiry_within_window() {
+        assert!(!escape_hatch_hardening_expired_as_of("2026-03-18"));
+        assert!(!escape_hatch_hardening_expired_as_of("2026-04-18"));
+    }
+
+    #[test]
+    fn escape_hatch_hardening_expiry_after_window() {
+        assert!(escape_hatch_hardening_expired_as_of("2026-04-19"));
+        assert!(escape_hatch_hardening_expired_as_of("2027-01-01"));
+    }
+
+    #[test]
+    fn enforce_escape_hatch_policy_as_of_ok_within_window() {
+        let result = enforce_escape_hatch_policy_as_of(
+            "FRAGILEC_PARSER_BACKEND=libtooling",
+            "test.cpp",
+            "2026-03-20",
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn enforce_escape_hatch_policy_as_of_err_after_window() {
+        let result = enforce_escape_hatch_policy_as_of(
+            "FRAGILEC_PARSER_BACKEND=libtooling",
+            "test.cpp",
+            "2026-04-19",
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("rejected"));
+        assert!(err.contains(ESCAPE_HATCH_HARDENING_EXPIRY));
+    }
+
+    #[test]
+    fn today_date_string_is_valid_format() {
+        let today = today_date_string();
+        assert_eq!(today.len(), 10);
+        assert_eq!(&today[4..5], "-");
+        assert_eq!(&today[7..8], "-");
     }
 }
