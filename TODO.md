@@ -147,8 +147,8 @@ Acceptance:
 - [x] M8.A2 Escape hatch usage is measured and trending to zero during hardening window. Done 2026-03-19. Evidence: added log parser (`parse_escape_hatch_log`, `generate_escape_hatch_usage_report`, `assert_escape_hatch_trending_to_zero`) in `fragile-driver`; added Python CI tool `scripts/escape_hatch_usage_report.py` with `--gate` mode for trending-to-zero enforcement; 17 regression tests in `m8_cutover_tests.rs` covering log parsing, report generation, gate pass/fail semantics, Python script integration, round-trip verification, and default-pipeline zero-usage acceptance; current default pipeline produces zero escape hatch entries (trending at zero).
 
 ### M9) Deferred RPC Target Closure (Lower Priority)
-- [ ] M9.0 Start only after M0-M8 acceptance is complete.
-- [ ] M9.1 Rebuild strict `test_rpc` + `rpcbench` with new parser backend and no force-native paths.
+- [x] M9.0 Start only after M0-M8 acceptance is complete. Done 2026-03-19. Evidence: M0-M8 acceptance items all closed (M8.A1, M8.A2 confirmed green).
+- [ ] M9.1 [WIP on claude/parser] Rebuild strict `test_rpc` + `rpcbench` with new parser backend and no force-native paths.
 - [ ] M9.2 Run full strict runtime replay and capture deterministic runtime manifests.
 - [ ] M9.3 Run deterministic clang vs fragile benchmark comparison and enforce no-regression gate.
 Acceptance:
