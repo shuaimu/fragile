@@ -1696,3 +1696,106 @@ fn m9_3_task_documented_in_todo() {
         "TODO.md should contain M9.3 subtask breakdown"
     );
 }
+
+// ---------------------------------------------------------------------------
+// M9.2.c: Script configuration correctness
+// ---------------------------------------------------------------------------
+
+/// M9.2.c: All orchestration scripts must default to release fragilec binary.
+/// Debug fragilec is ~10x slower and causes build timeouts on mako.
+#[test]
+fn m9_2c_orchestration_scripts_default_to_release_fragilec() {
+    let ws = workspace_root_dir();
+    let scripts = [
+        "scripts/mako_rpc_strict_runtime_replay.py",
+        "scripts/mako_rpc_benchmark_comparison.py",
+        "scripts/mako_rpcbench_harness.py",
+        "scripts/parser_shadow_non_rpc_corpus.py",
+    ];
+
+    for script_path in &scripts {
+        let src = fs::read_to_string(ws.join(script_path))
+            .unwrap_or_else(|e| panic!("read {}: {}", script_path, e));
+
+        assert!(
+            !src.contains(r#""debug" / "fragilec""#),
+            "{} must not default to debug fragilec (causes build timeouts on mako)",
+            script_path,
+        );
+    }
+}
+
+/// M9.2.c: Strict runtime replay build timeout must be >= 3600s for mako.
+#[test]
+fn m9_2c_strict_runtime_replay_build_timeout_sufficient() {
+    let src = fs::read_to_string(
+        workspace_root_dir().join("scripts/mako_rpc_strict_runtime_replay.py"),
+    )
+    .expect("read replay script");
+
+    // Find the line with --build-timeout-seconds default
+    let timeout_line = src
+        .lines()
+        .find(|l| l.contains("--build-timeout-seconds") && l.contains("default="))
+        .expect("build-timeout-seconds default line not found");
+
+    // Extract the default=N value
+    let default_marker = "default=";
+    let start = timeout_line
+        .find(default_marker)
+        .expect("default= not found in timeout line")
+        + default_marker.len();
+    let end = timeout_line[start..]
+        .find(|c: char| !c.is_ascii_digit())
+        .map(|i| start + i)
+        .unwrap_or(timeout_line.len());
+    let timeout: u64 = timeout_line[start..end].parse().unwrap();
+
+    assert!(
+        timeout >= 3600,
+        "build timeout default {}s too low for mako; need >= 3600s",
+        timeout,
+    );
+}
+
+/// M9.2.c: Python test suite covers script default configuration validation.
+#[test]
+fn m9_2c_python_tests_cover_default_config() {
+    let src = fs::read_to_string(
+        workspace_root_dir().join("tests/python/test_mako_rpc_strict_runtime_replay.py"),
+    )
+    .expect("read Python tests");
+
+    assert!(
+        src.contains("ScriptDefaultConfigTests"),
+        "Python tests must include ScriptDefaultConfigTests class",
+    );
+    assert!(
+        src.contains("release"),
+        "Python tests must validate release fragilec default",
+    );
+}
+
+/// M9.2.c: Run Python default-config tests and assert they pass.
+#[test]
+fn m9_2c_python_default_config_tests_pass() {
+    let output = Command::new("python3")
+        .args([
+            "-m",
+            "unittest",
+            "test_mako_rpc_strict_runtime_replay.ScriptDefaultConfigTests",
+            "-v",
+        ])
+        .current_dir(workspace_root_dir().join("tests/python"))
+        .output()
+        .expect("run Python default-config tests");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    eprintln!("Python default-config tests:\n{}", stderr);
+
+    assert!(
+        output.status.success(),
+        "Python ScriptDefaultConfigTests must pass:\n{}",
+        stderr,
+    );
+}

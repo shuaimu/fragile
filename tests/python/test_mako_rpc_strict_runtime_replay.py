@@ -282,5 +282,61 @@ class MakoRpcStrictRuntimeReplayTests(unittest.TestCase):
             self.assertIn("FRAGILEC_FORCE_NATIVE_SOURCES", result.stderr)
 
 
+class ScriptDefaultConfigTests(unittest.TestCase):
+    """Verify that orchestration scripts default to release fragilec binary
+    and reasonable build timeouts for real-world mako builds."""
+
+    def _read_script(self, name: str) -> str:
+        return (REPO_ROOT / "scripts" / name).read_text(encoding="utf-8")
+
+    def test_strict_runtime_replay_defaults_to_release_fragilec(self) -> None:
+        src = self._read_script("mako_rpc_strict_runtime_replay.py")
+        self.assertIn('"release" / "fragilec"', src)
+        self.assertNotIn('"debug" / "fragilec"', src)
+
+    def test_benchmark_comparison_defaults_to_release_fragilec(self) -> None:
+        src = self._read_script("mako_rpc_benchmark_comparison.py")
+        self.assertIn('"release" / "fragilec"', src)
+        self.assertNotIn('"debug" / "fragilec"', src)
+
+    def test_parser_shadow_defaults_to_release_fragilec(self) -> None:
+        src = self._read_script("parser_shadow_non_rpc_corpus.py")
+        self.assertIn('"release" / "fragilec"', src)
+        self.assertNotIn('"debug" / "fragilec"', src)
+
+    def test_harness_defaults_to_release_fragilec(self) -> None:
+        src = self._read_script("mako_rpcbench_harness.py")
+        self.assertIn('"release" / "fragilec"', src)
+        self.assertNotIn('"debug" / "fragilec"', src)
+
+    def test_strict_runtime_replay_build_timeout_at_least_3600(self) -> None:
+        """Build timeout must be >= 3600s for mako builds with release fragilec."""
+        src = self._read_script("mako_rpc_strict_runtime_replay.py")
+        import re
+        m = re.search(r"--build-timeout-seconds.*?default=(\d+)", src)
+        self.assertIsNotNone(m, "build-timeout-seconds default not found")
+        timeout = int(m.group(1))
+        self.assertGreaterEqual(
+            timeout, 3600,
+            f"build timeout default {timeout}s is too low for mako; need >= 3600s"
+        )
+
+    def test_all_scripts_consistent_release_fragilec(self) -> None:
+        """No orchestration script should default to debug fragilec binary."""
+        scripts = [
+            "mako_rpc_strict_runtime_replay.py",
+            "mako_rpc_benchmark_comparison.py",
+            "mako_rpcbench_harness.py",
+            "parser_shadow_non_rpc_corpus.py",
+        ]
+        for name in scripts:
+            src = self._read_script(name)
+            self.assertNotIn(
+                '"debug" / "fragilec"',
+                src,
+                f"{name} still defaults to debug fragilec",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
