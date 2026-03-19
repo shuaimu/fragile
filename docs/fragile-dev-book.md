@@ -20634,3 +20634,43 @@ Validation:
 - `cargo test -p fragile-clang --test integration_test test_libcxx_thread_transpilation -- --nocapture`
 - `cargo test -p fragile-clang --test integration_test test_libcxx_vector_transpilation -- --nocapture`
 - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+## 2026-03-19: M9.2.b runtime replay harness focus/resume controls
+
+Task sizing analysis:
+- Scope is small and bounded (<1000 LOC) across two Python scripts plus tests.
+- No additional TODO decomposition is required.
+
+Plan before execution:
+- add generic harness flags to skip `masstree_perf` target and optional clean step;
+- keep deterministic command-plan/manifest artifact contracts for strict replay evidence;
+- make strict replay wrapper pass and verify the same flags to prevent drift;
+- add focused Python regressions, then rerun full Rust/Python suites.
+
+Wrong-approach check:
+- Re-reviewed Section 1.3 and `docs/dev/wrong.md` before implementation.
+- No target-specific hacks, no native bypass paths, and no fake semantic stubs were added.
+
+Implemented:
+- `scripts/mako_rpcbench_harness.py`
+  - Added `--skip-masstree-perf-target` and `--skip-clean-step`.
+  - Build target list is now conditional (`test_rpc`, `rpcbench`, optional `masstree_perf`).
+  - Command-plan and manifest now persist `skip_masstree_perf_target` and `skip_clean_step`.
+  - Clean-step skipping is explicit (`clean.status=-1`, skipped reason in stderr) and failure classification is skip-aware.
+- `scripts/mako_rpc_strict_runtime_replay.py`
+  - Added wrapper controls with runtime-focused defaults:
+    - `--skip-masstree-perf-target` (default true) / `--include-masstree-perf-target`
+    - `--skip-clean-step` (default true) / `--run-clean-step`
+  - Wrapper forwards flags into harness command artifacts.
+  - Wrapper requires harness manifest skip fields and fails on mismatch.
+- Regression coverage:
+  - `tests/python/test_mako_rpcbench_harness.py`
+  - `tests/python/test_mako_rpc_strict_runtime_replay.py`
+
+Validation:
+- Focused Python suites:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.python.test_mako_rpcbench_harness tests.python.test_mako_rpc_strict_runtime_replay tests.python.test_mako_rpc_milestone_contract`
+- Full Python suite:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/python -p 'test_*.py'`
+- Full Rust workspace suite:
+  - `cargo test --workspace --all-targets`

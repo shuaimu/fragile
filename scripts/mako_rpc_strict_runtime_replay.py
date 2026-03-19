@@ -225,6 +225,32 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--rpc-epoll-instances", type=int, default=2)
     parser.add_argument("--rpc-payload-bytes", type=int, default=10)
     parser.add_argument(
+        "--skip-masstree-perf-target",
+        dest="skip_masstree_perf_target",
+        action="store_true",
+        default=True,
+        help="skip masstree_perf build target for runtime-focused replay (default)",
+    )
+    parser.add_argument(
+        "--include-masstree-perf-target",
+        dest="skip_masstree_perf_target",
+        action="store_false",
+        help="include masstree_perf build target in strict runtime replay",
+    )
+    parser.add_argument(
+        "--skip-clean-step",
+        dest="skip_clean_step",
+        action="store_true",
+        default=True,
+        help="skip clean target before build for resumable replay (default)",
+    )
+    parser.add_argument(
+        "--run-clean-step",
+        dest="skip_clean_step",
+        action="store_false",
+        help="run clean target before build in strict runtime replay",
+    )
+    parser.add_argument(
         "--harness-script",
         type=Path,
         default=script_dir / "mako_rpcbench_harness.py",
@@ -403,6 +429,10 @@ def main(argv: Sequence[str]) -> int:
             "--rpc-payload-bytes",
             str(ns.rpc_payload_bytes),
         ]
+        if ns.skip_masstree_perf_target:
+            harness_cmd.append("--skip-masstree-perf-target")
+        if ns.skip_clean_step:
+            harness_cmd.append("--skip-clean-step")
 
         write_lines(
             run_root / "strict_runtime_replay_commands.txt",
@@ -415,6 +445,11 @@ def main(argv: Sequence[str]) -> int:
                 "strict_env_parser_core_codegen_escape_hatch=unset",
                 f"fragilec_build_command={shell_join(fragilec_build_cmd)}",
                 f"fragile_cxx={fragilec_path}",
+                (
+                    "skip_masstree_perf_target="
+                    f"{'true' if ns.skip_masstree_perf_target else 'false'}"
+                ),
+                f"skip_clean_step={'true' if ns.skip_clean_step else 'false'}",
                 f"harness_command={shell_join(harness_cmd)}",
             ],
         )
@@ -467,6 +502,28 @@ def main(argv: Sequence[str]) -> int:
             "lane_fragilec_failure_class",
             source="harness",
         )
+        harness_skip_masstree_perf_target = required_key(
+            harness_manifest,
+            "skip_masstree_perf_target",
+            source="harness",
+        )
+        harness_skip_clean_step = required_key(
+            harness_manifest,
+            "skip_clean_step",
+            source="harness",
+        )
+        expected_skip_masstree = "true" if ns.skip_masstree_perf_target else "false"
+        expected_skip_clean = "true" if ns.skip_clean_step else "false"
+        if harness_skip_masstree_perf_target != expected_skip_masstree:
+            raise ValueError(
+                "harness skip_masstree_perf_target mismatch: "
+                f"expected {expected_skip_masstree}, got {harness_skip_masstree_perf_target}"
+            )
+        if harness_skip_clean_step != expected_skip_clean:
+            raise ValueError(
+                "harness skip_clean_step mismatch: "
+                f"expected {expected_skip_clean}, got {harness_skip_clean_step}"
+            )
         harness_no_regression_verdict = required_key(
             harness_manifest,
             "no_regression_verdict",
@@ -504,6 +561,8 @@ def main(argv: Sequence[str]) -> int:
             f"lane_fragilec_test_rpc_status={lane_test_rpc_status}",
             f"lane_fragilec_completed_trials={lane_completed_trials}",
             f"lane_fragilec_failure_class={lane_failure_class}",
+            f"skip_masstree_perf_target={harness_skip_masstree_perf_target}",
+            f"skip_clean_step={harness_skip_clean_step}",
             (
                 "runtime_all_trials_passed="
                 f"{'true' if trial_summary.all_trials_passed else 'false'}"
