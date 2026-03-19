@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Shared milestone run-root naming and artifact contract helpers.
 
-This module defines the M0 naming contract and required artifact sets for:
+This module defines the naming contract and required artifact sets for:
 - M0.1 strict baseline capture
 - M0.2 parser backend A/B harness
+- M9.2 strict runtime replay
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from typing import Iterable
 
 RUN_ROOT_CONTRACT_VERSION = "1"
 RUN_ROOT_NAME_PATTERN = (
-    r"^fragile_(m0_1_strict_baseline|m0_2_parser_backend_ab)_\d{8}T\d{6}Z_p\d+$"
+    r"^fragile_(m0_1_strict_baseline|m0_2_parser_backend_ab|m9_2_strict_runtime_replay)_\d{8}T\d{6}Z_p\d+$"
 )
 _RUN_ROOT_RE = re.compile(RUN_ROOT_NAME_PATTERN)
 
@@ -98,6 +99,59 @@ def required_artifacts_m0_2(
     )
 
 
+def required_artifacts_m9_2(
+    *,
+    trials: int,
+    lane: str = "fragilec",
+) -> tuple[str, ...]:
+    if trials <= 0:
+        raise ValueError(f"trials must be > 0, got {trials}")
+    if not lane:
+        raise ValueError("lane must be non-empty")
+
+    entries: list[str] = [
+        "strict_runtime_replay_commands.txt",
+        "strict_runtime_replay_fragilec_build.status",
+        "strict_runtime_replay_fragilec_build.stdout.log",
+        "strict_runtime_replay_fragilec_build.stderr.log",
+        "strict_runtime_replay_harness.status",
+        "strict_runtime_replay_harness.stdout.log",
+        "strict_runtime_replay_harness.stderr.log",
+        "benchmark_harness_manifest.txt",
+        "benchmark_harness_command_plan.txt",
+        "benchmark_expected_artifacts.txt",
+        "benchmark_qps_comparison_manifest.txt",
+        f"lane_{lane}/configure.status",
+        f"lane_{lane}/configure.stdout",
+        f"lane_{lane}/configure.stderr",
+        f"lane_{lane}/clean.status",
+        f"lane_{lane}/clean.stdout",
+        f"lane_{lane}/clean.stderr",
+        f"lane_{lane}/build.status",
+        f"lane_{lane}/build.stdout",
+        f"lane_{lane}/build.stderr",
+        f"lane_{lane}/test_rpc.status",
+        f"lane_{lane}/test_rpc.stdout",
+        f"lane_{lane}/test_rpc.stderr",
+        "strict_runtime_replay_manifest.txt",
+    ]
+
+    for trial_index in range(1, trials + 1):
+        trial_prefix = f"lane_{lane}/trial_{trial_index:02d}"
+        entries.extend(
+            [
+                f"{trial_prefix}/rpc_server.status",
+                f"{trial_prefix}/rpc_server.stdout",
+                f"{trial_prefix}/rpc_server.stderr",
+                f"{trial_prefix}/rpc_client.status",
+                f"{trial_prefix}/rpc_client.stdout",
+                f"{trial_prefix}/rpc_client.stderr",
+            ]
+        )
+
+    return tuple(entries)
+
+
 def write_artifact_contract_manifest(
     *,
     manifest_path: Path,
@@ -140,4 +194,3 @@ def write_artifact_contract_manifest(
         missing_count=missing_count,
         manifest_path=manifest_path,
     )
-

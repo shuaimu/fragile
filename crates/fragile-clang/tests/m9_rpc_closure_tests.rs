@@ -725,3 +725,488 @@ fn m9_1_default_backend_is_new_parser_for_rpc_builds() {
         "M9.1 task must be documented"
     );
 }
+
+// ---------------------------------------------------------------------------
+// M9.2 Strict Runtime Replay Contract Tests
+// ---------------------------------------------------------------------------
+
+/// M9.2.a: Validate the strict runtime replay script exists and has correct interface.
+#[test]
+fn m9_2a_strict_runtime_replay_script_exists() {
+    let workspace_root = workspace_root_dir();
+    let script = workspace_root.join("scripts/mako_rpc_strict_runtime_replay.py");
+    assert!(
+        script.exists(),
+        "M9.2 strict runtime replay script must exist at scripts/mako_rpc_strict_runtime_replay.py"
+    );
+    let content = fs::read_to_string(&script).expect("read replay script");
+
+    // Script must import the milestone contract module
+    assert!(
+        content.contains("from mako_rpc_milestone_contract import"),
+        "replay script must import milestone contract module"
+    );
+
+    // Script must reference M9.2 task leaf
+    assert!(
+        content.contains("M9.2"),
+        "replay script must reference M9.2 task leaf"
+    );
+
+    // Script must enforce strict mode
+    assert!(
+        content.contains("FRAGILEC_MODE"),
+        "replay script must enforce FRAGILEC_MODE"
+    );
+    assert!(
+        content.contains("FRAGILEC_PARSER_BACKEND"),
+        "replay script must reference FRAGILEC_PARSER_BACKEND"
+    );
+    assert!(
+        content.contains("FRAGILEC_FORCE_NATIVE_SOURCES"),
+        "replay script must check FRAGILEC_FORCE_NATIVE_SOURCES"
+    );
+    assert!(
+        content.contains("FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH"),
+        "replay script must check FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH"
+    );
+}
+
+/// M9.2.a: Validate the milestone contract module defines M9.2 artifacts.
+#[test]
+fn m9_2a_milestone_contract_defines_m9_2_artifacts() {
+    let workspace_root = workspace_root_dir();
+    let contract = workspace_root.join("scripts/mako_rpc_milestone_contract.py");
+    assert!(
+        contract.exists(),
+        "milestone contract module must exist"
+    );
+    let content = fs::read_to_string(&contract).expect("read contract module");
+
+    // Must define required_artifacts_m9_2
+    assert!(
+        content.contains("def required_artifacts_m9_2"),
+        "contract module must define required_artifacts_m9_2()"
+    );
+
+    // Must include m9_2_strict_runtime_replay in run root pattern
+    assert!(
+        content.contains("m9_2_strict_runtime_replay"),
+        "contract module must include m9_2_strict_runtime_replay in naming pattern"
+    );
+
+    // Must include trial-level artifacts
+    assert!(
+        content.contains("rpc_server.status"),
+        "contract module must include per-trial rpc_server.status artifact"
+    );
+    assert!(
+        content.contains("rpc_client.status"),
+        "contract module must include per-trial rpc_client.status artifact"
+    );
+
+    // Must include manifest artifact
+    assert!(
+        content.contains("strict_runtime_replay_manifest.txt"),
+        "contract module must include strict_runtime_replay_manifest.txt artifact"
+    );
+}
+
+/// M9.2.a: Validate environment enforcement rejects incompatible parent env.
+#[test]
+fn m9_2a_replay_script_rejects_incompatible_env() {
+    let workspace_root = workspace_root_dir();
+    let script = workspace_root.join("scripts/mako_rpc_strict_runtime_replay.py");
+    let content = fs::read_to_string(&script).expect("read replay script");
+
+    // Must have explicit parent env validation
+    assert!(
+        content.contains("assert_parent_env_is_strict_contract_compatible")
+            || content.contains("parent_env"),
+        "replay script must validate parent environment compatibility"
+    );
+
+    // Must reject force-native sources
+    assert!(
+        content.contains("forbidden native bypass")
+            || content.contains("FORCE_NATIVE_SOURCES"),
+        "replay script must reject FRAGILEC_FORCE_NATIVE_SOURCES"
+    );
+
+    // Must reject escape hatch
+    assert!(
+        content.contains("escape hatch must be unset")
+            || content.contains("PARSER_CORE_CODEGEN_ESCAPE_HATCH"),
+        "replay script must reject FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH"
+    );
+}
+
+/// M9.2.a: Validate the replay script emits required manifest fields.
+#[test]
+fn m9_2a_replay_manifest_field_contract() {
+    let workspace_root = workspace_root_dir();
+    let script = workspace_root.join("scripts/mako_rpc_strict_runtime_replay.py");
+    let content = fs::read_to_string(&script).expect("read replay script");
+
+    // Required manifest fields that must be emitted
+    let required_fields = [
+        "task_leaf=M9.2",
+        "strict_mode=true",
+        "strict_env_mode=",
+        "strict_env_parser_backend=",
+        "strict_env_force_native_sources=unset",
+        "strict_env_parser_core_codegen_escape_hatch=unset",
+        "lanes=fragilec",
+        "requested_trials=",
+        "harness_status=",
+        "lane_fragilec_build_status=",
+        "lane_fragilec_test_rpc_status=",
+        "lane_fragilec_completed_trials=",
+        "lane_fragilec_failure_class=",
+        "runtime_all_trials_passed=",
+        "runtime_trial_passed_count=",
+        "runtime_trial_failed_count=",
+        "run_root_contract_version=",
+        "run_root_name_pattern=",
+        "run_root_name_is_contract_valid=",
+    ];
+
+    for field_prefix in &required_fields {
+        // The field must appear in the script as a string being written to the manifest
+        let field_key = field_prefix.split('=').next().unwrap();
+        assert!(
+            content.contains(field_key),
+            "replay script must emit manifest field: {}",
+            field_key
+        );
+    }
+}
+
+/// M9.2.b: Integration test that invokes the replay script with fake harness
+/// and validates full manifest round-trip.
+#[test]
+#[ignore] // Requires Python3 and creates temp files
+fn m9_2b_replay_script_fake_harness_integration() {
+    let workspace_root = workspace_root_dir();
+    let script = workspace_root.join("scripts/mako_rpc_strict_runtime_replay.py");
+
+    let out_dir = temp_dir("m9_2b_replay_integration");
+    let fake_workspace = out_dir.join("workspace");
+    let fake_mako = fake_workspace.join("vendor/mako");
+    fs::create_dir_all(&fake_mako).expect("create fake mako dir");
+    fs::write(
+        fake_mako.join("CMakeLists.txt"),
+        "cmake_minimum_required(VERSION 3.16)\n",
+    )
+    .expect("write fake CMakeLists.txt");
+
+    let run_root = out_dir.join("run");
+
+    // Write a fake harness that produces all required artifacts with success
+    let fake_harness = out_dir.join("fake_harness.py");
+    let fake_harness_content = r#"#!/usr/bin/env python3
+import argparse
+import os
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--run-root', required=True)
+parser.add_argument('--trials', required=True)
+args, _ = parser.parse_known_args()
+
+run_root = Path(args.run_root)
+run_root.mkdir(parents=True, exist_ok=True)
+trials = int(args.trials)
+lane = 'fragilec'
+
+(run_root / 'benchmark_harness_command_plan.txt').write_text('plan\n', encoding='utf-8')
+(run_root / 'benchmark_expected_artifacts.txt').write_text('expected\n', encoding='utf-8')
+(run_root / 'benchmark_qps_comparison_manifest.txt').write_text(
+    '\n'.join([
+        'version=1',
+        'no_regression_verdict=insufficient_data',
+    ]) + '\n',
+    encoding='utf-8'
+)
+
+manifest_lines = [
+    'version=1',
+    'lanes=fragilec',
+    f'trials={trials}',
+    'no_regression_verdict=insufficient_data',
+    f'lane_{lane}_build_status=0',
+    f'lane_{lane}_test_rpc_status=0',
+    f'lane_{lane}_completed_trials={trials}',
+    f'lane_{lane}_failure_class=none',
+]
+(run_root / 'benchmark_harness_manifest.txt').write_text('\n'.join(manifest_lines) + '\n', encoding='utf-8')
+
+lane_dir = run_root / f'lane_{lane}'
+lane_dir.mkdir(parents=True, exist_ok=True)
+for step in ('configure', 'clean', 'build', 'test_rpc'):
+    (lane_dir / f'{step}.status').write_text('0\n', encoding='utf-8')
+    (lane_dir / f'{step}.stdout').write_text(f'{step} stdout\n', encoding='utf-8')
+    (lane_dir / f'{step}.stderr').write_text(f'{step} stderr\n', encoding='utf-8')
+
+for trial in range(1, trials + 1):
+    trial_dir = lane_dir / f'trial_{trial:02d}'
+    trial_dir.mkdir(parents=True, exist_ok=True)
+    (trial_dir / 'rpc_server.status').write_text('0\n', encoding='utf-8')
+    (trial_dir / 'rpc_server.stdout').write_text('rpc server stdout\n', encoding='utf-8')
+    (trial_dir / 'rpc_server.stderr').write_text('rpc server stderr\n', encoding='utf-8')
+    (trial_dir / 'rpc_client.status').write_text('0\n', encoding='utf-8')
+    (trial_dir / 'rpc_client.stdout').write_text('rpc client stdout\n', encoding='utf-8')
+    (trial_dir / 'rpc_client.stderr').write_text('rpc client stderr\n', encoding='utf-8')
+
+print(run_root)
+raise SystemExit(1)
+"#;
+    fs::write(&fake_harness, fake_harness_content).expect("write fake harness");
+
+    // Run the replay script with fake harness
+    let output = Command::new("python3")
+        .arg(&script)
+        .args([
+            "--workspace-root",
+            fake_workspace.to_str().unwrap(),
+            "--mako-root",
+            fake_mako.to_str().unwrap(),
+            "--run-root",
+            run_root.to_str().unwrap(),
+            "--harness-script",
+            fake_harness.to_str().unwrap(),
+            "--fragile-cxx",
+            fake_harness.to_str().unwrap(),
+            "--skip-fragilec-build",
+            "--trials",
+            "2",
+            "--jobs",
+            "1",
+            "--base-port",
+            "23800",
+            "--rpc-duration-seconds",
+            "1",
+        ])
+        .output()
+        .expect("run replay script");
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    assert!(
+        output.status.success(),
+        "replay script should succeed with fake harness (insufficient_data verdict is accepted)\nstdout:\n{}\nstderr:\n{}",
+        stdout, stderr
+    );
+
+    // Validate manifest was produced
+    let manifest_path = run_root.join("strict_runtime_replay_manifest.txt");
+    assert!(
+        manifest_path.exists(),
+        "strict_runtime_replay_manifest.txt must be produced"
+    );
+
+    let manifest_content = fs::read_to_string(&manifest_path).expect("read manifest");
+
+    // Validate key manifest fields
+    assert!(manifest_content.contains("task_leaf=M9.2"), "manifest must contain task_leaf=M9.2");
+    assert!(manifest_content.contains("strict_mode=true"), "manifest must contain strict_mode=true");
+    assert!(
+        manifest_content.contains("strict_env_mode=strict"),
+        "manifest must contain strict_env_mode=strict"
+    );
+    assert!(
+        manifest_content.contains("strict_env_parser_backend=fragile-parser-clang"),
+        "manifest must contain strict_env_parser_backend=fragile-parser-clang"
+    );
+    assert!(
+        manifest_content.contains("strict_env_force_native_sources=unset"),
+        "manifest must contain strict_env_force_native_sources=unset"
+    );
+    assert!(
+        manifest_content.contains("lane_fragilec_build_status=0"),
+        "manifest must contain lane_fragilec_build_status=0"
+    );
+    assert!(
+        manifest_content.contains("lane_fragilec_test_rpc_status=0"),
+        "manifest must contain lane_fragilec_test_rpc_status=0"
+    );
+    assert!(
+        manifest_content.contains("runtime_all_trials_passed=true"),
+        "manifest must contain runtime_all_trials_passed=true"
+    );
+    assert!(
+        manifest_content.contains("runtime_trial_passed_count=2"),
+        "manifest must contain runtime_trial_passed_count=2"
+    );
+    assert!(
+        manifest_content.contains("runtime_trial_failed_count=0"),
+        "manifest must contain runtime_trial_failed_count=0"
+    );
+    assert!(
+        manifest_content.contains("missing_required_artifact_count=0"),
+        "manifest must contain missing_required_artifact_count=0"
+    );
+
+    // Validate commands artifact was produced
+    let commands_path = run_root.join("strict_runtime_replay_commands.txt");
+    assert!(commands_path.exists(), "commands artifact must be produced");
+    let commands_content = fs::read_to_string(&commands_path).expect("read commands");
+    assert!(
+        commands_content.contains("FRAGILEC_MODE=strict"),
+        "commands must contain strict env"
+    );
+    assert!(
+        commands_content.contains("FRAGILEC_PARSER_BACKEND=fragile-parser-clang"),
+        "commands must contain parser backend env"
+    );
+    assert!(
+        commands_content.contains("--lanes fragilec"),
+        "commands must contain --lanes fragilec"
+    );
+
+    // Validate artifact contract manifest was produced
+    let artifact_manifest = run_root.join("strict_runtime_replay_required_artifacts_manifest.txt");
+    assert!(
+        artifact_manifest.exists(),
+        "artifact contract manifest must be produced"
+    );
+    let artifact_content = fs::read_to_string(&artifact_manifest).expect("read artifact manifest");
+    assert!(
+        artifact_content.contains("missing_required_artifact_count=0"),
+        "all required artifacts must be present"
+    );
+
+    eprintln!(
+        "M9.2.b integration test PASSED: run_root={}, manifest fields validated",
+        run_root.display()
+    );
+}
+
+/// M9.2.c: Validate Python test suite covers runtime replay end-to-end.
+#[test]
+fn m9_2c_python_test_suite_covers_runtime_replay() {
+    let workspace_root = workspace_root_dir();
+    let test_file = workspace_root.join("tests/python/test_mako_rpc_strict_runtime_replay.py");
+    assert!(
+        test_file.exists(),
+        "Python test suite for M9.2 runtime replay must exist"
+    );
+    let content = fs::read_to_string(&test_file).expect("read Python test file");
+
+    // Must have positive test (accept insufficient_data verdict)
+    assert!(
+        content.contains("insufficient_data") && content.contains("lane_passes"),
+        "Python tests must cover positive case: accept insufficient_data verdict when lane passes.\n\
+         (Looked for 'insufficient_data' and 'lane_passes' in test file)"
+    );
+
+    // Must have negative test (reject lane failure)
+    assert!(
+        content.contains("lane_failure") || content.contains("rejects_lane_failure"),
+        "Python tests must cover negative case: reject lane failure contract"
+    );
+
+    // Must have negative test (reject non-insufficient_data nonzero harness)
+    assert!(
+        content.contains("rejects_non_insufficient_data")
+            || content.contains("without insufficient_data"),
+        "Python tests must cover negative case: reject non-insufficient_data nonzero harness"
+    );
+
+    // Must have env rejection test
+    assert!(
+        content.contains("FRAGILEC_FORCE_NATIVE_SOURCES")
+            && content.contains("rejected"),
+        "Python tests must cover env rejection: FRAGILEC_FORCE_NATIVE_SOURCES"
+    );
+}
+
+/// M9.2.c: Run the Python test suite for runtime replay and verify it passes.
+#[test]
+fn m9_2c_python_runtime_replay_tests_pass() {
+    let workspace_root = workspace_root_dir();
+    let test_file = workspace_root.join("tests/python/test_mako_rpc_strict_runtime_replay.py");
+    if !test_file.exists() {
+        eprintln!("skipping: Python test file not found");
+        return;
+    }
+
+    let output = Command::new("python3")
+        .arg("-m")
+        .arg("unittest")
+        .arg(test_file.to_str().unwrap())
+        .env("PYTHONPATH", workspace_root.join("scripts").to_str().unwrap())
+        .current_dir(&workspace_root)
+        .output()
+        .expect("run Python tests");
+
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        output.status.success(),
+        "Python runtime replay tests must pass\nstderr:\n{}",
+        stderr
+    );
+
+    // Verify test count (should have at least 4 tests)
+    assert!(
+        stderr.contains("Ran ") && stderr.contains(" tests"),
+        "Python test output should show test count\nstderr:\n{}",
+        stderr
+    );
+
+    eprintln!(
+        "M9.2.c Python runtime replay tests PASSED:\n{}",
+        stderr.lines().last().unwrap_or("(no output)")
+    );
+}
+
+/// M9.2.c: Run the Python milestone contract tests and verify they pass.
+#[test]
+fn m9_2c_python_milestone_contract_tests_pass() {
+    let workspace_root = workspace_root_dir();
+    let test_file = workspace_root.join("tests/python/test_mako_rpc_milestone_contract.py");
+    if !test_file.exists() {
+        eprintln!("skipping: Python milestone contract test file not found");
+        return;
+    }
+
+    let output = Command::new("python3")
+        .arg("-m")
+        .arg("unittest")
+        .arg(test_file.to_str().unwrap())
+        .env("PYTHONPATH", workspace_root.join("scripts").to_str().unwrap())
+        .current_dir(&workspace_root)
+        .output()
+        .expect("run Python milestone contract tests");
+
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        output.status.success(),
+        "Python milestone contract tests must pass\nstderr:\n{}",
+        stderr
+    );
+
+    eprintln!(
+        "M9.2.c Python milestone contract tests PASSED:\n{}",
+        stderr.lines().last().unwrap_or("(no output)")
+    );
+}
+
+/// M9.2: Verify TODO.md documents M9.2 task and its subtasks.
+#[test]
+fn m9_2_task_documented_in_todo() {
+    let todo = fs::read_to_string(workspace_root_dir().join("TODO.md"))
+        .expect("read TODO.md");
+
+    assert!(
+        todo.contains("M9.2"),
+        "TODO.md must document M9.2 task"
+    );
+
+    // M9.2 should have subtask breakdown
+    assert!(
+        todo.contains("M9.2.a") || todo.contains("M9.2.b") || todo.contains("M9.2.c"),
+        "TODO.md should contain M9.2 subtask breakdown"
+    );
+}

@@ -14,6 +14,7 @@ from mako_rpc_milestone_contract import (  # pylint: disable=wrong-import-positi
     RUN_ROOT_NAME_PATTERN,
     default_run_root_name,
     required_artifacts_m0_1,
+    required_artifacts_m9_2,
     run_root_name_is_contract_valid,
     write_artifact_contract_manifest,
 )
@@ -40,6 +41,28 @@ class MakoRpcMilestoneContractTests(unittest.TestCase):
                 "fragile_m0_1_strict_baseline_2026_03_16_p4242"
             )
         )
+
+    def test_m9_2_run_root_name_matches_contract_pattern(self) -> None:
+        fixed_now = datetime(2026, 3, 19, 4, 44, 59, tzinfo=timezone.utc)
+        name = default_run_root_name(
+            "m9_2_strict_runtime_replay",
+            now=fixed_now,
+            pid=31337,
+        )
+        self.assertEqual(
+            name,
+            "fragile_m9_2_strict_runtime_replay_20260319T044459Z_p31337",
+        )
+        self.assertTrue(run_root_name_is_contract_valid(name), msg=RUN_ROOT_NAME_PATTERN)
+
+    def test_required_artifacts_m9_2_contains_runtime_entries(self) -> None:
+        required = required_artifacts_m9_2(trials=2)
+        self.assertIn("strict_runtime_replay_manifest.txt", required)
+        self.assertIn("lane_fragilec/test_rpc.status", required)
+        self.assertIn("lane_fragilec/trial_01/rpc_server.status", required)
+        self.assertIn("lane_fragilec/trial_01/rpc_client.status", required)
+        self.assertIn("lane_fragilec/trial_02/rpc_server.status", required)
+        self.assertIn("lane_fragilec/trial_02/rpc_client.status", required)
 
     def test_write_artifact_contract_manifest_reports_missing_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -71,4 +94,3 @@ class MakoRpcMilestoneContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
