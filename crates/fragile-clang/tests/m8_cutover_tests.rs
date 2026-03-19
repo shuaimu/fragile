@@ -51,6 +51,14 @@ fn temp_dir(label: &str) -> PathBuf {
     dir
 }
 
+fn workspace_root_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("workspace root should exist")
+        .to_path_buf()
+}
+
 fn parse_with_new_backend(source_path: &std::path::Path, language: ParserCoreLanguage) -> fragile_parser_core::ParserOutputV1 {
     let backend = FragileParserClangBackend;
     let request = ParseRequest {
@@ -1138,4 +1146,49 @@ fn m8_a2_report_round_trip_log_write_parse() {
     );
 
     let _ = fs::remove_dir_all(&dir);
+}
+
+// ---------------------------------------------------------------------------
+// M8.A1 Acceptance: CI defaults use new backend with green required checks.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn m8_a1_ci_required_workflow_does_not_pin_parser_backend_or_escape_hatch() {
+    let workflow_path = workspace_root_dir().join(".github/workflows/ci.yml");
+    let workflow = fs::read_to_string(&workflow_path).expect("failed to read CI workflow");
+
+    assert!(
+        !workflow.contains("FRAGILEC_PARSER_BACKEND"),
+        "required CI workflow must not pin parser backend override; found FRAGILEC_PARSER_BACKEND in {}",
+        workflow_path.display()
+    );
+    assert!(
+        !workflow.contains("FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH"),
+        "required CI workflow must not set parser-core codegen escape hatch in {}",
+        workflow_path.display()
+    );
+}
+
+#[test]
+fn m8_a1_ci_required_workflow_keeps_required_job_matrix_present() {
+    let workflow_path = workspace_root_dir().join(".github/workflows/ci.yml");
+    let workflow = fs::read_to_string(&workflow_path).expect("failed to read CI workflow");
+
+    for job in [
+        "build",
+        "lint",
+        "fmt",
+        "zlib-smoke-parity",
+        "tinyxml2-smoke-parity",
+        "pugixml-smoke-baseline",
+        "rapidjson-smoke-baseline",
+    ] {
+        let marker = format!("\n  {}:\n", job);
+        assert!(
+            workflow.contains(&marker),
+            "required CI job `{}` missing from {}",
+            job,
+            workflow_path.display()
+        );
+    }
 }
