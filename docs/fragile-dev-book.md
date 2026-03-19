@@ -20830,3 +20830,40 @@ Implemented:
 Validation:
 - `cargo test -p fragile-clang normalize_unresolved_lowercase_item_type_tokens -- --nocapture`
 - `cargo test -p fragile-clang m9_2c_iv_d -- --nocapture`
+
+## 2026-03-19: M9.2.c.iv.d.4 missing `__throw_*` and `_Range_chk` helper closure
+
+Task sizing analysis:
+- Small, bounded helper-surface fix (<1000 LOC): preamble helper additions, helper ownership registration, and focused regressions.
+- No additional TODO decomposition needed for this leaf.
+
+Plan before execution:
+- add generic preamble helper definitions for `__throw_invalid_argument`, `__throw_out_of_range`, and `_Range_chk::_S_chk`;
+- register helper ownership so AST duplicate helper definitions are suppressed deterministically;
+- add regression coverage for preamble helper presence and unresolved non-C-ABI guard closure;
+- run focused and full regression suites.
+
+Wrong-approach check:
+- Reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before editing.
+- No target-specific hacks, no native fallback bypass, and no fake target-only stubs were introduced.
+- Fix is generic transpiler/preamble behavior for all strict-lane inputs.
+
+Implemented:
+- `crates/fragile-stl/src/clib.rs`
+  - Added helpers:
+    - `__throw_out_of_range(_what: *const i8) -> !`
+    - `__throw_invalid_argument(_what: *const i8) -> !`
+    - `_Range_chk` + `_Range_chk::_S_chk(__val: i64, __narrow_to_int: i32) -> bool`
+- `crates/fragile-clang/src/ast_codegen.rs`
+  - Added `__throw_out_of_range` and `__throw_invalid_argument` to preamble-owned helper function list.
+  - Added `_Range_chk` to preamble-owned struct names.
+  - Added regressions:
+    - `test_preamble_emits_throw_and_range_chk_helpers_for_stoa_paths`
+    - `test_range_chk_namespaced_calls_do_not_inject_unresolved_external_compile_error`
+- `crates/fragile-clang/tests/m9_rpc_closure_tests.rs`
+  - Added regressions:
+    - `m9_2c_iv_d4_preamble_emits_throw_and_range_chk_helpers`
+    - `m9_2c_iv_d4_live_debugging_misc_no_unresolved_range_chk_external_error`
+    - `m9_2c_iv_d4_task_documented_in_todo`
+- `TODO.md`
+  - Marked `M9.2.c.iv.d.4` done and updated blocker taxonomy to leave `d.5` as remaining downstream blocker class.

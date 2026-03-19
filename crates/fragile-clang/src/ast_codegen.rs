@@ -59598,6 +59598,8 @@ impl FragileAtomicBoolCompat for atomic_bool {
             "__constexpr_wmemchr_i32_i32",
             "fill_n_char_u64_i8",
             "copy_n_char_i32_char",
+            "__throw_out_of_range",
+            "__throw_invalid_argument",
             // Array begin/end stubs (std::begin/end template instantiations)
             "begin__u32__110_",
             "end__u32__110_",
@@ -59620,6 +59622,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
             "fpos_mbstate_t",
             "__cxx_atomic_impl___cxx_contention_t",
             "tm",
+            "_Range_chk",
         ]
     }
 
@@ -86572,6 +86575,54 @@ mod tests {
             code.contains("pub fn __constexpr_wmemchr_i32_i32("),
             "preamble should expose __constexpr_wmemchr_i32_i32 helper, got:\n{}",
             code
+        );
+    }
+
+    #[test]
+    fn test_preamble_emits_throw_and_range_chk_helpers_for_stoa_paths() {
+        let code = AstCodeGen::new().generate(&make_node(ClangNodeKind::TranslationUnit, vec![]));
+        assert!(
+            code.contains("pub fn __throw_invalid_argument(_what: *const i8) -> !"),
+            "preamble should expose __throw_invalid_argument helper, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn __throw_out_of_range(_what: *const i8) -> !"),
+            "preamble should expose __throw_out_of_range helper, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub struct _Range_chk;"),
+            "preamble should expose _Range_chk helper type, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn _S_chk(__val: i64, __narrow_to_int: i32) -> bool"),
+            "preamble should expose _Range_chk::_S_chk helper, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_range_chk_namespaced_calls_do_not_inject_unresolved_external_compile_error() {
+        let source = r#"
+pub struct _Range_chk;
+impl _Range_chk {
+    pub fn _S_chk(__val: i64, __narrow_to_int: i32) -> bool { false }
+}
+pub fn parse_or_throw(__tmp: i64) {
+    if _Range_chk::_S_chk(__tmp, 0) {
+        __throw_out_of_range(std::ptr::null());
+    }
+}
+pub fn __throw_out_of_range(_what: *const i8) -> ! { panic!("out of range") }
+"#;
+        let normalized =
+            AstCodeGen::append_compile_error_for_unresolved_non_c_abi_external_calls(source);
+        assert!(
+            !normalized.contains("fragile: unresolved non-C-ABI external C++ calls detected"),
+            "_Range_chk::_S_chk should be treated as resolved when helper type is defined, got:\n{}",
+            normalized
         );
     }
 

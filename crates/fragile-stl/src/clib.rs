@@ -278,6 +278,21 @@ pub fn wmemchr(_s: *const i32, _c: i32, _n: u64) -> *const i32 { std::ptr::null(
 #[inline]
 pub fn __throw_out_of_range_fmt(_fmt: *const i8, _s: *const i8, _pos: u64, _size: u64) { panic!("out of range"); }
 #[inline]
+pub fn __throw_out_of_range(_what: *const i8) -> ! { panic!("out of range") }
+#[inline]
+pub fn __throw_invalid_argument(_what: *const i8) -> ! { panic!("invalid argument") }
+#[repr(C)]
+pub struct _Range_chk;
+impl _Range_chk {
+    #[inline]
+    pub fn _S_chk(__val: i64, __narrow_to_int: i32) -> bool {
+        if __narrow_to_int == 0 {
+            return false;
+        }
+        __val < i64::from(i32::MIN) || __val > i64::from(i32::MAX)
+    }
+}
+#[inline]
 pub fn pthread_mutex_timedlock(_mutex: *mut std::ffi::c_void, _abs_timeout: *const std::ffi::c_void) -> i32 { 0 }
 #[inline]
 pub fn __stoa_extern__C__fn_ptr_const_i8__ptr_mut_ptr_mut_i8__i32___ret__i64_i8_i8_u64(_f: &dyn Fn(*const i8, *mut *mut i8, i32) -> i64, _name: *const i8, _str: *const i8, _idx: *mut u64, _base: i32) -> i64 { 0 }

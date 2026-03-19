@@ -2486,8 +2486,6 @@ fn m9_2c_iv_d3_live_debugging_cpp_no_u128_errors() {
     let compile_args = mako_compile_args(&mako_root);
     let temp = temp_dir("m9_2c_iv_d3_debugging");
 
-    // Run fragilec — it will still fail with other rustc errors, but the
-    // u128-specific patterns should be gone
     let output = Command::new(&fragilec)
         .args(&compile_args)
         .arg("-c")
@@ -2499,23 +2497,114 @@ fn m9_2c_iv_d3_live_debugging_cpp_no_u128_errors() {
 
     if let Ok(out) = output {
         let stderr = String::from_utf8_lossy(&out.stderr);
-
-        // The u128 type should not appear in rustc error messages.
-        // Before the fix, debugging.cpp had ~200 E0308 errors mentioning u128.
         let u128_error_count = stderr.matches("u128").count();
         eprintln!(
             "debugging.cpp u128 mentions in stderr: {} (was ~200+ before fix)",
             u128_error_count
         );
-
-        // With the fix, there should be zero or very few u128 mentions
-        // (could still appear in unrelated contexts, so allow small count)
         assert!(
             u128_error_count < 10,
             "debugging.cpp should have very few u128 mentions after fix, \
-             got {} (was ~200+ before fix). The ios_base fmtflags u128 → u64 \
-             fix should eliminate the majority of u128 type errors.",
+             got {} (was ~200+ before fix).",
             u128_error_count
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// M9.2.c.iv.d.4: missing STL helper functions
+// ---------------------------------------------------------------------------
+
+/// M9.2.c.iv.d.4: Verify the generated preamble includes the missing
+/// libc++ helper surfaces used by stoi/stol-style conversion paths.
+#[test]
+fn m9_2c_iv_d4_preamble_emits_throw_and_range_chk_helpers() {
+    let code = fragile_clang::AstCodeGen::new().generate(
+        &fragile_clang::ClangNode::new(fragile_clang::ClangNodeKind::TranslationUnit),
+    );
+    assert!(
+        code.contains("pub fn __throw_invalid_argument(_what: *const i8) -> !"),
+        "expected __throw_invalid_argument helper in preamble, got:\n{}",
+        code
+    );
+    assert!(
+        code.contains("pub fn __throw_out_of_range(_what: *const i8) -> !"),
+        "expected __throw_out_of_range helper in preamble, got:\n{}",
+        code
+    );
+    assert!(
+        code.contains("pub struct _Range_chk;"),
+        "expected _Range_chk helper type in preamble, got:\n{}",
+        code
+    );
+    assert!(
+        code.contains("pub fn _S_chk(__val: i64, __narrow_to_int: i32) -> bool"),
+        "expected _Range_chk::_S_chk helper in preamble, got:\n{}",
+        code
+    );
+}
+
+/// M9.2.c.iv.d.4: Live compile should no longer report unresolved non-C-ABI
+/// external call errors for `_Range_chk::_S_chk` in debugging/misc units.
+#[test]
+#[ignore] // Expensive live compile of large Mako TUs; used for manual strict replay evidence.
+fn m9_2c_iv_d4_live_debugging_misc_no_unresolved_range_chk_external_error() {
+    let Some(mako_root) = mako_root_dir() else {
+        eprintln!("Skipping: vendor/mako not populated");
+        return;
+    };
+    let fragilec = ensure_fragilec_binary().expect("fragilec binary");
+    let blocker_files = ["src/rrr/base/debugging.cpp", "src/rrr/base/misc.cpp"];
+
+    for file in &blocker_files {
+        let source = mako_root.join(file);
+        if !source.exists() {
+            eprintln!("Skipping {}: file not found", file);
+            continue;
+        }
+        let out_obj = std::env::temp_dir().join(format!(
+            "m9_2c_iv_d4_{}_{}.o",
+            file.replace('/', "_"),
+            std::process::id()
+        ));
+        let (success, _stdout, stderr) = fragilec_compile_one(&fragilec, &source, &out_obj, &mako_root);
+        assert!(
+            !stderr.contains("unresolved non-C-ABI external C++ calls detected")
+                && !stderr.contains("_Range_chk::_S_chk"),
+            "M9.2.c.iv.d.4 regression: {} still reports unresolved _Range_chk helper external calls:\n{}",
+            file,
+            stderr
+        );
+        if !success {
+            eprintln!(
+                "M9.2.c.iv.d.4 helper closure verified for {} (compile still fails later, expected until d.5).",
+                file
+            );
+        }
+        let _ = fs::remove_file(&out_obj);
+    }
+}
+
+/// M9.2.c.iv.d.4 task documented in TODO
+#[test]
+fn m9_2c_iv_d4_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("M9.2.c.iv.d.4"),
+        "M9.2.c.iv.d.4 should be documented in TODO.md"
+    );
+    assert!(
+        todo.contains("__throw_out_of_range")
+            && todo.contains("__throw_invalid_argument")
+            && todo.contains("_Range_chk"),
+        "d.4 TODO entry should list __throw_* and _Range_chk helper blockers"
+    );
 }
