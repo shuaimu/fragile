@@ -199,7 +199,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument(
         "--fragile-cxx",
         type=Path,
-        default=workspace_root / "target" / "debug" / "fragilec",
+        default=workspace_root / "target" / "release" / "fragilec",
     )
     parser.add_argument("--clang-cxx", default="clang++")
     parser.add_argument(

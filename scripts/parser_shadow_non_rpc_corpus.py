@@ -691,7 +691,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument(
         "--fragilec-bin",
         type=Path,
-        default=workspace_root / "target" / "debug" / "fragilec",
+        default=workspace_root / "target" / "release" / "fragilec",
     )
     parser.add_argument("--baseline-backend", default=DEFAULT_BASELINE_BACKEND)
     parser.add_argument("--candidate-backend", default=DEFAULT_CANDIDATE_BACKEND)

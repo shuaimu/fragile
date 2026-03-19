@@ -203,7 +203,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument(
         "--fragile-cxx",
         type=Path,
-        default=workspace_root / "target" / "debug" / "fragilec",
+        default=workspace_root / "target" / "release" / "fragilec",
     )
     parser.add_argument(
         "--skip-fragilec-build",
@@ -213,7 +213,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--trials", type=int, default=1)
     parser.add_argument("--base-port", type=int, default=23900)
-    parser.add_argument("--build-timeout-seconds", type=int, default=900)
+    parser.add_argument("--build-timeout-seconds", type=int, default=3600)
     parser.add_argument("--test-rpc-timeout-seconds", type=int, default=120)
     parser.add_argument("--rpc-client-timeout-seconds", type=int, default=120)
     parser.add_argument("--rpc-server-startup-wait-seconds", type=float, default=1.0)
