@@ -20470,3 +20470,44 @@ Checked against Section 1.3 and `docs/dev/wrong.md`:
 - no target-specific parser/codegen hacks,
 - no force-native bypass strategy,
 - no rollback-pattern expansion.
+
+## 2026-03-19: M7.2 shadow parity metrics for non-RPC corpus
+
+Plan before execution:
+- extend the existing non-RPC shadow harness so manifests include parity metrics for
+  first-failure class, unresolved-name counts, runtime-status tracking, and perf
+  fields;
+- keep runtime honest for compile-only replay (`-c`) by reporting explicit
+  non-runtime states instead of synthesizing runtime results;
+- preserve deterministic artifact contracts and RPC deferral queue coverage.
+
+Implemented:
+- `scripts/parser_shadow_non_rpc_corpus.py` now emits `M7.2` parity metric fields
+  and per-fixture metric sidecar files.
+- `tests/python/test_parser_shadow_non_rpc_corpus.py` now covers:
+  - unresolved `E0425` failure classification/count tracking,
+  - timeout metric behavior,
+  - parity summary field presence/stability.
+- `docs/m7_2_shadow_parity_metrics_2026_03_19.md` added.
+
+Evidence run:
+- command: `python3 scripts/parser_shadow_non_rpc_corpus.py --compile-timeout-seconds 180`
+- run root: `/tmp/fragile_m7_2_shadow_non_rpc_20260319T004733Z_p3550552`
+- summary highlights:
+  - `baseline_success_count=7`, `baseline_failure_count=1`
+  - `candidate_success_count=8`, `candidate_failure_count=0`
+  - `candidate_non_worsening_vs_baseline=true`
+  - `baseline_first_failure_class=other_rustc_error`
+  - `candidate_first_failure_class=none`
+  - `baseline_unresolved_name_e0425_total=0`
+  - `candidate_unresolved_name_e0425_total=0`
+  - `candidate_runtime_status_counts=not_run_compile_only:8`
+  - `baseline_transpile_timing_present_count=8`
+  - `candidate_transpile_timing_present_count=8`
+  - `transpile_total_ms_delta_vs_baseline=927`
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+- no semantic stubs/fake method-body fallback,
+- no target-specific hacks,
+- no force-native bypass,
+- no rollback-pattern growth.
