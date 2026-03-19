@@ -20732,3 +20732,37 @@ Validation:
 - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.python.test_mako_rpc_strict_runtime_replay tests.python.test_mako_rpc_milestone_contract`
 - `cargo test -p fragile-clang --test m9_rpc_closure_tests m9_2`
 - `python3 scripts/mako_rpc_strict_runtime_replay.py --baseline-run-root /tmp/fragile_m9_2_strict_runtime_replay_20260319T153002Z_p1482329`
+
+## 2026-03-19: M9.2.c.iv.b.i strict replay fragilec build/profile consistency
+
+Task sizing analysis:
+- Scope is small and bounded (<1000 LOC): one strict replay orchestration script + one Python regression assertion + TODO/book updates.
+- `M9.2.c.iv.b` was decomposed into sub-leaves so the first executable slice can be closed independently.
+
+Plan before execution:
+- fix strict replay binary-profile drift by aligning `fragilec` build profile with default `--fragile-cxx` path;
+- add regression coverage that locks command-plan build profile contract;
+- update `TODO.md` with the new `M9.2.c.iv.b.i` done evidence and leave follow-up leaf work explicit.
+
+Wrong-approach check:
+- Re-checked section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific hacks, no native bypasses, and no fake semantic stubs were introduced.
+- Change is generic orchestration correctness: it prevents stale binary reuse across all strict replay runs.
+
+Implemented:
+- `scripts/mako_rpc_strict_runtime_replay.py`
+  - Updated pre-replay fragilec build command from debug profile to release profile:
+    - from `cargo build -p fragile-cli --bin fragilec`
+    - to `cargo build --release -p fragile-cli --bin fragilec`
+  - This matches the existing default `--fragile-cxx` path (`target/release/fragilec`) and removes build/profile drift.
+- `tests/python/test_mako_rpc_strict_runtime_replay.py`
+  - Added assertion that `strict_runtime_replay_commands.txt` records:
+    - `fragilec_build_command=cargo build --release -p fragile-cli --bin fragilec`
+- `TODO.md`
+  - Decomposed `M9.2.c.iv.b` into:
+    - `M9.2.c.iv.b.i` (done: build/profile consistency),
+    - `M9.2.c.iv.b.ii` (profile-consistent strict replay evidence recapture),
+    - `M9.2.c.iv.b.iii` (additional mapping-completeness closure only if still needed).
+
+Validation:
+- `python3 -m unittest tests.python.test_mako_rpc_strict_runtime_replay`

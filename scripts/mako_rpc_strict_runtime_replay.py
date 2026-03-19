@@ -531,7 +531,17 @@ def main(argv: Sequence[str]) -> int:
         strict_env = strict_runtime_replay_env(base_env)
         fragilec_path = ns.fragile_cxx.resolve()
 
-        fragilec_build_cmd = ["cargo", "build", "-p", "fragile-cli", "--bin", "fragilec"]
+        # Keep build profile aligned with default --fragile-cxx path
+        # (target/release/fragilec) so replay never runs a stale binary.
+        fragilec_build_cmd = [
+            "cargo",
+            "build",
+            "--release",
+            "-p",
+            "fragile-cli",
+            "--bin",
+            "fragilec",
+        ]
         if ns.skip_fragilec_build:
             fragilec_build_result = CommandResult(
                 status=0,

@@ -211,6 +211,10 @@ class MakoRpcStrictRuntimeReplayTests(unittest.TestCase):
             self.assertIn("--lanes fragilec", commands)
             self.assertIn("--skip-masstree-perf-target", commands)
             self.assertIn("--skip-clean-step", commands)
+            self.assertIn(
+                "fragilec_build_command=cargo build --release -p fragile-cli --bin fragilec",
+                commands,
+            )
 
     def test_runtime_replay_rejects_lane_failure_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
