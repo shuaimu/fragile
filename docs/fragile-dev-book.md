@@ -20439,3 +20439,34 @@ Validation:
 - Full regression:
   - `cargo test --workspace --all-targets`
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+## 2026-03-18: M7.1 shadow-mode non-RPC corpus replay + deferred RPC queue
+
+Plan before execution:
+- add a deterministic strict replay harness for old/new parser backend shadow runs on a representative non-RPC corpus;
+- emit explicit queue artifact that defers RPC corpus closure to `M9.1`/`M9.2`/`M9.3`;
+- keep implementation scoped to harness/test/docs only.
+
+Implemented:
+- `scripts/parser_shadow_non_rpc_corpus.py`
+- `tests/python/test_parser_shadow_non_rpc_corpus.py`
+- `docs/m7_1_shadow_mode_non_rpc_corpus_2026_03_18.md`
+
+Evidence run:
+- command: `python3 scripts/parser_shadow_non_rpc_corpus.py --compile-timeout-seconds 180`
+- run root: `/tmp/fragile_m7_1_shadow_non_rpc_20260318T225545Z_p3360421`
+- summary:
+  - `fixture_count=8`
+  - baseline `libtooling`: `success=6`, `failure=2`
+  - candidate `fragile-parser-clang`: `success=8`, `failure=0`
+  - `candidate_non_worsening_vs_baseline=true`
+  - `missing_required_artifact_count=0`
+- deferred RPC queue:
+  - `rpc_targets=test_rpc,rpcbench`
+  - queued TODOs: `M9.1`, `M9.2`, `M9.3`
+
+Checked against Section 1.3 and `docs/dev/wrong.md`:
+- no semantic stub/fake body synthesis,
+- no target-specific parser/codegen hacks,
+- no force-native bypass strategy,
+- no rollback-pattern expansion.
