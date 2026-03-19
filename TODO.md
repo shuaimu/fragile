@@ -139,7 +139,7 @@ Acceptance:
 - [x] M7.A2 Runtime behavior parity is established for covered smoke fixtures. Done 2026-03-19. Evidence: `test_m7_a2_runtime_parity_smoke_fixtures` runs both backends on factorial fixture with main(), compiles to binaries, executes them, and asserts both exit 0 (factorial(5)==120 correct) with runtime_non_worsening=true.
 
 ### M8) Cutover to New Parser Backend
-- [ ] M8.1 Flip default parser backend to new module.
+- [ ] M8.1 Flip default parser backend to new module. **WIP**
 - [ ] M8.2 Keep temporary explicit escape hatch for one hardening window only.
 - [ ] M8.3 Publish migration notes for developers and CI.
 Acceptance:
