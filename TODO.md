@@ -153,7 +153,7 @@ Acceptance:
   - [x] M9.1.b Add deterministic build-only replay gate. Done 2026-03-19. Evidence: `m9_1b_rpc_targets_in_cmake_build_system` verifies both targets in CMake; `m9_1_cmake_build_test_rpc_and_rpcbench_with_fragilec` (ignored) performs full CMake build with manifest.
   - [x] M9.1.c Add blocker-log gate for no native fallback. Done 2026-03-19. Evidence: `m9_1c_no_native_fallback_in_driver` verifies no native fallback code in driver source.
   - [x] M9.1.d Capture pinned strict replay run-root. Done 2026-03-19. Evidence: `m9_1_cmake_build_test_rpc_and_rpcbench_with_fragilec` and `m9_a1_test_rpc_runtime_gate` (ignored) emit deterministic manifests under `/tmp/fragile_m9_rpc_*` run roots.
-- [ ] M9.2 Run full strict runtime replay and capture deterministic runtime manifests.
+- [ ] M9.2 Run full strict runtime replay and capture deterministic runtime manifests. **[WIP on claude/parser]**
 - [ ] M9.3 Run deterministic clang vs fragile benchmark comparison and enforce no-regression gate.
 Acceptance:
 - [ ] M9.A1 `test_rpc` build/run pass gate is green.
