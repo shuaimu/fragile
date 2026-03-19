@@ -143,8 +143,8 @@ Acceptance:
 - [x] M8.2 Keep temporary explicit escape hatch for one hardening window only. Done 2026-03-18. Evidence: hardening window expiry set to 2026-04-18; both `FRAGILEC_PARSER_BACKEND=libtooling` and `FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH=libtooling` emit deprecation warnings on stderr when used, log usage to `FRAGILEC_ESCAPE_HATCH_LOG_PATH` when set, and are rejected with actionable error after expiry; 10 M8.2 tests added to `crates/fragile-clang/tests/m8_cutover_tests.rs` covering expiry logic, policy enforcement, usage logging, and deprecation messages; 5 unit tests added to `crates/fragile-driver/src/lib.rs`; all workspace tests pass (0 failures).
 - [x] M8.3 Publish migration notes for developers and CI. Done 2026-03-19. Evidence: added `docs/m8_3_parser_backend_migration_notes_2026_03_19.md` covering default-backend behavior, hardening-window policy (`2026-04-18` expiry), developer migration commands, CI migration/telemetry guidance (`FRAGILEC_ESCAPE_HATCH_LOG_PATH`), and troubleshooting; linked migration notes from `README.md` documentation section.
 Acceptance:
-- [ ] M8.A1 CI defaults use new backend with green required checks.
-- [ ] M8.A2 Escape hatch usage is measured and trending to zero during hardening window.
+- [x] M8.A1 CI defaults use new backend with green required checks. Done 2026-03-19. Evidence: added CI guard regressions in `crates/fragile-clang/tests/m8_cutover_tests.rs` (`m8_a1_ci_required_workflow_does_not_pin_parser_backend_or_escape_hatch`, `m8_a1_ci_required_workflow_keeps_required_job_matrix_present`) that assert `.github/workflows/ci.yml` does not set `FRAGILEC_PARSER_BACKEND` or `FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH` and preserves required job lanes (`build`, `lint`, `fmt`, `zlib-smoke-parity`, `tinyxml2-smoke-parity`, `pugixml-smoke-baseline`, `rapidjson-smoke-baseline`); full Rust + Python regressions pass.
+- [ ] M8.A2 Escape hatch usage is measured and trending to zero during hardening window. **[WIP — claude/parser branch, 2026-03-19]**
 
 ### M9) Deferred RPC Target Closure (Lower Priority)
 - [ ] M9.0 Start only after M0-M8 acceptance is complete.
