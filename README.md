@@ -89,6 +89,8 @@ cargo build --release
 ## Documentation
 
 See [docs/fragile-book.md](docs/fragile-book.md) for the full specification.
+Parser-backend cutover and CI migration guidance:
+[docs/m8_3_parser_backend_migration_notes_2026_03_19.md](docs/m8_3_parser_backend_migration_notes_2026_03_19.md).
 
 ## License
 

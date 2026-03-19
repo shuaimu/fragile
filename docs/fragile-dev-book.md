@@ -20553,3 +20553,45 @@ Checked against Section 1.3 and `docs/dev/wrong.md`:
 - no target-specific parser/codegen hacks,
 - no force-native bypass,
 - no rollback-pattern expansion.
+
+## 2026-03-19: M8.3 parser-backend migration notes publication (developer + CI)
+
+Task sizing analysis:
+- Scope is documentation-only and small (<1000 LOC).
+- No TODO leaf decomposition was required.
+
+Plan before execution:
+- publish a migration note that captures post-cutover defaults and hardening policy;
+- include concrete developer migration commands and CI policy guidance;
+- include telemetry/troubleshooting guidance for escape-hatch usage;
+- run full regression suites after doc updates to keep iteration evidence current.
+
+Wrong-approach check:
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific hacks, force-native bypasses, or fake semantic stubs were introduced.
+
+Implemented:
+- Added migration notes doc:
+  - `docs/m8_3_parser_backend_migration_notes_2026_03_19.md`
+  - Covers:
+    - default strict backend behavior (`fragile-parser-clang`)
+    - hardening-window policy and expiry (`2026-04-18`)
+    - developer migration commands
+    - CI migration and telemetry (`FRAGILEC_ESCAPE_HATCH_LOG_PATH`)
+    - troubleshooting for common backend/escape-hatch errors
+- Updated documentation entry point:
+  - `README.md` now links to the M8.3 migration-notes doc.
+- Updated plan tracking:
+  - `TODO.md` marks `M8.3` done with concrete evidence links.
+
+Validation:
+- Focused backend-selection regressions:
+  - `cargo test -p fragile-driver strict_parser_backend_validation -- --nocapture`
+  - `cargo test -p fragile-cli --bin fragilec strict_parser_backend_validation -- --nocapture`
+- Full regression (cargo, split execution including isolated long libc++ tests):
+  - `cargo test --workspace --all-targets -- --skip test_libcxx_iostream_transpilation --skip test_libcxx_thread_transpilation --skip test_libcxx_vector_transpilation`
+  - `cargo test -p fragile-clang --test integration_test test_libcxx_iostream_transpilation`
+  - `cargo test -p fragile-clang --test integration_test test_libcxx_thread_transpilation`
+  - `cargo test -p fragile-clang --test integration_test test_libcxx_vector_transpilation`
+- Python regression:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
