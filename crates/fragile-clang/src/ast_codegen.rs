@@ -41402,6 +41402,24 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 }
             }
 
+            // Check for std_-prefixed types that map to already-generated enums
+            // without the namespace prefix. E.g., std___lce_alg_type -> __lce_alg_type
+            // when __lce_alg_type was generated as an enum from the std namespace.
+            if rust_name.starts_with("std_") {
+                let stripped = &rust_name["std_".len()..];
+                if self.generated_enums.contains(stripped) {
+                    self.writeln(&format!(
+                        "/// Alias namespace-prefixed `{}` to enum `{}`",
+                        rust_name, stripped
+                    ));
+                    self.writeln(&format!("pub type {} = {};", rust_name, stripped));
+                    self.generated_aliases.insert(rust_name.clone());
+                    defined_type_like.insert(rust_name.clone());
+                    self.writeln("");
+                    continue;
+                }
+            }
+
             // Check if we have specialization field data for this type
             let spec_info = self.find_specialization_by_rust_name(&rust_name);
             let has_real_fields = spec_info.as_ref().map_or(false, |info| {
