@@ -5801,6 +5801,27 @@ impl AstCodeGen {
         Some(normalized)
     }
 
+    /// Return the element byte size for a `__wrap_iter_*` type name.
+    /// C++ `__wrap_iter<double*>` becomes `std___wrap_iter_double`; the element
+    /// type suffix tells us the stride for pointer arithmetic.
+    fn wrap_iter_element_size(rust_name: &str) -> usize {
+        // Strip std_ prefix and __wrap_iter_[const_] prefix to get element suffix
+        let suffix = rust_name
+            .trim_start_matches("std_")
+            .trim_start_matches("__wrap_iter_const_")
+            .trim_start_matches("__wrap_iter_");
+        match suffix {
+            "double" | "f64" => 8,       // sizeof(double)
+            "float" | "f32" => 4,        // sizeof(float)
+            "int" | "i32" | "u32" => 4,  // sizeof(int)
+            "long" | "i64" | "u64" => 8, // sizeof(long)
+            "char" | "i8" | "u8" => 1,   // sizeof(char)
+            "short" | "i16" | "u16" => 2, // sizeof(short)
+            "bool" => 1,
+            _ => 8, // default to pointer-sized for unknown/user types
+        }
+    }
+
     fn degraded_function_signature_siblings(name: &str) -> Vec<String> {
         // Degraded spellings can encode repeated scope separators (`::::`) as
         // repeated underscores. Prefer already-emitted sibling spellings with
@@ -41613,6 +41634,13 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 self.writeln("pub value: GenericValue_UTF8_,");
                 field_defaults.push(("name".to_string(), "Default::default()".to_string()));
                 field_defaults.push(("value".to_string(), "Default::default()".to_string()));
+            } else if rust_name.contains("__wrap_iter") {
+                // C++ __wrap_iter<T*> is a thin pointer wrapper used by libc++ for
+                // std::vector::iterator. Store as a raw pointer so pointer arithmetic
+                // (AddAssign/SubAssign) and Deref work correctly on the generated type.
+                self.writeln("pub _ptr: *mut u8, // underlying element pointer");
+                field_defaults
+                    .push(("_ptr".to_string(), "std::ptr::null_mut()".to_string()));
             } else {
                 // Opaque placeholder
                 self.writeln("_opaque: [u8; 64], // placeholder - actual size may differ");
@@ -41662,6 +41690,78 @@ impl FragileAtomicBoolCompat for atomic_bool {
             self.indent -= 1;
             self.writeln("}");
             self.writeln("");
+
+            // For __wrap_iter types, generate AddAssign/SubAssign impls so that
+            // iterator arithmetic (`it += n`, `it -= n`) compiles correctly.
+            // C++ __wrap_iter<T*> is a thin wrapper around a raw pointer, so += / -=
+            // are just pointer offsets.
+            if rust_name.contains("__wrap_iter") {
+                // Extract the element size from the name to compute correct byte offsets.
+                // For now, use the element type suffix to determine the stride.
+                let elem_size = Self::wrap_iter_element_size(&rust_name);
+                self.writeln(&format!(
+                    "impl std::ops::AddAssign<isize> for {} {{",
+                    rust_name
+                ));
+                self.indent += 1;
+                self.writeln("fn add_assign(&mut self, rhs: isize) {");
+                self.indent += 1;
+                self.writeln(&format!(
+                    "self._ptr = unsafe {{ self._ptr.offset(rhs * {}) }};",
+                    elem_size
+                ));
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+
+                self.writeln(&format!(
+                    "impl std::ops::SubAssign<isize> for {} {{",
+                    rust_name
+                ));
+                self.indent += 1;
+                self.writeln("fn sub_assign(&mut self, rhs: isize) {");
+                self.indent += 1;
+                self.writeln(&format!(
+                    "self._ptr = unsafe {{ self._ptr.offset(-rhs * {}) }};",
+                    elem_size
+                ));
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+
+                // Also implement for i32 since Rust integer literals default to i32
+                self.writeln(&format!(
+                    "impl std::ops::AddAssign<i32> for {} {{",
+                    rust_name
+                ));
+                self.indent += 1;
+                self.writeln("fn add_assign(&mut self, rhs: i32) {");
+                self.indent += 1;
+                self.writeln("*self += rhs as isize;");
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+
+                self.writeln(&format!(
+                    "impl std::ops::SubAssign<i32> for {} {{",
+                    rust_name
+                ));
+                self.indent += 1;
+                self.writeln("fn sub_assign(&mut self, rhs: i32) {");
+                self.indent += 1;
+                self.writeln("*self -= rhs as isize;");
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+            }
 
             if matches!(
                 rust_name.as_str(),
@@ -129646,5 +129746,83 @@ impl domain_error {
         let output = AstCodeGen::normalize_exception_constructor_deref_args(input);
         assert!(output.contains("runtime_error::new_1(unsafe { &*__s })"));
         assert!(output.contains("logic_error::new_1(unsafe { &*__s })"));
+    }
+
+    // -----------------------------------------------------------------------
+    // M9.2.c.iv.e.4: wrap_iter element size + AddAssign/SubAssign stubs
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_wrap_iter_element_size_known_types() {
+        assert_eq!(AstCodeGen::wrap_iter_element_size("std___wrap_iter_double"), 8);
+        assert_eq!(AstCodeGen::wrap_iter_element_size("std___wrap_iter_const_double"), 8);
+        assert_eq!(AstCodeGen::wrap_iter_element_size("std___wrap_iter_float"), 4);
+        assert_eq!(AstCodeGen::wrap_iter_element_size("std___wrap_iter_int"), 4);
+        assert_eq!(AstCodeGen::wrap_iter_element_size("std___wrap_iter_char"), 1);
+        assert_eq!(AstCodeGen::wrap_iter_element_size("std___wrap_iter_const_char"), 1);
+        assert_eq!(AstCodeGen::wrap_iter_element_size("std___wrap_iter_i32"), 4);
+        assert_eq!(AstCodeGen::wrap_iter_element_size("std___wrap_iter_u8"), 1);
+    }
+
+    #[test]
+    fn test_wrap_iter_element_size_unknown_defaults_to_8() {
+        // Unknown element types default to pointer-sized (8 bytes)
+        assert_eq!(AstCodeGen::wrap_iter_element_size("std___wrap_iter_MyStruct"), 8);
+        assert_eq!(AstCodeGen::wrap_iter_element_size("std___wrap_iter_const_SomeType"), 8);
+    }
+
+    #[test]
+    fn test_wrap_iter_stub_has_ptr_field_and_addassign() {
+        // Create a minimal codegen and trigger stub generation for a __wrap_iter type
+        let mut codegen = AstCodeGen::new();
+        // Register the type as used so it appears in missing types
+        codegen.used_types.insert(
+            "std___wrap_iter_double".to_string(),
+            "std::__wrap_iter<double *>".to_string(),
+        );
+        codegen.generate_missing_type_stubs();
+        let output = &codegen.output;
+
+        // Verify _ptr field instead of _opaque
+        assert!(
+            output.contains("_ptr: *mut u8"),
+            "wrap_iter stub should have _ptr field, got:\n{}",
+            &output[..output.len().min(2000)]
+        );
+
+        // Verify AddAssign/SubAssign impls
+        assert!(
+            output.contains("impl std::ops::AddAssign<isize> for std___wrap_iter_double"),
+            "wrap_iter stub should have AddAssign<isize> impl"
+        );
+        assert!(
+            output.contains("impl std::ops::SubAssign<isize> for std___wrap_iter_double"),
+            "wrap_iter stub should have SubAssign<isize> impl"
+        );
+        assert!(
+            output.contains("impl std::ops::AddAssign<i32> for std___wrap_iter_double"),
+            "wrap_iter stub should have AddAssign<i32> impl"
+        );
+        assert!(
+            output.contains("impl std::ops::SubAssign<i32> for std___wrap_iter_double"),
+            "wrap_iter stub should have SubAssign<i32> impl"
+        );
+    }
+
+    #[test]
+    fn test_wrap_iter_stub_uses_correct_element_stride() {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "std___wrap_iter_double".to_string(),
+            "std::__wrap_iter<double *>".to_string(),
+        );
+        codegen.generate_missing_type_stubs();
+        let output = &codegen.output;
+
+        // Verify the offset calculation includes element size (8 for double)
+        assert!(
+            output.contains("self._ptr.offset(rhs * 8)"),
+            "wrap_iter_double AddAssign should use stride 8 for f64 elements"
+        );
     }
 }
