@@ -20998,3 +20998,45 @@ Validation:
 Result:
 - `M9.2.c.iv.e.3.a` helper-lane mismatch class is closed.
 - Remaining `expected i8, found u16/u32` are now `Self::eq`/`Self::lt` signature-lane mismatches (non-helper class), tracked under remaining `M9.2.c.iv.e.3.*` work.
+
+## 2026-03-20: M9.2.c.iv.e.3.b `runtime_error::new_1` borrow mismatch (`expected &std_string, found std_string`)
+
+Task sizing analysis:
+- Small, bounded fix (<1000 LOC): constructor-initializer normalization path + one focused regression + strict replay evidence refresh.
+- No decomposition required.
+
+Plan before execution:
+- capture strict replay evidence for `rrr/base/{debugging,misc}.cpp` and confirm `runtime_error::new_1(*__s)` mismatch class;
+- patch constructor initializer argument normalization generically at the source lowering path (not output-only patching);
+- add focused regression on base-constructor initialization with reference-typed target;
+- rebuild release `fragilec`, replay strict evidence, and record deltas.
+
+Wrong-approach check:
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No rollback-pattern expansion, no target-specific conditional hacks, and no fake semantic stubs were introduced.
+- Fix is generic constructor argument normalization based on source/target type shape.
+
+Implemented:
+- `crates/fragile-clang/src/ast_codegen.rs`
+  - in constructor base/member initializer normalization (`correct_ctor_initializer`), added reference-target collapse:
+    - when target type is `CppType::Reference` and source expression is `*<ref_param>`, normalize to `<ref_param>`;
+    - kept existing pointer-target collapse/cast behavior unchanged.
+  - added regression:
+    - `test_base_ctor_initializer_drops_ref_param_deref_for_reference_target`
+- `TODO.md`
+  - refreshed `M9.2.c.iv.e.3.b` entry to reflect actual root cause, fix path, and strict evidence.
+
+Validation:
+- Focused unit test:
+  - `cargo test -p fragile-clang test_base_ctor_initializer_drops_ref_param_deref_for_reference_target -- --nocapture`
+- Live strict replay evidence (release `fragilec`):
+  - before fix:
+    - `/tmp/fragile_e3b_debugging.stderr`: `E0308=64`, `runtime_error::new_1` mismatch markers present, `expected \`&std_string\`, found \`std_string\`` = `8`
+    - `/tmp/fragile_e3b_misc.stderr`: `E0308=64`, same mismatch class count `8`
+  - after fix:
+    - `/tmp/fragile_e3b_debugging_after.stderr`: `E0308=56`, `runtime_error::new_1` mismatch markers `0`, `expected \`&std_string\`, found \`std_string\`` `0`
+    - `/tmp/fragile_e3b_misc_after.stderr`: `E0308=56`, same mismatch class `0`
+
+Result:
+- `M9.2.c.iv.e.3.b` borrow-mismatch class is closed in strict replay evidence.
+- Remaining `E0308` classes continue under `M9.2.c.iv.e.3.c+`.

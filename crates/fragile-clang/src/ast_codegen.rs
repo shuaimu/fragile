@@ -72912,6 +72912,28 @@ impl FragileAtomicBoolCompat for atomic_bool {
                     .collect();
                 let correct_ctor_initializer = |value: &str, ty: &CppType| -> String {
                     let raw = value.trim();
+                    let collapse_ref_param_deref_for_reference_target = || -> Option<String> {
+                        if !matches!(ty, CppType::Reference { .. }) {
+                            return None;
+                        }
+                        let stripped = Self::strip_outer_parens_expr(raw).trim();
+                        let deref_stripped = stripped.strip_prefix('*')?;
+                        let ident = Self::strip_outer_parens_expr(deref_stripped).trim();
+                        if ident.is_empty()
+                            || !ident
+                                .chars()
+                                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+                        {
+                            return None;
+                        }
+                        if !ctor_param_type_by_name
+                            .get(ident)
+                            .is_some_and(|param_ty| matches!(param_ty, CppType::Reference { .. }))
+                        {
+                            return None;
+                        }
+                        Some(ident.to_string())
+                    };
                     let collapse_ref_param_deref_for_pointer_field = || -> Option<String> {
                         let target_rust = match ty {
                             CppType::Reference { .. } => ty.to_rust_type_str_for_field(),
@@ -72973,7 +72995,8 @@ impl FragileAtomicBoolCompat for atomic_bool {
                         Some(format!("{} as {}", lhs, rhs))
                     };
 
-                    if let Some(collapsed) = collapse_ref_param_deref_for_pointer_field()
+                    if let Some(collapsed) = collapse_ref_param_deref_for_reference_target()
+                        .or_else(collapse_ref_param_deref_for_pointer_field)
                         .or_else(collapse_ref_param_pointer_cast)
                     {
                         collapsed
@@ -90604,6 +90627,96 @@ pub fn __throw_out_of_range(_what: *const i8) -> ! { panic!("out of range") }
         assert!(
             !code.contains("_node: &node as *const XMLNode"),
             "unexpected double-reference const cast in constructor initializer:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_base_ctor_initializer_drops_ref_param_deref_for_reference_target() {
+        let std_string_ref = CppType::Reference {
+            referent: Box::new(CppType::Named("std::string".to_string())),
+            is_const: true,
+            is_rvalue: false,
+        };
+
+        let runtime_error_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "runtime_error".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![make_node(
+                ClangNodeKind::ConstructorDecl {
+                    class_name: "runtime_error".to_string(),
+                    params: vec![("__s".to_string(), std_string_ref.clone())],
+                    is_definition: true,
+                    ctor_kind: ConstructorKind::Other,
+                    access: AccessSpecifier::Public,
+                },
+                vec![make_node(ClangNodeKind::CompoundStmt, vec![])],
+            )],
+        );
+
+        let range_error_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "range_error".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![make_node(
+                ClangNodeKind::ConstructorDecl {
+                    class_name: "range_error".to_string(),
+                    params: vec![("__s".to_string(), std_string_ref.clone())],
+                    is_definition: true,
+                    ctor_kind: ConstructorKind::Other,
+                    access: AccessSpecifier::Public,
+                },
+                vec![
+                    make_node(
+                        ClangNodeKind::Unknown("TypeRef:runtime_error".to_string()),
+                        vec![],
+                    ),
+                    make_node(
+                        ClangNodeKind::CallExpr {
+                            ty: CppType::Named("runtime_error".to_string()),
+                            template_instantiation: None,
+                        },
+                        vec![make_node(
+                            ClangNodeKind::UnaryOperator {
+                                op: UnaryOp::Deref,
+                                ty: CppType::Named("std::string".to_string()),
+                            },
+                            vec![make_node(
+                                ClangNodeKind::DeclRefExpr {
+                                    name: "__s".to_string(),
+                                    ty: CppType::Named("std::string".to_string()),
+                                    namespace_path: vec![],
+                                },
+                                vec![],
+                            )],
+                        )],
+                    ),
+                    make_node(ClangNodeKind::CompoundStmt, vec![]),
+                ],
+            )],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![runtime_error_record, range_error_record],
+        );
+        let code = AstCodeGen::new().generate(&ast);
+
+        assert!(
+            code.contains("__base: runtime_error::new_1(__s)"),
+            "expected base ctor call to preserve borrowed std_string argument, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("runtime_error::new_1(*__s)"),
+            "unexpected deref in base ctor call for borrowed std_string arg:\n{}",
             code
         );
     }
