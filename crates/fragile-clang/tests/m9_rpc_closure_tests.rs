@@ -2864,3 +2864,52 @@ fn m9_2c_iv_e2_live_mako_rpc_base_no_lt_eq_unresolved_errors() {
         let _ = std::fs::remove_file(&out_obj);
     }
 }
+
+// ---------------------------------------------------------------------------
+// M9.2.c.iv.e.3.b — runtime_error/logic_error::new_1 borrow mismatch
+// ---------------------------------------------------------------------------
+
+/// Verify the task is documented in TODO.md.
+#[test]
+fn m9_2c_iv_e3b_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("TODO.md"),
+    )
+    .expect("TODO.md must be readable");
+    assert!(
+        todo.contains("M9.2.c.iv.e.3.b"),
+        "M9.2.c.iv.e.3.b must be documented in TODO.md"
+    );
+}
+
+/// Verify the normalizer is applied in the post-processing pipeline.
+/// We check this by reading the ast_codegen.rs source and confirming
+/// `normalize_exception_constructor_deref_args` is called in the pipeline.
+#[test]
+fn m9_2c_iv_e3b_normalizer_integrated_in_pipeline() {
+    let ast_codegen_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("ast_codegen.rs");
+    let src = std::fs::read_to_string(&ast_codegen_path)
+        .expect("ast_codegen.rs must be readable");
+    // The normalizer function must exist
+    assert!(
+        src.contains("fn normalize_exception_constructor_deref_args("),
+        "M9.2.c.iv.e.3.b: normalizer function must be defined"
+    );
+    // It must be called in the post-processing pipeline (output = Self::normalize_...)
+    assert!(
+        src.contains("normalize_exception_constructor_deref_args(&output)"),
+        "M9.2.c.iv.e.3.b: normalizer must be called in the post-processing pipeline"
+    );
+    // It must rewrite runtime_error and logic_error patterns
+    assert!(
+        src.contains("runtime_error::new_1(*__s)") && src.contains("logic_error::new_1(*__s)"),
+        "M9.2.c.iv.e.3.b: normalizer must handle both runtime_error and logic_error"
+    );
+}

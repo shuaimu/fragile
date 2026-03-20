@@ -15101,6 +15101,34 @@ impl AstCodeGen {
             .replace("basic_istream_char::eof()", "super::char_traits::eof()")
     }
 
+    /// Derived exception constructors (e.g. `out_of_range`, `invalid_argument`)
+    /// delegate to their base class constructor via struct-init syntax:
+    ///
+    /// ```ignore
+    ///     __base: runtime_error::new_1(*__s),
+    /// ```
+    ///
+    /// Here `__s` is `*const std_string` (C++ `const string&` convention).
+    /// The deref `*__s` produces `std_string` by value, but the generated
+    /// `new_1` expects `&std_string`.  Reborrow through the raw pointer:
+    /// `runtime_error::new_1(unsafe { &*__s })`.
+    fn normalize_exception_constructor_deref_args(code: &str) -> String {
+        // Quick exit: only relevant when the problematic pattern exists.
+        if !code.contains("::new_1(*__s)") {
+            return code.to_string();
+        }
+        let mut out = code.to_string();
+        for prefix in &[
+            "runtime_error::new_1(*__s)",
+            "logic_error::new_1(*__s)",
+        ] {
+            let replacement = prefix
+                .replace("(*__s)", "(unsafe { &*__s })");
+            out = out.replace(prefix, &replacement);
+        }
+        out
+    }
+
     /// Degraded `std_char_traits_*` impl bodies (for non-`char` char_traits specializations
     /// like `wchar_t`, `char16_t`, `char32_t`, `char8_t`) can emit bare `lt(...)` and `eq(...)`
     /// calls that reference methods defined on the char_traits struct itself. In Rust these
@@ -28892,6 +28920,10 @@ impl AstCodeGen {
         // Degraded `std_char_traits_*` impl bodies can emit bare `lt(...)` / `eq(...)`
         // calls that are unresolvable in Rust (E0425). Rewrite to crate-level helpers.
         output = Self::normalize_unqualified_char_traits_comparator_calls(&output);
+        // Derived exception constructors delegate `__base: runtime_error::new_1(*__s)`
+        // where `__s: *const std_string`.  The deref yields a value but the generated
+        // `new_1` expects `&std_string`.  Reborrow through the raw pointer.
+        output = Self::normalize_exception_constructor_deref_args(&output);
         // Some degraded POSIX calls pass whole arrays in size slots
         // (`snprintf(buf, (buf), ...)`, `readlink(..., (buf))`).
         output = Self::normalize_posix_array_size_call_arguments(&output);
@@ -129208,5 +129240,66 @@ pub fn demo() {
             "preamble must include __fragile_char_traits_lt_i8 helper, got:\n{}",
             &code[..code.len().min(500)]
         );
+    }
+
+    // M9.2.c.iv.e.3.b tests: normalize_exception_constructor_deref_args
+    #[test]
+    fn test_normalize_exception_constructor_deref_args_rewrites_runtime_error() {
+        let input = r#"
+impl system_error {
+    pub fn new_1(__s: *const std_string) -> Self {
+        Self {
+            __base: runtime_error::new_1(*__s),
+        }
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_exception_constructor_deref_args(input);
+        assert!(
+            output.contains("runtime_error::new_1(unsafe { &*__s })"),
+            "should reborrow through raw pointer, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("runtime_error::new_1(*__s)"),
+            "should not contain bare deref pattern"
+        );
+    }
+
+    #[test]
+    fn test_normalize_exception_constructor_deref_args_rewrites_logic_error() {
+        let input = r#"
+impl domain_error {
+    pub fn new_1(__s: *const std_string) -> Self {
+        Self {
+            __base: logic_error::new_1(*__s),
+        }
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_exception_constructor_deref_args(input);
+        assert!(
+            output.contains("logic_error::new_1(unsafe { &*__s })"),
+            "should reborrow through raw pointer, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_exception_constructor_deref_args_skips_unrelated_code() {
+        let input = "let x = some_func::new_1(y);\nlet z = 42;\n";
+        let output = AstCodeGen::normalize_exception_constructor_deref_args(input);
+        assert_eq!(input, output, "should not modify unrelated code");
+    }
+
+    #[test]
+    fn test_normalize_exception_constructor_deref_args_handles_both_in_same_file() {
+        let input = concat!(
+            "__base: runtime_error::new_1(*__s),\n",
+            "__base: logic_error::new_1(*__s),\n",
+        );
+        let output = AstCodeGen::normalize_exception_constructor_deref_args(input);
+        assert!(output.contains("runtime_error::new_1(unsafe { &*__s })"));
+        assert!(output.contains("logic_error::new_1(unsafe { &*__s })"));
     }
 }
