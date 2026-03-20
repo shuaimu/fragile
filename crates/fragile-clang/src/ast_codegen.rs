@@ -27472,6 +27472,29 @@ impl AstCodeGen {
         }
     }
 
+    /// Check if an operand string already contains a dereference of pointer
+    /// arithmetic (e.g., `*ptr.sub(N)`, `unsafe { *ptr.add(N) }`).  Adding
+    /// another `*` would produce an invalid double-dereference (E0614).
+    pub fn operand_already_derefs_ptr_arithmetic(operand: &str) -> bool {
+        let has_ptr_arith = operand.contains(".sub(")
+            || operand.contains(".add(")
+            || operand.contains(".wrapping_offset(");
+        if !has_ptr_arith {
+            return false;
+        }
+        // Direct `*ptr.sub(...)` form
+        if operand.starts_with('*') {
+            return true;
+        }
+        // Unsafe-wrapped `unsafe { *ptr.sub(...) }` form
+        if let Some(inner) = operand.strip_prefix("unsafe { ") {
+            if inner.starts_with('*') {
+                return true;
+            }
+        }
+        false
+    }
+
     fn should_use_unaligned_deref_read(node: &ClangNode, result_ty: &CppType) -> bool {
         if !Self::is_scalar_unaligned_read_type(result_ty) || node.children.is_empty() {
             return false;
@@ -75840,6 +75863,19 @@ impl FragileAtomicBoolCompat for atomic_bool {
                             if operand.starts_with('*') && operand.contains(".op_index(") {
                                 return operand;
                             }
+                            // Pointer subtraction (ptr.offset_from(other)) returns isize, not a
+                            // pointer — dereferencing it is invalid (E0614).
+                            if operand.contains(".offset_from(") {
+                                return operand;
+                            }
+                            // Pointer arithmetic expressions (ptr.sub/add/wrapping_offset) that
+                            // already include a dereference (`*ptr.sub(N)`) should not get a
+                            // second one.  This happens when ArraySubscriptExpr or ptr[idx]
+                            // lowering already embeds the `*`, then a parent UnaryOp::Deref
+                            // tries to add another.
+                            if Self::operand_already_derefs_ptr_arithmetic(&operand) {
+                                return operand;
+                            }
                             let operand_ty = Self::get_original_expr_type(&node.children[0])
                                 .or_else(|| Self::get_expr_type(&node.children[0]));
                             let operand_is_pointer_like =
@@ -79745,6 +79781,17 @@ impl FragileAtomicBoolCompat for atomic_bool {
                             // Recovered string indexing call-shapes already produce a read expression
                             // (`*str.op_index(...)`). Avoid introducing a second dereference.
                             if operand.starts_with('*') && operand.contains(".op_index(") {
+                                return operand;
+                            }
+                            // Pointer subtraction (ptr.offset_from(other)) returns isize, not a
+                            // pointer — dereferencing it is invalid (E0614).
+                            if operand.contains(".offset_from(") {
+                                return operand;
+                            }
+                            // Pointer arithmetic expressions (ptr.sub/add/wrapping_offset) that
+                            // already include a dereference (`*ptr.sub(N)`) or an unsafe-wrapped
+                            // dereference (`unsafe { *ptr.sub(N) }`) should not get a second one.
+                            if Self::operand_already_derefs_ptr_arithmetic(&operand) {
                                 return operand;
                             }
                             let operand_ty = Self::get_original_expr_type(&node.children[0])
@@ -118339,6 +118386,138 @@ pub fn parseArg(argv: *const *const i8, index: i32) -> *const i8 {
         assert!(
             !code.contains("let mut delta: u64 = unsafe { q.offset_from(p) };"),
             "offset_from result should not be assigned to u64 without explicit cast, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_operand_already_derefs_ptr_arithmetic_detection() {
+        // Direct *ptr.sub(...) form
+        assert!(AstCodeGen::operand_already_derefs_ptr_arithmetic(
+            "*__a_end.sub(1 as usize)"
+        ));
+        assert!(AstCodeGen::operand_already_derefs_ptr_arithmetic(
+            "*ptr.add(5 as usize)"
+        ));
+        assert!(AstCodeGen::operand_already_derefs_ptr_arithmetic(
+            "*ptr.wrapping_offset(-(1 as isize))"
+        ));
+        // Unsafe-wrapped form
+        assert!(AstCodeGen::operand_already_derefs_ptr_arithmetic(
+            "unsafe { *ptr.sub(1 as usize) }"
+        ));
+        assert!(AstCodeGen::operand_already_derefs_ptr_arithmetic(
+            "unsafe { *ptr.add(3 as usize) }"
+        ));
+        // Non-matching: no leading *
+        assert!(!AstCodeGen::operand_already_derefs_ptr_arithmetic(
+            "ptr.sub(1 as usize)"
+        ));
+        // Non-matching: no pointer arithmetic
+        assert!(!AstCodeGen::operand_already_derefs_ptr_arithmetic(
+            "*ptr.clone()"
+        ));
+        // offset_from returns isize, not pointer — handled separately
+        assert!(!AstCodeGen::operand_already_derefs_ptr_arithmetic(
+            "ptr.offset_from(other)"
+        ));
+    }
+
+    #[test]
+    fn test_deref_of_pointer_subtraction_skips_invalid_star() {
+        // C++: `(end - begin) < 40` where end/begin are const char*
+        // The transpiler should emit `end.offset_from(begin)` without a `*`.
+        let cchar_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        // Build: *(end - begin) — an invalid deref of pointer subtraction
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "test_deref_ptr_sub".to_string(),
+                    return_type: CppType::Int { signed: true },
+                    mangled_name: "_Z18test_deref_ptr_subPKcS0_".to_string(),
+                    is_static: false,
+                    params: vec![
+                        ("begin".to_string(), cchar_ptr.clone()),
+                        ("end".to_string(), cchar_ptr.clone()),
+                    ],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![
+                    make_node(
+                        ClangNodeKind::ParmVarDecl {
+                            name: "begin".to_string(),
+                            ty: cchar_ptr.clone(),
+                        },
+                        vec![],
+                    ),
+                    make_node(
+                        ClangNodeKind::ParmVarDecl {
+                            name: "end".to_string(),
+                            ty: cchar_ptr.clone(),
+                        },
+                        vec![],
+                    ),
+                    make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![
+                                // *(end - begin) — deref of ptr subtraction
+                                make_node(
+                                    ClangNodeKind::UnaryOperator {
+                                        op: UnaryOp::Deref,
+                                        ty: CppType::Char { signed: true },
+                                    },
+                                    vec![make_node(
+                                        ClangNodeKind::BinaryOperator {
+                                            op: BinaryOp::Sub,
+                                            ty: CppType::LongLong { signed: true },
+                                        },
+                                        vec![
+                                            make_node(
+                                                ClangNodeKind::DeclRefExpr {
+                                                    name: "end".to_string(),
+                                                    ty: cchar_ptr.clone(),
+                                                    namespace_path: vec![],
+                                                },
+                                                vec![],
+                                            ),
+                                            make_node(
+                                                ClangNodeKind::DeclRefExpr {
+                                                    name: "begin".to_string(),
+                                                    ty: cchar_ptr.clone(),
+                                                    namespace_path: vec![],
+                                                },
+                                                vec![],
+                                            ),
+                                        ],
+                                    )],
+                                ),
+                            ],
+                        )],
+                    ),
+                ],
+            )],
+        );
+        let code = AstCodeGen::new().generate(&ast);
+        // Should NOT contain *...offset_from (deref of isize is invalid E0614)
+        assert!(
+            !code.contains("*end.offset_from(") && !code.contains("*(end.offset_from("),
+            "deref of offset_from should be suppressed (E0614), got:\n{}",
+            code
+        );
+        // Should contain offset_from without the * prefix
+        assert!(
+            code.contains("end.offset_from(begin)"),
+            "pointer subtraction should use offset_from, got:\n{}",
             code
         );
     }

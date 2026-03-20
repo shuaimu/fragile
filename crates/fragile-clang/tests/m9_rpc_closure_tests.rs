@@ -3649,3 +3649,58 @@ fn m9_2c_iv_e5a_callable_stl_type_detection() {
         "e.5.a should reference E0599 errors"
     );
 }
+
+/// M9.2.c.iv.e.5.b: task is documented in TODO.md
+#[test]
+fn m9_2c_iv_e5b_task_documented_in_todo() {
+    let todo = fs::read_to_string(workspace_root_dir().join("TODO.md"))
+        .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("M9.2.c.iv.e.5.b"),
+        "TODO.md should document M9.2.c.iv.e.5.b task"
+    );
+    assert!(
+        todo.contains("E0614"),
+        "M9.2.c.iv.e.5.b description should mention E0614"
+    );
+}
+
+/// M9.2.c.iv.e.5.b: deref of offset_from suppressed in transpiled output.
+/// Verifies that the operand_already_derefs_ptr_arithmetic helper correctly
+/// prevents E0614 by detecting offset_from and double-deref patterns.
+#[test]
+fn m9_2c_iv_e5b_deref_of_offset_from_suppressed() {
+    use fragile_clang::AstCodeGen;
+    // offset_from returns isize — dereferencing it would be E0614
+    assert!(
+        AstCodeGen::operand_already_derefs_ptr_arithmetic("*ptr.sub(1 as usize)"),
+        "*ptr.sub(...) should be detected as already-dereffed pointer arithmetic"
+    );
+    assert!(
+        AstCodeGen::operand_already_derefs_ptr_arithmetic("unsafe { *ptr.add(3 as usize) }"),
+        "unsafe {{ *ptr.add(...) }} should be detected as already-dereffed pointer arithmetic"
+    );
+    assert!(
+        !AstCodeGen::operand_already_derefs_ptr_arithmetic("ptr.sub(1 as usize)"),
+        "ptr.sub(...) without * should NOT be detected as already-dereffed"
+    );
+    assert!(
+        !AstCodeGen::operand_already_derefs_ptr_arithmetic("ptr.offset_from(other)"),
+        "offset_from without * is handled by a separate guard"
+    );
+}
+
+/// M9.2.c.iv.e.5.b: double-deref of pointer arithmetic suppressed.
+/// Uses AST to verify that `*(ptr - N)` does not produce `**ptr.sub(N)`.
+#[test]
+fn m9_2c_iv_e5b_double_deref_ptr_arithmetic_suppressed() {
+    use fragile_clang::AstCodeGen;
+    assert!(
+        AstCodeGen::operand_already_derefs_ptr_arithmetic("*__a_end.sub(1 as usize)"),
+        "*__a_end.sub(1 as usize) should be detected as already-dereffed"
+    );
+    assert!(
+        AstCodeGen::operand_already_derefs_ptr_arithmetic("*ptr.wrapping_offset(-(1 as isize))"),
+        "*ptr.wrapping_offset should be detected as already-dereffed"
+    );
+}
