@@ -37317,7 +37317,17 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 if rewritten.contains(alias) {
                     let trimmed_rewritten = rewritten.trim_start();
                     let static_decl_prefix = format!("static mut {}:", symbol);
-                    if !trimmed_rewritten.starts_with(&static_decl_prefix) {
+                    // Never rewrite function signature lines — parameter names must
+                    // stay as plain identifiers, not `unsafe { __fsv_... }` wrappers.
+                    let is_fn_signature = trimmed_rewritten.starts_with("pub fn ")
+                        || trimmed_rewritten.starts_with("fn ")
+                        || trimmed_rewritten.starts_with("pub extern ")
+                        || trimmed_rewritten.starts_with("extern \"C\" fn ")
+                        || trimmed_rewritten.starts_with("pub unsafe extern ")
+                        || trimmed_rewritten.starts_with("unsafe extern ");
+                    if !trimmed_rewritten.starts_with(&static_decl_prefix)
+                        && !is_fn_signature
+                    {
                         let replacement = if *is_maybeuninit {
                             format!("unsafe {{ {}.assume_init_mut() }}", symbol)
                         } else {
@@ -99094,6 +99104,95 @@ pub mod fragile_runtime {
             normalized.contains("Ok(result) => result"),
             "match-arm bindings should remain intact when snapshot injection is skipped, got:\n{}",
             normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_function_static_symbol_refs_skips_fn_signature_lines() {
+        // When a function-static alias like `__x` matches a parameter name
+        // in a function signature, the rewrite must NOT replace the parameter
+        // name with `unsafe { __fsv___func___x_0 }` — that would produce
+        // invalid Rust syntax (keyword `unsafe` in parameter position).
+        let input = concat!(
+            "static mut __fsv___func___x_0: f64 = unsafe { std::mem::zeroed() };\n",
+            "pub fn trunc_(__x: f64) -> f64 {\n",
+            "return __builtin_trunc(__x);\n",
+            "}\n",
+        );
+        let result = AstCodeGen::normalize_unprefixed_function_static_symbol_refs(input);
+        // The fn signature must keep `__x` as-is, not `unsafe { __fsv___func___x_0 }`
+        assert!(
+            result.contains("pub fn trunc_(__x: f64)"),
+            "function signature parameter must not be rewritten with unsafe wrapper, got:\n{}",
+            result
+        );
+        // The body use *should* be rewritten
+        assert!(
+            result.contains("unsafe { __fsv___func___x_0 }"),
+            "body reference to alias should be rewritten to unsafe {{ __fsv_... }}, got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_normalize_function_static_symbol_refs_skips_extern_c_fn_signature() {
+        let input = concat!(
+            "static mut __fsv___func___x_0: f64 = unsafe { std::mem::zeroed() };\n",
+            "pub extern \"C\" fn isnan(__x: f64) -> bool {\n",
+            "return __x != __x;\n",
+            "}\n",
+        );
+        let result = AstCodeGen::normalize_unprefixed_function_static_symbol_refs(input);
+        assert!(
+            result.contains("pub extern \"C\" fn isnan(__x: f64)"),
+            "extern C fn signature must not be rewritten, got:\n{}",
+            result
+        );
+        // Body uses should be rewritten
+        assert!(
+            result.contains("unsafe { __fsv___func___x_0 } != unsafe { __fsv___func___x_0 }"),
+            "body should have alias rewritten, got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_normalize_function_static_symbol_refs_skips_mut_param_signature() {
+        // `mut` parameter variant
+        let input = concat!(
+            "static mut __fsv___func___x_0: u32 = unsafe { std::mem::zeroed() };\n",
+            "pub extern \"C\" fn op_and_assign_1(mut __x: &mut u32, __y: u32) -> &mut u32 {\n",
+            "__x = __x & __y;\n",
+            "return __x;\n",
+            "}\n",
+        );
+        let result = AstCodeGen::normalize_unprefixed_function_static_symbol_refs(input);
+        assert!(
+            result.contains("pub extern \"C\" fn op_and_assign_1(mut __x: &mut u32"),
+            "mut param in fn signature must not be rewritten, got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_normalize_function_static_symbol_refs_rewrites_body_not_signature_multi_param() {
+        // Multi-param function where only one param matches an alias
+        let input = concat!(
+            "static mut __fsv___func___x_0: f64 = unsafe { std::mem::zeroed() };\n",
+            "pub fn hermite_f64(__n: u32, __x: f64) -> f64 {\n",
+            "return hermite_f64(__n, __x);\n",
+            "}\n",
+        );
+        let result = AstCodeGen::normalize_unprefixed_function_static_symbol_refs(input);
+        assert!(
+            result.contains("pub fn hermite_f64(__n: u32, __x: f64)"),
+            "multi-param fn signature must not be rewritten, got:\n{}",
+            result
+        );
+        assert!(
+            result.contains("hermite_f64(__n, unsafe { __fsv___func___x_0 })"),
+            "body call should rewrite the alias param, got:\n{}",
+            result
         );
     }
 

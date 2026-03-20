@@ -2608,3 +2608,84 @@ fn m9_2c_iv_d4_task_documented_in_todo() {
         "d.4 TODO entry should list __throw_* and _Range_chk helper blockers"
     );
 }
+
+/// M9.2.c.iv.d.5: Verify that function-static alias rewrite does not inject
+/// `unsafe { __fsv_... }` into function signature parameter positions.
+#[test]
+fn m9_2c_iv_d5_no_unsafe_in_function_signature_params() {
+    // Build a minimal C++ snippet that exercises the pattern:
+    // a function with a parameter name that matches a function-static alias.
+    let cpp = r#"
+static double trunc_helper(double __x) {
+    return __x;
+}
+"#;
+    let tmp_dir = std::env::temp_dir().join(format!(
+        "fragile_m9_2c_iv_d5_sig_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::create_dir_all(&tmp_dir);
+    let cpp_path = tmp_dir.join("d5_param_test.cpp");
+    std::fs::write(&cpp_path, cpp).unwrap();
+
+    let fragile_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("target")
+        .join("debug")
+        .join("fragile");
+    if !fragile_bin.exists() {
+        eprintln!("Skipping: fragile binary not built");
+        return;
+    }
+
+    let output = std::process::Command::new(&fragile_bin)
+        .args(["transpile", cpp_path.to_str().unwrap()])
+        .output()
+        .expect("fragile transpile should run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{}\n{}", stdout, stderr);
+
+    // The transpiled output must not contain `unsafe { __fsv_` in a
+    // function signature position (i.e., as a parameter name).
+    // Check for the specific pattern: `fn ...(unsafe { __fsv_`
+    let has_unsafe_param = combined
+        .lines()
+        .any(|line| {
+            let trimmed = line.trim();
+            (trimmed.starts_with("pub fn ")
+                || trimmed.starts_with("fn ")
+                || trimmed.starts_with("pub extern ")
+                || trimmed.starts_with("extern \"C\" fn ")
+                || trimmed.starts_with("pub unsafe extern "))
+                && trimmed.contains("unsafe { __fsv_")
+        });
+    assert!(
+        !has_unsafe_param,
+        "transpiled output must not have `unsafe {{ __fsv_... }}` in function signature parameters.\nOutput:\n{}",
+        combined
+    );
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+}
+
+/// M9.2.c.iv.d.5: Verify the task is documented in TODO.md
+#[test]
+fn m9_2c_iv_d5_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("M9.2.c.iv.d.5"),
+        "M9.2.c.iv.d.5 should be documented in TODO.md"
+    );
+}
