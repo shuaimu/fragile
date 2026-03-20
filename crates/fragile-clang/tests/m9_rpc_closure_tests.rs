@@ -2805,3 +2805,62 @@ fn m9_2c_iv_e2_task_documented_in_todo() {
         "M9.2.c.iv.e.2 TODO entry should mention comparator unresolved names (`lt`/`eq`)"
     );
 }
+
+/// M9.2.c.iv.e.2: Verify that live strict fragilec compile of rrr/base files
+/// does not produce E0425 `cannot find function `lt`` or `cannot find function `eq``
+/// errors. These come from bare lt()/eq() calls in non-char char_traits impls that
+/// are now rewritten to __fragile_char_traits_lt_i8/__fragile_char_traits_eq_i8.
+#[test]
+fn m9_2c_iv_e2_live_mako_rpc_base_no_lt_eq_unresolved_errors() {
+    let mako_root = match mako_root_dir() {
+        Some(r) => r,
+        None => {
+            eprintln!("SKIP: mako source not found");
+            return;
+        }
+    };
+    let fragilec = match ensure_fragilec_binary() {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("SKIP: fragilec not available: {}", e);
+            return;
+        }
+    };
+
+    for file in &[
+        "rrr/base/debugging.cpp",
+        "rrr/base/misc.cpp",
+    ] {
+        let source = mako_root.join(file);
+        if !source.exists() {
+            eprintln!("Skipping {}: file not found", file);
+            continue;
+        }
+        let out_obj = std::env::temp_dir().join(format!(
+            "m9_2c_iv_e2_{}_{}.o",
+            file.replace('/', "_"),
+            std::process::id()
+        ));
+        let (_success, _stdout, stderr) =
+            fragilec_compile_one(&fragilec, &source, &out_obj, &mako_root);
+
+        // Check that no E0425 errors mention bare `lt` or `eq` as unresolved names.
+        let has_lt_unresolved = stderr.contains("cannot find function `lt`")
+            || stderr.contains("cannot find value `lt`");
+        let has_eq_unresolved = stderr.contains("cannot find function `eq`")
+            || stderr.contains("cannot find value `eq`");
+        assert!(
+            !has_lt_unresolved,
+            "M9.2.c.iv.e.2 regression: {} still has unresolved `lt` E0425 errors:\n{}",
+            file,
+            &stderr[..stderr.len().min(2000)]
+        );
+        assert!(
+            !has_eq_unresolved,
+            "M9.2.c.iv.e.2 regression: {} still has unresolved `eq` E0425 errors:\n{}",
+            file,
+            &stderr[..stderr.len().min(2000)]
+        );
+        let _ = std::fs::remove_file(&out_obj);
+    }
+}
