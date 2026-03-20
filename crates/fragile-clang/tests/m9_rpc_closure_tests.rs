@@ -62,9 +62,10 @@ fn ensure_fragilec_binary() -> Result<PathBuf, String> {
     }
 
     let workspace_root = workspace_root_dir();
-    let fragilec = workspace_root.join("target/debug/fragilec");
+    let fragilec = workspace_root.join("target/release/fragilec");
     let output = Command::new("cargo")
         .arg("build")
+        .arg("--release")
         .arg("-p")
         .arg("fragile-cli")
         .arg("--bin")

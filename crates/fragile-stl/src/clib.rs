@@ -286,8 +286,25 @@ where
     lhs == rhs
 }
 #[inline]
-pub fn __fragile_char_traits_lt_i8(__c1: i8, __c2: i8) -> bool {
-    (__c1 as u8 as i32) < (__c2 as u8 as i32)
+pub fn __fragile_char_traits_lt_i8<T, U>(__c1: T, __c2: U) -> bool
+where
+    T: std::convert::TryInto<i64> + Copy,
+    U: std::convert::TryInto<i64> + Copy,
+{
+    let lhs = __c1.try_into().unwrap_or_default();
+    let rhs = __c2.try_into().unwrap_or_default();
+
+    // Preserve unsigned-char ordering semantics for true i8 lanes while still
+    // accepting widened u16/u32 operands from degraded char_traits overloads.
+    let i8_min = i8::MIN as i64;
+    let i8_max = i8::MAX as i64;
+    if (i8_min..=i8_max).contains(&lhs) && (i8_min..=i8_max).contains(&rhs) {
+        let lhs_i8 = lhs as i8;
+        let rhs_i8 = rhs as i8;
+        (lhs_i8 as u8 as i32) < (rhs_i8 as u8 as i32)
+    } else {
+        lhs < rhs
+    }
 }
 #[inline]
 pub fn __throw_out_of_range_fmt(_fmt: *const i8, _s: *const i8, _pos: u64, _size: u64) { panic!("out of range"); }

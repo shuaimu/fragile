@@ -21040,3 +21040,40 @@ Validation:
 Result:
 - `M9.2.c.iv.e.3.b` borrow-mismatch class is closed in strict replay evidence.
 - Remaining `E0308` classes continue under `M9.2.c.iv.e.3.c+`.
+
+## 2026-03-20: M9.2.c.iv.e.3.f.1 widened `Self::lt`/`Self::eq` lane mismatches (`expected i8, found u16/u32`)
+
+Task sizing analysis:
+- Bounded leaf-level fix (<1000 LOC): one normalization pass, one helper-lane generalization, focused tests, and TODO/doc updates.
+- Parent `M9.2.c.iv.e.3.f` is still broader than one leaf, so it was decomposed into `f.1` (this fix) and `f.2` (inventory refresh + next dominant-class breakdown).
+
+Plan before execution:
+- validate current strict evidence class for `expected i8, found u16/u32` after `e.3.e`;
+- patch codegen normalization to rewrite only widened `Self::lt`/`Self::eq` call-shapes;
+- keep non-widened `i8` `Self::` paths untouched;
+- add focused helper + integration regressions;
+- rerun focused tests and then full regression suites.
+
+Wrong-approach check:
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific mako conditionals, no `FRAGILEC_FORCE_NATIVE_SOURCES`, and no fake semantic stubs were introduced.
+- Fix is generic generated-code normalization + helper-surface hardening.
+
+Implemented:
+- `crates/fragile-clang/src/ast_codegen.rs`
+  - Added `normalize_widened_char_traits_self_comparator_calls` to rewrite widened `Self::lt`/`Self::eq` call-shapes to crate helpers.
+  - Wired the pass into the post-lowering normalization pipeline after unqualified comparator-call normalization.
+  - Added regressions:
+    - `test_normalize_widened_char_traits_self_comparator_calls_rewrites_u16_u32_self_calls`
+    - `test_normalize_widened_char_traits_self_comparator_calls_skips_regular_i8_self_calls`
+- `crates/fragile-stl/src/clib.rs`
+  - Generalized `__fragile_char_traits_lt_i8` to accept widened lanes via `TryInto<i64>` while preserving unsigned-byte ordering semantics for true `i8` lanes.
+- `crates/fragile-stl/tests/char_traits_helpers_tests.rs`
+  - Added widened-lane coverage: `char_traits_lt_i8_accepts_wider_lanes`.
+- `crates/fragile-clang/tests/m9_rpc_closure_tests.rs`
+  - Added `f.1` contract/integration tests:
+    - `m9_2c_iv_e3f1_task_documented_in_todo`
+    - `m9_2c_iv_e3f1_normalizer_integrated_in_pipeline`
+    - `m9_2c_iv_e3f1_live_debugging_cpp_no_i8_u16_u32_char_traits_mismatch`
+- `TODO.md`
+  - Added `M9.2.c.iv.e.3.f` leaf decomposition (`f.1`/`f.2`) and marked `f.1` done.

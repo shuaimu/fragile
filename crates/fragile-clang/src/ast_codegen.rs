@@ -15279,6 +15279,44 @@ impl AstCodeGen {
         s
     }
 
+    /// Degraded `std_char_traits_char_` overload bodies can keep `Self::lt`/`Self::eq`
+    /// calls while widening operands to `u16`/`u32` lanes (`compare_1/2`, `length_1/2`).
+    /// These calls mismatch the base `i8` signature. Rewrite only this widened
+    /// `Self::` call-shape to crate-level comparator helpers.
+    fn normalize_widened_char_traits_self_comparator_calls(code: &str) -> String {
+        if !code.contains("Self::lt(") && !code.contains("Self::eq(") {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        for line in code.lines() {
+            let trimmed = line.trim();
+            let mut rewritten = line.to_string();
+
+            let is_widened_self_lt = trimmed.contains("Self::lt(")
+                && trimmed.contains("unsafe { *__s")
+                && (trimmed.contains("__s1") || trimmed.contains("__s2"));
+            if is_widened_self_lt {
+                rewritten = rewritten.replacen("Self::lt(", "__fragile_char_traits_lt_i8(", 1);
+            }
+
+            let is_widened_self_eq = trimmed.contains("Self::eq(")
+                && trimmed.contains("unsafe { *__s")
+                && (trimmed.contains("as u16") || trimmed.contains("as u32"));
+            if is_widened_self_eq {
+                rewritten = rewritten.replacen("Self::eq(", "__fragile_char_traits_eq_i8(", 1);
+            }
+
+            out.push_str(&rewritten);
+            out.push('\n');
+        }
+
+        if !code.ends_with('\n') && !out.is_empty() {
+            out.pop();
+        }
+        out
+    }
+
     /// Calls emitted against placeholder structs are non-callable artifacts in
     /// Rust's value namespace. Rewrite zero-arg invocations to concrete
     /// placeholder default constructors (`Type::default()`) so degraded TUs
@@ -28937,6 +28975,9 @@ impl AstCodeGen {
         // Degraded `std_char_traits_*` impl bodies can emit bare `lt(...)` / `eq(...)`
         // calls that are unresolvable in Rust (E0425). Rewrite to crate-level helpers.
         output = Self::normalize_unqualified_char_traits_comparator_calls(&output);
+        // Some widened char_traits overloads (`u16`/`u32` lanes) still call
+        // `Self::lt`/`Self::eq` with non-`i8` operands; route those calls to helpers.
+        output = Self::normalize_widened_char_traits_self_comparator_calls(&output);
         // Derived exception constructors delegate `__base: runtime_error::new_1(*__s)`
         // where `__s: *const std_string`.  The deref yields a value but the generated
         // `new_1` expects `&std_string`.  Reborrow through the raw pointer.
@@ -129370,6 +129411,49 @@ pub fn demo() {
             result.contains("    pub fn lt(__c1: u16"),
             "pub fn lt declaration line must not be rewritten even in non-char impl, got:\n{}",
             result
+        );
+    }
+
+    #[test]
+    fn test_normalize_widened_char_traits_self_comparator_calls_rewrites_u16_u32_self_calls() {
+        let input = concat!(
+            "impl std_char_traits_char_ {\n",
+            "    pub fn compare_1(__s1: *const u16, __s2: *const u16) -> i32 {\n",
+            "        if Self::lt(unsafe { *__s1 }, unsafe { *__s2 }) { return -1; }\n",
+            "        0\n",
+            "    }\n",
+            "    pub fn length_1(__s: *const u16) -> u64 {\n",
+            "        if !(!Self::eq(unsafe { *__s }, 0 as u16)) { return 0; }\n",
+            "        1\n",
+            "    }\n",
+            "}\n",
+        );
+        let output = AstCodeGen::normalize_widened_char_traits_self_comparator_calls(input);
+        assert!(
+            output.contains("__fragile_char_traits_lt_i8(unsafe { *__s1 }, unsafe { *__s2 })"),
+            "widened Self::lt call should be rewritten, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("__fragile_char_traits_eq_i8(unsafe { *__s }, 0 as u16)"),
+            "widened Self::eq call should be rewritten, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_widened_char_traits_self_comparator_calls_skips_regular_i8_self_calls() {
+        let input = concat!(
+            "impl std_char_traits_char_ {\n",
+            "    pub fn compare(__c1: i8, __c2: i8) -> bool {\n",
+            "        Self::lt(__c1, __c2) && Self::eq(__c1, __c2)\n",
+            "    }\n",
+            "}\n",
+        );
+        let output = AstCodeGen::normalize_widened_char_traits_self_comparator_calls(input);
+        assert_eq!(
+            output, input,
+            "normalizer should not rewrite non-widened Self::lt/Self::eq calls"
         );
     }
 
