@@ -15136,10 +15136,11 @@ impl AstCodeGen {
     /// `__fragile_char_traits_lt_i8` / `__fragile_char_traits_eq_i8`.
     ///
     /// Guarded rewrites:
-    /// - Only applies inside `impl` blocks that are NOT `impl std_char_traits_char_`
-    ///   (the char impl itself uses `Self::eq` / `Self::lt` correctly).
+    /// - Bare `lt(`/`eq(` rewrites only apply inside non-char char_traits impl blocks.
+    /// - `Self::lt(`/`Self::eq(` rewrites apply inside ALL char_traits impl blocks
+    ///   (including char_), because misplaced template methods (e.g. char16_t compare_1
+    ///   inside char_ impl) call Self::lt/Self::eq with u16/u32 args.
     /// - Does NOT rewrite `pub fn lt`/`pub fn eq` declaration lines.
-    /// - Does NOT rewrite already-qualified calls like `Self::lt(`, `char_traits::eq(`, etc.
     fn normalize_unqualified_char_traits_comparator_calls(code: &str) -> String {
         // Quick exit: only relevant for code that has non-char char_traits impls
         // AND bare lt/eq call patterns (not just declarations).
@@ -15157,7 +15158,10 @@ impl AstCodeGen {
         let mut result = Vec::with_capacity(lines.len());
 
         // Track impl block context.
-        // We only rewrite inside an impl block that is NOT std_char_traits_char_.
+        // We track two kinds of char_traits impl blocks:
+        // - ANY char_traits impl (for Self::lt/Self::eq → helper rewrites)
+        // - non-char char_traits impls (for bare lt/eq → helper rewrites)
+        let mut in_any_char_traits_impl = false;
         let mut in_non_char_impl = false;
         let mut brace_depth: i32 = 0;
         let mut impl_brace_start: i32 = -1; // brace_depth when impl block opened
@@ -15166,18 +15170,19 @@ impl AstCodeGen {
             let trimmed = line.trim();
 
             // Detect impl block start.
-            if !in_non_char_impl && trimmed.starts_with("impl ") && trimmed.ends_with('{') {
+            if !in_any_char_traits_impl && trimmed.starts_with("impl ") && trimmed.ends_with('{') {
                 let impl_target = trimmed
                     .strip_prefix("impl ")
                     .unwrap_or("")
                     .trim_end_matches('{')
                     .trim();
-                // Skip char impl itself — those already use Self:: calls correctly.
-                let is_char_impl = impl_target.starts_with("std_char_traits_char_")
-                    || impl_target == "std_char_traits_char";
-                if !is_char_impl && impl_target.contains("char_traits") {
-                    in_non_char_impl = true;
+                if impl_target.contains("char_traits") {
+                    in_any_char_traits_impl = true;
                     impl_brace_start = brace_depth;
+                    // Non-char impls also get bare lt/eq rewrites.
+                    let is_char_impl = impl_target.starts_with("std_char_traits_char_")
+                        || impl_target == "std_char_traits_char";
+                    in_non_char_impl = !is_char_impl;
                 }
             }
 
@@ -15187,12 +15192,13 @@ impl AstCodeGen {
             brace_depth += open_count - close_count;
 
             // Exit impl block when depth returns to opening level.
-            if in_non_char_impl && brace_depth <= impl_brace_start {
+            if in_any_char_traits_impl && brace_depth <= impl_brace_start {
+                in_any_char_traits_impl = false;
                 in_non_char_impl = false;
                 impl_brace_start = -1;
             }
 
-            if !in_non_char_impl {
+            if !in_any_char_traits_impl {
                 result.push(line.to_string());
                 continue;
             }
@@ -15207,11 +15213,22 @@ impl AstCodeGen {
                 continue;
             }
 
-            // Rewrite bare lt(...) / eq(...) calls to crate-level helpers.
-            // We replace token-boundary occurrences: the call must not be preceded
-            // by an identifier char (to avoid matching `streq(` etc.) and must not
-            // be preceded by `::` (already qualified).
-            let new_line = Self::rewrite_bare_char_traits_comparator_calls(line);
+            // In ALL char_traits impls: rewrite Self::lt(→helper and Self::eq(→helper.
+            // This handles misplaced template methods (e.g. char16_t compare_1 inside
+            // char_ impl) that call Self::lt/Self::eq with u16/u32 args but the
+            // methods expect i8.
+            let mut new_line = line.to_string();
+            if new_line.contains("Self::lt(") {
+                new_line = new_line.replace("Self::lt(", "__fragile_char_traits_lt_i8(");
+            }
+            if new_line.contains("Self::eq(") {
+                new_line = new_line.replace("Self::eq(", "__fragile_char_traits_eq_i8(");
+            }
+
+            // In non-char impls: also rewrite bare lt(...) / eq(...) calls.
+            if in_non_char_impl {
+                new_line = Self::rewrite_bare_char_traits_comparator_calls(&new_line);
+            }
             result.push(new_line);
         }
 
@@ -129370,6 +129387,119 @@ pub fn demo() {
             code.contains("pub fn __fragile_char_traits_lt_i8"),
             "preamble must include __fragile_char_traits_lt_i8 helper, got:\n{}",
             &code[..code.len().min(500)]
+        );
+    }
+
+    // M9.2.c.iv.e.3.f tests: Self::lt/Self::eq rewrite in char_traits impls
+    #[test]
+    fn test_normalize_char_traits_comparator_rewrites_self_lt_eq_in_char_impl() {
+        // Self::lt and Self::eq inside std_char_traits_char_ impl should be rewritten
+        // to helper functions (these come from misplaced char16_t/char32_t template methods).
+        let input = concat!(
+            "impl std_char_traits_char_ {\n",
+            "    pub fn lt(__c1: i8, __c2: i8) -> bool { (__c1 as u8) < (__c2 as u8) }\n",
+            "    pub fn eq(__c1: i8, __c2: i8) -> bool { __c1 == __c2 }\n",
+            "    pub fn compare_1(mut __s1: *const u16, mut __s2: *const u16, mut __n: u64) -> i32 {\n",
+            "        if Self::lt(unsafe { *__s1 }, unsafe { *__s2 }) { return -1; }\n",
+            "        if Self::lt(unsafe { *__s2 }, unsafe { *__s1 }) { return 1; }\n",
+            "        0\n",
+            "    }\n",
+            "    pub fn length_1(mut __s: *const u16) -> u64 {\n",
+            "        if !(!Self::eq(unsafe { *__s }, 0 as u16)) { break; }\n",
+            "        0\n",
+            "    }\n",
+            "}\n",
+        );
+        let result =
+            AstCodeGen::normalize_unqualified_char_traits_comparator_calls(input);
+        // Self::lt should be rewritten to helper
+        assert!(
+            result.contains("__fragile_char_traits_lt_i8(unsafe { *__s1 }"),
+            "Self::lt( in char impl should be rewritten to __fragile_char_traits_lt_i8, got:\n{}",
+            result
+        );
+        assert!(
+            !result.contains("Self::lt("),
+            "Self::lt( should be fully rewritten, got:\n{}",
+            result
+        );
+        // Self::eq should be rewritten to helper
+        assert!(
+            result.contains("__fragile_char_traits_eq_i8(unsafe { *__s }"),
+            "Self::eq( in char impl should be rewritten to __fragile_char_traits_eq_i8, got:\n{}",
+            result
+        );
+        assert!(
+            !result.contains("Self::eq("),
+            "Self::eq( should be fully rewritten, got:\n{}",
+            result
+        );
+        // fn declarations must NOT be rewritten
+        assert!(
+            result.contains("pub fn lt(__c1: i8"),
+            "pub fn lt declaration must not be rewritten, got:\n{}",
+            result
+        );
+        assert!(
+            result.contains("pub fn eq(__c1: i8"),
+            "pub fn eq declaration must not be rewritten, got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_normalize_char_traits_comparator_self_eq_lt_in_non_char_impl() {
+        // Self::lt/Self::eq inside non-char char_traits impls should also be rewritten.
+        let input = concat!(
+            "impl std_char_traits_char32_t_ {\n",
+            "    pub fn compare(mut __s1: *const u32, mut __s2: *const u32, mut __n: u64) -> i32 {\n",
+            "        if Self::lt(unsafe { *__s1 }, unsafe { *__s2 }) { return -1; }\n",
+            "        0\n",
+            "    }\n",
+            "    pub fn length(mut __s: *const u32) -> u64 {\n",
+            "        if !(!Self::eq(unsafe { *__s }, 0 as u32)) { break; }\n",
+            "        0\n",
+            "    }\n",
+            "}\n",
+        );
+        let result =
+            AstCodeGen::normalize_unqualified_char_traits_comparator_calls(input);
+        assert!(
+            result.contains("__fragile_char_traits_lt_i8(unsafe { *__s1 }"),
+            "Self::lt in char32 impl should be rewritten, got:\n{}",
+            result
+        );
+        assert!(
+            result.contains("__fragile_char_traits_eq_i8(unsafe { *__s }"),
+            "Self::eq in char32 impl should be rewritten, got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_normalize_char_traits_comparator_bare_calls_still_skipped_in_char_impl() {
+        // Bare lt()/eq() calls (NOT Self::) in char_ impl must NOT be rewritten.
+        let input = concat!(
+            "impl std_char_traits_char_ {\n",
+            "    pub fn compare(__s1: *const i8, __s2: *const i8, __n: u64) -> i32 {\n",
+            "        if lt(__s1, __s2) { return -1; }\n",
+            "        if eq(__s1, __s2) { return 0; }\n",
+            "        0\n",
+            "    }\n",
+            "}\n",
+        );
+        let result =
+            AstCodeGen::normalize_unqualified_char_traits_comparator_calls(input);
+        // Bare calls in char_ impl should NOT be rewritten
+        assert!(
+            result.contains("if lt(__s1"),
+            "bare lt( in char_ impl must NOT be rewritten, got:\n{}",
+            result
+        );
+        assert!(
+            result.contains("if eq(__s1"),
+            "bare eq( in char_ impl must NOT be rewritten, got:\n{}",
+            result
         );
     }
 
