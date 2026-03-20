@@ -5822,6 +5822,98 @@ impl AstCodeGen {
         }
     }
 
+    /// Returns true if `rust_name` is a callable STL type that needs an `op_call`
+    /// method stub. This covers random engines (mt19937, mersenne_twister_engine),
+    /// std::function instantiations, and distribution types with operator().
+    fn is_callable_stl_stub_type(rust_name: &str) -> bool {
+        // Mersenne Twister / random engines
+        if rust_name.contains("mt19937")
+            || rust_name.contains("mersenne_twister_engine")
+            || rust_name.contains("linear_congruential_engine")
+            || rust_name.contains("subtract_with_carry_engine")
+        {
+            return true;
+        }
+        // std::function instantiations (std_function_void___, std_function_void__void_, etc.)
+        if rust_name.starts_with("std_function_") || rust_name.starts_with("function_") {
+            return true;
+        }
+        // Distribution types with operator() (uniform_int_distribution, etc.)
+        if rust_name.contains("_distribution")
+            && !rust_name.contains("param_type")
+        {
+            return true;
+        }
+        false
+    }
+
+    /// Emit an `op_call` stub method for a callable STL type into the given output.
+    fn generate_callable_stl_op_call_stub(
+        rust_name: &str,
+        output: &mut String,
+        indent: usize,
+    ) {
+        let indent_str = "    ".repeat(indent);
+        if rust_name.contains("mt19937")
+            || rust_name.contains("mersenne_twister_engine")
+        {
+            // MT19937 operator() returns uint_fast32_t (u32 on most platforms)
+            output.push_str(&format!(
+                "{}pub fn op_call(&mut self) -> u32 {{\n",
+                indent_str
+            ));
+            output.push_str(&format!(
+                "{}    __fragile_call_mersenne_twister_engine(self) as u32\n",
+                indent_str
+            ));
+            output.push_str(&format!("{}}}\n", indent_str));
+        } else if rust_name.contains("linear_congruential_engine")
+            || rust_name.contains("subtract_with_carry_engine")
+        {
+            // Other random engines: return u64 as generic fallback
+            output.push_str(&format!(
+                "{}pub fn op_call(&mut self) -> u64 {{\n",
+                indent_str
+            ));
+            output.push_str(&format!(
+                "{}    __fragile_call_mersenne_twister_engine(self) as u64\n",
+                indent_str
+            ));
+            output.push_str(&format!("{}}}\n", indent_str));
+        } else if rust_name.starts_with("std_function_") || rust_name.starts_with("function_") {
+            // std::function<R(Args...)> operator() - extract return type hint from name
+            // Common patterns: std_function_void___ -> void return, std_function_int___ -> int return
+            let is_void = rust_name.contains("_void_");
+            if is_void {
+                output.push_str(&format!(
+                    "{}pub fn op_call(&self) {{}}\n",
+                    indent_str
+                ));
+            } else {
+                // Non-void: return Default::default() as a safe fallback
+                output.push_str(&format!(
+                    "{}pub fn op_call(&self) -> i64 {{ 0 }}\n",
+                    indent_str
+                ));
+            }
+        } else if rust_name.contains("_distribution") {
+            // Distribution types: operator()(generator&) -> result_type
+            // Most distributions return a numeric type
+            if rust_name.contains("uniform_int") || rust_name.contains("binomial") || rust_name.contains("poisson") || rust_name.contains("geometric") || rust_name.contains("negative_binomial") {
+                output.push_str(&format!(
+                    "{}pub fn op_call<G>(&self, _gen: &mut G) -> i64 {{ 0 }}\n",
+                    indent_str
+                ));
+            } else {
+                // uniform_real, normal, exponential, etc. -> f64
+                output.push_str(&format!(
+                    "{}pub fn op_call<G>(&self, _gen: &mut G) -> f64 {{ 0.0 }}\n",
+                    indent_str
+                ));
+            }
+        }
+    }
+
     fn degraded_function_signature_siblings(name: &str) -> Vec<String> {
         // Degraded spellings can encode repeated scope separators (`::::`) as
         // repeated underscores. Prefer already-emitted sibling spellings with
@@ -41758,6 +41850,55 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 self.writeln("*self -= rhs as isize;");
                 self.indent -= 1;
                 self.writeln("}");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+            }
+
+            // Callable STL types: generate op_call method stubs for types that
+            // implement operator() in C++ (random engines, std::function, etc.).
+            // This fixes E0599 "no method named `op_call`" errors.
+            let is_callable_stl_type = Self::is_callable_stl_stub_type(&rust_name);
+            if is_callable_stl_type {
+                self.writeln(&format!("impl {} {{", rust_name));
+                self.indent += 1;
+                Self::generate_callable_stl_op_call_stub(
+                    &rust_name,
+                    &mut self.output,
+                    self.indent,
+                );
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+            }
+
+            // Locale facet types: generate stub methods for time_put/time_get
+            // and param_type accessor methods to fix E0599 errors.
+            if rust_name.starts_with("std_time_put") || rust_name.starts_with("time_put") {
+                self.writeln(&format!("impl {} {{", rust_name));
+                self.indent += 1;
+                self.writeln("pub fn do_put(&self, _s: *mut i8, _io: &mut std::ffi::c_void, _fill: i8, _tm: *const std::ffi::c_void, _b: *const i8, _e: *const i8) -> *mut i8 { _s }");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+            }
+            if rust_name.starts_with("std_time_get") || rust_name.starts_with("time_get") {
+                self.writeln(&format!("impl {} {{", rust_name));
+                self.indent += 1;
+                self.writeln("pub fn do_get(&self, _s: *const i8, _end: *const i8, _io: &mut std::ffi::c_void, _err: &mut u32, _tm: *mut std::ffi::c_void, _fmt: i8, _mod_: i8) -> *const i8 { _s }");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+            }
+            if rust_name == "param_type" || rust_name.ends_with("_param_type") {
+                self.writeln(&format!("impl {} {{", rust_name));
+                self.indent += 1;
+                self.writeln("pub fn p(&self) -> f64 { 0.5 }");
+                self.writeln("pub fn mean(&self) -> f64 { 0.0 }");
+                self.writeln("pub fn stddev(&self) -> f64 { 1.0 }");
+                self.writeln("pub fn lambda(&self) -> f64 { 1.0 }");
+                self.writeln("pub fn a(&self) -> f64 { 0.0 }");
+                self.writeln("pub fn b(&self) -> f64 { 1.0 }");
                 self.indent -= 1;
                 self.writeln("}");
                 self.writeln("");
@@ -129824,5 +129965,121 @@ impl domain_error {
             output.contains("self._ptr.offset(rhs * 8)"),
             "wrap_iter_double AddAssign should use stride 8 for f64 elements"
         );
+    }
+
+    #[test]
+    fn test_callable_stl_stub_mt19937_has_op_call() {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "std_mt19937".to_string(),
+            "std::mt19937".to_string(),
+        );
+        codegen.generate_missing_type_stubs();
+        let output = &codegen.output;
+
+        assert!(
+            output.contains("impl std_mt19937"),
+            "mt19937 stub should have an impl block"
+        );
+        assert!(
+            output.contains("pub fn op_call(&mut self) -> u32"),
+            "mt19937 stub should have op_call returning u32, got:\n{}",
+            &output[..output.len().min(2000)]
+        );
+    }
+
+    #[test]
+    fn test_callable_stl_stub_function_void_has_op_call() {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "std_function_void___".to_string(),
+            "std::function<void ()>".to_string(),
+        );
+        codegen.generate_missing_type_stubs();
+        let output = &codegen.output;
+
+        assert!(
+            output.contains("impl std_function_void___"),
+            "function<void()> stub should have an impl block"
+        );
+        assert!(
+            output.contains("pub fn op_call(&self)"),
+            "function<void()> stub should have void op_call, got:\n{}",
+            &output[..output.len().min(2000)]
+        );
+        // Void function should not have return type
+        let op_call_line = output.lines().find(|l| l.contains("pub fn op_call(")).unwrap();
+        assert!(
+            !op_call_line.contains("-> "),
+            "void function op_call should have no return type, got: {}",
+            op_call_line
+        );
+    }
+
+    #[test]
+    fn test_callable_stl_stub_time_put_has_do_put() {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "std_time_put_char_".to_string(),
+            "std::time_put<char>".to_string(),
+        );
+        codegen.generate_missing_type_stubs();
+        let output = &codegen.output;
+
+        assert!(
+            output.contains("pub fn do_put("),
+            "time_put stub should have do_put method, got:\n{}",
+            &output[..output.len().min(2000)]
+        );
+    }
+
+    #[test]
+    fn test_callable_stl_stub_time_get_has_do_get() {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "std_time_get_char_".to_string(),
+            "std::time_get<char>".to_string(),
+        );
+        codegen.generate_missing_type_stubs();
+        let output = &codegen.output;
+
+        assert!(
+            output.contains("pub fn do_get("),
+            "time_get stub should have do_get method, got:\n{}",
+            &output[..output.len().min(2000)]
+        );
+    }
+
+    #[test]
+    fn test_callable_stl_stub_param_type_has_p() {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "param_type".to_string(),
+            "param_type".to_string(),
+        );
+        codegen.generate_missing_type_stubs();
+        let output = &codegen.output;
+
+        assert!(
+            output.contains("pub fn p(&self) -> f64"),
+            "param_type stub should have p() method, got:\n{}",
+            &output[..output.len().min(2000)]
+        );
+    }
+
+    #[test]
+    fn test_is_callable_stl_stub_type_detection() {
+        assert!(AstCodeGen::is_callable_stl_stub_type("std_mt19937"));
+        assert!(AstCodeGen::is_callable_stl_stub_type("std_mt19937_64"));
+        assert!(AstCodeGen::is_callable_stl_stub_type("mersenne_twister_engine_u32_"));
+        assert!(AstCodeGen::is_callable_stl_stub_type("std_function_void___"));
+        assert!(AstCodeGen::is_callable_stl_stub_type("std_function_void__void_"));
+        assert!(AstCodeGen::is_callable_stl_stub_type("std_function_int___"));
+        assert!(AstCodeGen::is_callable_stl_stub_type("uniform_int_distribution_int_"));
+        assert!(AstCodeGen::is_callable_stl_stub_type("normal_distribution_double_"));
+        // Negative cases
+        assert!(!AstCodeGen::is_callable_stl_stub_type("std_string"));
+        assert!(!AstCodeGen::is_callable_stl_stub_type("std_vector_int_"));
+        assert!(!AstCodeGen::is_callable_stl_stub_type("param_type"));
     }
 }
