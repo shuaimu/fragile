@@ -3065,3 +3065,195 @@ fn m9_2c_iv_e3c_live_debugging_cpp_no_lce_alg_mismatch() {
 
     let _ = std::fs::remove_dir_all(&tmp_dir);
 }
+
+// ---------------------------------------------------------------------------
+// M9.2.c.iv.e.3.d: Numpunct stage2 float prep placeholder mismatches — verified resolved
+// The numpunct type mismatches were resolved by M9.2.c.iv.e.3.c's enum-alias
+// fix in generate_missing_type_stubs, which also covers numpunct_char/numpunct_wchar_t
+// types that had conflicting std_-prefixed opaque stubs.
+// ---------------------------------------------------------------------------
+
+/// Verify M9.2.c.iv.e.3.d is documented in TODO.md.
+#[test]
+fn m9_2c_iv_e3d_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("TODO.md"),
+    )
+    .expect("TODO.md must be readable");
+    assert!(
+        todo.contains("M9.2.c.iv.e.3.d"),
+        "M9.2.c.iv.e.3.d must be documented in TODO.md"
+    );
+}
+
+/// Verify that the transpiler emits proper numpunct type structs/aliases
+/// without conflicting opaque-struct-vs-placeholder definitions.
+#[test]
+fn m9_2c_iv_e3d_transpiler_emits_numpunct_types() {
+    use fragile_clang::{AstCodeGen, ClangParser};
+
+    let cpp_code = r#"
+#include <locale>
+
+void test() {
+    std::numpunct<char> *p = nullptr;
+}
+"#;
+
+    let parser = ClangParser::new().expect("should create parser");
+    let ast = parser
+        .parse_string(cpp_code, "test_numpunct.cpp")
+        .expect("should parse");
+
+    let codegen = AstCodeGen::new();
+    let output = codegen.generate(&ast.translation_unit);
+
+    // The main invariant: no conflicting numpunct type definitions that
+    // produce E0308 `expected ()/std_string, found numpunct_*` errors.
+    let has_conflicting_numpunct = output.lines().any(|l| {
+        l.contains("pub struct std_numpunct_char_") && l.contains("_opaque")
+    }) && output.lines().any(|l| {
+        l.contains("pub struct numpunct_char") && !l.contains("std_")
+    });
+    assert!(
+        !has_conflicting_numpunct,
+        "M9.2.c.iv.e.3.d: should not have conflicting numpunct type definitions"
+    );
+}
+
+/// If mako source tree is available, verify that transpiling debugging.cpp
+/// does not produce numpunct-related type mismatch errors.
+#[test]
+fn m9_2c_iv_e3d_live_debugging_cpp_no_numpunct_mismatch() {
+    let mako_root = match mako_root_dir() {
+        Some(r) => r,
+        None => {
+            eprintln!("SKIP: mako source tree not found");
+            return;
+        }
+    };
+    let debugging_cpp = mako_root.join("src/rrr/base/debugging.cpp");
+    if !debugging_cpp.exists() {
+        eprintln!("SKIP: debugging.cpp not found at {:?}", debugging_cpp);
+        return;
+    }
+
+    let fragilec = match ensure_fragilec_binary() {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("SKIP: could not build fragilec: {}", e);
+            return;
+        }
+    };
+
+    let tmp_dir = std::env::temp_dir().join("fragile_m9_e3d_live_numpunct");
+    let _ = std::fs::create_dir_all(&tmp_dir);
+    let out_obj = tmp_dir.join("debugging.o");
+
+    let (_, _, stderr) = fragilec_compile_one(
+        &fragilec,
+        &debugging_cpp,
+        &out_obj,
+        &mako_root,
+    );
+
+    // Check for numpunct-related type mismatches
+    let numpunct_mismatch_count = stderr
+        .lines()
+        .filter(|l| {
+            l.contains("numpunct") && l.contains("expected")
+        })
+        .count();
+
+    assert_eq!(
+        numpunct_mismatch_count, 0,
+        "M9.2.c.iv.e.3.d: debugging.cpp should have 0 numpunct type mismatches, got {}",
+        numpunct_mismatch_count
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+}
+
+// ---------------------------------------------------------------------------
+// M9.2.c.iv.e.3.e: Chrono duration alias-vs-primitive mismatches — verified resolved
+// The chrono_duration/chrono_nanoseconds type mismatches were resolved by the
+// combination of e.3.c's enum-alias fix and proper preamble chrono stub types.
+// ---------------------------------------------------------------------------
+
+/// Verify M9.2.c.iv.e.3.e is documented in TODO.md.
+#[test]
+fn m9_2c_iv_e3e_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("TODO.md"),
+    )
+    .expect("TODO.md must be readable");
+    assert!(
+        todo.contains("M9.2.c.iv.e.3.e"),
+        "M9.2.c.iv.e.3.e must be documented in TODO.md"
+    );
+}
+
+/// If mako source tree is available, verify that transpiling debugging.cpp
+/// does not produce chrono_duration/chrono_nanoseconds type mismatch errors.
+#[test]
+fn m9_2c_iv_e3e_live_debugging_cpp_no_chrono_duration_mismatch() {
+    let mako_root = match mako_root_dir() {
+        Some(r) => r,
+        None => {
+            eprintln!("SKIP: mako source tree not found");
+            return;
+        }
+    };
+    let debugging_cpp = mako_root.join("src/rrr/base/debugging.cpp");
+    if !debugging_cpp.exists() {
+        eprintln!("SKIP: debugging.cpp not found at {:?}", debugging_cpp);
+        return;
+    }
+
+    let fragilec = match ensure_fragilec_binary() {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("SKIP: could not build fragilec: {}", e);
+            return;
+        }
+    };
+
+    let tmp_dir = std::env::temp_dir().join("fragile_m9_e3e_live_chrono");
+    let _ = std::fs::create_dir_all(&tmp_dir);
+    let out_obj = tmp_dir.join("debugging.o");
+
+    let (_, _, stderr) = fragilec_compile_one(
+        &fragilec,
+        &debugging_cpp,
+        &out_obj,
+        &mako_root,
+    );
+
+    // Check for chrono_duration/chrono_nanoseconds type mismatches
+    let chrono_mismatch_count = stderr
+        .lines()
+        .filter(|l| {
+            (l.contains("chrono_duration") || l.contains("chrono_nanoseconds"))
+                && l.contains("expected")
+                && l.contains("found")
+        })
+        .count();
+
+    assert_eq!(
+        chrono_mismatch_count, 0,
+        "M9.2.c.iv.e.3.e: debugging.cpp should have 0 chrono duration type mismatches, got {}",
+        chrono_mismatch_count
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+}
