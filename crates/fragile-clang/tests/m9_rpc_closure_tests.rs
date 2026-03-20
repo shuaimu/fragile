@@ -2913,3 +2913,155 @@ fn m9_2c_iv_e3b_normalizer_integrated_in_pipeline() {
         "M9.2.c.iv.e.3.b: normalizer must handle both runtime_error and logic_error"
     );
 }
+
+// ---------------------------------------------------------------------------
+// M9.2.c.iv.e.3.c: Fix std___lce_alg_type enum-lane mismatches
+// ---------------------------------------------------------------------------
+
+/// Verify M9.2.c.iv.e.3.c is documented in TODO.md.
+#[test]
+fn m9_2c_iv_e3c_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("TODO.md"),
+    )
+    .expect("TODO.md must be readable");
+    assert!(
+        todo.contains("M9.2.c.iv.e.3.c"),
+        "M9.2.c.iv.e.3.c must be documented in TODO.md"
+    );
+}
+
+/// Verify that generate_missing_type_stubs emits a type alias for std_-prefixed
+/// names that collide with already-generated enums (e.g., std___lce_alg_type -> __lce_alg_type).
+#[test]
+fn m9_2c_iv_e3c_std_prefixed_enum_alias_in_missing_stubs() {
+    let ast_codegen_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("ast_codegen.rs");
+    let src = std::fs::read_to_string(&ast_codegen_path)
+        .expect("ast_codegen.rs must be readable");
+    // The check for std_-prefixed enum alias must exist in generate_missing_type_stubs
+    assert!(
+        src.contains("generated_enums.contains(stripped)"),
+        "M9.2.c.iv.e.3.c: generate_missing_type_stubs must check generated_enums for std_-prefix stripping"
+    );
+    assert!(
+        src.contains("Alias namespace-prefixed"),
+        "M9.2.c.iv.e.3.c: type alias comment must be present"
+    );
+}
+
+/// Verify that transpiling a C++ file with std::__lce_alg_type enum produces
+/// a type alias `std___lce_alg_type = __lce_alg_type` instead of an opaque struct.
+#[test]
+fn m9_2c_iv_e3c_transpiler_emits_enum_alias_not_opaque_struct() {
+    use fragile_clang::{AstCodeGen, ClangParser};
+
+    let cpp_code = r#"
+namespace std {
+enum __lce_alg_type {
+    _LCE_Full = 0,
+    _LCE_Part = 1,
+    _LCE_Schrage = 2,
+    _LCE_Promote = 3
+};
+}
+
+void test() {
+    std::__lce_alg_type val = std::_LCE_Full;
+}
+"#;
+
+    let parser = ClangParser::new().expect("should create parser");
+    let ast = parser
+        .parse_string(cpp_code, "test_lce_enum.cpp")
+        .expect("should parse");
+
+    let codegen = AstCodeGen::new();
+    let output = codegen.generate(&ast.translation_unit);
+
+    // The output should NOT contain `pub struct std___lce_alg_type`
+    assert!(
+        !output.contains("pub struct std___lce_alg_type"),
+        "M9.2.c.iv.e.3.c: std___lce_alg_type must NOT be an opaque struct; \
+         it should be a type alias to __lce_alg_type. Got:\n{}",
+        output.lines()
+            .filter(|l| l.contains("lce_alg_type"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+
+    // The output should contain the enum __lce_alg_type
+    assert!(
+        output.contains("pub enum __lce_alg_type"),
+        "M9.2.c.iv.e.3.c: __lce_alg_type enum must be generated"
+    );
+
+    // The output should contain a type alias from std___lce_alg_type to __lce_alg_type
+    let has_alias = output.contains("pub type std___lce_alg_type = __lce_alg_type;");
+    assert!(
+        has_alias,
+        "M9.2.c.iv.e.3.c: must emit `pub type std___lce_alg_type = __lce_alg_type;`. \
+         Lines containing lce_alg_type:\n{}",
+        output.lines()
+            .filter(|l| l.contains("lce_alg_type"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+/// If mako source tree is available, verify that transpiling debugging.cpp
+/// does not produce `expected std___lce_alg_type, found __lce_alg_type` errors.
+#[test]
+fn m9_2c_iv_e3c_live_debugging_cpp_no_lce_alg_mismatch() {
+    let mako_root = match mako_root_dir() {
+        Some(r) => r,
+        None => {
+            eprintln!("SKIP: mako source tree not found");
+            return;
+        }
+    };
+    let debugging_cpp = mako_root.join("src/rrr/base/debugging.cpp");
+    if !debugging_cpp.exists() {
+        eprintln!("SKIP: debugging.cpp not found at {:?}", debugging_cpp);
+        return;
+    }
+
+    let fragilec = match ensure_fragilec_binary() {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("SKIP: could not build fragilec: {}", e);
+            return;
+        }
+    };
+
+    let compile_args = mako_compile_args(&mako_root);
+    let tmp_dir = std::env::temp_dir().join("fragile_m9_e3c_live_lce");
+    let _ = std::fs::create_dir_all(&tmp_dir);
+    let out_obj = tmp_dir.join("debugging.o");
+
+    let (_, _, stderr) = fragilec_compile_one(
+        &fragilec,
+        &debugging_cpp,
+        &out_obj,
+        &mako_root,
+    );
+
+    let lce_mismatch_count = stderr
+        .lines()
+        .filter(|l| l.contains("expected `std___lce_alg_type`, found `__lce_alg_type`"))
+        .count();
+
+    assert_eq!(
+        lce_mismatch_count, 0,
+        "M9.2.c.iv.e.3.c: debugging.cpp should have 0 lce_alg_type mismatches, got {}",
+        lce_mismatch_count
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+}
