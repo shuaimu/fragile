@@ -37194,37 +37194,96 @@ impl FragileAtomicBoolCompat for atomic_bool {
     /// internal `__fsv___func_*` names while bodies still use the unprefixed
     /// shorthand (`kVTable`, `mc_`, ...).
     fn normalize_unprefixed_function_static_symbol_refs(code: &str) -> String {
-        fn collect_function_static_aliases(code: &str) -> HashMap<String, (String, bool)> {
-            let mut seen: HashMap<String, (String, bool)> = HashMap::new();
-            let mut ambiguous: HashSet<String> = HashSet::new();
-            for line in code.lines() {
-                let trimmed = line.trim_start();
-                let Some(static_name) = AstCodeGen::parse_static_item_name(trimmed) else {
-                    continue;
-                };
-                let Some(rest) = static_name.strip_prefix("__fsv___func_") else {
-                    continue;
-                };
-                let Some((alias, suffix)) = rest.rsplit_once('_') else {
-                    continue;
-                };
-                if alias.is_empty() || !suffix.chars().all(|ch| ch.is_ascii_digit()) {
-                    continue;
-                }
-                let is_maybeuninit = trimmed.contains("std::mem::MaybeUninit<");
-                let entry = (static_name.clone(), is_maybeuninit);
-                if let Some(prev) = seen.get(alias) {
-                    if prev != &entry {
-                        ambiguous.insert(alias.to_string());
+        // Per-function alias map: maps (line_index_of_static_decl) to (alias, symbol, is_maybeuninit).
+        // We track which function each static belongs to so replacements are scoped.
+        type AliasEntry = (String, String, bool); // (alias, symbol, is_maybeuninit)
+
+        // Detect whether a trimmed line starts a function definition.
+        fn is_fn_def_line(trimmed: &str) -> bool {
+            trimmed.starts_with("pub fn ")
+                || trimmed.starts_with("fn ")
+                || trimmed.starts_with("pub extern ")
+                || trimmed.starts_with("extern \"C\" fn ")
+                || trimmed.starts_with("pub unsafe extern ")
+                || trimmed.starts_with("unsafe extern ")
+                || trimmed.starts_with("pub unsafe fn ")
+                || trimmed.starts_with("unsafe fn ")
+        }
+
+        // First pass: assign each line to a function index by tracking brace depth.
+        // function_of_line[i] = Some(fn_start_line) if line i is inside a function,
+        // None if at top level.
+        let lines: Vec<&str> = code.lines().collect();
+        let mut function_of_line: Vec<Option<usize>> = vec![None; lines.len()];
+        let mut current_fn: Option<usize> = None;
+        let mut brace_depth: i32 = 0;
+        for (i, line) in lines.iter().enumerate() {
+            let trimmed = line.trim();
+            if current_fn.is_none() && is_fn_def_line(trimmed) {
+                // Starting a new function definition
+                current_fn = Some(i);
+                brace_depth = 0;
+            }
+            if let Some(fn_start) = current_fn {
+                function_of_line[i] = Some(fn_start);
+                for ch in trimmed.chars() {
+                    match ch {
+                        '{' => brace_depth += 1,
+                        '}' => brace_depth -= 1,
+                        _ => {}
                     }
-                } else {
-                    seen.insert(alias.to_string(), entry);
+                }
+                if brace_depth <= 0 && trimmed.contains('}') {
+                    // Function body closed
+                    current_fn = None;
                 }
             }
-            for alias in ambiguous {
-                seen.remove(&alias);
+        }
+
+        // Second pass: collect function-static aliases per function.
+        // Key: fn_start_line, Value: HashMap<alias, (symbol, is_maybeuninit)>
+        let mut per_fn_aliases: HashMap<usize, HashMap<String, (String, bool)>> = HashMap::new();
+        let mut per_fn_ambiguous: HashMap<usize, HashSet<String>> = HashMap::new();
+        for (i, line) in lines.iter().enumerate() {
+            let trimmed = line.trim();
+            let Some(static_name) = AstCodeGen::parse_static_item_name(trimmed) else {
+                continue;
+            };
+            let Some(rest) = static_name.strip_prefix("__fsv___func_") else {
+                continue;
+            };
+            let Some((alias, suffix)) = rest.rsplit_once('_') else {
+                continue;
+            };
+            if alias.is_empty() || !suffix.chars().all(|ch| ch.is_ascii_digit()) {
+                continue;
             }
-            seen
+            let is_maybeuninit = trimmed.contains("std::mem::MaybeUninit<");
+            // Determine which function this static belongs to
+            let fn_key = function_of_line[i].unwrap_or(usize::MAX);
+            let entry = (static_name.clone(), is_maybeuninit);
+            let fn_aliases = per_fn_aliases.entry(fn_key).or_insert_with(HashMap::new);
+            let fn_ambig = per_fn_ambiguous.entry(fn_key).or_insert_with(HashSet::new);
+            if let Some(prev) = fn_aliases.get(alias) {
+                if prev != &entry {
+                    fn_ambig.insert(alias.to_string());
+                }
+            } else {
+                fn_aliases.insert(alias.to_string(), entry);
+            }
+        }
+        // Remove ambiguous aliases per function
+        for (fn_key, ambig) in &per_fn_ambiguous {
+            if let Some(aliases) = per_fn_aliases.get_mut(fn_key) {
+                for a in ambig {
+                    aliases.remove(a);
+                }
+            }
+        }
+        // Quick check: any aliases at all?
+        let has_any = per_fn_aliases.values().any(|m| !m.is_empty());
+        if !has_any {
+            return code.to_string();
         }
 
         fn replace_ident_token_non_path(text: &str, ident: &str, replacement: &str) -> String {
@@ -37266,19 +37325,20 @@ impl FragileAtomicBoolCompat for atomic_bool {
             out
         }
 
-        let alias_map = collect_function_static_aliases(code);
-        if alias_map.is_empty() {
-            return code.to_string();
-        }
-
+        // Third pass: rewrite lines, only applying aliases from the SAME function.
         let mut out = String::with_capacity(code.len());
-        for line in code.lines() {
+        for (i, line) in lines.iter().enumerate() {
             let mut rewritten = line.to_string();
             let indent_len = line.len().saturating_sub(line.trim_start().len());
             let indent = &line[..indent_len];
             let trimmed = line.trim();
 
-            for (alias, (symbol, is_maybeuninit)) in &alias_map {
+            // Look up aliases for the function this line belongs to
+            let fn_key = function_of_line[i].unwrap_or(usize::MAX);
+            let empty_map = HashMap::new();
+            let alias_map = per_fn_aliases.get(&fn_key).unwrap_or(&empty_map);
+
+            for (alias, (symbol, is_maybeuninit)) in alias_map {
                 let ret_mut = format!("return &mut {};", alias);
                 if trimmed == ret_mut {
                     if *is_maybeuninit {
@@ -37314,19 +37374,14 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 // General value-path recovery (`return foo.bar;`, `foo.method()`,
                 // arithmetic uses, etc.) when function-static alias names remain
                 // unprefixed in lowered function bodies.
-                if rewritten.contains(alias) {
+                if rewritten.contains(alias.as_str()) {
                     let trimmed_rewritten = rewritten.trim_start();
                     let static_decl_prefix = format!("static mut {}:", symbol);
                     // Never rewrite function signature lines — parameter names must
                     // stay as plain identifiers, not `unsafe { __fsv_... }` wrappers.
-                    let is_fn_signature = trimmed_rewritten.starts_with("pub fn ")
-                        || trimmed_rewritten.starts_with("fn ")
-                        || trimmed_rewritten.starts_with("pub extern ")
-                        || trimmed_rewritten.starts_with("extern \"C\" fn ")
-                        || trimmed_rewritten.starts_with("pub unsafe extern ")
-                        || trimmed_rewritten.starts_with("unsafe extern ");
+                    let is_fn_sig = is_fn_def_line(trimmed_rewritten);
                     if !trimmed_rewritten.starts_with(&static_decl_prefix)
-                        && !is_fn_signature
+                        && !is_fn_sig
                     {
                         let replacement = if *is_maybeuninit {
                             format!("unsafe {{ {}.assume_init_mut() }}", symbol)
@@ -99113,10 +99168,11 @@ pub mod fragile_runtime {
         // in a function signature, the rewrite must NOT replace the parameter
         // name with `unsafe { __fsv___func___x_0 }` — that would produce
         // invalid Rust syntax (keyword `unsafe` in parameter position).
+        // Note: static declarations are INSIDE the function body in real codegen.
         let input = concat!(
-            "static mut __fsv___func___x_0: f64 = unsafe { std::mem::zeroed() };\n",
             "pub fn trunc_(__x: f64) -> f64 {\n",
-            "return __builtin_trunc(__x);\n",
+            "    static mut __fsv___func___x_0: f64 = unsafe { std::mem::zeroed() };\n",
+            "    return __builtin_trunc(__x);\n",
             "}\n",
         );
         let result = AstCodeGen::normalize_unprefixed_function_static_symbol_refs(input);
@@ -99137,9 +99193,9 @@ pub mod fragile_runtime {
     #[test]
     fn test_normalize_function_static_symbol_refs_skips_extern_c_fn_signature() {
         let input = concat!(
-            "static mut __fsv___func___x_0: f64 = unsafe { std::mem::zeroed() };\n",
             "pub extern \"C\" fn isnan(__x: f64) -> bool {\n",
-            "return __x != __x;\n",
+            "    static mut __fsv___func___x_0: f64 = unsafe { std::mem::zeroed() };\n",
+            "    return __x != __x;\n",
             "}\n",
         );
         let result = AstCodeGen::normalize_unprefixed_function_static_symbol_refs(input);
@@ -99158,12 +99214,12 @@ pub mod fragile_runtime {
 
     #[test]
     fn test_normalize_function_static_symbol_refs_skips_mut_param_signature() {
-        // `mut` parameter variant
+        // `mut` parameter variant — static is inside the function body
         let input = concat!(
-            "static mut __fsv___func___x_0: u32 = unsafe { std::mem::zeroed() };\n",
             "pub extern \"C\" fn op_and_assign_1(mut __x: &mut u32, __y: u32) -> &mut u32 {\n",
-            "__x = __x & __y;\n",
-            "return __x;\n",
+            "    static mut __fsv___func___x_0: u32 = unsafe { std::mem::zeroed() };\n",
+            "    __x = __x & __y;\n",
+            "    return __x;\n",
             "}\n",
         );
         let result = AstCodeGen::normalize_unprefixed_function_static_symbol_refs(input);
@@ -99177,10 +99233,11 @@ pub mod fragile_runtime {
     #[test]
     fn test_normalize_function_static_symbol_refs_rewrites_body_not_signature_multi_param() {
         // Multi-param function where only one param matches an alias
+        // Static is inside the function body (real codegen pattern)
         let input = concat!(
-            "static mut __fsv___func___x_0: f64 = unsafe { std::mem::zeroed() };\n",
             "pub fn hermite_f64(__n: u32, __x: f64) -> f64 {\n",
-            "return hermite_f64(__n, __x);\n",
+            "    static mut __fsv___func___x_0: f64 = unsafe { std::mem::zeroed() };\n",
+            "    return hermite_f64(__n, __x);\n",
             "}\n",
         );
         let result = AstCodeGen::normalize_unprefixed_function_static_symbol_refs(input);
@@ -99192,6 +99249,80 @@ pub mod fragile_runtime {
         assert!(
             result.contains("hermite_f64(__n, unsafe { __fsv___func___x_0 })"),
             "body call should rewrite the alias param, got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_normalize_function_static_symbol_refs_scopes_per_function() {
+        // Static declared in func_a must NOT be applied in func_b.
+        // This prevents cross-function scope leaking where a common parameter
+        // name like `__x` in func_b gets incorrectly rewritten to reference
+        // a function-static variable from func_a.
+        let input = concat!(
+            "pub fn func_a() {\n",
+            "    static mut __fsv___func___x_0: f64 = unsafe { std::mem::zeroed() };\n",
+            "    let y = __x + 1.0;\n",
+            "}\n",
+            "pub fn func_b(__x: f64) -> f64 {\n",
+            "    return __x * 2.0;\n",
+            "}\n",
+        );
+        let result = AstCodeGen::normalize_unprefixed_function_static_symbol_refs(input);
+        // func_a's body should be rewritten
+        assert!(
+            result.contains("unsafe { __fsv___func___x_0 } + 1.0"),
+            "func_a body should rewrite __x to __fsv_ reference, got:\n{}",
+            result
+        );
+        // func_b's signature must NOT be rewritten
+        assert!(
+            result.contains("pub fn func_b(__x: f64)"),
+            "func_b signature must not be rewritten, got:\n{}",
+            result
+        );
+        // func_b's body must NOT be rewritten (the static is in func_a, not func_b)
+        assert!(
+            result.contains("return __x * 2.0;"),
+            "func_b body must not reference __fsv_ from func_a, got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_normalize_function_static_symbol_refs_scopes_multiple_statics() {
+        // Two functions, each with their own function-static with the same alias name.
+        // Each should only be rewritten within its own function.
+        let input = concat!(
+            "pub fn alpha() {\n",
+            "    static mut __fsv___func___val_0: i32 = unsafe { std::mem::zeroed() };\n",
+            "    let a = __val;\n",
+            "}\n",
+            "pub fn beta() {\n",
+            "    static mut __fsv___func___val_1: i64 = unsafe { std::mem::zeroed() };\n",
+            "    let b = __val;\n",
+            "}\n",
+            "pub fn gamma(__val: f32) -> f32 {\n",
+            "    return __val;\n",
+            "}\n",
+        );
+        let result = AstCodeGen::normalize_unprefixed_function_static_symbol_refs(input);
+        // alpha's body uses alpha's static
+        assert!(
+            result.contains("let a = unsafe { __fsv___func___val_0 };"),
+            "alpha body should use __fsv___func___val_0, got:\n{}",
+            result
+        );
+        // beta's body uses beta's static
+        assert!(
+            result.contains("let b = unsafe { __fsv___func___val_1 };"),
+            "beta body should use __fsv___func___val_1, got:\n{}",
+            result
+        );
+        // gamma has no static — its __val must NOT be rewritten
+        assert!(
+            result.contains("return __val;"),
+            "gamma body must not be rewritten since it has no function-static, got:\n{}",
             result
         );
     }

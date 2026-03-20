@@ -2672,6 +2672,99 @@ static double trunc_helper(double __x) {
     let _ = std::fs::remove_dir_all(&tmp_dir);
 }
 
+/// M9.2.c.iv.e.1: Verify function-static variable normalizer scopes per function.
+/// A function-static `static mut __fsv___func___x_0` declared in function A
+/// must NOT cause `__x` references in function B to be rewritten.
+#[test]
+fn m9_2c_iv_e1_function_static_scope_isolation() {
+    // Two functions: func_with_static has a function-static variable,
+    // func_with_param has a parameter with the same name.
+    let cpp = r#"
+static int counter = 0;
+int func_with_static() {
+    static int __x = 42;
+    return __x++;
+}
+double func_with_param(double __x) {
+    return __x * 2.0;
+}
+"#;
+    let tmp_dir = std::env::temp_dir().join(format!(
+        "fragile_m9_2c_iv_e1_scope_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::create_dir_all(&tmp_dir);
+    let cpp_path = tmp_dir.join("e1_scope_test.cpp");
+    std::fs::write(&cpp_path, cpp).unwrap();
+
+    let fragile_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("target")
+        .join("debug")
+        .join("fragile");
+    if !fragile_bin.exists() {
+        eprintln!("Skipping: fragile binary not built");
+        return;
+    }
+
+    let output = std::process::Command::new(&fragile_bin)
+        .args(["transpile", cpp_path.to_str().unwrap()])
+        .output()
+        .expect("fragile transpile should run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // func_with_param's body must NOT reference __fsv_ from func_with_static.
+    // The __x parameter in func_with_param is just a parameter, not a function-static.
+    let mut in_func_with_param = false;
+    let mut func_with_param_has_fsv = false;
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.contains("func_with_param") && trimmed.contains("fn ") {
+            in_func_with_param = true;
+        }
+        if in_func_with_param {
+            if trimmed.contains("__fsv_") && !trimmed.starts_with("//") {
+                func_with_param_has_fsv = true;
+            }
+            // Track if we've left the function (simple heuristic: next fn def)
+            if trimmed.starts_with("pub fn ") && !trimmed.contains("func_with_param") {
+                break;
+            }
+        }
+    }
+
+    assert!(
+        !func_with_param_has_fsv,
+        "func_with_param must not reference __fsv_ variables from func_with_static.\n\
+         This would indicate cross-function scope leaking in the normalizer.\n\
+         Output:\n{}",
+        stdout
+    );
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+}
+
+/// M9.2.c.iv.e.1: Verify the task is documented in TODO.md
+#[test]
+fn m9_2c_iv_e1_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("M9.2.c.iv.e.1"),
+        "M9.2.c.iv.e.1 should be documented in TODO.md"
+    );
+}
+
 /// M9.2.c.iv.d.5: Verify the task is documented in TODO.md
 #[test]
 fn m9_2c_iv_d5_task_documented_in_todo() {
