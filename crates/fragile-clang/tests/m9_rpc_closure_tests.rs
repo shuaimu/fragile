@@ -3374,3 +3374,112 @@ int main() {
 
     let _ = std::fs::remove_dir_all(&tmp_dir);
 }
+
+// ---------------------------------------------------------------------------
+// M9.2.c.iv.e.3.f.2: Post-f.1 strict compile error inventory refresh
+// ---------------------------------------------------------------------------
+
+/// Verify M9.2.c.iv.e.3.f.2 is documented in TODO.md.
+#[test]
+fn m9_2c_iv_e3f2_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("M9.2.c.iv.e.3.f.2"),
+        "M9.2.c.iv.e.3.f.2 must be documented in TODO.md"
+    );
+}
+
+/// Verify that the post-f.1 error inventory document exists with expected content.
+#[test]
+fn m9_2c_iv_e3f2_inventory_document_exists() {
+    let doc_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("docs/dev/m9_2c_iv_e3f2_post_f1_error_inventory.md");
+    assert!(
+        doc_path.exists(),
+        "Post-f.1 error inventory document must exist at {:?}",
+        doc_path
+    );
+    let content = std::fs::read_to_string(&doc_path).unwrap();
+
+    assert!(
+        content.contains("E0425") && content.contains("194"),
+        "Inventory must document E0425 as dominant class with 194 errors"
+    );
+    assert!(
+        content.contains("E0308") && content.contains("40"),
+        "Inventory must document E0308 with 40 errors"
+    );
+    assert!(
+        content.contains("__fsv___func___x_0"),
+        "Inventory must identify __fsv___func___x_0 as dominant E0425 pattern"
+    );
+    assert!(
+        content.contains("Recommended Next Leaf Closures"),
+        "Inventory must contain next-step recommendations"
+    );
+}
+
+/// Verify the inventory captures the post-f.1 error reduction delta.
+#[test]
+fn m9_2c_iv_e3f2_inventory_captures_delta() {
+    let doc_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("docs/dev/m9_2c_iv_e3f2_post_f1_error_inventory.md");
+    let content = std::fs::read_to_string(&doc_path)
+        .expect("Inventory document should be readable");
+
+    assert!(
+        content.contains("Pre-f.1") && content.contains("Post-f.1"),
+        "Inventory must contain pre/post comparison"
+    );
+    assert!(
+        content.contains("296") || content.contains("297"),
+        "Inventory must document post-f.1 total error count (296 or 297)"
+    );
+    assert!(
+        content.contains("-87") || content.contains("-23%"),
+        "Inventory must document error reduction delta"
+    );
+}
+
+/// Verify the inventory categorizes E0308 sub-classes for actionable next steps.
+#[test]
+fn m9_2c_iv_e3f2_e0308_subcategories_documented() {
+    let doc_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("docs/dev/m9_2c_iv_e3f2_post_f1_error_inventory.md");
+    let content = std::fs::read_to_string(&doc_path)
+        .expect("Inventory document should be readable");
+
+    let expected_subcategories = [
+        "numpunct",
+        "chrono",
+        "iterator",
+        "ordering",
+    ];
+    for cat in &expected_subcategories {
+        assert!(
+            content.to_lowercase().contains(cat),
+            "E0308 subcategory '{}' must be documented in inventory",
+            cat
+        );
+    }
+}
