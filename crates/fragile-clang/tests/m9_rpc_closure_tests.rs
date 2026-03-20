@@ -3704,3 +3704,55 @@ fn m9_2c_iv_e5b_double_deref_ptr_arithmetic_suppressed() {
         "*ptr.wrapping_offset should be detected as already-dereffed"
     );
 }
+
+// ── M9.2.c.iv.e.5.c: E0605 non-primitive cast fixes ──
+
+#[test]
+fn m9_2c_iv_e5c_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("M9.2.c.iv.e.5.c"),
+        "M9.2.c.iv.e.5.c task should be documented in TODO.md"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5c_void_assign_cast_to_ptr_rewritten() {
+    let input = "    return (std_char_traits_char_::assign(__s as *mut i8, __n, __a)) as *mut i8;\n";
+    let output = fragile_clang::AstCodeGen::normalize_nonprimitive_as_cast_e0605(input);
+    assert!(
+        !output.contains(")) as *mut"),
+        "E0605: void assign result should not be cast to *mut, got:\n{}",
+        output
+    );
+    assert!(
+        output.contains("__s as *mut i8"),
+        "E0605: first arg should be returned as the pointer, got:\n{}",
+        output
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5c_struct_field_to_u128_uses_transmute() {
+    let input = "                    return (self._M_ptr) as u128;\n";
+    let output = fragile_clang::AstCodeGen::normalize_nonprimitive_as_cast_e0605(input);
+    assert!(
+        output.contains("std::mem::transmute_copy"),
+        "E0605: struct field to u128 should use transmute_copy, got:\n{}",
+        output
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5c_self_clone_to_ptr_uses_null_mut() {
+    let input = "    let mut __sb: *mut streambuf_type = (self).clone() as *mut streambuf_type;\n";
+    let output = fragile_clang::AstCodeGen::normalize_nonprimitive_as_cast_e0605(input);
+    assert!(
+        output.contains("std::ptr::null_mut"),
+        "E0605: self.clone() to ptr should use null_mut, got:\n{}",
+        output
+    );
+}

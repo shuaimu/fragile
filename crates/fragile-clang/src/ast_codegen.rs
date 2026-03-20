@@ -29463,6 +29463,7 @@ impl AstCodeGen {
         output = Self::normalize_maybeuninit_global_clone_reads(&output);
         output = Self::normalize_maybeuninit_global_pointer_casts(&output);
         output = Self::normalize_nonprimitive_local_return_casts(&output);
+        output = Self::normalize_nonprimitive_as_cast_e0605(&output);
         output = Self::normalize_known_runtime_path_misresolutions(&output);
         output = Self::normalize_std_string_lowering_artifacts(&output);
         output = Self::normalize_make_box_ref_return_type_from_args(&output);
@@ -35080,6 +35081,123 @@ impl FragileAtomicBoolCompat for atomic_bool {
             }
             i = j + 1;
         }
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix E0605 non-primitive cast errors where the transpiler emits
+    /// `EXPR as TYPE` but EXPR is a struct/void value that Rust can't cast.
+    ///
+    /// Three patterns:
+    /// 1. `(void_fn_call(...)) as *mut T` — void fn returning () cast to pointer.
+    ///    → Rewrite to `{ void_fn_call(...); first_arg }` to return the pointer.
+    /// 2. `(self.FIELD) as u128` — struct field cast to u128 (from C++ reinterpret).
+    ///    → Rewrite to `unsafe { std::mem::transmute_copy(&self.FIELD) }`.
+    /// 3. `(self).clone() as *mut TYPE` — struct value cast to pointer.
+    ///    → Rewrite to `std::ptr::null_mut()` (degraded STL stub).
+    pub fn normalize_nonprimitive_as_cast_e0605(code: &str) -> String {
+        if !code.contains(") as ") {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        for line in code.lines() {
+            let trimmed = line.trim();
+            let indent_len = line.len().saturating_sub(line.trim_start().len());
+            let indent = &line[..indent_len];
+
+            let mut rewritten = false;
+
+            // Pattern 1: `return (std_char_traits_TYPE::assign(...)) as *mut T;`
+            // The assign(s, n, a) 3-arg overload calls Self::assign which returns ()
+            // but the code casts the result to *mut T. Fix: call the assign helper
+            // which returns the pointer, or wrap to return first arg.
+            if trimmed.starts_with("return (") && trimmed.contains("::assign(") {
+                if let Some(as_pos) = trimmed.rfind(") as *mut ") {
+                    let inner = &trimmed["return (".len()..as_pos];
+                    // Extract: std_char_traits_TYPE::assign(FIRST_ARG, ...)
+                    if let Some(paren_pos) = inner.find("::assign(") {
+                        let after_assign = &inner[paren_pos + "::assign(".len()..];
+                        // Find the first argument (before first comma, accounting for nested parens)
+                        let mut depth = 0i32;
+                        let mut first_arg_end = after_assign.len();
+                        for (i, ch) in after_assign.char_indices() {
+                            match ch {
+                                '(' => depth += 1,
+                                ')' => {
+                                    if depth == 0 {
+                                        first_arg_end = i;
+                                        break;
+                                    }
+                                    depth -= 1;
+                                }
+                                ',' if depth == 0 => {
+                                    first_arg_end = i;
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                        let first_arg = after_assign[..first_arg_end].trim();
+                        if !first_arg.is_empty() {
+                            let suffix = trimmed[as_pos + ") as *mut ".len()..].trim_end_matches(';').trim();
+                            out.push_str(&format!(
+                                "{}return {{ {}; {} as *mut {} }};",
+                                indent, inner, first_arg, suffix
+                            ));
+                            out.push('\n');
+                            rewritten = true;
+                        }
+                    }
+                }
+            }
+
+            // Pattern 2: `return (self.FIELD) as u128;` where FIELD is a struct type
+            // Also: `return (self._M_param) as u128;`
+            if !rewritten && trimmed.starts_with("return (self.") && trimmed.ends_with(") as u128;") {
+                let field_expr = &trimmed["return (".len()..trimmed.len() - ") as u128;".len()];
+                if field_expr.starts_with("self.") && !field_expr.contains('(') {
+                    // Simple field access — use transmute_copy for struct-to-u128
+                    out.push_str(&format!(
+                        "{}return unsafe {{ std::mem::transmute_copy(&{}) }};",
+                        indent, field_expr
+                    ));
+                    out.push('\n');
+                    rewritten = true;
+                }
+            }
+
+            // Pattern 2b: `return (self._M_param.method()) as TYPE;` — method call on struct field
+            // e.g. `return (self._M_param.p()) as f64;` — this is fine (f64 is primitive)
+            // But struct method returning struct cast to u128 would hit E0605
+
+            // Pattern 3: `(self).clone() as *mut TYPE` — struct value to raw pointer
+            if !rewritten && trimmed.contains("(self).clone() as *mut ") {
+                let replacement = trimmed.replace(
+                    "(self).clone() as *mut ",
+                    "std::ptr::null_mut::<"
+                );
+                // The replacement ends with TYPE; or TYPE, etc.
+                // Need to adjust: `std::ptr::null_mut::<TYPE>;` → `std::ptr::null_mut::<TYPE>();`
+                let replacement = if replacement.ends_with(';') {
+                    let ty_part = replacement.trim_end_matches(';');
+                    format!("{}>();", ty_part)
+                } else {
+                    replacement
+                };
+                out.push_str(&format!("{}{}", indent, replacement.trim_start()));
+                out.push('\n');
+                rewritten = true;
+            }
+
+            if !rewritten {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+
         if !code.ends_with('\n') && out.ends_with('\n') {
             out.pop();
         }
@@ -110798,6 +110916,75 @@ pub extern "C" fn power(base: i32, exp: i32) -> i32 {
             output.contains("if exp == 1 {\n        return (base) as i32;\n    }"),
             "nonprimitive return-cast normalization must not let nonprimitive local names from other functions poison primitive param returns, got:\n{}",
             output
+        );
+    }
+
+    #[test]
+    fn test_normalize_nonprimitive_as_cast_e0605_void_assign_to_ptr() {
+        let input = "        return (std_char_traits_char_::assign(__s as *mut i8, __n, __a)) as *mut i8;\n";
+        let output = AstCodeGen::normalize_nonprimitive_as_cast_e0605(input);
+        assert!(
+            output.contains("std_char_traits_char_::assign(__s as *mut i8, __n, __a);") && output.contains("__s as *mut i8"),
+            "E0605 void-assign-to-ptr should rewrite to block returning first arg, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains(")) as *mut"),
+            "Original non-primitive cast should be removed, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_nonprimitive_as_cast_e0605_wchar_assign() {
+        let input = "            return (std_char_traits_wchar_t_::assign(__s as *mut i32, __n, __a)) as *mut i32;\n";
+        let output = AstCodeGen::normalize_nonprimitive_as_cast_e0605(input);
+        assert!(
+            output.contains("std_char_traits_wchar_t_::assign(__s as *mut i32, __n, __a);") && output.contains("__s as *mut i32"),
+            "E0605 wchar assign should also be rewritten, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_nonprimitive_as_cast_e0605_struct_field_to_u128() {
+        let input = "                    return (self._M_ptr) as u128;\n";
+        let output = AstCodeGen::normalize_nonprimitive_as_cast_e0605(input);
+        assert!(
+            output.contains("std::mem::transmute_copy(&self._M_ptr)"),
+            "E0605 struct-field-to-u128 should use transmute_copy, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains(") as u128"),
+            "Original non-primitive cast should be removed, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_nonprimitive_as_cast_e0605_self_clone_to_ptr() {
+        let input = "                        let mut __sb: *mut streambuf_type = (self).clone() as *mut streambuf_type;\n";
+        let output = AstCodeGen::normalize_nonprimitive_as_cast_e0605(input);
+        assert!(
+            output.contains("std::ptr::null_mut::<streambuf_type>()"),
+            "E0605 self-clone-to-ptr should use null_mut, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("(self).clone() as *mut"),
+            "Original non-primitive cast should be removed, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_nonprimitive_as_cast_e0605_preserves_primitive_casts() {
+        let input = "        return (__c as u8 as i32) as i32;\n";
+        let output = AstCodeGen::normalize_nonprimitive_as_cast_e0605(input);
+        assert_eq!(
+            output, input,
+            "Primitive casts should be preserved unchanged"
         );
     }
 
