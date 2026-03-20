@@ -3257,3 +3257,119 @@ fn m9_2c_iv_e3e_live_debugging_cpp_no_chrono_duration_mismatch() {
 
     let _ = std::fs::remove_dir_all(&tmp_dir);
 }
+
+// ---------------------------------------------------------------------------
+// M9.2.c.iv.e.3.f: Self::lt/Self::eq i8 mismatch in char_traits impls
+// ---------------------------------------------------------------------------
+
+/// Verify M9.2.c.iv.e.3.f is documented in TODO.md.
+#[test]
+fn m9_2c_iv_e3f_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("M9.2.c.iv.e.3.f"),
+        "M9.2.c.iv.e.3.f must be documented in TODO.md"
+    );
+}
+
+/// Verify that transpiled output does not contain Self::lt( or Self::eq( inside
+/// char_traits impl blocks (they should be rewritten to __fragile_char_traits_*_i8 helpers).
+#[test]
+fn m9_2c_iv_e3f_no_self_lt_eq_in_char_traits_impls() {
+    let fragile_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("target")
+        .join("debug")
+        .join("fragile");
+
+    if !fragile_bin.exists() {
+        eprintln!("SKIP: fragile debug binary not found at {:?}", fragile_bin);
+        return;
+    }
+
+    // Create a minimal C++ file that triggers char_traits template instantiation
+    let tmp_dir = std::env::temp_dir().join(format!(
+        "fragile_m9_e3f_self_lt_eq_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::create_dir_all(&tmp_dir);
+    let cpp_file = tmp_dir.join("test_char_traits.cpp");
+    std::fs::write(
+        &cpp_file,
+        r#"
+#include <string>
+int main() {
+    std::string s = "hello";
+    return s.size();
+}
+"#,
+    )
+    .unwrap();
+
+    let rs_file = tmp_dir.join("test_char_traits.rs");
+    let _output = std::process::Command::new(&fragile_bin)
+        .args(&["transpile", cpp_file.to_str().unwrap(), "-o", rs_file.to_str().unwrap()])
+        .output()
+        .expect("fragile transpile should run");
+
+    if rs_file.exists() {
+        let rs_content = std::fs::read_to_string(&rs_file).unwrap();
+
+        // Check that inside char_traits impl blocks, Self::lt/Self::eq are rewritten
+        let mut in_char_traits_impl = false;
+        let mut brace_depth: i32 = 0;
+        let mut impl_brace_start: i32 = -1;
+        let mut violations = Vec::new();
+
+        for (line_no, line) in rs_content.lines().enumerate() {
+            let trimmed = line.trim();
+            if !in_char_traits_impl && trimmed.starts_with("impl ") && trimmed.ends_with('{') {
+                let impl_target = trimmed.strip_prefix("impl ").unwrap_or("").trim_end_matches('{').trim();
+                if impl_target.contains("char_traits") {
+                    in_char_traits_impl = true;
+                    impl_brace_start = brace_depth;
+                }
+            }
+
+            let open = line.chars().filter(|&c| c == '{').count() as i32;
+            let close = line.chars().filter(|&c| c == '}').count() as i32;
+            brace_depth += open - close;
+
+            if in_char_traits_impl && brace_depth <= impl_brace_start {
+                in_char_traits_impl = false;
+                impl_brace_start = -1;
+            }
+
+            if in_char_traits_impl {
+                // Skip fn declaration lines
+                if trimmed.starts_with("pub fn lt") || trimmed.starts_with("pub fn eq")
+                    || trimmed.starts_with("fn lt") || trimmed.starts_with("fn eq") {
+                    continue;
+                }
+                if line.contains("Self::lt(") || line.contains("Self::eq(") {
+                    violations.push(format!("line {}: {}", line_no + 1, trimmed));
+                }
+            }
+        }
+
+        assert!(
+            violations.is_empty(),
+            "M9.2.c.iv.e.3.f: Self::lt/Self::eq should not appear in char_traits impl bodies \
+             (should be rewritten to __fragile_char_traits_*_i8 helpers). Violations:\n{}",
+            violations.join("\n")
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+}
