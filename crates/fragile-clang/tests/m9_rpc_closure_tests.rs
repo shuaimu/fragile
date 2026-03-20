@@ -2782,3 +2782,26 @@ fn m9_2c_iv_d5_task_documented_in_todo() {
         "M9.2.c.iv.d.5 should be documented in TODO.md"
     );
 }
+
+/// M9.2.c.iv.e.2: Verify comparator unresolved-symbol closure task is
+/// documented in TODO.md with `lt`/`eq` context.
+#[test]
+fn m9_2c_iv_e2_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("M9.2.c.iv.e.2"),
+        "M9.2.c.iv.e.2 should be documented in TODO.md"
+    );
+    assert!(
+        todo.contains("lt`/`eq`") || todo.contains("lt/eq") || todo.contains("comparator"),
+        "M9.2.c.iv.e.2 TODO entry should mention comparator unresolved names (`lt`/`eq`)"
+    );
+}

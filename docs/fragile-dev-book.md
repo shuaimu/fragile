@@ -20867,3 +20867,37 @@ Implemented:
     - `m9_2c_iv_d4_task_documented_in_todo`
 - `TODO.md`
   - Marked `M9.2.c.iv.d.4` done and updated blocker taxonomy to leave `d.5` as remaining downstream blocker class.
+
+## 2026-03-20: M9.2.c.iv.e.1 function-static alias rewrite scoping
+
+Task sizing analysis:
+- Small, bounded normalization fix (<1000 LOC) in one function with focused tests.
+- No further decomposition needed for this leaf.
+
+Plan before execution:
+- inspect `normalize_unprefixed_function_static_symbol_refs` alias collection scope;
+- switch alias collection/rewrite from file-global to per-function body scope;
+- add regressions for cross-function leak and repeated alias names across functions;
+- run focused regression tests and Python suite.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific conditions, no force-native fallback, and no fake semantic stubs were introduced.
+- Change is generic codegen normalization behavior.
+
+Implemented:
+- `crates/fragile-clang/src/ast_codegen.rs`
+  - `normalize_unprefixed_function_static_symbol_refs` now:
+    - parses function blocks,
+    - collects `__fsv___func_*` alias mappings per-function body,
+    - rewrites aliases only inside the owning function body.
+  - Added regressions:
+    - `test_normalize_function_static_symbol_refs_scopes_aliases_per_function_body`
+    - `test_normalize_function_static_symbol_refs_uses_local_symbol_when_alias_repeats_across_functions`
+  - Updated existing signature guard tests to use function-local static declarations (matching real lowering shape).
+- `TODO.md`
+  - Marked `M9.2.c.iv.e.1` done and refreshed blocker-taxonomy text for remaining `e.2+` work.
+
+Validation:
+- `cargo test -p fragile-clang normalize_function_static_symbol_refs -- --nocapture`
+- `python3 -m unittest discover -s tests/python -p 'test_*.py'`
