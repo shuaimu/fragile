@@ -20901,3 +20901,100 @@ Implemented:
 Validation:
 - `cargo test -p fragile-clang normalize_function_static_symbol_refs -- --nocapture`
 - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+## 2026-03-20: M9.2.c.iv.e.2 unresolved comparator helper names (`lt`/`eq`)
+
+Task sizing analysis:
+- Small, bounded codegen/preamble fix (<1000 LOC): one new normalizer, two preamble helpers, focused tests, and TODO/docs updates.
+- No further decomposition needed for this leaf.
+
+Plan before execution:
+- capture fresh strict compile evidence for `rrr/base/{debugging,misc}.cpp` after e.1 to confirm current `E0425` class;
+- implement a generic normalizer for bare comparator helper calls in generated `std_char_traits_*` impl bodies;
+- add stable preamble helper surfaces and register ownership to avoid duplicate re-emission;
+- add focused unit/regression coverage;
+- re-run focused + full suites and re-capture live compile evidence.
+
+Wrong-approach check:
+- Re-checked Section 1.3 and `docs/dev/wrong.md`.
+- No mako-targeted conditional branches, no native-source bypasses, and no fake semantic stubs were introduced.
+- Fix is generic generated-code normalization and preamble helper surfacing.
+
+Implemented:
+- `crates/fragile-clang/src/ast_codegen.rs`
+  - Added `normalize_unqualified_char_traits_comparator_calls`:
+    - scans generated `impl std_char_traits_*` blocks;
+    - rewrites bare `lt(...)` -> `crate::__fragile_char_traits_lt_i8(...)` and bare `eq(...)` -> `crate::__fragile_char_traits_eq_i8(...)` in non-`std_char_traits_char_` impl bodies;
+    - skips function declaration lines and preserves already-qualified paths.
+  - Wired pass into post-lowering normalization pipeline immediately after `normalize_char_traits_eof_calls`.
+  - Registered new preamble-owned helper names:
+    - `__fragile_char_traits_eq_i8`
+    - `__fragile_char_traits_lt_i8`
+  - Added regressions:
+    - `test_normalize_unqualified_char_traits_comparator_calls_rewrites_bare_calls_in_non_char_impls`
+    - `test_normalize_unqualified_char_traits_comparator_calls_skips_char_impl_and_fn_decl_lines`
+    - `test_preamble_emits_char_traits_comparator_helpers`
+- `crates/fragile-stl/src/clib.rs`
+  - Added preamble comparator helper definitions:
+    - `__fragile_char_traits_eq_i8(__c1: i8, __c2: i8) -> bool`
+    - `__fragile_char_traits_lt_i8(__c1: i8, __c2: i8) -> bool`
+- `crates/fragile-clang/tests/m9_rpc_closure_tests.rs`
+  - Added ledger regression:
+    - `m9_2c_iv_e2_task_documented_in_todo`
+- `TODO.md`
+  - Marked `M9.2.c.iv.e.2` done and updated e-blocker taxonomy to reflect closure of `lt`/`eq` unresolved-function class.
+
+Validation:
+- Focused Rust:
+  - `cargo test -p fragile-clang normalize_unqualified_char_traits_comparator_calls -- --nocapture`
+  - `cargo test -p fragile-clang preamble_emits_char_traits_comparator_helpers -- --nocapture`
+  - `cargo test -p fragile-clang --test m9_rpc_closure_tests m9_2c_iv_e2_task_documented_in_todo -- --nocapture`
+- Live strict compile evidence (release `fragilec`):
+  - `target/release/fragilec -c ... vendor/mako/src/rrr/base/debugging.cpp ...`
+  - `target/release/fragilec -c ... vendor/mako/src/rrr/base/misc.cpp ...`
+  - both stderr captures show no `error[E0425]: cannot find function \`lt\`` / `\`eq\`` entries.
+- Full suites:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/python -p 'test_*.py'`
+  - `cargo test --workspace --all-targets` (summary-filtered rerun logged at `/tmp/fragile_cargo_test_workspace_all_targets_20260319T234614.log`, `CARGO_FULL_SUITE_STATUS=0`).
+
+## 2026-03-20: M9.2.c.iv.e.3.a comparator-helper lane mismatch (`__fragile_char_traits_eq_i8`)
+
+Task sizing analysis:
+- Small, bounded fix (<1000 LOC): one helper signature/generalization change, focused helper tests, TODO/book evidence update.
+- Leaf `M9.2.c.iv.e.3.a` is independently executable and does not require broad replay closure.
+
+Plan before execution:
+- replay strict compile evidence on `rrr/base/{debugging,misc}.cpp` to lock baseline counts for `expected i8, found u16/u32`;
+- patch comparator helper lane contract generically (no target-specific branching) so widened char lanes are accepted;
+- add focused helper regressions for widened left/right operand lanes;
+- rebuild release `fragilec`, replay strict compile evidence, and record deltas.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific hacks, no native-source bypass, and no fake semantic stubs were introduced.
+- Fix is generic preamble helper surface hardening.
+
+Implemented:
+- `crates/fragile-stl/src/clib.rs`
+  - generalized `__fragile_char_traits_eq_i8` from fixed `(i8, T)` to `(T, U)` where both lanes are `TryInto<i64> + Copy`;
+  - comparison now normalizes both operands into integer lanes before compare.
+- `crates/fragile-stl/tests/char_traits_helpers_tests.rs`
+  - extended `char_traits_eq_i8_accepts_wider_zero_lanes` to cover widened left lane and mixed widened lanes (`u16`/`u32`), plus negative widened-lane case.
+- `TODO.md`
+  - marked `M9.2.c.iv.e.3.a` done with strict compile evidence and residual-blocker note.
+
+Validation:
+- Focused tests:
+  - `cargo test -p fragile-stl --test char_traits_helpers_tests -- --nocapture`
+  - `cargo test -p fragile-clang normalize_unqualified_char_traits_comparator_calls -- --nocapture`
+- Live strict compile evidence (release `fragilec`):
+  - baseline (before patch):
+    - `/tmp/fragile_e3a_debugging.stderr`: `E0308=72`, `expected i8, found u16=10`, `expected i8, found u32=10`
+    - `/tmp/fragile_e3a_misc.stderr`: `E0308=72`, `expected i8, found u16=10`, `expected i8, found u32=10`
+  - after patch + release rebuild:
+    - `/tmp/fragile_e3a_debugging_v2.stderr`: `E0308=64`, `expected i8, found u16=6`, `expected i8, found u32=6`, `__fragile_char_traits_eq_i8(` mismatch callsites `0`
+    - `/tmp/fragile_e3a_misc_v2.stderr`: `E0308=64`, `expected i8, found u16=6`, `expected i8, found u32=6`, `__fragile_char_traits_eq_i8(` mismatch callsites `0`
+
+Result:
+- `M9.2.c.iv.e.3.a` helper-lane mismatch class is closed.
+- Remaining `expected i8, found u16/u32` are now `Self::eq`/`Self::lt` signature-lane mismatches (non-helper class), tracked under remaining `M9.2.c.iv.e.3.*` work.

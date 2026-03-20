@@ -276,8 +276,14 @@ pub fn wcsncmp(_s1: *const i32, _s2: *const i32, _n: u64) -> i32 { 0 }
 #[inline]
 pub fn wmemchr(_s: *const i32, _c: i32, _n: u64) -> *const i32 { std::ptr::null() }
 #[inline]
-pub fn __fragile_char_traits_eq_i8(__c1: i8, __c2: i8) -> bool {
-    (__c1 as i32) == (__c2 as i32)
+pub fn __fragile_char_traits_eq_i8<T, U>(__c1: T, __c2: U) -> bool
+where
+    T: std::convert::TryInto<i64> + Copy,
+    U: std::convert::TryInto<i64> + Copy,
+{
+    let lhs = __c1.try_into().unwrap_or_default();
+    let rhs = __c2.try_into().unwrap_or_default();
+    lhs == rhs
 }
 #[inline]
 pub fn __fragile_char_traits_lt_i8(__c1: i8, __c2: i8) -> bool {
