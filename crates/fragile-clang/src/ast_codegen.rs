@@ -23936,6 +23936,146 @@ impl AstCodeGen {
         aliases
     }
 
+    /// Strip module-qualified `module::__gv_X` references when `__gv_X` is
+    /// defined at the top level but not inside `module`.  This fixes E0603
+    /// "static import is private" errors where C++ namespaced globals (like
+    /// `std::ranges::min`/`max`) get transpiled as `ranges::__gv_min` but
+    /// the actual static is declared at crate scope.
+    pub fn normalize_module_qualified_gv_refs_to_top_level(code: &str) -> String {
+        // 1. Collect top-level `__gv_*` defs and module-level `__gv_*` defs.
+        let mut top_level_gv: HashSet<String> = HashSet::new();
+        let mut module_gv: HashMap<String, HashSet<String>> = HashMap::new();
+
+        let mut depth: i32 = 0;
+        let mut module_stack: Vec<(i32, String)> = Vec::new();
+
+        for line in code.lines() {
+            while module_stack
+                .last()
+                .is_some_and(|(start_depth, _)| *start_depth > depth)
+            {
+                module_stack.pop();
+            }
+
+            let trimmed = line.trim_start();
+            if let Some(static_name) = Self::parse_static_item_name(trimmed) {
+                if static_name.starts_with("__gv_") {
+                    if module_stack.is_empty() {
+                        top_level_gv.insert(static_name);
+                    } else if let Some((_, mod_name)) = module_stack.last() {
+                        module_gv
+                            .entry(mod_name.clone())
+                            .or_default()
+                            .insert(static_name);
+                    }
+                }
+            }
+
+            if let Some(module_name) = Self::parse_module_decl_name(line) {
+                let open_count = line.chars().filter(|&ch| ch == '{').count() as i32;
+                if open_count > 0 {
+                    module_stack.push((depth + 1, module_name));
+                }
+            }
+
+            let open_count = line.chars().filter(|&ch| ch == '{').count() as i32;
+            let close_count = line.chars().filter(|&ch| ch == '}').count() as i32;
+            depth += open_count - close_count;
+            if depth < 0 {
+                depth = 0;
+            }
+            while module_stack
+                .last()
+                .is_some_and(|(start_depth, _)| *start_depth > depth)
+            {
+                module_stack.pop();
+            }
+        }
+
+        if top_level_gv.is_empty() {
+            return code.to_string();
+        }
+
+        // 2. Rewrite `module::__gv_X` → `__gv_X` when __gv_X is top-level
+        //    but NOT in that module.
+        let mut out = String::with_capacity(code.len());
+        for line in code.lines() {
+            let trimmed = line.trim_start();
+            // Skip static definitions, comments, module declarations
+            if trimmed.starts_with("pub(crate) static")
+                || trimmed.starts_with("static")
+                || trimmed.starts_with("//")
+                || trimmed.starts_with("pub mod ")
+                || trimmed.starts_with("mod ")
+            {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+
+            let mut rewritten = line.to_string();
+            // Find patterns like `ident::__gv_name`
+            let mut changed = true;
+            while changed {
+                changed = false;
+                if let Some(pos) = rewritten.find("::__gv_") {
+                    // Extract module name before ::
+                    let before = &rewritten[..pos];
+                    let mut mod_start = pos;
+                    while mod_start > 0 {
+                        let ch = rewritten[..mod_start]
+                            .chars()
+                            .next_back()
+                            .unwrap_or(' ');
+                        if ch.is_alphanumeric() || ch == '_' {
+                            mod_start -= ch.len_utf8();
+                        } else {
+                            break;
+                        }
+                    }
+                    let mod_name = &rewritten[mod_start..pos];
+                    if !mod_name.is_empty() && mod_name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                        // Extract __gv_name after ::
+                        let gv_start = pos + 2; // skip ::
+                        let mut gv_end = gv_start;
+                        while gv_end < rewritten.len() {
+                            let ch = rewritten[gv_end..].chars().next().unwrap_or(' ');
+                            if ch.is_alphanumeric() || ch == '_' {
+                                gv_end += ch.len_utf8();
+                            } else {
+                                break;
+                            }
+                        }
+                        let gv_name = rewritten[gv_start..gv_end].to_string();
+                        let mod_has_it = module_gv
+                            .get(mod_name)
+                            .map_or(false, |set| set.contains(&gv_name));
+                        if top_level_gv.contains(&gv_name) && !mod_has_it {
+                            // Replace `mod::__gv_X` with just `__gv_X`
+                            rewritten = format!(
+                                "{}{}{}",
+                                &rewritten[..mod_start],
+                                &gv_name,
+                                &rewritten[gv_end..]
+                            );
+                            changed = true;
+                        }
+                    }
+                }
+            }
+
+            out.push_str(&rewritten);
+            out.push('\n');
+        }
+
+        if code.ends_with('\n') {
+            out
+        } else {
+            out.pop();
+            out
+        }
+    }
+
     /// Re-export unique module-qualified `__gv_*` statics at crate scope.
     fn append_unique_prefixed_static_module_aliases(code: &str) -> String {
         let aliases = Self::collect_unique_prefixed_static_module_aliases(code);
@@ -29305,6 +29445,9 @@ impl AstCodeGen {
         // degraded qualified refs still use unprefixed tails (`...::name`).
         // Rewrite rooted path tails to the internal `...::__gv_name` symbol.
         output = Self::normalize_global_symbol_aliases_for_prefixed_statics(&output);
+        // Strip module-qualified `module::__gv_X` refs when __gv_X is at top
+        // level but not inside that module (fixes E0603 private field errors).
+        output = Self::normalize_module_qualified_gv_refs_to_top_level(&output);
         // Re-export unique module-qualified `__gv_*` statics at crate scope so
         // later shorthand snapshot rewrites can resolve consistently.
         output = Self::append_unique_prefixed_static_module_aliases(&output);
@@ -99841,6 +99984,75 @@ pub fn probe() {
         assert!(
             normalized.contains("let _c = mako::len;"),
             "non-rooted module paths should remain unchanged, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_module_qualified_gv_refs_strips_wrong_module_prefix() {
+        let input = r#"pub mod ranges {
+    use super::*;
+    pub struct __fn {}
+}
+pub(crate) static mut __gv_min: i64 = 0;
+pub(crate) static mut __gv_max: i64 = 0;
+pub fn use_minmax() {
+    let a = unsafe { ranges::__gv_min };
+    let b = unsafe { ranges::__gv_max };
+}
+"#;
+        let normalized =
+            AstCodeGen::normalize_module_qualified_gv_refs_to_top_level(input);
+        assert!(
+            normalized.contains("unsafe { __gv_min }"),
+            "should strip ranges:: prefix when __gv_min is at top level, got:\n{}",
+            normalized
+        );
+        assert!(
+            normalized.contains("unsafe { __gv_max }"),
+            "should strip ranges:: prefix when __gv_max is at top level, got:\n{}",
+            normalized
+        );
+        assert!(
+            !normalized.contains("ranges::__gv_min"),
+            "should not contain ranges::__gv_min after normalization, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_module_qualified_gv_refs_preserves_module_defined_statics() {
+        let input = r#"pub mod config {
+    use super::*;
+    pub(crate) static mut __gv_debug: bool = false;
+}
+pub fn check() {
+    let d = unsafe { config::__gv_debug };
+}
+"#;
+        let normalized =
+            AstCodeGen::normalize_module_qualified_gv_refs_to_top_level(input);
+        assert!(
+            normalized.contains("config::__gv_debug"),
+            "should preserve module:: prefix when __gv_debug is inside config module, got:\n{}",
+            normalized
+        );
+    }
+
+    #[test]
+    fn test_normalize_module_qualified_gv_refs_no_change_when_no_top_level() {
+        let input = r#"pub mod ns {
+    pub(crate) static mut __gv_val: i32 = 0;
+}
+pub fn read() {
+    let v = unsafe { ns::__gv_val };
+}
+"#;
+        let normalized =
+            AstCodeGen::normalize_module_qualified_gv_refs_to_top_level(input);
+        assert!(
+            normalized.contains("ns::__gv_val"),
+            "should preserve ns::__gv_val when no top-level __gv_val exists, got:\n{}",
             normalized
         );
     }

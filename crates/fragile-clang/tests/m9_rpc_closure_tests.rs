@@ -3756,3 +3756,68 @@ fn m9_2c_iv_e5c_self_clone_to_ptr_uses_null_mut() {
         output
     );
 }
+
+// --- M9.2.c.iv.e.5.d: Fix E0603 private field access errors ---
+
+#[test]
+fn m9_2c_iv_e5d_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("M9.2.c.iv.e.5.d"),
+        "M9.2.c.iv.e.5.d task should be documented in TODO.md"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5d_module_qualified_gv_ref_stripped_when_top_level() {
+    let input = r#"pub mod ranges {
+    use super::*;
+    pub struct __fn {}
+}
+pub(crate) static mut __gv_min: i64 = 0;
+pub(crate) static mut __gv_max: i64 = 0;
+pub fn use_minmax() {
+    let a = unsafe { ranges::__gv_min };
+    let b = unsafe { ranges::__gv_max };
+}
+"#;
+    let normalized =
+        fragile_clang::AstCodeGen::normalize_module_qualified_gv_refs_to_top_level(input);
+    assert!(
+        !normalized.contains("ranges::__gv_min"),
+        "E0603: ranges::__gv_min should be stripped when __gv_min is at top level, got:\n{}",
+        normalized
+    );
+    assert!(
+        !normalized.contains("ranges::__gv_max"),
+        "E0603: ranges::__gv_max should be stripped when __gv_max is at top level, got:\n{}",
+        normalized
+    );
+    assert!(
+        normalized.contains("unsafe { __gv_min }"),
+        "E0603: should reference bare __gv_min, got:\n{}",
+        normalized
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5d_module_qualified_gv_ref_preserved_when_in_module() {
+    let input = r#"pub mod config {
+    use super::*;
+    pub(crate) static mut __gv_debug: bool = false;
+}
+pub fn check() {
+    let d = unsafe { config::__gv_debug };
+}
+"#;
+    let normalized =
+        fragile_clang::AstCodeGen::normalize_module_qualified_gv_refs_to_top_level(input);
+    assert!(
+        normalized.contains("config::__gv_debug"),
+        "E0603: should keep config:: prefix when __gv_debug is inside that module, got:\n{}",
+        normalized
+    );
+}
