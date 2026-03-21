@@ -55,7 +55,7 @@ Goal: replace LibTooling-centered parsing with a custom parser module that treat
     - [ ] P0.b.8 (on/after 2026-04-18) Run full regression gates (`cargo test --workspace --all-targets`, Python suite) and record removal run artifacts.
     - [ ] P0.b.9 (on/after 2026-04-18) Update docs/README and operational guidance to remove deprecated LibTooling/escape-hatch instructions.
   - [x] P0.c Add anti-regression CI/test gates to fail if strict-path LibTooling parser references are reintroduced. Done 2026-03-21. Evidence: 13 tests in `crates/fragile-clang/tests/p0c_anti_regression_tests.rs` enforcing per-file and aggregate ceilings on LibTooling/escape-hatch references across all production-path files, plus no-new-files guard, default-backend invariant, and expiry-date invariant.
-  - [ ] P0.d Update docs/README to mark LibTooling parser path removal complete (not just deprecated). **WIP on claude/parser branch**
+  - [x] P0.d Update docs/README to mark LibTooling parser path removal complete (not just deprecated). Done 2026-03-21. Evidence: CLAUDE.md status updated to 2026-03-21, fragile-dev-book.md operational sections updated from "deprecated" to "removed", 3 documentation consistency tests in `p0_libtooling_removal_audit_tests.rs`.
 - [ ] P1 (next): close remaining M9.2 runtime replay blockers and green M9.A2/M9.A3.
 - [x] Historical completion: parser migration milestones M0-M8 parser/regression gates were completed on 2026-03-19.
 
