@@ -652,6 +652,59 @@ fn p0b_2a_preflight_document_contains_driver_symbol_inventory() {
     }
 }
 
+#[test]
+fn p0b_2b0_task_decomposed_in_todo() {
+    let todo = read_project_file("TODO.md");
+    assert!(
+        todo.contains("P0.b.2.b.0 (pre-cutover) Publish variant-removal dependency map"),
+        "audit: TODO should document completed pre-cutover leaf P0.b.2.b.0"
+    );
+    for expected_leaf in [
+        "P0.b.2.b.1 (on/after 2026-04-18)",
+        "P0.b.2.b.2 (on/after 2026-04-18)",
+    ] {
+        assert!(
+            todo.contains(expected_leaf),
+            "audit: TODO should contain decomposed P0.b.2.b leaf `{}`",
+            expected_leaf
+        );
+    }
+}
+
+#[test]
+fn p0b_2b0_dependency_map_document_exists() {
+    let doc_path = project_root().join("docs/dev/p0b2b_variant_removal_dependency_map.md");
+    assert!(
+        doc_path.exists(),
+        "audit: expected P0.b.2.b dependency-map doc to exist at {}",
+        doc_path.display()
+    );
+}
+
+#[test]
+fn p0b_2b0_dependency_map_contains_expected_symbols_and_boundaries() {
+    let doc = read_project_file("docs/dev/p0b2b_variant_removal_dependency_map.md");
+    for required in [
+        "crates/fragile-driver/src/lib.rs",
+        "crates/fragile-cli/src/bin/fragilec.rs",
+        "StrictParserBackend::Libtooling",
+        "ParserCoreCodegenEscapeHatch::Libtooling",
+        "parse_parser_backend_value",
+        "strict_parser_backend_from_legacy_backend",
+        "P0.b.2.b.1",
+        "P0.b.2.b.2",
+        "P0.b.2.c",
+        "cargo test -p fragile-driver",
+        "cargo test -p fragile-cli",
+    ] {
+        assert!(
+            doc.contains(required),
+            "audit: P0.b.2.b dependency-map doc should contain `{}`",
+            required
+        );
+    }
+}
+
 /// Comprehensive summary test that produces the full audit inventory.
 #[test]
 fn p0a_audit_comprehensive_site_inventory() {

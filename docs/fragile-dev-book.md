@@ -21246,6 +21246,39 @@ Validation:
   - `real_world_xxhash_tests`
   - `real_world_yamlcpp_tests`
   - `real_world_zlib_tests`
-  - `runtime_correctness_tests`
-  - `zlib_failure_repro_command_tests`
+- `runtime_correctness_tests`
+- `zlib_failure_repro_command_tests`
 - Python suite re-run passed: `84` tests, `1` skipped.
+
+## 2026-03-21: `P0.b.2.b` decomposition and variant-removal dependency map (`P0.b.2.b.0`)
+
+Task sizing analysis:
+- Top-priority first undone leaf after prior completion was `P0.b.2.b`, but it is date-gated (`on/after 2026-04-18`).
+- `P0.b.2.b` has cross-file coupling with `P0.b.2.c` (enum variant removal vs parser backend value/label parsing), so one-shot edits are risky.
+- Decomposed `P0.b.2.b` into bounded leaves and executed pre-cutover dependency-map leaf `P0.b.2.b.0`.
+
+Plan before execution:
+- refine `TODO.md` so `P0.b.2.b` has explicit bounded sub-leaves under the date gate;
+- publish exact `fragile-driver` and `fragilec` symbol inventory for enum-variant removal;
+- encode coupling boundary with `P0.b.2.c` and lock with audit tests.
+
+Wrong-approach check:
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific behavior, no force-native bypass, no fake semantic fallback.
+- This leaf is planning/contract-only and preserves active behavior.
+
+Implemented:
+- `TODO.md`
+  - decomposed `P0.b.2.b` into:
+    - `P0.b.2.b.0` (pre-cutover, done)
+    - `P0.b.2.b.1` / `P0.b.2.b.2` (on/after 2026-04-18)
+- `docs/dev/p0b2b_variant_removal_dependency_map.md`
+  - added exact variant/match/test callsite inventory across production drivers;
+  - documented compile-coupling boundary with `P0.b.2.c`;
+  - added ordered cutover slices and validation checkpoints.
+- `crates/fragile-clang/tests/p0_libtooling_removal_audit_tests.rs`
+  - added `P0.b.2.b.0` contract tests for TODO decomposition and dependency-map document content.
+
+Result:
+- `P0.b.2.b` now has bounded, test-gated cutover sequencing with pre-cutover dependency clarity.
+- cutover-day risk is reduced without violating the 2026-04-18 hardening gate.
