@@ -21282,3 +21282,33 @@ Implemented:
 Result:
 - `P0.b.2.b` now has bounded, test-gated cutover sequencing with pre-cutover dependency clarity.
 - cutover-day risk is reduced without violating the 2026-04-18 hardening gate.
+
+## 2026-03-21: `P0.b.2.b.1` decomposition and line-level patch spec (`P0.b.2.b.1.a`)
+
+Task sizing analysis:
+- First undone leaf under highest-priority `P0` remained `P0.b.2.b.1`, which is date-gated to on/after 2026-04-18.
+- Direct code removal is intentionally deferred by policy, so this iteration executed the first actionable pre-cutover sub-leaf.
+- Estimated cutover-day edit size for `P0.b.2.b.1` is ~135-300 LOC across `fragile-driver` and `fragilec`, with all planned leaves well below the 1000-LOC target.
+
+Plan before execution:
+- decompose `P0.b.2.b.1` into bounded sub-leaves;
+- publish a line-level patch spec with per-file order and ownership boundaries;
+- add audit tests that lock TODO decomposition and required patch-spec contracts.
+
+Wrong-approach check:
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific behavior, no native bypasses, and no fake semantic fallback/stub path added.
+
+Implemented:
+- `TODO.md`
+  - decomposed `P0.b.2.b.1` into:
+    - `P0.b.2.b.1.a` (pre-cutover, done)
+    - `P0.b.2.b.1.b` / `P0.b.2.b.1.c` / `P0.b.2.b.1.d` (on/after 2026-04-18)
+- `docs/dev/p0b2b1_variant_removal_patch_spec.md`
+  - added per-file line-level edit order, LOC sizing, and explicit `P0.b.2.b.1` vs `P0.b.2.c` ownership boundary.
+- `crates/fragile-clang/tests/p0_libtooling_removal_audit_tests.rs`
+  - added `P0.b.2.b.1` contract tests for TODO decomposition and patch-spec doc content.
+
+Result:
+- `P0.b.2.b.1` is now executable in bounded slices with an explicit cutover operator guide.
+- Date-gated code removal remains deferred while pre-cutover ambiguity and coupling risk are reduced.

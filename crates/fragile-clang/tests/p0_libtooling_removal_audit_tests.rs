@@ -705,6 +705,64 @@ fn p0b_2b0_dependency_map_contains_expected_symbols_and_boundaries() {
     }
 }
 
+#[test]
+fn p0b_2b1_task_decomposed_in_todo() {
+    let todo = read_project_file("TODO.md");
+    assert!(
+        todo.contains("P0.b.2.b.1.a (pre-cutover) Publish line-level cutover patch spec"),
+        "audit: TODO should document completed pre-cutover leaf P0.b.2.b.1.a"
+    );
+    for expected_leaf in [
+        "P0.b.2.b.1.b (on/after 2026-04-18)",
+        "P0.b.2.b.1.c (on/after 2026-04-18)",
+        "P0.b.2.b.1.d (on/after 2026-04-18)",
+    ] {
+        assert!(
+            todo.contains(expected_leaf),
+            "audit: TODO should contain decomposed P0.b.2.b.1 leaf `{}`",
+            expected_leaf
+        );
+    }
+}
+
+#[test]
+fn p0b_2b1_patch_spec_document_exists() {
+    let doc_path = project_root().join("docs/dev/p0b2b1_variant_removal_patch_spec.md");
+    assert!(
+        doc_path.exists(),
+        "audit: expected P0.b.2.b.1 patch-spec doc to exist at {}",
+        doc_path.display()
+    );
+}
+
+#[test]
+fn p0b_2b1_patch_spec_contains_required_cutover_boundaries() {
+    let doc = read_project_file("docs/dev/p0b2b1_variant_removal_patch_spec.md");
+    for required in [
+        "P0.b.2.b.1.a",
+        "P0.b.2.b.1.b",
+        "P0.b.2.b.1.c",
+        "P0.b.2.b.1.d",
+        "P0.b.2.c",
+        "crates/fragile-driver/src/lib.rs",
+        "crates/fragile-cli/src/bin/fragilec.rs",
+        "StrictParserBackend::Libtooling",
+        "ParserCoreCodegenEscapeHatch::Libtooling",
+        "strict_parser_backend_from_legacy_backend",
+        "parse_parser_backend_value",
+        "strict_parser_backend_label",
+        "parse_codegen_escape_hatch_value",
+        "cargo test -p fragile-driver",
+        "cargo test -p fragile-cli",
+    ] {
+        assert!(
+            doc.contains(required),
+            "audit: P0.b.2.b.1 patch-spec doc should contain `{}`",
+            required
+        );
+    }
+}
+
 /// Comprehensive summary test that produces the full audit inventory.
 #[test]
 fn p0a_audit_comprehensive_site_inventory() {
