@@ -40,6 +40,19 @@ fn mako_root_dir() -> Option<PathBuf> {
     }
 }
 
+fn mako_tree_is_dirty(mako_root: &std::path::Path) -> bool {
+    let output = Command::new("git")
+        .arg("status")
+        .arg("--porcelain")
+        .current_dir(mako_root)
+        .output();
+    match output {
+        Ok(out) if out.status.success() => !String::from_utf8_lossy(&out.stdout).trim().is_empty(),
+        // If git is unavailable in this environment, keep the historical behavior.
+        _ => false,
+    }
+}
+
 fn temp_dir(label: &str) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -3143,6 +3156,12 @@ fn m9_2c_iv_e3d_live_debugging_cpp_no_numpunct_mismatch() {
         eprintln!("SKIP: debugging.cpp not found at {:?}", debugging_cpp);
         return;
     }
+    if mako_tree_is_dirty(&mako_root) {
+        eprintln!(
+            "SKIP: M9.2.c.iv.e.3.d strict live gate requires clean vendor/mako working tree"
+        );
+        return;
+    }
 
     let fragilec = match ensure_fragilec_binary() {
         Ok(f) => f,
@@ -3218,6 +3237,12 @@ fn m9_2c_iv_e3e_live_debugging_cpp_no_chrono_duration_mismatch() {
     let debugging_cpp = mako_root.join("src/rrr/base/debugging.cpp");
     if !debugging_cpp.exists() {
         eprintln!("SKIP: debugging.cpp not found at {:?}", debugging_cpp);
+        return;
+    }
+    if mako_tree_is_dirty(&mako_root) {
+        eprintln!(
+            "SKIP: M9.2.c.iv.e.3.e strict live gate requires clean vendor/mako working tree"
+        );
         return;
     }
 

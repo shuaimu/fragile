@@ -597,6 +597,61 @@ fn p0b_1_playbook_mentions_gate_and_slice_bounds() {
     );
 }
 
+#[test]
+fn p0b_2a_task_decomposed_in_todo() {
+    let todo = read_project_file("TODO.md");
+    assert!(
+        todo.contains("P0.b.2.a (pre-cutover) Publish driver-cutover preflight inventory"),
+        "audit: TODO should document completed P0.b.2.a pre-cutover leaf"
+    );
+    for expected_leaf in [
+        "P0.b.2.b (on/after 2026-04-18)",
+        "P0.b.2.c (on/after 2026-04-18)",
+        "P0.b.2.d (on/after 2026-04-18)",
+        "P0.b.2.e (on/after 2026-04-18)",
+        "P0.b.2.f (on/after 2026-04-18)",
+    ] {
+        assert!(
+            todo.contains(expected_leaf),
+            "audit: TODO should contain decomposed P0.b.2 leaf `{}`",
+            expected_leaf
+        );
+    }
+}
+
+#[test]
+fn p0b_2a_preflight_document_exists() {
+    let doc_path = project_root().join("docs/dev/p0b2_driver_cutover_preflight.md");
+    assert!(
+        doc_path.exists(),
+        "audit: expected P0.b.2 preflight doc to exist at {}",
+        doc_path.display()
+    );
+}
+
+#[test]
+fn p0b_2a_preflight_document_contains_driver_symbol_inventory() {
+    let doc = read_project_file("docs/dev/p0b2_driver_cutover_preflight.md");
+    for required in [
+        "crates/fragile-driver/src/lib.rs",
+        "crates/fragile-cli/src/bin/fragilec.rs",
+        "StrictParserBackend::Libtooling",
+        "ParserCoreCodegenEscapeHatch::Libtooling",
+        "use_libtooling_codegen_escape_hatch",
+        "ClangParserBackend::Libtooling",
+        "P0.b.2.b",
+        "P0.b.2.f",
+        "cargo test --workspace --all-targets",
+        "python3 -m unittest discover -s tests/python -p 'test_*.py'",
+    ] {
+        assert!(
+            doc.contains(required),
+            "audit: P0.b.2 preflight doc should contain `{}`",
+            required
+        );
+    }
+}
+
 /// Comprehensive summary test that produces the full audit inventory.
 #[test]
 fn p0a_audit_comprehensive_site_inventory() {
