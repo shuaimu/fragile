@@ -4240,3 +4240,78 @@ fn m9_2c_iv_e5g_helpers_use_char_traits_arg() {
         "helpers should no longer use TryInto<i64> bound"
     );
 }
+
+// ───────────────────── M9.2.c.iv.e.5.h ─────────────────────
+
+#[test]
+fn m9_2c_iv_e5h_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md must exist");
+    assert!(
+        todo.contains("M9.2.c.iv.e.5.h"),
+        "e.5.h task must be tracked in TODO.md"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5h_brace_tracking_skips_char_literals() {
+    // The normalizer's function-scoping pass must not count braces inside
+    // char literals ('{'/'}'). Verify by running the normalizer on code
+    // with char literal braces and ensuring aliases don't leak.
+    let input = concat!(
+        "fn minify() {\n",
+        "    match ch {\n",
+        "        '{' | '[' => { stack.push(ch); }\n",
+        "        '}' | ']' => { stack.pop(); }\n",
+        "        _ => {}\n",
+        "    }\n",
+        "}\n",
+        "\n",
+        "pub fn seed() -> u64 {\n",
+        "    static mut __fsv___func___x_0: i8 = 0;\n",
+        "    return unsafe { &mut __fsv___func___x_0 } as *mut i8 as u64;\n",
+        "}\n",
+        "\n",
+        "pub fn trunc_(__x: f64) -> f64 {\n",
+        "    return __builtin_trunc(__x);\n",
+        "}\n",
+    );
+    let result = fragile_clang::AstCodeGen::normalize_unprefixed_function_static_symbol_refs(input);
+    assert!(
+        result.contains("return __builtin_trunc(__x);"),
+        "char literal braces must not leak alias scope; got:\n{}",
+        result
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5h_inventory_document_exists() {
+    let doc_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/dev/m9_2c_iv_e5h_brace_literal_scoping_fix.md");
+    assert!(
+        doc_path.exists(),
+        "inventory document must exist at {:?}",
+        doc_path
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5h_function_static_mapping_isolated_in_generate_method() {
+    // The save/restore of function_static_var_mapping in generate_method
+    // prevents leakage between methods. Verify the source code has the guard.
+    let src = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/ast_codegen.rs"),
+    )
+    .expect("ast_codegen.rs must exist");
+    let count = src.matches("saved_function_static_var_mapping").count();
+    assert!(
+        count >= 6,
+        "function_static_var_mapping must be saved/restored in at least 3 places \
+         (generate_method CXXMethodDecl + ConstructorDecl, generate_fn_template_instance); \
+         found {} references",
+        count
+    );
+}

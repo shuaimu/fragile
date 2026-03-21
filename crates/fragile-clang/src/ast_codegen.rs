@@ -37816,7 +37816,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
     /// Recover references to function-static symbols that were lowered with
     /// internal `__fsv___func_*` names while bodies still use the unprefixed
     /// shorthand (`kVTable`, `mc_`, ...).
-    fn normalize_unprefixed_function_static_symbol_refs(code: &str) -> String {
+    pub fn normalize_unprefixed_function_static_symbol_refs(code: &str) -> String {
         // Per-function alias map: maps (line_index_of_static_decl) to (alias, symbol, is_maybeuninit).
         // We track which function each static belongs to so replacements are scoped.
         type AliasEntry = (String, String, bool); // (alias, symbol, is_maybeuninit)
@@ -37854,11 +37854,51 @@ impl FragileAtomicBoolCompat for atomic_bool {
             }
             if let Some(fn_start) = current_fn {
                 function_of_line[i] = Some(fn_start);
-                for ch in trimmed.chars() {
-                    match ch {
-                        '{' => brace_depth += 1,
-                        '}' => brace_depth -= 1,
-                        _ => {}
+                // Count braces, skipping those inside char literals ('X') and
+                // string literals ("..."). Without this, match arms like
+                //   '{' | '[' => { ... }
+                // cause brace depth to drift, breaking per-function scoping.
+                let bytes = trimmed.as_bytes();
+                let mut j = 0usize;
+                while j < bytes.len() {
+                    match bytes[j] {
+                        b'\'' => {
+                            // Skip char literal: 'X' or '\X'
+                            j += 1;
+                            if j < bytes.len() && bytes[j] == b'\\' {
+                                j += 1; // skip escaped char
+                            }
+                            if j < bytes.len() {
+                                j += 1; // skip the char
+                            }
+                            if j < bytes.len() && bytes[j] == b'\'' {
+                                j += 1; // skip closing quote
+                            }
+                        }
+                        b'"' => {
+                            // Skip string literal
+                            j += 1;
+                            while j < bytes.len() && bytes[j] != b'"' {
+                                if bytes[j] == b'\\' {
+                                    j += 1; // skip escape
+                                }
+                                j += 1;
+                            }
+                            if j < bytes.len() {
+                                j += 1; // skip closing quote
+                            }
+                        }
+                        b'{' => {
+                            brace_depth += 1;
+                            j += 1;
+                        }
+                        b'}' => {
+                            brace_depth -= 1;
+                            j += 1;
+                        }
+                        _ => {
+                            j += 1;
+                        }
                     }
                 }
                 if brace_depth <= 0 && trimmed.contains('}') {
@@ -49080,6 +49120,15 @@ impl FragileAtomicBoolCompat for atomic_bool {
             let saved_const_receiver_vars = std::mem::take(&mut self.const_receiver_vars);
             let saved_ptr_vars = std::mem::take(&mut self.ptr_vars);
             let saved_arr_vars = std::mem::take(&mut self.arr_vars);
+            // Save and clear function-static var mapping to prevent leakage
+            // across template instances. Without this, a static local `__x` in
+            // one template instance (e.g. __seed()) causes all subsequent instances
+            // with a parameter named `__x` (e.g. trunc_) to incorrectly resolve
+            // the parameter as `__fsv___func___x_0`.
+            let saved_function_static_var_mapping =
+                std::mem::take(&mut self.function_static_var_mapping);
+            let saved_function_static_counter = self.function_static_counter;
+            self.function_static_counter = 0;
 
             // Start with a clean function-local scope state.
             self.push_local_scope();
@@ -49128,6 +49177,8 @@ impl FragileAtomicBoolCompat for atomic_bool {
             self.scoped_local_scope_stack = saved_scoped_local_scope_stack;
             self.scoped_local_ptr_state = saved_scoped_local_ptr_state;
             self.scoped_local_ptr_scope_stack = saved_scoped_local_ptr_scope_stack;
+            self.function_static_var_mapping = saved_function_static_var_mapping;
+            self.function_static_counter = saved_function_static_counter;
         } else {
             self.writeln("todo!(\"Function template body not available\")");
         }
@@ -73323,6 +73374,11 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 let saved_scoped_local_scope_stack = self.scoped_local_scope_stack.clone();
                 let saved_scoped_local_ptr_state = self.scoped_local_ptr_state.clone();
                 let saved_scoped_local_ptr_scope_stack = self.scoped_local_ptr_scope_stack.clone();
+                // Save and clear function-static mapping to prevent leakage between methods
+                let saved_function_static_var_mapping = self.function_static_var_mapping.clone();
+                let saved_function_static_counter = self.function_static_counter;
+                self.function_static_var_mapping.clear();
+                self.function_static_counter = 0;
                 self.local_vars.clear();
                 self.scoped_local_var_counts.clear();
                 self.scoped_local_scope_stack.clear();
@@ -73458,6 +73514,8 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 self.scoped_local_scope_stack = saved_scoped_local_scope_stack;
                 self.scoped_local_ptr_state = saved_scoped_local_ptr_state;
                 self.scoped_local_ptr_scope_stack = saved_scoped_local_ptr_scope_stack;
+                self.function_static_var_mapping = saved_function_static_var_mapping;
+                self.function_static_counter = saved_function_static_counter;
 
                 self.current_return_type = old_return_type;
                 self.current_method_is_const = old_method_is_const;
@@ -73498,6 +73556,11 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 let saved_const_receiver_vars = self.const_receiver_vars.clone();
                 let saved_ptr_vars = self.ptr_vars.clone();
                 let saved_arr_vars = self.arr_vars.clone();
+                // Save and clear function-static mapping to prevent leakage between constructors
+                let saved_function_static_var_mapping = self.function_static_var_mapping.clone();
+                let saved_function_static_counter = self.function_static_counter;
+                self.function_static_var_mapping.clear();
+                self.function_static_counter = 0;
                 self.local_vars.clear();
                 self.scoped_local_var_counts.clear();
                 self.scoped_local_scope_stack.clear();
@@ -74284,6 +74347,8 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 self.scoped_local_scope_stack = saved_scoped_local_scope_stack;
                 self.scoped_local_ptr_state = saved_scoped_local_ptr_state;
                 self.scoped_local_ptr_scope_stack = saved_scoped_local_ptr_scope_stack;
+                self.function_static_var_mapping = saved_function_static_var_mapping;
+                self.function_static_counter = saved_function_static_counter;
             }
             _ => {}
         }
@@ -100551,6 +100616,105 @@ pub mod fragile_runtime {
         assert!(
             result.contains("return __x;"),
             "func_b body must not be rewritten, got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_normalize_function_static_symbol_refs_char_literal_braces_do_not_break_scoping() {
+        // When a function body contains char literals '{' or '}' (e.g. in
+        // match arms), the brace depth tracker must not count them as real
+        // braces. Otherwise the function never "closes" and all subsequent
+        // lines are scoped to it, causing aliases to leak.
+        let input = concat!(
+            "fn minify(input: &str) -> String {\n",
+            "    for ch in input.chars() {\n",
+            "        match ch {\n",
+            "            '{' | '[' => {\n",
+            "                stack.push(ch);\n",
+            "            }\n",
+            "            '}' | ']' => {\n",
+            "                stack.pop();\n",
+            "            }\n",
+            "            _ => {}\n",
+            "        }\n",
+            "    }\n",
+            "    String::new()\n",
+            "}\n",
+            "\n",
+            "pub fn __seed() -> u64 {\n",
+            "    static mut __fsv___func___x_0: i8 = 0;\n",
+            "    return unsafe { &mut __fsv___func___x_0 } as *mut i8 as u64;\n",
+            "}\n",
+            "\n",
+            "pub fn trunc_(__x: f64) -> f64 {\n",
+            "    return __builtin_trunc(__x);\n",
+            "}\n",
+        );
+        let result = AstCodeGen::normalize_unprefixed_function_static_symbol_refs(input);
+        // trunc_ must keep __x as-is (different function than __seed)
+        assert!(
+            result.contains("return __builtin_trunc(__x);"),
+            "trunc_ body must NOT be rewritten with __fsv alias from __seed, got:\n{}",
+            result
+        );
+        // __seed body should still correctly wrap
+        assert!(
+            result.contains("return unsafe { &mut __fsv___func___x_0 }"),
+            "__seed return must remain correctly wrapped, got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_normalize_function_static_symbol_refs_string_literal_braces_do_not_break_scoping() {
+        // Braces inside string literals ("{}") must not affect brace depth.
+        let input = concat!(
+            "pub fn format_helper() {\n",
+            "    let s = \"{} items in {}\".to_string();\n",
+            "}\n",
+            "\n",
+            "pub fn __seed() -> u64 {\n",
+            "    static mut __fsv___func___x_0: i8 = 0;\n",
+            "    return unsafe { &mut __fsv___func___x_0 } as *mut i8 as u64;\n",
+            "}\n",
+            "\n",
+            "pub fn trunc_(__x: f64) -> f64 {\n",
+            "    return __builtin_trunc(__x);\n",
+            "}\n",
+        );
+        let result = AstCodeGen::normalize_unprefixed_function_static_symbol_refs(input);
+        assert!(
+            result.contains("return __builtin_trunc(__x);"),
+            "trunc_ body must NOT be rewritten when braces are only in string literals, got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_normalize_function_static_symbol_refs_match_arm_some_brace() {
+        // A common pattern: `if stack.pop() != Some('{') {` has '{' inside Some()
+        // which must not confuse the brace tracker.
+        let input = concat!(
+            "pub fn check(stack: &mut Vec<char>) {\n",
+            "    if stack.pop() != Some('{') {\n",
+            "        return;\n",
+            "    }\n",
+            "}\n",
+            "\n",
+            "pub fn seed() -> u64 {\n",
+            "    static mut __fsv___func___x_0: i8 = 0;\n",
+            "    return unsafe { &mut __fsv___func___x_0 } as *mut i8 as u64;\n",
+            "}\n",
+            "\n",
+            "pub fn math_fn(__x: f64) -> f64 {\n",
+            "    return __x * 2.0;\n",
+            "}\n",
+        );
+        let result = AstCodeGen::normalize_unprefixed_function_static_symbol_refs(input);
+        assert!(
+            result.contains("return __x * 2.0;"),
+            "math_fn must keep __x as-is (char literal brace must not leak), got:\n{}",
             result
         );
     }
