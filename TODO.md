@@ -35,6 +35,9 @@ Goal: replace LibTooling-centered parsing with a custom parser module that treat
           - [ ] P0.b.2.b.1.b (on/after 2026-04-18) Remove variant declarations and legacy-backend adapter mappings in `crates/fragile-driver/src/lib.rs`.
             - [x] P0.b.2.b.1.b.0 (pre-cutover) Publish `fragile-driver` line-anchored cutover map (exact symbol edit order + compile-check checkpoints) for variant removal in `crates/fragile-driver/src/lib.rs`. Done 2026-03-21. Evidence: `docs/dev/p0b2b1b_driver_variant_removal_patch_map.md`.
             - [ ] P0.b.2.b.1.b.1 (on/after 2026-04-18) Remove `StrictParserBackend::Libtooling` and `ParserCoreCodegenEscapeHatch::Libtooling` enum variants in `crates/fragile-driver/src/lib.rs`.
+              - [x] P0.b.2.b.1.b.1.0 (pre-cutover) Publish declaration-hunk cutover spec for `fragile-driver` enum variant removal with explicit `b.1`/`b.2`/`b.3` ownership boundaries. Done 2026-03-21. Evidence: `docs/dev/p0b2b1b1_driver_enum_decl_removal_patch_spec.md`.
+              - [ ] P0.b.2.b.1.b.1.1 (on/after 2026-04-18) Remove `StrictParserBackend::Libtooling` declaration entry in `crates/fragile-driver/src/lib.rs`.
+              - [ ] P0.b.2.b.1.b.1.2 (on/after 2026-04-18) Remove `ParserCoreCodegenEscapeHatch::Libtooling` declaration entry in `crates/fragile-driver/src/lib.rs`.
             - [ ] P0.b.2.b.1.b.2 (on/after 2026-04-18) Remove `strict_parser_backend_from_legacy_backend` Libtooling adapter mapping in `crates/fragile-driver/src/lib.rs`.
             - [ ] P0.b.2.b.1.b.3 (on/after 2026-04-18) Resolve `fragile-driver` strict-path variant-match compile breaks after variant deletion while keeping backend string/help removals in `P0.b.2.c`.
           - [ ] P0.b.2.b.1.c (on/after 2026-04-18) Remove variant declarations and legacy-backend adapter mappings in `crates/fragile-cli/src/bin/fragilec.rs`.
@@ -52,7 +55,7 @@ Goal: replace LibTooling-centered parsing with a custom parser module that treat
     - [ ] P0.b.8 (on/after 2026-04-18) Run full regression gates (`cargo test --workspace --all-targets`, Python suite) and record removal run artifacts.
     - [ ] P0.b.9 (on/after 2026-04-18) Update docs/README and operational guidance to remove deprecated LibTooling/escape-hatch instructions.
   - [x] P0.c Add anti-regression CI/test gates to fail if strict-path LibTooling parser references are reintroduced. Done 2026-03-21. Evidence: 13 tests in `crates/fragile-clang/tests/p0c_anti_regression_tests.rs` enforcing per-file and aggregate ceilings on LibTooling/escape-hatch references across all production-path files, plus no-new-files guard, default-backend invariant, and expiry-date invariant.
-  - [ ] P0.d Update docs/README to mark LibTooling parser path removal complete (not just deprecated).
+  - [ ] P0.d Update docs/README to mark LibTooling parser path removal complete (not just deprecated). **WIP on claude/parser branch**
 - [ ] P1 (next): close remaining M9.2 runtime replay blockers and green M9.A2/M9.A3.
 - [x] Historical completion: parser migration milestones M0-M8 parser/regression gates were completed on 2026-03-19.
 
