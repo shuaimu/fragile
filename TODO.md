@@ -33,6 +33,10 @@ Goal: replace LibTooling-centered parsing with a custom parser module that treat
         - [ ] P0.b.2.b.1 (on/after 2026-04-18) Remove `StrictParserBackend::Libtooling` and `ParserCoreCodegenEscapeHatch::Libtooling` enum variants in `fragile-driver` and `fragilec`; execute in bounded per-file slices.
           - [x] P0.b.2.b.1.a (pre-cutover) Publish line-level cutover patch spec with per-file LOC budget, function-order edit checkpoints, and explicit `P0.b.2.c` ownership boundaries. Done 2026-03-21. Evidence: `docs/dev/p0b2b1_variant_removal_patch_spec.md`.
           - [ ] P0.b.2.b.1.b (on/after 2026-04-18) Remove variant declarations and legacy-backend adapter mappings in `crates/fragile-driver/src/lib.rs`.
+            - [x] P0.b.2.b.1.b.0 (pre-cutover) Publish `fragile-driver` line-anchored cutover map (exact symbol edit order + compile-check checkpoints) for variant removal in `crates/fragile-driver/src/lib.rs`. Done 2026-03-21. Evidence: `docs/dev/p0b2b1b_driver_variant_removal_patch_map.md`.
+            - [ ] P0.b.2.b.1.b.1 (on/after 2026-04-18) Remove `StrictParserBackend::Libtooling` and `ParserCoreCodegenEscapeHatch::Libtooling` enum variants in `crates/fragile-driver/src/lib.rs`.
+            - [ ] P0.b.2.b.1.b.2 (on/after 2026-04-18) Remove `strict_parser_backend_from_legacy_backend` Libtooling adapter mapping in `crates/fragile-driver/src/lib.rs`.
+            - [ ] P0.b.2.b.1.b.3 (on/after 2026-04-18) Resolve `fragile-driver` strict-path variant-match compile breaks after variant deletion while keeping backend string/help removals in `P0.b.2.c`.
           - [ ] P0.b.2.b.1.c (on/after 2026-04-18) Remove variant declarations and legacy-backend adapter mappings in `crates/fragile-cli/src/bin/fragilec.rs`.
           - [ ] P0.b.2.b.1.d (on/after 2026-04-18) Resolve strict-path variant-match compile breaks after variant deletion while keeping backend string/help contract removals under `P0.b.2.c`.
         - [ ] P0.b.2.b.2 (on/after 2026-04-18) Update production-driver tests that currently construct/assert Libtooling enum variants to parser-core-only strict-path invariants.

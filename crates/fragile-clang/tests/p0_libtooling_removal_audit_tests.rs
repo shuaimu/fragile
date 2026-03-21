@@ -763,6 +763,66 @@ fn p0b_2b1_patch_spec_contains_required_cutover_boundaries() {
     }
 }
 
+#[test]
+fn p0b_2b1b_task_decomposed_in_todo() {
+    let todo = read_project_file("TODO.md");
+    for expected_leaf in [
+        "P0.b.2.b.1.b.0 (pre-cutover)",
+        "P0.b.2.b.1.b.1 (on/after 2026-04-18)",
+        "P0.b.2.b.1.b.2 (on/after 2026-04-18)",
+        "P0.b.2.b.1.b.3 (on/after 2026-04-18)",
+    ] {
+        assert!(
+            todo.contains(expected_leaf),
+            "audit: TODO should contain decomposed P0.b.2.b.1.b leaf `{}`",
+            expected_leaf
+        );
+    }
+}
+
+#[test]
+fn p0b_2b1b_driver_patch_map_document_exists() {
+    let doc_path = project_root().join("docs/dev/p0b2b1b_driver_variant_removal_patch_map.md");
+    assert!(
+        doc_path.exists(),
+        "audit: expected P0.b.2.b.1.b driver patch-map doc to exist at {}",
+        doc_path.display()
+    );
+}
+
+#[test]
+fn p0b_2b1b_driver_patch_map_contains_required_line_anchors_and_boundaries() {
+    let doc = read_project_file("docs/dev/p0b2b1b_driver_variant_removal_patch_map.md");
+    for required in [
+        "P0.b.2.b.1.b.0",
+        "P0.b.2.b.1.b.1",
+        "P0.b.2.b.1.b.2",
+        "P0.b.2.b.1.b.3",
+        "crates/fragile-driver/src/lib.rs",
+        "35-44",
+        "591-643",
+        "620-624",
+        "908-923",
+        "1269-1275",
+        "1287-1290",
+        "1324-1331",
+        "1697-1762",
+        "strict_parser_backend_from_legacy_backend",
+        "parse_parser_backend_value",
+        "strict_parser_backend_label",
+        "parse_parser_core_codegen_escape_hatch_value",
+        "P0.b.2.c",
+        "P0.b.2.e",
+        "cargo test -p fragile-driver",
+    ] {
+        assert!(
+            doc.contains(required),
+            "audit: P0.b.2.b.1.b driver patch-map doc should contain `{}`",
+            required
+        );
+    }
+}
+
 /// Comprehensive summary test that produces the full audit inventory.
 #[test]
 fn p0a_audit_comprehensive_site_inventory() {

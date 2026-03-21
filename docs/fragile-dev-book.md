@@ -21312,3 +21312,34 @@ Implemented:
 Result:
 - `P0.b.2.b.1` is now executable in bounded slices with an explicit cutover operator guide.
 - Date-gated code removal remains deferred while pre-cutover ambiguity and coupling risk are reduced.
+
+## 2026-03-21: `P0.b.2.b.1.b` decomposition and `fragile-driver` line-anchored cutover map (`P0.b.2.b.1.b.0`)
+
+Task sizing analysis:
+- First undone leaf in top-priority `P0` remained `P0.b.2.b.1.b`, but it is explicitly date-gated to on/after 2026-04-18.
+- Estimated direct code-removal footprint for this file-local leaf is ~42-99 LOC in `crates/fragile-driver/src/lib.rs` (well below 1000 LOC).
+- Since cutover is date-gated, executed the first honest pre-cutover sub-leaf (`P0.b.2.b.1.b.0`) to reduce cutover ambiguity.
+
+Plan before execution:
+- decompose `P0.b.2.b.1.b` into bounded sub-leaves (`b.0`..`b.3`);
+- publish driver-specific, line-anchored edit map with strict ownership boundaries;
+- lock decomposition/doc contracts with deterministic audit tests.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` in this book and `docs/dev/wrong.md`.
+- No target-specific bypasses, no force-native switches, and no semantic-fake/stub shortcuts were introduced.
+
+Implemented:
+- `TODO.md`
+  - decomposed `P0.b.2.b.1.b` into:
+    - `P0.b.2.b.1.b.0` (pre-cutover, done)
+    - `P0.b.2.b.1.b.1` / `.b.2` / `.b.3` (on/after 2026-04-18)
+- `docs/dev/p0b2b1b_driver_variant_removal_patch_map.md`
+  - added line anchors and ordered checkpoints for `crates/fragile-driver/src/lib.rs`;
+  - documented `P0.b.2.b.1.b` vs `P0.b.2.c`/`P0.b.2.e` boundaries and validation commands.
+- `crates/fragile-clang/tests/p0_libtooling_removal_audit_tests.rs`
+  - added audit tests for TODO decomposition, document existence, and required line-anchor/boundary content.
+
+Result:
+- `P0.b.2.b.1.b` now has a bounded and test-locked cutover map while preserving the 2026-04-18 gate.
+- Cutover-day edit risk for `fragile-driver` is reduced without crossing ownership boundaries.
