@@ -3900,3 +3900,99 @@ fn m9_2c_iv_e5e_inventory_documents_priority_assessment() {
         "Priority assessment should identify __fsv___func___x_0 as highest-impact fix"
     );
 }
+
+// ---------------------------------------------------------------------------
+// M9.2.c.iv.e.5.f: Corrected error inventory with proper compile flags
+// ---------------------------------------------------------------------------
+
+#[test]
+fn m9_2c_iv_e5f_task_documented_in_todo() {
+    let todo = fs::read_to_string(workspace_root_dir().join("TODO.md")).expect("read TODO.md");
+    assert!(
+        todo.contains("M9.2.c.iv.e.5.f"),
+        "TODO.md must document M9.2.c.iv.e.5.f"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5f_corrected_inventory_document_exists() {
+    let doc_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/dev/m9_2c_iv_e5f_corrected_error_inventory.md");
+    assert!(
+        doc_path.exists(),
+        "Corrected inventory document should exist at {:?}",
+        doc_path
+    );
+    let content = std::fs::read_to_string(&doc_path).expect("read inventory doc");
+    assert!(
+        content.contains("gnu++23"),
+        "Inventory must document the correct C++ standard (gnu++23)"
+    );
+    assert!(
+        content.contains("mako_compile_args"),
+        "Inventory must reference test harness compile args function"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5f_inventory_confirms_fsv_func_resolved() {
+    let doc_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/dev/m9_2c_iv_e5f_corrected_error_inventory.md");
+    let content = std::fs::read_to_string(&doc_path).expect("read inventory doc");
+    assert!(
+        content.contains("No `__fsv___func___x_0` errors remain"),
+        "Corrected inventory must confirm __fsv___func___x_0 is fully resolved"
+    );
+    assert!(
+        content.contains("E0308") && content.contains("dominant"),
+        "Corrected inventory must identify E0308 as the new dominant error class"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5f_inventory_captures_correct_compile_profile() {
+    let doc_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/dev/m9_2c_iv_e5f_corrected_error_inventory.md");
+    let content = std::fs::read_to_string(&doc_path).expect("read inventory doc");
+    // The corrected inventory must note that the e.5.e inventory used wrong flags
+    assert!(
+        content.contains("incorrect") && content.contains("c++17"),
+        "Inventory must document that previous inventory used incorrect -std=c++17"
+    );
+    // Must document the correct total
+    assert!(
+        content.contains("410"),
+        "Inventory must document ~410 total errors under correct compile profile"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5f_compile_flags_match_test_harness() {
+    // Verify that mako_compile_args produces the expected flags
+    let mako_root = match mako_root_dir() {
+        Some(r) => r,
+        None => {
+            eprintln!("SKIP: mako not available");
+            return;
+        }
+    };
+    let args = mako_compile_args(&mako_root);
+    // Must include gnu++23 (not c++17)
+    assert!(
+        args.contains(&"-std=gnu++23".to_string()),
+        "mako_compile_args must use -std=gnu++23, got: {:?}",
+        args
+    );
+    // Must include GTEST_HAS_PTHREAD
+    assert!(
+        args.contains(&"-DGTEST_HAS_PTHREAD=1".to_string()),
+        "mako_compile_args must include GTEST_HAS_PTHREAD define"
+    );
+    // Must have at least 8 include directories
+    let include_count = args.iter().filter(|a| *a == "-I").count();
+    assert!(
+        include_count >= 6,
+        "mako_compile_args must have at least 6 include dirs, got {}",
+        include_count
+    );
+}
