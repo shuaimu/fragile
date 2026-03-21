@@ -21157,3 +21157,31 @@ Validation evidence:
   - numpunct matcher count: `10`
   - chrono matcher count: `4`
 - Conclusion: failing full-suite assertions were stale zero-expectations, not regressions introduced by e.5.f.3.
+
+## 2026-03-21: P0.b decomposition and pre-cutover playbook (`P0.b.1`)
+
+Task sizing analysis:
+- Top-priority undone leaf was `P0.b` (hard-removal cutover), but this item is date-gated to on/after `2026-04-18` and is too large for one patch (>1000 LOC expected if done monolithically).
+- Decomposed `P0.b` into bounded leaves (`P0.b.2`..`P0.b.9`) with each leaf scoped to an estimated <1000 LOC touch set.
+
+Plan before execution:
+- re-check `TODO.md` priority ordering and pick top unfinished leaf;
+- codify a cutover-day playbook with ordered leaves, risk controls, and full regression gates;
+- add regression tests that lock the TODO decomposition and playbook artifact so future runs can execute deterministically.
+
+Wrong-approach check:
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific shortcuts, no native bypass (`FRAGILEC_FORCE_NATIVE_SOURCES`), and no fake semantic stubs were introduced.
+- This change only adds planning/contracts for the date-gated removal work.
+
+Implemented:
+- `TODO.md`
+  - decomposed `P0.b` into executable leaves (`P0.b.2`..`P0.b.9`) and marked `P0.b.1` complete.
+- `docs/dev/p0b_hard_removal_cutover_playbook.md`
+  - added decomposition rationale, per-leaf LOC bounds, cutover execution order, and regression checklist.
+- `crates/fragile-clang/tests/p0_libtooling_removal_audit_tests.rs`
+  - added `P0.b.1` contract tests for TODO decomposition and playbook existence/content.
+
+Result:
+- Highest-priority date-gated work now has an executable, bounded implementation sequence.
+- First leaf (`P0.b.1`) is complete and test-gated without violating the hardening-window date constraint.

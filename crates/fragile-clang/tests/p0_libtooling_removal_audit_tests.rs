@@ -536,6 +536,65 @@ fn p0a_audit_task_documented_in_todo() {
     );
 }
 
+#[test]
+fn p0b_1_task_decomposed_in_todo() {
+    let todo = read_project_file("TODO.md");
+    assert!(
+        todo.contains("P0.b.1 Decompose P0.b into <1000 LOC leaves"),
+        "audit: TODO should document completed P0.b.1 decomposition leaf"
+    );
+    for expected_leaf in [
+        "P0.b.2 (on/after 2026-04-18)",
+        "P0.b.3 (on/after 2026-04-18)",
+        "P0.b.4 (on/after 2026-04-18)",
+        "P0.b.5 (on/after 2026-04-18)",
+        "P0.b.6 (on/after 2026-04-18)",
+        "P0.b.7 (on/after 2026-04-18)",
+        "P0.b.8 (on/after 2026-04-18)",
+        "P0.b.9 (on/after 2026-04-18)",
+    ] {
+        assert!(
+            todo.contains(expected_leaf),
+            "audit: TODO should contain decomposed leaf `{}`",
+            expected_leaf
+        );
+    }
+}
+
+#[test]
+fn p0b_1_playbook_document_exists() {
+    let doc_path = project_root().join("docs/dev/p0b_hard_removal_cutover_playbook.md");
+    assert!(
+        doc_path.exists(),
+        "audit: expected P0.b playbook doc to exist at {}",
+        doc_path.display()
+    );
+}
+
+#[test]
+fn p0b_1_playbook_mentions_gate_and_slice_bounds() {
+    let doc = read_project_file("docs/dev/p0b_hard_removal_cutover_playbook.md");
+    assert!(
+        doc.contains("on/after **2026-04-18**"),
+        "audit: playbook should document hardening-window date gate"
+    );
+    assert!(
+        doc.contains("Leaf Breakdown (<1000 LOC each)"),
+        "audit: playbook should document bounded leaf sizing"
+    );
+    assert!(
+        doc.contains("P0.b.2")
+            && doc.contains("P0.b.3")
+            && doc.contains("P0.b.4")
+            && doc.contains("P0.b.5")
+            && doc.contains("P0.b.6")
+            && doc.contains("P0.b.7")
+            && doc.contains("P0.b.8")
+            && doc.contains("P0.b.9"),
+        "audit: playbook should enumerate all decomposed P0.b execution leaves"
+    );
+}
+
 /// Comprehensive summary test that produces the full audit inventory.
 #[test]
 fn p0a_audit_comprehensive_site_inventory() {
