@@ -38022,6 +38022,86 @@ impl FragileAtomicBoolCompat for atomic_bool {
         if !code.ends_with('\n') && !out.is_empty() {
             out.pop();
         }
+
+        // Helper: find position of first bare (not inside `unsafe { ... }`) __fsv___func_ ref
+        fn find_bare_fsv_ref_pos(line: &str, prefix: &str) -> Option<usize> {
+            let mut search_start = 0;
+            while let Some(pos) = line[search_start..].find(prefix) {
+                let abs_pos = search_start + pos;
+                // Check if this occurrence is inside `unsafe { ... }`
+                let before = &line[..abs_pos];
+                let is_inside_unsafe = before.ends_with("unsafe { ")
+                    || before.ends_with("unsafe { &mut ")
+                    || before.ends_with("unsafe { &")
+                    || before.ends_with(".assume_init_mut() }} as *const") // skip assume_init patterns
+                    ;
+                if !is_inside_unsafe {
+                    return Some(abs_pos);
+                }
+                search_start = abs_pos + prefix.len();
+            }
+            None
+        }
+
+        // Fourth pass: recover orphaned __fsv___func_ references that were not
+        // rewritten because they don't belong to the current function's scope.
+        // These arise from codegen bugs where parameter names (e.g. `__x`) collide
+        // with function-static aliases from unrelated functions, producing
+        // `__fsv___func___x_0` in the wrong function body. Replace them back to
+        // the bare alias name so the parameter is used instead.
+        // Only replace BARE (unwrapped) references — NOT those inside:
+        //   - `static mut __fsv___func_...` declarations (correctly declared)
+        //   - `unsafe { __fsv___func_... }` wrappers (correctly rewritten by pass 3)
+        if out.contains("__fsv___func_") {
+            let fsv_prefix = "__fsv___func_";
+            let mut recovered = String::with_capacity(out.len());
+            for line in out.lines() {
+                let trimmed = line.trim();
+                // Skip static declarations — they define the symbol, not reference it
+                if trimmed.starts_with("static mut __fsv___func_")
+                    || trimmed.starts_with("pub static mut __fsv___func_")
+                    || trimmed.starts_with("pub(crate) static mut __fsv___func_")
+                {
+                    recovered.push_str(line);
+                    recovered.push('\n');
+                    continue;
+                }
+                if line.contains(fsv_prefix) && find_bare_fsv_ref_pos(line, fsv_prefix).is_some() {
+                    let mut rewritten_line = line.to_string();
+                    // Replace bare __fsv___func___<alias>_<N> with __<alias>
+                    loop {
+                        let Some(start) = find_bare_fsv_ref_pos(&rewritten_line, fsv_prefix) else {
+                            break;
+                        };
+                        let rest = &rewritten_line[start + fsv_prefix.len()..];
+                        // Parse __<alias>_<digits> suffix
+                        if let Some(alias_end) = rest.rfind('_') {
+                            let suffix = &rest[alias_end + 1..];
+                            let digit_end = suffix.find(|c: char| !c.is_ascii_digit()).unwrap_or(suffix.len());
+                            if digit_end > 0 && suffix[..digit_end].chars().all(|c| c.is_ascii_digit()) {
+                                let alias_part = &rest[..alias_end]; // e.g. "__x"
+                                let full_symbol_len = fsv_prefix.len() + alias_end + 1 + digit_end;
+                                if alias_part.starts_with("__") {
+                                    let full_symbol = rewritten_line[start..start + full_symbol_len].to_string();
+                                    rewritten_line = rewritten_line.replacen(&full_symbol, alias_part, 1);
+                                    continue;
+                                }
+                            }
+                        }
+                        break;
+                    }
+                    recovered.push_str(&rewritten_line);
+                } else {
+                    recovered.push_str(line);
+                }
+                recovered.push('\n');
+            }
+            if !out.ends_with('\n') && !recovered.is_empty() {
+                recovered.pop();
+            }
+            return recovered;
+        }
+
         out
     }
 
@@ -100301,6 +100381,86 @@ pub mod fragile_runtime {
         assert!(
             result.contains("return __val;"),
             "gamma body must not be rewritten since it has no function-static, got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_normalize_function_static_symbol_refs_recovers_orphaned_cross_function_refs() {
+        // When function B's body contains __fsv___func___x_0 (from function A's static),
+        // but B has no matching static, the reference should be recovered back to __x.
+        let input = concat!(
+            "pub fn seed_fn() {\n",
+            "    static mut __fsv___func___x_0: i8 = 0;\n",
+            "    return &mut __x as *mut i8 as u64;\n",
+            "}\n",
+            "pub extern \"C\" fn op_eq(__x: &error_condition, __y: &error_condition) -> bool {\n",
+            "    return __x.category().op_eq(&__y.category()) && __x.value() == __y.value();\n",
+            "}\n",
+        );
+        let result = AstCodeGen::normalize_unprefixed_function_static_symbol_refs(input);
+        // seed_fn's __x should be rewritten to its static
+        assert!(
+            result.contains("unsafe { __fsv___func___x_0 }") || result.contains("unsafe { &mut __fsv___func___x_0 }"),
+            "seed_fn body should rewrite __x to __fsv___func___x_0, got:\n{}",
+            result
+        );
+        // op_eq's body must NOT contain __fsv___func___x_0 — it should keep __x (the parameter)
+        assert!(
+            !result.contains("return __fsv___func___x_0.category()"),
+            "op_eq body must not contain orphaned __fsv_ references, got:\n{}",
+            result
+        );
+        // op_eq's parameter __x should remain as __x in body usage
+        let op_eq_body = result.split("pub extern \"C\" fn op_eq").nth(1).unwrap_or("");
+        assert!(
+            op_eq_body.contains("__x.category()"),
+            "op_eq body should use parameter __x directly, got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_normalize_function_static_symbol_refs_recovers_multiple_orphaned_refs() {
+        // Multiple orphaned __fsv___func_ references in a single line
+        let input = concat!(
+            "pub fn init() {\n",
+            "    static mut __fsv___func___a_0: i32 = 0;\n",
+            "    static mut __fsv___func___b_0: i32 = 0;\n",
+            "    let x = __a + __b;\n",
+            "}\n",
+            "pub fn user(__a: i32, __b: i32) -> i32 {\n",
+            "    return __a + __b;\n",
+            "}\n",
+        );
+        let result = AstCodeGen::normalize_unprefixed_function_static_symbol_refs(input);
+        // user() has no statics, so its __a and __b must stay as parameters
+        let user_body = result.split("pub fn user(").nth(1).unwrap_or("");
+        assert!(
+            !user_body.contains("__fsv___func_"),
+            "user body must not contain __fsv_ references, got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_normalize_function_static_symbol_refs_no_recovery_needed_when_owned() {
+        // When __fsv___func_ reference is correctly owned, no recovery should happen
+        let input = concat!(
+            "pub fn owned_fn() {\n",
+            "    static mut __fsv___func___x_0: i32 = 0;\n",
+            "    let v = __x + 1;\n",
+            "}\n",
+        );
+        let result = AstCodeGen::normalize_unprefixed_function_static_symbol_refs(input);
+        assert!(
+            result.contains("unsafe { __fsv___func___x_0 }"),
+            "owned function should correctly rewrite __x, got:\n{}",
+            result
+        );
+        assert!(
+            !result.contains("return __x"),
+            "owned function should not have bare __x in body, got:\n{}",
             result
         );
     }

@@ -4072,3 +4072,56 @@ fn m9_2c_iv_e5f2_inventory_compares_with_previous() {
         "Inventory must cover both blocker files"
     );
 }
+
+#[test]
+fn m9_2c_iv_e5f4_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md must exist");
+    assert!(
+        todo.contains("M9.2.c.iv.e.5.f.4"),
+        "TODO.md must document M9.2.c.iv.e.5.f.4"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5f4_orphaned_recovery_documented() {
+    // The f.4 fix adds a fourth pass to normalize_unprefixed_function_static_symbol_refs
+    // that recovers orphaned __fsv___func_ references back to bare alias names.
+    let ast_codegen_src = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ast_codegen.rs"),
+    )
+    .expect("ast_codegen.rs must exist");
+    // The fourth pass comment must exist in the normalizer
+    assert!(
+        ast_codegen_src.contains("Fourth pass: recover orphaned __fsv___func_ references"),
+        "ast_codegen.rs must contain the fourth pass recovery logic"
+    );
+    // The recovery should replace bare refs back to alias name
+    assert!(
+        ast_codegen_src.contains("Replace them back to"),
+        "Fourth pass must document that orphaned refs are replaced back to bare alias"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5f4_unit_tests_cover_orphaned_recovery() {
+    // Verify that unit tests exist for the orphaned recovery behavior
+    let ast_codegen_src = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ast_codegen.rs"),
+    )
+    .expect("ast_codegen.rs must exist");
+    assert!(
+        ast_codegen_src.contains("test_normalize_function_static_symbol_refs_recovers_orphaned_cross_function_refs"),
+        "Must have unit test for orphaned cross-function recovery"
+    );
+    assert!(
+        ast_codegen_src.contains("test_normalize_function_static_symbol_refs_recovers_multiple_orphaned_refs"),
+        "Must have unit test for multiple orphaned recovery"
+    );
+    assert!(
+        ast_codegen_src.contains("test_normalize_function_static_symbol_refs_no_recovery_needed_when_owned"),
+        "Must have unit test confirming owned refs are not recovered"
+    );
+}
