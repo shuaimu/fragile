@@ -4340,3 +4340,117 @@ fn m9_2c_iv_e5h_function_static_mapping_isolated_in_generate_method() {
         count
     );
 }
+
+// ---------------------------------------------------------------------------
+// M9.2.c.iv.e.3 + e.5 Closure Tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn m9_2c_iv_e3_closure_task_documented_in_todo() {
+    let todo = fs::read_to_string(workspace_root_dir().join("TODO.md"))
+        .expect("read TODO.md");
+    assert!(
+        todo.contains("[x] M9.2.c.iv.e.3"),
+        "M9.2.c.iv.e.3 must be marked complete in TODO.md"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5_closure_task_documented_in_todo() {
+    let todo = fs::read_to_string(workspace_root_dir().join("TODO.md"))
+        .expect("read TODO.md");
+    assert!(
+        todo.contains("[x] M9.2.c.iv.e.5"),
+        "M9.2.c.iv.e.5 must be marked complete in TODO.md"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5_closure_inventory_document_exists() {
+    let doc = workspace_root_dir().join("docs/dev/m9_2c_iv_e5_closure_inventory.md");
+    assert!(
+        doc.exists(),
+        "closure inventory document must exist at {}",
+        doc.display()
+    );
+    let content = fs::read_to_string(&doc).expect("read inventory doc");
+    assert!(
+        content.contains("gnu++23"),
+        "inventory must document gnu++23 compile profile"
+    );
+    assert!(
+        content.contains("debugging.cpp"),
+        "inventory must cover debugging.cpp"
+    );
+    assert!(
+        content.contains("misc.cpp"),
+        "inventory must cover misc.cpp"
+    );
+    assert!(
+        content.contains("basetypes.cpp"),
+        "inventory must cover basetypes.cpp"
+    );
+    assert!(
+        content.contains("logging.cpp"),
+        "inventory must cover logging.cpp"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5_closure_inventory_error_counts_bounded() {
+    let doc = workspace_root_dir().join("docs/dev/m9_2c_iv_e5_closure_inventory.md");
+    let content = fs::read_to_string(&doc).expect("read inventory doc");
+    // Verify documented error counts are bounded (ceiling based on current numbers + margin)
+    // debugging.cpp: 348, misc.cpp: 344, basetypes.cpp: 325, logging.cpp: 389
+    // Total: 1406, ceiling: 1500
+    assert!(
+        content.contains("348 + 344 + 325 + 389 = **1406**"),
+        "inventory must document per-file totals summing to 1406"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5_closure_e3_subtasks_all_complete() {
+    let todo = fs::read_to_string(workspace_root_dir().join("TODO.md"))
+        .expect("read TODO.md");
+    // All e.3 sub-tasks (a through f.2) must be marked complete
+    for sub in &["e.3.a", "e.3.b", "e.3.c", "e.3.d", "e.3.e", "e.3.f"] {
+        assert!(
+            todo.contains(&format!("[x] M9.2.c.iv.{}", sub)),
+            "M9.2.c.iv.{} must be marked complete",
+            sub
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_e5_closure_e5_subtasks_all_complete() {
+    let todo = fs::read_to_string(workspace_root_dir().join("TODO.md"))
+        .expect("read TODO.md");
+    // All e.5 sub-tasks (a through h) must be marked complete
+    for sub in &["e.5.a", "e.5.b", "e.5.c", "e.5.d", "e.5.e", "e.5.f", "e.5.g", "e.5.h"] {
+        assert!(
+            todo.contains(&format!("[x] M9.2.c.iv.{}", sub)),
+            "M9.2.c.iv.{} must be marked complete",
+            sub
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_e5_closure_inventory_documents_comparison() {
+    let doc = workspace_root_dir().join("docs/dev/m9_2c_iv_e5_closure_inventory.md");
+    let content = fs::read_to_string(&doc).expect("read inventory doc");
+    assert!(
+        content.contains("vs e.5.f corrected inventory"),
+        "inventory must compare with previous corrected inventory"
+    );
+    assert!(
+        content.contains("What was eliminated"),
+        "inventory must document what was eliminated by e.3 + e.5"
+    );
+    assert!(
+        content.contains("What remains"),
+        "inventory must document remaining error classes"
+    );
+}
