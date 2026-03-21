@@ -3821,3 +3821,82 @@ pub fn check() {
         normalized
     );
 }
+
+// ── M9.2.c.iv.e.5.e: Post-e.5.d strict compile error inventory refresh ──
+
+#[test]
+fn m9_2c_iv_e5e_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("M9.2.c.iv.e.5.e"),
+        "M9.2.c.iv.e.5.e task should be documented in TODO.md"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5e_inventory_document_exists() {
+    let doc_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/dev/m9_2c_iv_e5e_post_e5d_error_inventory.md");
+    assert!(
+        doc_path.exists(),
+        "Post-e.5.d error inventory document should exist at {}",
+        doc_path.display()
+    );
+    let content = std::fs::read_to_string(&doc_path).expect("inventory doc should be readable");
+    assert!(
+        content.contains("294") && content.contains("295"),
+        "Inventory should document 294/295 total errors"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5e_inventory_captures_e0425_dominance() {
+    let doc_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/dev/m9_2c_iv_e5e_post_e5d_error_inventory.md");
+    let content = std::fs::read_to_string(&doc_path).expect("inventory doc should be readable");
+    // E0425 is the dominant class at 194 errors (66%)
+    assert!(
+        content.contains("E0425") && content.contains("194"),
+        "Inventory should document E0425 as dominant class with 194 errors"
+    );
+    // __fsv___func___x_0 is the single highest-impact bug
+    assert!(
+        content.contains("__fsv___func___x_0") && content.contains("186"),
+        "Inventory should identify __fsv___func___x_0 scope bug as 186 of 194 E0425 errors"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5e_inventory_captures_delta_vs_f2() {
+    let doc_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/dev/m9_2c_iv_e5e_post_e5d_error_inventory.md");
+    let content = std::fs::read_to_string(&doc_path).expect("inventory doc should be readable");
+    // Should document the delta from the previous inventory
+    assert!(
+        content.contains("296") || content.contains("297"),
+        "Inventory should reference previous f.2 baseline (296/297)"
+    );
+    // E0603 should be gone (fixed in e.5.d)
+    assert!(
+        !content.contains("| E0603 |"),
+        "E0603 should not appear as a current error class (fixed in e.5.d)"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5e_inventory_documents_priority_assessment() {
+    let doc_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/dev/m9_2c_iv_e5e_post_e5d_error_inventory.md");
+    let content = std::fs::read_to_string(&doc_path).expect("inventory doc should be readable");
+    assert!(
+        content.contains("Priority Assessment"),
+        "Inventory should include priority assessment for next fix cycle"
+    );
+    assert!(
+        content.contains("__fsv___func___x_0") && content.contains("highest-impact"),
+        "Priority assessment should identify __fsv___func___x_0 as highest-impact fix"
+    );
+}
