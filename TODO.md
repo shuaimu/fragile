@@ -1,7 +1,7 @@
 # Fragile TODO
 
-Last updated: 2026-03-19
-Status: active plan is parser-first STL-opaque migration (LibTooling retirement path); RPC target closure is deferred to final hardening.
+Last updated: 2026-03-21
+Status: active plan is parser-first STL-opaque migration; highest-priority active workstream is full LibTooling parser-path removal from production flow.
 
 ## Deprecation Notice
 - [x] Previous active plan "RPC bring-up plan (active, 2026-03-12)" is deprecated and removed from this file.
@@ -22,8 +22,13 @@ Status: active plan is parser-first STL-opaque migration (LibTooling retirement 
 Goal: replace LibTooling-centered parsing with a custom parser module that treats STL as opaque placeholders mapped to pre-generated STL codegen targets. `test_rpc` + `rpcbench` build/runtime/performance are lower-priority closure gates after parser cutover hardening.
 
 ## Priority Order (Highest to Lowest)
-- [x] P0 (highest): complete parser migration milestones M0-M8 and satisfy parser/regression gates. Done 2026-03-19.
-- [x] P1 (lower): complete RPC target closure milestone M9 and satisfy RPC build/runtime/performance gates. Done 2026-03-19.
+- [ ] P0 (highest): remove the legacy LibTooling parser path from active production flow.
+  - [ ] P0.a Complete pre-removal code audits now (strict-path backend selection, parser invocation sites, escape-hatch callsites, CI workflow usage). **WIP on claude/parser branch.**
+  - [ ] P0.b Execute hard removal cutover on/after 2026-04-18 (hardening-window expiry): remove strict-path `libtooling` selection and remove legacy parser/escape-hatch codepaths from active flow.
+  - [ ] P0.c Add anti-regression CI/test gates to fail if strict-path LibTooling parser references are reintroduced.
+  - [ ] P0.d Update docs/README to mark LibTooling parser path removal complete (not just deprecated).
+- [ ] P1 (next): close remaining M9.2 runtime replay blockers and green M9.A2/M9.A3.
+- [x] Historical completion: parser migration milestones M0-M8 parser/regression gates were completed on 2026-03-19.
 
 ## Non-Negotiable Constraints
 - No `FRAGILEC_FORCE_NATIVE_SOURCES`.
@@ -231,4 +236,4 @@ Ordered failure-class clearance ledger (active sequence)
 ## Done Criteria
 - [ ] D1 Milestones M0-M9 acceptance items all closed. Blocked: M9.A2, M9.A3 pending M9.2.c end-to-end runtime completion.
 - [ ] D2 Program gates G1-G6 all green in one clean run window. Blocked: G5, G6 pending M9.2.c.
-- [ ] D3 Old parser path removed from active production flow after hardening window. Blocked: hardening window expires 2026-04-18; removal scheduled after expiry.
+- [ ] D3 Old parser path removed from active production flow after hardening window. Highest-priority P0 track: pre-removal tasks active now; execute hard removal on/after 2026-04-18.
