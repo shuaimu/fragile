@@ -3996,3 +3996,79 @@ fn m9_2c_iv_e5f_compile_flags_match_test_harness() {
         include_count
     );
 }
+
+// ── M9.2.c.iv.e.5.f.2 tests ──────────────────────────────────────────────
+
+#[test]
+fn m9_2c_iv_e5f2_task_documented_in_todo() {
+    let todo = fs::read_to_string(workspace_root_dir().join("TODO.md")).expect("read TODO.md");
+    assert!(
+        todo.contains("M9.2.c.iv.e.5.f.2"),
+        "TODO.md must document M9.2.c.iv.e.5.f.2"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5f2_post_f1_inventory_document_exists() {
+    let doc_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/dev/m9_2c_iv_e5f2_post_f1_error_inventory.md");
+    assert!(
+        doc_path.exists(),
+        "Post-f.1 inventory document should exist at {:?}",
+        doc_path
+    );
+    let content = std::fs::read_to_string(&doc_path).expect("read inventory doc");
+    assert!(
+        content.contains("gnu++23"),
+        "Inventory must document the correct C++ standard (gnu++23)"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5f2_inventory_confirms_fsv_func_fully_resolved() {
+    let doc_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/dev/m9_2c_iv_e5f2_post_f1_error_inventory.md");
+    let content = std::fs::read_to_string(&doc_path).expect("read inventory doc");
+    assert!(
+        content.contains("0 `__fsv___func___x_0` references remain"),
+        "Post-f.1 inventory must confirm zero __fsv___func___x_0 references"
+    );
+    assert!(
+        content.contains("E0308") && content.contains("179"),
+        "Inventory must show E0308 as dominant error class with 179 occurrences"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5f2_inventory_shows_e0425_breakdown() {
+    let doc_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/dev/m9_2c_iv_e5f2_post_f1_error_inventory.md");
+    let content = std::fs::read_to_string(&doc_path).expect("read inventory doc");
+    // Must show E0425 count of 15 (not 194 from pre-f.1)
+    assert!(
+        content.contains("E0425") && content.contains("| 15 |"),
+        "Inventory must show E0425 count of 15"
+    );
+    // Must show the breakdown of remaining E0425 errors
+    assert!(
+        content.contains("char_traits") && content.contains("__to_xstring"),
+        "Inventory must break down remaining E0425 errors by category"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5f2_inventory_compares_with_previous() {
+    let doc_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/dev/m9_2c_iv_e5f2_post_f1_error_inventory.md");
+    let content = std::fs::read_to_string(&doc_path).expect("read inventory doc");
+    // Must include comparison table with previous inventories
+    assert!(
+        content.contains("e.5.e") && content.contains("e.5.f") && content.contains("e.5.f.2"),
+        "Inventory must compare with previous e.5.e and e.5.f inventories"
+    );
+    // Must note that both files show 0 __fsv_ matches
+    assert!(
+        content.contains("misc.cpp") && content.contains("debugging.cpp"),
+        "Inventory must cover both blocker files"
+    );
+}
