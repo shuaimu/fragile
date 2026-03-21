@@ -125,11 +125,11 @@ Active design direction (2026-03):
 - Codegen must map STL placeholders to pre-generated STL implementation surfaces.
 - STL source-to-source strict translation is not part of the active design.
 
-Backend deprecation status:
+Backend status:
 
-- `LibTooling` parser flow is deprecated for new architecture work.
-- `libclang` parser flow is deprecated for new architecture work.
-- Historical LibTooling/libclang content in this book is retained for reference only during migration.
+- `LibTooling` parser flow has been **removed** from the active production path (P0.a complete 2026-03-21). Hard removal of residual code is scheduled for on/after 2026-04-18 (P0.b).
+- `libclang` parser flow has been **removed** from new architecture work.
+- Historical LibTooling/libclang content in this book is retained for reference only.
 
 ## 2. End-to-End Architecture
 
@@ -161,9 +161,9 @@ Tracing support:
 
 Backend note:
 
-- `ParserBackend::Libtooling` and `ParserBackend::Libclang` are deprecated.
-- Legacy backends remain reference/fallback paths only during migration.
-- New parser work should target the STL-opaque architecture above.
+- `ParserBackend::Libtooling` and `ParserBackend::Libclang` have been **removed** from the active production path (P0.a complete 2026-03-21).
+- Legacy backend code remains in the codebase during the hardening window (expires 2026-04-18) and will be hard-removed in P0.b.
+- All new parser work targets the `fragile-parser-clang` backend exclusively.
 
 ### 2.1 (Legacy, Deprecated) Mako `btree.cc` failure pattern and generic mitigation
 
@@ -376,8 +376,9 @@ Failure policy:
 
 Migration policy:
 
-- Deprecated `LibTooling`/`libclang` paths may remain temporarily for reference,
-  but new behavior should be implemented only on the STL-opaque parser path.
+- `LibTooling`/`libclang` parser paths have been **removed** from the active production flow (P0.a complete 2026-03-21).
+  Residual code remains during the hardening window (expires 2026-04-18) and will be hard-removed in P0.b.
+  All new behavior must be implemented on the `fragile-parser-clang` backend exclusively.
 
 ### 2.7 M0 Run-Root and Artifact Contract
 
@@ -418,17 +419,10 @@ flags, plus deterministic counters:
 Milestone `M2.3` wires strict entry points to the parser-core backend trait
 path while keeping codegen cutover explicit:
 
-- strict backend selection accepts:
-  - `libtooling`
-  - `fragile-parser-clang`
-- for `fragile-parser-clang`, driver/CLI register backend(s) in
-  `fragile_parser_core::BackendRegistry` and run parse preflight using
-  `ParseRequest`
-- parser output schema version is validated before continuing
-- pipeline returns deterministic cutover-boundary error instead of synthetic
-  fallback codegen behavior
-- `libtooling` remains the active transpile/codegen path until cutover
-  milestones complete
+- strict backend selection uses `fragile-parser-clang` exclusively (LibTooling backend removed from production path as of P0.a, 2026-03-21).
+- driver/CLI registers backend in `fragile_parser_core::BackendRegistry` and runs parse preflight using `ParseRequest`.
+- parser output schema version is validated before continuing.
+- pipeline returns deterministic cutover-boundary error instead of synthetic fallback codegen behavior.
 
 Wrong-approach guard (Section 1.3):
 

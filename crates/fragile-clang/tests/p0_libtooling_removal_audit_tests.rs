@@ -900,3 +900,81 @@ fn p0a_audit_comprehensive_site_inventory() {
     }
     eprintln!("=== End of audit inventory ===\n");
 }
+
+// ---------------------------------------------------------------------------
+// P0.d Documentation consistency gates
+// ---------------------------------------------------------------------------
+
+/// P0.d: CLAUDE.md must describe LibTooling parser path as "removed", not just "deprecated".
+#[test]
+fn test_p0d_claude_md_marks_libtooling_as_removed() {
+    let content = read_project_file("CLAUDE.md");
+
+    // Must contain "removed" in relation to LibTooling
+    assert!(
+        content.contains("removed") && content.contains("fragile-parser-clang"),
+        "CLAUDE.md must describe LibTooling as removed and reference fragile-parser-clang as sole backend"
+    );
+
+    // Must NOT show --use-libtooling in a CLI usage example (OK to mention it as removed)
+    assert!(
+        !content.contains("fragile transpile file.cpp --use-libtooling"),
+        "CLAUDE.md must not show --use-libtooling as a working CLI example"
+    );
+
+    // Must NOT still describe FRAGILEC_PARSER_BACKEND=libtooling as a settable option
+    assert!(
+        !content.contains("FRAGILEC_PARSER_BACKEND=libtooling") ||
+        content.contains("no longer used"),
+        "CLAUDE.md must not describe FRAGILEC_PARSER_BACKEND=libtooling as an available option"
+    );
+}
+
+/// P0.d: fragile-dev-book.md operational sections must say "removed", not just "deprecated".
+#[test]
+fn test_p0d_dev_book_operational_sections_mark_libtooling_as_removed() {
+    let content = read_project_file("docs/fragile-dev-book.md");
+
+    // The backend status section must say "removed"
+    assert!(
+        content.contains("LibTooling` parser flow has been **removed**"),
+        "dev-book backend status must say LibTooling is removed, not deprecated"
+    );
+
+    // The backend note section must say "removed"
+    assert!(
+        content.contains("have been **removed** from the active production path"),
+        "dev-book backend note must say backends are removed from production path"
+    );
+
+    // The migration policy must reference removal
+    assert!(
+        content.contains("removed** from the active production flow"),
+        "dev-book migration policy must reference removal from production flow"
+    );
+
+    // Must say fragile-parser-clang is used exclusively
+    assert!(
+        content.contains("fragile-parser-clang` backend exclusively") ||
+        content.contains("fragile-parser-clang` exclusively"),
+        "dev-book must state fragile-parser-clang is the exclusive backend"
+    );
+}
+
+/// P0.d: CLAUDE.md current status date must be updated to 2026-03-21 or later.
+#[test]
+fn test_p0d_claude_md_status_date_is_current() {
+    let content = read_project_file("CLAUDE.md");
+
+    // Must NOT still show old date in status header
+    assert!(
+        !content.contains("Current Status (as of 2026-02-28)"),
+        "CLAUDE.md status section must be updated past the 2026-02-28 date"
+    );
+
+    // Must show a current date
+    assert!(
+        content.contains("Current Status (as of 2026-03-21)"),
+        "CLAUDE.md status section must reflect the P0.d update date (2026-03-21)"
+    );
+}

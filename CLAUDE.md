@@ -14,22 +14,13 @@ Pipeline:
 C++ Source -> Clang AST -> Rust Source (unsafe) -> rustc -> Binary
 ```
 
-## Current Status (as of 2026-02-28)
+## Current Status (as of 2026-03-21)
 
 - `fragilec` is **strict-only** (`FRAGILEC_MODE=auto/pass` removed).
-- Phase 5 cutover date: **2026-02-28**.
-- M8.1 cutover date: **2026-03-18**.
-  - strict default parser backend is now `fragile-parser-clang` (`FRAGILEC_PARSER_BACKEND` unset/empty -> `fragile-parser-clang`).
-  - explicit escape hatch to legacy backend: `FRAGILEC_PARSER_BACKEND=libtooling`.
-- M8.2 escape hatch hardening window: expires **2026-04-18**.
-  - escape hatches emit deprecation warnings and are rejected after expiry.
-  - usage logging via `FRAGILEC_ESCAPE_HATCH_LOG_PATH` env var.
-- Latest strict backend-matrix parity evidence (run root: `/tmp/fragile_real_world_rapidjson_strict_cmake_no_tests_backend_matrix_484423_1772259242504942926`):
-  - `backend=libtooling` and baseline both report `configure_status=0`, `build_status=2`, `build_timed_out=false`, `first_failure_class=other_rustc_error`, `first_failure_e0425_count=0`.
-  - runtime parity markers are locked: `runtime_parity_vs_baseline=true`, `condense_run_status_delta_vs_baseline=0`, `pretty_run_status_delta_vs_baseline=0`.
-- Latest strict `capitalize.cpp` sidecar inventory delta evidence (run root: `/tmp/fragile_real_world_rapidjson_strict_capitalize_backend_surface_delta_3476060_1772238977899700230`):
-  - baseline (`libclang`) inventory: `surface_line_count=39146`, `surface_placeholder_count=56`, `surface_rapidjson_placeholder_count=2`, `surface_c_void_alias_count=172`, `surface_parse_unspecific_count=18`.
-  - LibTooling inventory delta vs baseline: `surface_line_count_delta_vs_baseline=-34053`, `surface_placeholder_delta_vs_baseline=-44`, `surface_rapidjson_placeholder_delta_vs_baseline=-2`, `surface_c_void_alias_delta_vs_baseline=0`, `surface_parse_unspecific_delta_vs_baseline=-1`.
+- **Parser backend**: `fragile-parser-clang` is the sole parser backend. The LibTooling parser path has been **removed** from the active production flow (P0.a audit complete 2026-03-21, anti-regression gates in P0.c).
+  - `FRAGILEC_PARSER_BACKEND` env var is no longer used; the parser backend is hardcoded.
+  - The `--use-libtooling` CLI flag is no longer available.
+  - Historical LibTooling code remains in the codebase for reference during the hardening window (expires 2026-04-18), after which it will be hard-removed (P0.b).
 - RapidJSON with `RAPIDJSON_BUILD_TESTS=ON` is not yet supported in strict mode (configure fails during CXX feature detection / gtest `target_compile_features`).
 - Authoritative status and blocker ledger live in `TODO.md` (not `docs/transpiler-status.md`).
 
@@ -112,9 +103,6 @@ fragile transpile file.cpp -o output.rs
 
 # With includes/defines
 fragile transpile file.cpp -I /path/to/include -DMACRO=1 -o output.rs
-
-# Enable LibTooling method-body enrichment
-fragile transpile file.cpp --use-libtooling -o output.rs
 ```
 
 ```bash
