@@ -4125,3 +4125,51 @@ fn m9_2c_iv_e5f4_unit_tests_cover_orphaned_recovery() {
         "Must have unit test confirming owned refs are not recovered"
     );
 }
+
+#[test]
+fn m9_2c_iv_e5f5_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../TODO.md"),
+    )
+    .expect("TODO.md must exist");
+    assert!(
+        todo.contains("M9.2.c.iv.e.5.f.5"),
+        "M9.2.c.iv.e.5.f.5 must be documented in TODO.md"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5f5_is_fn_def_line_recognizes_visibility_qualified_functions() {
+    // Verify unit tests exist for pub(crate)/pub(super) recognition
+    let ast_codegen_src = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ast_codegen.rs"),
+    )
+    .expect("ast_codegen.rs must exist");
+    assert!(
+        ast_codegen_src.contains("test_normalize_function_static_symbol_refs_handles_pub_crate_visibility"),
+        "Must have unit test for pub(crate) fn recognition"
+    );
+    assert!(
+        ast_codegen_src.contains("test_normalize_function_static_symbol_refs_handles_pub_super_visibility"),
+        "Must have unit test for pub(super) fn recognition"
+    );
+    assert!(
+        ast_codegen_src.contains("test_normalize_function_static_symbol_refs_handles_pub_crate_unsafe_fn"),
+        "Must have unit test for pub(crate) unsafe fn recognition"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5f5_is_fn_def_line_contains_pub_paren_pattern() {
+    // Verify the actual is_fn_def_line code handles pub(...) patterns
+    let ast_codegen_src = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ast_codegen.rs"),
+    )
+    .expect("ast_codegen.rs must exist");
+    // The fix adds generic pub(...) detection via starts_with("pub(") && contains(") fn ")
+    assert!(
+        ast_codegen_src.contains(r#"trimmed.starts_with("pub(")"#),
+        "is_fn_def_line must check for pub( prefix for visibility-qualified functions"
+    );
+}

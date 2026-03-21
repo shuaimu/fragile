@@ -37822,6 +37822,8 @@ impl FragileAtomicBoolCompat for atomic_bool {
         type AliasEntry = (String, String, bool); // (alias, symbol, is_maybeuninit)
 
         // Detect whether a trimmed line starts a function definition.
+        // Must recognize all visibility qualifiers to correctly scope
+        // function-static aliases per function body.
         fn is_fn_def_line(trimmed: &str) -> bool {
             trimmed.starts_with("pub fn ")
                 || trimmed.starts_with("fn ")
@@ -37831,6 +37833,9 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 || trimmed.starts_with("unsafe extern ")
                 || trimmed.starts_with("pub unsafe fn ")
                 || trimmed.starts_with("unsafe fn ")
+                // Visibility-qualified variants (pub(crate), pub(super), pub(self), etc.)
+                || (trimmed.starts_with("pub(") && trimmed.contains(") fn "))
+                || (trimmed.starts_with("pub(") && trimmed.contains(") unsafe fn "))
         }
 
         // First pass: assign each line to a function index by tracking brace depth.
@@ -100461,6 +100466,91 @@ pub mod fragile_runtime {
         assert!(
             !result.contains("return __x"),
             "owned function should not have bare __x in body, got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_normalize_function_static_symbol_refs_handles_pub_crate_visibility() {
+        // pub(crate) fn definitions must be recognized as function boundaries.
+        // Without this, pub(crate) functions are treated as top-level code,
+        // breaking per-function alias scoping and causing cross-function leakage.
+        let input = concat!(
+            "pub(crate) fn func_a() {\n",
+            "    static mut __fsv___func___x_0: f64 = unsafe { std::mem::zeroed() };\n",
+            "    let y = __x + 1.0;\n",
+            "}\n",
+            "pub(crate) fn func_b(__x: f64) -> f64 {\n",
+            "    return __x * 2.0;\n",
+            "}\n",
+        );
+        let result = AstCodeGen::normalize_unprefixed_function_static_symbol_refs(input);
+        // func_a's body should be rewritten
+        assert!(
+            result.contains("unsafe { __fsv___func___x_0 } + 1.0"),
+            "func_a body should rewrite __x, got:\n{}",
+            result
+        );
+        // func_b's signature must NOT be rewritten
+        assert!(
+            result.contains("pub(crate) fn func_b(__x: f64)"),
+            "func_b signature must not be rewritten, got:\n{}",
+            result
+        );
+        // func_b's body must NOT be rewritten (static is in func_a, not func_b)
+        assert!(
+            result.contains("return __x * 2.0;"),
+            "func_b body must not reference __fsv_ from func_a, got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_normalize_function_static_symbol_refs_handles_pub_super_visibility() {
+        // pub(super) fn definitions must also be recognized.
+        let input = concat!(
+            "pub(super) fn func_a() {\n",
+            "    static mut __fsv___func___y_0: i32 = 0;\n",
+            "    let z = __y + 1;\n",
+            "}\n",
+            "pub(super) fn func_b(__y: i32) -> i32 {\n",
+            "    return __y * 2;\n",
+            "}\n",
+        );
+        let result = AstCodeGen::normalize_unprefixed_function_static_symbol_refs(input);
+        assert!(
+            result.contains("unsafe { __fsv___func___y_0 } + 1"),
+            "func_a body should rewrite __y, got:\n{}",
+            result
+        );
+        assert!(
+            result.contains("return __y * 2;"),
+            "func_b body must not be rewritten, got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_normalize_function_static_symbol_refs_handles_pub_crate_unsafe_fn() {
+        // pub(crate) unsafe fn must be recognized as function definition.
+        let input = concat!(
+            "pub(crate) unsafe fn func_a() {\n",
+            "    static mut __fsv___func___x_0: i32 = 0;\n",
+            "    let v = __x;\n",
+            "}\n",
+            "pub(crate) fn func_b(__x: i32) -> i32 {\n",
+            "    return __x;\n",
+            "}\n",
+        );
+        let result = AstCodeGen::normalize_unprefixed_function_static_symbol_refs(input);
+        assert!(
+            result.contains("unsafe { __fsv___func___x_0 }"),
+            "func_a body should rewrite __x, got:\n{}",
+            result
+        );
+        assert!(
+            result.contains("return __x;"),
+            "func_b body must not be rewritten, got:\n{}",
             result
         );
     }
