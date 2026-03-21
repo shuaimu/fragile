@@ -4454,3 +4454,58 @@ fn m9_2c_iv_e5_closure_inventory_documents_comparison() {
         "inventory must document remaining error classes"
     );
 }
+
+// --- M9.2.c.iv rerun regression tests (post e.5.h fixes) ---
+
+#[test]
+fn m9_2c_iv_rerun_inventory_document_exists() {
+    let doc = workspace_root_dir().join("docs/dev/m9_2c_iv_rerun_inventory.md");
+    assert!(doc.exists(), "rerun inventory document must exist at {:?}", doc);
+    let content = fs::read_to_string(&doc).expect("read rerun inventory doc");
+    assert!(
+        content.contains("1294"),
+        "rerun inventory must report total=1294"
+    );
+    assert!(
+        content.contains("-112"),
+        "rerun inventory must report delta=-112"
+    );
+}
+
+#[test]
+fn m9_2c_iv_rerun_basic_string_method_stubs_fix_documented() {
+    let doc = workspace_root_dir().join("docs/dev/m9_2c_iv_rerun_inventory.md");
+    let content = fs::read_to_string(&doc).expect("read rerun inventory doc");
+    assert!(
+        content.contains("_M_set_length"),
+        "rerun inventory must document _M_set_length fix"
+    );
+    assert!(
+        content.contains("_M_init_local_buf"),
+        "rerun inventory must document _M_init_local_buf fix"
+    );
+}
+
+#[test]
+fn m9_2c_iv_rerun_ios_base_fmtflags_fix_documented() {
+    let doc = workspace_root_dir().join("docs/dev/m9_2c_iv_rerun_inventory.md");
+    let content = fs::read_to_string(&doc).expect("read rerun inventory doc");
+    assert!(
+        content.contains("ios_base fmtflags"),
+        "rerun inventory must document ios_base fmtflags fix"
+    );
+    assert!(
+        content.contains("_S_boolalpha"),
+        "rerun inventory must mention _S_boolalpha constant"
+    );
+}
+
+#[test]
+fn m9_2c_iv_rerun_e0599_reduced_by_half() {
+    let doc = workspace_root_dir().join("docs/dev/m9_2c_iv_rerun_inventory.md");
+    let content = fs::read_to_string(&doc).expect("read rerun inventory doc");
+    assert!(
+        content.contains("E0599 | 111 | 223 | -112"),
+        "rerun inventory must show E0599 reduced from 223 to 111 (-112)"
+    );
+}

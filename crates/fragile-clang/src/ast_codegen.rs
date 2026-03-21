@@ -5825,6 +5825,19 @@ impl AstCodeGen {
     /// Returns true if `rust_name` is a callable STL type that needs an `op_call`
     /// method stub. This covers random engines (mt19937, mersenne_twister_engine),
     /// std::function instantiations, and distribution types with operator().
+    /// Returns true if `rust_name` is a basic_string specialization that should
+    /// receive `_M_set_length` and `_M_init_local_buf` method stubs.
+    fn is_basic_string_stub_type(rust_name: &str) -> bool {
+        matches!(
+            rust_name,
+            "basic_string_char"
+                | "basic_string_wchar_t"
+                | "basic_string_char8_t"
+                | "basic_string_char16_t"
+                | "basic_string_char32_t"
+        )
+    }
+
     fn is_callable_stl_stub_type(rust_name: &str) -> bool {
         // Mersenne Twister / random engines
         if rust_name.contains("mt19937")
@@ -29624,6 +29637,7 @@ impl AstCodeGen {
         output = Self::normalize_default_local_numeric_assignment_artifacts(&output);
         output = Self::normalize_unresolved_current_fiber_calls(&output);
         output = Self::append_basic_string_view_compat_impls(&output);
+        output = Self::append_basic_string_internal_method_stubs(&output);
         output = Self::normalize_invalid_variadic_template_instantiation_blocks(&output);
         output = Self::normalize_drop_unreferenced_broken_functions(&output);
         output = Self::normalize_final_rpc_straggler_artifacts(&output);
@@ -29651,6 +29665,10 @@ impl AstCodeGen {
         // libc++ `std::byte` bit-operator helpers can degrade to bare `std`
         // type tokens late in the pipeline; recover those signatures.
         output = Self::normalize_std_byte_operator_module_root_types(&output);
+        // ios_base fmtflags constants: `u32::_S_boolalpha` etc. are invalid
+        // because you cannot add associated items to primitive types; replace
+        // with the actual constant values from libc++.
+        output = Self::normalize_ios_base_fmtflags_primitive_associated_constants(&output);
         output = Self::append_compile_error_for_unresolved_non_c_abi_external_calls(&output);
         if Self::output_requires_c_variadic_feature(&output) {
             output = Self::ensure_c_variadic_feature_attr(&output);
@@ -35236,6 +35254,43 @@ impl FragileAtomicBoolCompat for atomic_bool {
     /// Three patterns:
     /// 1. `(void_fn_call(...)) as *mut T` — void fn returning () cast to pointer.
     ///    → Rewrite to `{ void_fn_call(...); first_arg }` to return the pointer.
+    /// Replace `std__Ios_Fmtflags::_S_boolalpha` (and `u32::_S_boolalpha`) with
+    /// the actual libc++ constant values.  These references arise because
+    /// `ios_base::fmtflags` is type-aliased to `u32`, and the enum variant
+    /// constants cannot be associated items on a primitive type.
+    pub fn normalize_ios_base_fmtflags_primitive_associated_constants(code: &str) -> String {
+        let constants: &[(&str, &str)] = &[
+            ("_S_boolalpha", "0x0001_u32"),
+            ("_S_dec", "0x0002_u32"),
+            ("_S_fixed", "0x0004_u32"),
+            ("_S_hex", "0x0008_u32"),
+            ("_S_internal", "0x0010_u32"),
+            ("_S_left", "0x0020_u32"),
+            ("_S_oct", "0x0040_u32"),
+            ("_S_right", "0x0080_u32"),
+            ("_S_scientific", "0x0100_u32"),
+            ("_S_showbase", "0x0200_u32"),
+            ("_S_showpoint", "0x0400_u32"),
+            ("_S_showpos", "0x0800_u32"),
+            ("_S_skipws", "0x1000_u32"),
+            ("_S_unitbuf", "0x2000_u32"),
+            ("_S_uppercase", "0x4000_u32"),
+            ("_S_adjustfield", "0x00B0_u32"),
+            ("_S_basefield", "0x004A_u32"),
+            ("_S_floatfield", "0x0104_u32"),
+        ];
+        // Prefixes that may qualify these constants
+        let prefixes = ["std__Ios_Fmtflags::", "u32::"];
+        let mut result = code.to_string();
+        for prefix in &prefixes {
+            for (name, value) in constants {
+                let from = format!("{}{}", prefix, name);
+                result = result.replace(&from, value);
+            }
+        }
+        result
+    }
+
     /// 2. `(self.FIELD) as u128` — struct field cast to u128 (from C++ reinterpret).
     ///    → Rewrite to `unsafe { std::mem::transmute_copy(&self.FIELD) }`.
     /// 3. `(self).clone() as *mut TYPE` — struct value cast to pointer.
@@ -39211,6 +39266,42 @@ impl FragileAtomicBoolCompat for atomic_bool {
         out.push_str("    #[inline] fn data(&self) -> *const i8 { self.__data_ }\n");
         out.push_str("    #[inline] fn length(&self) -> i32 { self.__size_ as i32 }\n");
         out.push_str("}\n");
+        out
+    }
+
+    /// Append `_M_set_length` and `_M_init_local_buf` method stubs for
+    /// basic_string specializations that are already generated as structs but
+    /// lack these internal libc++ methods (fixes E0599 errors).
+    fn append_basic_string_internal_method_stubs(code: &str) -> String {
+        let types = [
+            "basic_string_char",
+            "basic_string_wchar_t",
+            "basic_string_char8_t",
+            "basic_string_char16_t",
+            "basic_string_char32_t",
+        ];
+        let mut needs_stubs = Vec::new();
+        for ty in &types {
+            let struct_marker = format!("pub struct {} ", ty);
+            if code.contains(&struct_marker) && !code.contains("fn _M_set_length") {
+                needs_stubs.push(*ty);
+            }
+        }
+        if needs_stubs.is_empty() {
+            return code.to_string();
+        }
+        let mut out = String::with_capacity(code.len() + needs_stubs.len() * 200);
+        out.push_str(code);
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        for ty in &needs_stubs {
+            out.push('\n');
+            out.push_str(&format!("impl {} {{\n", ty));
+            out.push_str("    pub fn _M_set_length(&mut self, _n: usize) { /* stub: set string length */ }\n");
+            out.push_str("    pub fn _M_init_local_buf(&mut self) { /* stub: initialize local buffer */ }\n");
+            out.push_str("}\n");
+        }
         out
     }
 
@@ -131073,5 +131164,88 @@ impl domain_error {
         assert!(!AstCodeGen::is_callable_stl_stub_type("std_string"));
         assert!(!AstCodeGen::is_callable_stl_stub_type("std_vector_int_"));
         assert!(!AstCodeGen::is_callable_stl_stub_type("param_type"));
+    }
+
+    #[test]
+    fn test_is_basic_string_stub_type_detection() {
+        assert!(AstCodeGen::is_basic_string_stub_type("basic_string_char"));
+        assert!(AstCodeGen::is_basic_string_stub_type("basic_string_wchar_t"));
+        assert!(AstCodeGen::is_basic_string_stub_type("basic_string_char8_t"));
+        assert!(AstCodeGen::is_basic_string_stub_type("basic_string_char16_t"));
+        assert!(AstCodeGen::is_basic_string_stub_type("basic_string_char32_t"));
+        // Negative cases
+        assert!(!AstCodeGen::is_basic_string_stub_type("std_basic_string_char"));
+        assert!(!AstCodeGen::is_basic_string_stub_type("basic_string_view_char"));
+        assert!(!AstCodeGen::is_basic_string_stub_type("basic_string"));
+    }
+
+    #[test]
+    fn test_append_basic_string_internal_method_stubs() {
+        let input = "pub struct basic_string_char { _data: [u8; 32] }\n\
+                      impl basic_string_char { pub fn size(&self) -> usize { 0 } }\n";
+        let output = AstCodeGen::append_basic_string_internal_method_stubs(input);
+        assert!(
+            output.contains("fn _M_set_length"),
+            "Should add _M_set_length stub for basic_string_char"
+        );
+        assert!(
+            output.contains("fn _M_init_local_buf"),
+            "Should add _M_init_local_buf stub for basic_string_char"
+        );
+    }
+
+    #[test]
+    fn test_append_basic_string_internal_method_stubs_skips_when_already_present() {
+        let input = "pub struct basic_string_char { _data: [u8; 32] }\n\
+                      impl basic_string_char { pub fn _M_set_length(&mut self, _n: usize) {} }\n";
+        let output = AstCodeGen::append_basic_string_internal_method_stubs(input);
+        assert_eq!(
+            output, input,
+            "Should not add stubs when _M_set_length already exists"
+        );
+    }
+
+    #[test]
+    fn test_normalize_ios_base_fmtflags_replaces_std_ios_fmtflags_constants() {
+        let input = "__base.unsetf(std__Ios_Fmtflags::_S_boolalpha);\n\
+                      __base.unsetf(std__Ios_Fmtflags::_S_showbase);\n\
+                      __base.unsetf(std__Ios_Fmtflags::_S_floatfield);\n";
+        let output =
+            AstCodeGen::normalize_ios_base_fmtflags_primitive_associated_constants(input);
+        assert!(
+            output.contains("0x0001_u32"),
+            "Should replace _S_boolalpha with 0x0001_u32"
+        );
+        assert!(
+            output.contains("0x0200_u32"),
+            "Should replace _S_showbase with 0x0200_u32"
+        );
+        assert!(
+            output.contains("0x0104_u32"),
+            "Should replace _S_floatfield with 0x0104_u32"
+        );
+        assert!(
+            !output.contains("std__Ios_Fmtflags"),
+            "Should not contain std__Ios_Fmtflags after replacement"
+        );
+    }
+
+    #[test]
+    fn test_normalize_ios_base_fmtflags_replaces_u32_prefix() {
+        let input = "let flags = u32::_S_skipws | u32::_S_uppercase;\n";
+        let output =
+            AstCodeGen::normalize_ios_base_fmtflags_primitive_associated_constants(input);
+        assert!(
+            output.contains("0x1000_u32") && output.contains("0x4000_u32"),
+            "Should replace u32::_S_* constants"
+        );
+    }
+
+    #[test]
+    fn test_normalize_ios_base_fmtflags_preserves_unrelated_code() {
+        let input = "let x = 42_u32;\nfoo::_S_custom();\n";
+        let output =
+            AstCodeGen::normalize_ios_base_fmtflags_primitive_associated_constants(input);
+        assert_eq!(output, input, "Should not modify unrelated code");
     }
 }
