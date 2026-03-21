@@ -543,8 +543,10 @@ fn p0b_1_task_decomposed_in_todo() {
         todo.contains("P0.b.1 Decompose P0.b into <1000 LOC leaves"),
         "audit: TODO should document completed P0.b.1 decomposition leaf"
     );
+    // P0.b.2 was expanded into sub-items (P0.b.2.a..P0.b.2.f); check the top-level
+    // leaf identifiers exist. P0.b.3 through P0.b.9 have (on/after 2026-04-18) directly.
     for expected_leaf in [
-        "P0.b.2 (on/after 2026-04-18)",
+        "P0.b.2 Remove strict-path backend",
         "P0.b.3 (on/after 2026-04-18)",
         "P0.b.4 (on/after 2026-04-18)",
         "P0.b.5 (on/after 2026-04-18)",
