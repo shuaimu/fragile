@@ -4173,3 +4173,70 @@ fn m9_2c_iv_e5f5_is_fn_def_line_contains_pub_paren_pattern() {
         "is_fn_def_line must check for pub( prefix for visibility-qualified functions"
     );
 }
+
+// ---------------------------------------------------------------------------
+// M9.2.c.iv.e.5.g: Fix E0277 trait bound failures via CharTraitsArg trait
+// ---------------------------------------------------------------------------
+
+#[test]
+fn m9_2c_iv_e5g_task_documented_in_todo() {
+    let todo = fs::read_to_string(workspace_root_dir().join("TODO.md")).expect("read TODO.md");
+    assert!(
+        todo.contains("M9.2.c.iv.e.5.g"),
+        "TODO.md must document M9.2.c.iv.e.5.g"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5g_char_traits_arg_trait_exists() {
+    let clib_src = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../fragile-stl/src/clib.rs"),
+    )
+    .expect("clib.rs must exist");
+    assert!(
+        clib_src.contains("pub trait CharTraitsArg"),
+        "clib.rs must define CharTraitsArg trait"
+    );
+    assert!(
+        clib_src.contains("fn to_i64_lane(self) -> i64"),
+        "CharTraitsArg must have to_i64_lane method"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5g_char_traits_arg_handles_references() {
+    let clib_src = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../fragile-stl/src/clib.rs"),
+    )
+    .expect("clib.rs must exist");
+    // Must have blanket impl for references
+    assert!(
+        clib_src.contains("impl<T: CharTraitsArg + Copy> CharTraitsArg for &T"),
+        "CharTraitsArg must have blanket impl for &T references"
+    );
+    // Must handle void/unit type
+    assert!(
+        clib_src.contains("impl CharTraitsArg for ()"),
+        "CharTraitsArg must handle () void type"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e5g_helpers_use_char_traits_arg() {
+    let clib_src = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../fragile-stl/src/clib.rs"),
+    )
+    .expect("clib.rs must exist");
+    // Helpers should use CharTraitsArg instead of TryInto<i64>
+    assert!(
+        clib_src.contains("T: CharTraitsArg"),
+        "helpers must use CharTraitsArg bound"
+    );
+    assert!(
+        !clib_src.contains("T: std::convert::TryInto<i64>"),
+        "helpers should no longer use TryInto<i64> bound"
+    );
+}

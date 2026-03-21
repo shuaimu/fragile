@@ -275,24 +275,44 @@ pub fn wcscmp(_s1: *const i32, _s2: *const i32) -> i32 { 0 }
 pub fn wcsncmp(_s1: *const i32, _s2: *const i32, _n: u64) -> i32 { 0 }
 #[inline]
 pub fn wmemchr(_s: *const i32, _c: i32, _n: u64) -> *const i32 { std::ptr::null() }
+/// Trait for char_traits comparator helper arguments.
+/// Handles owned primitives, references to primitives, and void (`()`) gracefully.
+pub trait CharTraitsArg {
+    fn to_i64_lane(self) -> i64;
+}
+impl CharTraitsArg for i8 { #[inline] fn to_i64_lane(self) -> i64 { self as i64 } }
+impl CharTraitsArg for u8 { #[inline] fn to_i64_lane(self) -> i64 { self as i64 } }
+impl CharTraitsArg for i16 { #[inline] fn to_i64_lane(self) -> i64 { self as i64 } }
+impl CharTraitsArg for u16 { #[inline] fn to_i64_lane(self) -> i64 { self as i64 } }
+impl CharTraitsArg for i32 { #[inline] fn to_i64_lane(self) -> i64 { self as i64 } }
+impl CharTraitsArg for u32 { #[inline] fn to_i64_lane(self) -> i64 { self as i64 } }
+impl CharTraitsArg for i64 { #[inline] fn to_i64_lane(self) -> i64 { self } }
+impl CharTraitsArg for u64 { #[inline] fn to_i64_lane(self) -> i64 { self as i64 } }
+impl CharTraitsArg for usize { #[inline] fn to_i64_lane(self) -> i64 { self as i64 } }
+impl CharTraitsArg for isize { #[inline] fn to_i64_lane(self) -> i64 { self as i64 } }
+impl CharTraitsArg for () { #[inline] fn to_i64_lane(self) -> i64 { 0 } }
+impl<T: CharTraitsArg + Copy> CharTraitsArg for &T {
+    #[inline] fn to_i64_lane(self) -> i64 { (*self).to_i64_lane() }
+}
+
 #[inline]
 pub fn __fragile_char_traits_eq_i8<T, U>(__c1: T, __c2: U) -> bool
 where
-    T: std::convert::TryInto<i64> + Copy,
-    U: std::convert::TryInto<i64> + Copy,
+    T: CharTraitsArg,
+    U: CharTraitsArg,
 {
-    let lhs = __c1.try_into().unwrap_or_default();
-    let rhs = __c2.try_into().unwrap_or_default();
+    let lhs = __c1.to_i64_lane();
+    let rhs = __c2.to_i64_lane();
     lhs == rhs
 }
 #[inline]
 pub fn __fragile_char_traits_lt_i8<T, U>(__c1: T, __c2: U) -> bool
 where
-    T: std::convert::TryInto<i64> + Copy,
-    U: std::convert::TryInto<i64> + Copy,
+    T: CharTraitsArg,
+    U: CharTraitsArg,
 {
-    let lhs = __c1.try_into().unwrap_or_default();
-    let rhs = __c2.try_into().unwrap_or_default();
+    let lhs = __c1.to_i64_lane();
+    let rhs = __c2.to_i64_lane();
 
     // Preserve unsigned-char ordering semantics for true i8 lanes while still
     // accepting widened u16/u32 operands from degraded char_traits overloads.
