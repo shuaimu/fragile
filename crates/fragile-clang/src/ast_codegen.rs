@@ -30085,6 +30085,14 @@ impl AstCodeGen {
         output = Self::normalize_memory_order_enum_to_integer(&output);
         // Fix E0308 degraded atomic new_1() parameter types.
         output = Self::normalize_atomic_degraded_new_params(&output);
+        // Fix E0308 struct literal zero-init: `Self { field: 0 }` where field
+        // is non-primitive struct type, and degraded () params in struct literals.
+        output = Self::normalize_struct_literal_zero_init(&output);
+        // Fix E0308 enum-flag bitwise operator return type: functions returning
+        // enum types but computing i32 bitwise results.
+        output = Self::normalize_enum_flag_bitwise_return_cast(&output);
+        // Fix E0277 mixed-signedness compound assignment: `u32_var |= i32_literal`.
+        output = Self::normalize_mixed_signedness_compound_ops(&output);
         // Final pass: late normalizations can still reintroduce statement-only
         // degraded preface expressions and default tail returns in helper bodies.
         output = Self::normalize_default_preface_local_assignment_artifacts(&output);
@@ -34627,6 +34635,362 @@ impl FragileAtomicBoolCompat for atomic_bool {
                     search_from = end + 1;
                 }
             }
+        }
+        out
+    }
+
+    /// Fix E0308 in struct literal expressions: `Self { field: 0, ... }` where
+    /// the field type is a non-primitive struct type. Rewrites `field: 0` to
+    /// `field: unsafe { std::mem::zeroed() }` and pointer fields to null.
+    /// Also fixes `field: __param` where param type is `()` but field expects
+    /// a concrete type, by replacing with `unsafe { std::mem::zeroed() }`.
+    pub fn normalize_struct_literal_zero_init(code: &str) -> String {
+        // Quick bail: if no `Self {`, nothing to fix
+        if !code.contains("Self {") {
+            return code.to_string();
+        }
+
+        // Phase 1: Build struct field type map from `pub struct NAME { ... }` blocks
+        let mut struct_fields: std::collections::HashMap<String, std::collections::HashMap<String, String>> =
+            std::collections::HashMap::new();
+        let mut type_aliases: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        {
+            let mut current_struct: Option<String> = None;
+            for line in code.lines() {
+                let trimmed = line.trim();
+                if let Some(rest) = trimmed.strip_prefix("pub struct ") {
+                    if let Some(name_end) = rest.find(|c: char| c == ' ' || c == '{') {
+                        let name = rest[..name_end].trim().to_string();
+                        if trimmed.ends_with('{') {
+                            current_struct = Some(name);
+                        }
+                    }
+                } else if trimmed == "}" && current_struct.is_some() {
+                    current_struct = None;
+                } else if let Some(ref sname) = current_struct {
+                    let field_line = trimmed.trim_start_matches("pub ");
+                    if let Some((fname, ftype)) = field_line.split_once(':') {
+                        let fname = fname.trim();
+                        let ftype = ftype.trim().trim_end_matches(',').trim();
+                        if !fname.is_empty()
+                            && !fname.contains(' ')
+                            && !ftype.is_empty()
+                            && fname.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                        {
+                            struct_fields
+                                .entry(sname.clone())
+                                .or_default()
+                                .insert(fname.to_string(), ftype.to_string());
+                        }
+                    }
+                }
+                if let Some(rest) = trimmed.strip_prefix("pub type ") {
+                    if let Some((alias_name, alias_target)) = rest.split_once(" = ") {
+                        let alias_name = alias_name.trim();
+                        let alias_target = alias_target.trim().trim_end_matches(';').trim();
+                        if !alias_name.is_empty() && !alias_target.is_empty() {
+                            type_aliases.insert(alias_name.to_string(), alias_target.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        if struct_fields.is_empty() {
+            return code.to_string();
+        }
+
+        // Phase 2: Track current impl block and fix struct literal field inits
+        let mut current_impl: Option<String> = None;
+        let mut out = String::with_capacity(code.len() + 512);
+        // Collect ()‑typed parameters per function for degraded-param detection
+        let mut unit_params: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for line in code.lines() {
+            let trimmed = line.trim();
+
+            // Track impl blocks: `impl NAME {`
+            if trimmed.starts_with("impl ") && trimmed.ends_with('{') {
+                let rest = &trimmed[5..trimmed.len() - 1].trim();
+                if !rest.contains(" for ") {
+                    let name = rest.split_whitespace().next().unwrap_or("");
+                    if !name.is_empty() && struct_fields.contains_key(name) {
+                        current_impl = Some(name.to_string());
+                    }
+                }
+            }
+
+            // Track function signatures to find ()‑typed parameters
+            if trimmed.starts_with("pub fn ") || trimmed.starts_with("pub unsafe fn ")
+                || trimmed.starts_with("fn ")
+            {
+                unit_params.clear();
+                // Extract params between ( and )
+                if let Some(paren_start) = trimmed.find('(') {
+                    if let Some(paren_end) = trimmed.rfind(')') {
+                        let params_str = &trimmed[paren_start + 1..paren_end];
+                        for param in params_str.split(',') {
+                            let param = param.trim().trim_start_matches("mut ");
+                            if let Some((pname, ptype)) = param.split_once(':') {
+                                let pname = pname.trim();
+                                let ptype = ptype.trim();
+                                if ptype == "()" {
+                                    unit_params.insert(pname.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Look for struct literal field init: `field: VALUE,`
+            // Inside `Self { ... }` blocks within impl blocks
+            if let Some(ref impl_name) = current_impl {
+                if let Some(fields) = struct_fields.get(impl_name) {
+                    if let Some(rewritten) =
+                        Self::try_fix_struct_literal_field_init(trimmed, fields, &type_aliases, &unit_params)
+                    {
+                        let indent = &line[..line.len() - line.trim_start().len()];
+                        out.push_str(indent);
+                        out.push_str(&rewritten);
+                        out.push('\n');
+                        continue;
+                    }
+                }
+            }
+
+            out.push_str(line);
+            out.push('\n');
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Try to fix a struct literal field init line: `field: VALUE,`
+    fn try_fix_struct_literal_field_init(
+        trimmed: &str,
+        fields: &std::collections::HashMap<String, String>,
+        type_aliases: &std::collections::HashMap<String, String>,
+        unit_params: &std::collections::HashSet<String>,
+    ) -> Option<String> {
+        // Match: `FIELD: VALUE,` (with trailing comma) or `FIELD: VALUE,` inside Self { }
+        // Must not be a `pub FIELD: TYPE,` (struct definition)
+        if trimmed.starts_with("pub ") || trimmed.starts_with("//") || trimmed.starts_with("let ") {
+            return None;
+        }
+
+        let (field_name, rest) = trimmed.split_once(':')?;
+        let field_name = field_name.trim();
+
+        // Must be a simple identifier
+        if field_name.is_empty()
+            || !field_name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            return None;
+        }
+
+        let field_type = fields.get(field_name)?;
+        let resolved_type = type_aliases
+            .get(field_type.as_str())
+            .map(|s| s.as_str())
+            .unwrap_or(field_type.as_str());
+
+        let value = rest.trim().trim_end_matches(',').trim();
+        let has_trailing_comma = rest.trim().ends_with(',');
+        let comma = if has_trailing_comma { "," } else { "" };
+
+        // Check if value is zero integer literal
+        if is_zero_integer_literal_str(value) {
+            // Pointer field → null
+            if field_type.starts_with("*const ") {
+                return Some(format!("{}: std::ptr::null(){}", field_name, comma));
+            }
+            if field_type.starts_with("*mut ") {
+                return Some(format!("{}: std::ptr::null_mut(){}", field_name, comma));
+            }
+            // Float field → 0.0
+            if field_type == "f64" || field_type == "f32" || resolved_type == "f64" || resolved_type == "f32" {
+                return Some(format!("{}: 0.0{}", field_name, comma));
+            }
+            // Non-primitive struct field → zeroed()
+            let is_primitive = matches!(
+                resolved_type,
+                "i8" | "i16" | "i32" | "i64" | "i128" | "isize"
+                    | "u8" | "u16" | "u32" | "u64" | "u128" | "usize"
+                    | "f32" | "f64" | "bool" | "char" | "()"
+            ) || resolved_type.starts_with("*mut ")
+                || resolved_type.starts_with("*const ")
+                || resolved_type.starts_with('[');
+            let field_is_primitive = matches!(
+                field_type.as_str(),
+                "i8" | "i16" | "i32" | "i64" | "i128" | "isize"
+                    | "u8" | "u16" | "u32" | "u64" | "u128" | "usize"
+                    | "f32" | "f64" | "bool" | "char" | "()"
+            ) || field_type.starts_with("*mut ")
+                || field_type.starts_with("*const ")
+                || field_type.starts_with('[');
+            if !is_primitive && !field_is_primitive {
+                return Some(format!(
+                    "{}: unsafe {{ std::mem::zeroed() }}{}",
+                    field_name, comma
+                ));
+            }
+        }
+
+        // Check if value is a ()‑typed parameter being assigned to a non-() field
+        if unit_params.contains(value) && field_type != "()" && resolved_type != "()" {
+            let is_primitive = matches!(
+                resolved_type,
+                "i8" | "i16" | "i32" | "i64" | "i128" | "isize"
+                    | "u8" | "u16" | "u32" | "u64" | "u128" | "usize"
+                    | "bool" | "char"
+            );
+            if is_primitive {
+                return Some(format!("{}: Default::default(){}", field_name, comma));
+            }
+            if field_type.starts_with("*mut ") || resolved_type.starts_with("*mut ") {
+                return Some(format!("{}: std::ptr::null_mut(){}", field_name, comma));
+            }
+            if field_type.starts_with("*const ") || resolved_type.starts_with("*const ") {
+                return Some(format!("{}: std::ptr::null(){}", field_name, comma));
+            }
+            if resolved_type == "f64" || resolved_type == "f32" {
+                return Some(format!("{}: 0.0{}", field_name, comma));
+            }
+            return Some(format!(
+                "{}: unsafe {{ std::mem::zeroed() }}{}",
+                field_name, comma
+            ));
+        }
+
+        None
+    }
+
+    /// Fix E0308 in enum-flag bitwise operator functions that return an enum type
+    /// but compute the result as i32. Pattern:
+    ///   `return ((a as i32) as i32) OP ((b as i32) as i32);`
+    /// in a function `-> EnumType`. Wraps with `unsafe { std::mem::transmute(...) }`.
+    pub fn normalize_enum_flag_bitwise_return_cast(code: &str) -> String {
+        if !code.contains("as i32) as i32)") {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len() + 256);
+        let mut current_fn_return_type: Option<String> = None;
+
+        for line in code.lines() {
+            let trimmed = line.trim();
+
+            // Track function return types
+            if (trimmed.starts_with("pub fn ") || trimmed.starts_with("pub extern \"C\" fn ")
+                || trimmed.starts_with("pub unsafe fn ") || trimmed.starts_with("pub unsafe extern \"C\" fn "))
+                && trimmed.contains("-> ")
+            {
+                if let Some(arrow_pos) = trimmed.rfind("-> ") {
+                    let ret_part = &trimmed[arrow_pos + 3..];
+                    let ret_type = ret_part.trim_end_matches('{').trim_end_matches(|c: char| c == ' ');
+                    // Only track non-primitive return types (enum types)
+                    let is_primitive = matches!(
+                        ret_type,
+                        "i8" | "i16" | "i32" | "i64" | "i128" | "isize"
+                            | "u8" | "u16" | "u32" | "u64" | "u128" | "usize"
+                            | "f32" | "f64" | "bool" | "()" | "char"
+                    ) || ret_type.starts_with("*") || ret_type.starts_with("&") || ret_type.is_empty();
+                    if !is_primitive && ret_type.starts_with("std_") {
+                        current_fn_return_type = Some(ret_type.to_string());
+                    } else {
+                        current_fn_return_type = None;
+                    }
+                }
+            }
+
+            // Detect: `return EXPR;` where EXPR is bitwise op on i32 casts
+            if let Some(ref ret_type) = current_fn_return_type {
+                if let Some(rest) = trimmed.strip_prefix("return ") {
+                    if let Some(expr) = rest.strip_suffix(';') {
+                        let expr = expr.trim();
+                        // Check if expression is a bitwise operation on i32 casts
+                        if expr.contains("as i32) as i32)")
+                            && (expr.contains(" & ") || expr.contains(" | ") || expr.contains(" ^ "))
+                        {
+                            let indent = &line[..line.len() - line.trim_start().len()];
+                            out.push_str(indent);
+                            out.push_str(&format!(
+                                "return unsafe {{ std::mem::transmute::<i32, {}>({}) }};",
+                                ret_type, expr
+                            ));
+                            out.push('\n');
+                            continue;
+                        }
+                        // Also handle complement: `!(x as i32) as i32`
+                        if expr.contains("as i32) as i32") && expr.contains('!') {
+                            let indent = &line[..line.len() - line.trim_start().len()];
+                            out.push_str(indent);
+                            out.push_str(&format!(
+                                "return unsafe {{ std::mem::transmute::<i32, {}>({}) }};",
+                                ret_type, expr
+                            ));
+                            out.push('\n');
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            out.push_str(line);
+            out.push('\n');
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix E0277 mixed-signedness compound assignment: `u32_var |= i32_expr`
+    /// and mixed arithmetic: `u32_var * i32_var`. Appends ` as u32` to i32
+    /// literals used in compound assignment to u32 variables.
+    /// Also fixes `__err |= 2i32` → `__err |= 2i32 as u32` for Ios_Iostate vars.
+    pub fn normalize_mixed_signedness_compound_ops(code: &str) -> String {
+        if !code.contains("i32") {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len() + 256);
+
+        for line in code.lines() {
+            let trimmed = line.trim();
+            let mut rewritten = false;
+
+            // Pattern: `VAR |= NUMi32;` or `VAR &= NUMi32;`
+            // where VAR is likely u32 typed (Ios_Iostate, Fmtflags, etc.)
+            if (trimmed.contains("|=") || trimmed.contains("&="))
+                && trimmed.contains("i32;")
+                && !trimmed.contains(" as u32")
+            {
+                // Replace `Ni32;` with `Ni32 as u32;` at end of statement
+                if let Some(pos) = trimmed.rfind("i32;") {
+                    let new_line = format!("{}i32 as u32;", &trimmed[..pos]);
+                    let indent = &line[..line.len() - line.trim_start().len()];
+                    out.push_str(indent);
+                    out.push_str(&new_line);
+                    out.push('\n');
+                    rewritten = true;
+                }
+            }
+
+            if !rewritten {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
         }
         out
     }
@@ -132659,5 +133023,236 @@ pub fn op_weak_ordering(&self, ) -> weak_ordering {
         let input = "let x = Foo::new_1(42);\n";
         let output = AstCodeGen::normalize_atomic_degraded_new_params(input);
         assert_eq!(output, input, "Should not modify non-atomic new_1 calls");
+    }
+
+    // -----------------------------------------------------------------------
+    // normalize_struct_literal_zero_init tests (e.10)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_struct_literal_zero_init_replaces_struct_field_zero() {
+        let input = "\
+pub struct std_basic_string_char_ {
+    _M_dataplus: _Alloc_hider,
+    _M_string_length: u64,
+}
+impl std_basic_string_char_ {
+    pub fn new_0() -> Self {
+        let mut __self = Self {
+            _M_dataplus: 0,
+            _M_string_length: 0,
+        };
+        __self
+    }
+}
+";
+        let output = AstCodeGen::normalize_struct_literal_zero_init(input);
+        assert!(
+            output.contains("_M_dataplus: unsafe { std::mem::zeroed() }"),
+            "Struct field _M_dataplus: 0 should be replaced with zeroed(), got: {}",
+            output
+        );
+        assert!(
+            output.contains("_M_string_length: 0"),
+            "Primitive u64 field should remain as 0, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_struct_literal_zero_init_pointer_field() {
+        let input = "\
+pub struct Foo {
+    _ptr: *mut u8,
+    _cptr: *const i32,
+    _val: i32,
+}
+impl Foo {
+    pub fn new_0() -> Self {
+        Self {
+            _ptr: 0,
+            _cptr: 0,
+            _val: 0,
+        }
+    }
+}
+";
+        let output = AstCodeGen::normalize_struct_literal_zero_init(input);
+        assert!(
+            output.contains("_ptr: std::ptr::null_mut()"),
+            "*mut field should become null_mut(), got: {}",
+            output
+        );
+        assert!(
+            output.contains("_cptr: std::ptr::null()"),
+            "*const field should become null(), got: {}",
+            output
+        );
+        assert!(
+            output.contains("_val: 0"),
+            "i32 field should remain 0, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_struct_literal_zero_init_float_field() {
+        let input = "\
+pub struct Bar {
+    _x: f64,
+    _y: f32,
+}
+impl Bar {
+    pub fn new_0() -> Self {
+        Self {
+            _x: 0,
+            _y: 0,
+        }
+    }
+}
+";
+        let output = AstCodeGen::normalize_struct_literal_zero_init(input);
+        assert!(output.contains("_x: 0.0"), "f64 field should become 0.0, got: {}", output);
+        assert!(output.contains("_y: 0.0"), "f32 field should become 0.0, got: {}", output);
+    }
+
+    #[test]
+    fn test_struct_literal_zero_init_degraded_param() {
+        let input = "\
+pub struct NumHelper {
+    _M_i: i32,
+    _M_n: u64,
+}
+impl NumHelper {
+    pub fn new_1(__i: (), __n: ()) -> Self {
+        Self {
+            _M_i: __i,
+            _M_n: __n,
+        }
+    }
+}
+";
+        let output = AstCodeGen::normalize_struct_literal_zero_init(input);
+        assert!(
+            output.contains("_M_i: Default::default()"),
+            "() param assigned to i32 field should become Default::default(), got: {}",
+            output
+        );
+        assert!(
+            output.contains("_M_n: Default::default()"),
+            "() param assigned to u64 field should become Default::default(), got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_struct_literal_zero_init_no_change_without_self() {
+        let input = "let x = 0;\nlet y = Foo { a: 42 };\n";
+        let output = AstCodeGen::normalize_struct_literal_zero_init(input);
+        assert_eq!(output, input, "Should not modify code without Self {{");
+    }
+
+    // -----------------------------------------------------------------------
+    // normalize_enum_flag_bitwise_return_cast tests (e.10)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_enum_flag_bitwise_and_return_cast() {
+        let input = "\
+pub extern \"C\" fn op_bitand_1(__a: std__Ios_Fmtflags, __b: std__Ios_Fmtflags) -> std__Ios_Fmtflags {
+    return ((__a as i32) as i32) & ((__b as i32) as i32);
+}
+";
+        let output = AstCodeGen::normalize_enum_flag_bitwise_return_cast(input);
+        assert!(
+            output.contains("std::mem::transmute::<i32, std__Ios_Fmtflags>"),
+            "Bitwise & should be wrapped in transmute, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_enum_flag_bitwise_or_return_cast() {
+        let input = "\
+pub extern \"C\" fn op_bitor_1(__a: std__Ios_Openmode, __b: std__Ios_Openmode) -> std__Ios_Openmode {
+    return ((__a as i32) as i32) | ((__b as i32) as i32);
+}
+";
+        let output = AstCodeGen::normalize_enum_flag_bitwise_return_cast(input);
+        assert!(
+            output.contains("std::mem::transmute::<i32, std__Ios_Openmode>"),
+            "Bitwise | should be wrapped in transmute, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_enum_flag_bitwise_no_change_for_primitive() {
+        let input = "\
+pub fn foo(__a: i32, __b: i32) -> i32 {
+    return ((__a as i32) as i32) & ((__b as i32) as i32);
+}
+";
+        let output = AstCodeGen::normalize_enum_flag_bitwise_return_cast(input);
+        assert!(
+            !output.contains("transmute"),
+            "Should not transmute for i32 return type, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_enum_flag_bitwise_xor_return_cast() {
+        let input = "\
+pub extern \"C\" fn op_bitxor_1(__a: std__Ios_Fmtflags, __b: std__Ios_Fmtflags) -> std__Ios_Fmtflags {
+    return ((__a as i32) as i32) ^ ((__b as i32) as i32);
+}
+";
+        let output = AstCodeGen::normalize_enum_flag_bitwise_return_cast(input);
+        assert!(
+            output.contains("std::mem::transmute::<i32, std__Ios_Fmtflags>"),
+            "Bitwise ^ should be wrapped in transmute, got: {}",
+            output
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // normalize_mixed_signedness_compound_ops tests (e.10)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_mixed_signedness_or_assign_i32_literal() {
+        let input = "    __err |= 2i32;\n";
+        let output = AstCodeGen::normalize_mixed_signedness_compound_ops(input);
+        assert!(
+            output.contains("|= 2i32 as u32;"),
+            "Should cast i32 literal to u32, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_mixed_signedness_and_assign_i32_literal() {
+        let input = "    flags &= 0xFFi32;\n";
+        let output = AstCodeGen::normalize_mixed_signedness_compound_ops(input);
+        assert!(
+            output.contains("&= 0xFFi32 as u32;"),
+            "Should cast i32 literal to u32, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_mixed_signedness_no_change_without_i32() {
+        let input = "    __err |= 2u32;\n";
+        let output = AstCodeGen::normalize_mixed_signedness_compound_ops(input);
+        assert_eq!(output, input, "Should not modify code without i32");
+    }
+
+    #[test]
+    fn test_mixed_signedness_preserves_already_cast() {
+        let input = "    __err |= 2i32 as u32;\n";
+        let output = AstCodeGen::normalize_mixed_signedness_compound_ops(input);
+        assert_eq!(output, input, "Should not double-cast");
     }
 }
