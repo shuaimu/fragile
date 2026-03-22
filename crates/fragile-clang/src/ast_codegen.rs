@@ -21200,6 +21200,212 @@ impl AstCodeGen {
         out
     }
 
+    /// Fix Rust operator precedence for dereference + method call chains.
+    ///
+    /// In Rust, `*x.method()` is parsed as `*(x.method())` because method
+    /// call binds tighter than the dereference operator.
+    ///
+    /// Two patterns are fixed:
+    ///
+    /// 1. `*var.offset_from(other)` → `(*var).offset_from(other)`:
+    ///    `offset_from` always returns `isize`, never a pointer.  The leading
+    ///    `*` is always a dereference of the operand, not the result.  Without
+    ///    parenthesization, rustc tries to dereference the `isize` return
+    ///    value, causing E0614.
+    ///
+    /// 2. `**var.sub(N)` → `*(*var).sub(N)` (and other ptr-arith methods):
+    ///    With a double-pointer, the first `*` dereferences the outer pointer
+    ///    to get an inner pointer, then `.sub(N)` advances it, and the
+    ///    second `*` dereferences the result.  Without parenthesization, Rust
+    ///    parses as `**(var.sub(N))` which tries to double-deref a
+    ///    single-pointer result.
+    ///
+    /// NOTE: Single-deref `*var.sub(N)` is intentionally NOT modified because
+    /// it is valid Rust meaning `*(var.sub(N))` — advance pointer and deref.
+    pub fn normalize_deref_method_call_precedence(code: &str) -> String {
+        // Quick bail-out: nothing to fix if no target methods present.
+        if !code.contains(".offset_from(")
+            && !code.contains(".sub(")
+            && !code.contains(".add(")
+            && !code.contains(".offset(")
+            && !code.contains(".wrapping_add(")
+            && !code.contains(".wrapping_sub(")
+            && !code.contains(".wrapping_offset(")
+        {
+            return code.to_string();
+        }
+
+        // offset_from always needs parenthesization with single deref
+        // because its return type is isize, not a pointer.
+        let single_deref_methods: &[&str] = &[".offset_from("];
+
+        // For sub/add/offset etc., only fix double-deref (**var.method)
+        let double_deref_methods: &[&str] = &[
+            ".offset_from(",
+            ".sub(",
+            ".add(",
+            ".offset(",
+            ".wrapping_add(",
+            ".wrapping_sub(",
+            ".wrapping_offset(",
+            ".byte_add(",
+            ".byte_sub(",
+        ];
+
+        let mut out = String::with_capacity(code.len() + 256);
+        for line in code.lines() {
+            let rewritten = Self::rewrite_deref_method_precedence_line(
+                line,
+                single_deref_methods,
+                double_deref_methods,
+            );
+            out.push_str(&rewritten);
+            out.push('\n');
+        }
+        // Remove trailing newline to match input
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Rewrite a single line, fixing deref-precedence issues.
+    ///
+    /// `single_deref_methods`: methods where `*IDENT.method(` must become
+    ///     `(*IDENT).method(` (e.g. `offset_from` which returns `isize`).
+    ///
+    /// `double_deref_methods`: methods where `**IDENT.method(` must become
+    ///     `*(*IDENT).method(` (double-pointer dereference before ptr arithmetic).
+    fn rewrite_deref_method_precedence_line(
+        line: &str,
+        single_deref_methods: &[&str],
+        double_deref_methods: &[&str],
+    ) -> String {
+        let mut result = line.to_string();
+
+        // First pass: fix double-deref patterns (**ident.method → *(*ident).method)
+        for method in double_deref_methods {
+            let mut search_start = 0;
+            loop {
+                let Some(method_pos) = result[search_start..].find(method) else {
+                    break;
+                };
+                let method_abs = search_start + method_pos;
+                let (action, ident_owned, star_pos) =
+                    Self::analyze_deref_before_method(&result, method_abs);
+
+                if action == 2 {
+                    let new_line = format!(
+                        "{}*(*{}){}",
+                        &result[..star_pos],
+                        ident_owned,
+                        &result[method_abs..]
+                    );
+                    let advance = star_pos + 3 + ident_owned.len() + 1 + method.len();
+                    result = new_line;
+                    search_start = advance;
+                } else {
+                    search_start = method_abs + method.len();
+                }
+            }
+        }
+
+        // Second pass: fix single-deref patterns (*ident.method → (*ident).method)
+        for method in single_deref_methods {
+            let mut search_start = 0;
+            loop {
+                let Some(method_pos) = result[search_start..].find(method) else {
+                    break;
+                };
+                let method_abs = search_start + method_pos;
+                let (action, ident_owned, star_pos) =
+                    Self::analyze_deref_before_method(&result, method_abs);
+
+                if action == 1 {
+                    let new_line = format!(
+                        "{}(*{}){}",
+                        &result[..star_pos],
+                        ident_owned,
+                        &result[method_abs..]
+                    );
+                    let advance = star_pos + 2 + ident_owned.len() + 1 + method.len();
+                    result = new_line;
+                    search_start = advance;
+                } else {
+                    search_start = method_abs + method.len();
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Analyze the prefix before a method call position to determine if there's
+    /// a dereference that needs parenthesization.
+    ///
+    /// Returns `(action, ident, star_pos)` where:
+    /// - action=0: no rewrite needed
+    /// - action=1: single deref `*ident.method(` → `(*ident).method(`
+    /// - action=2: double deref `**ident.method(` → `*(*ident).method(`
+    fn analyze_deref_before_method(
+        result: &str,
+        method_abs: usize,
+    ) -> (u8, String, usize) {
+        let bytes = result.as_bytes();
+        // Walk backward from method_abs to find ident
+        let mut p = method_abs;
+        while p > 0 && (bytes[p - 1].is_ascii_alphanumeric() || bytes[p - 1] == b'_') {
+            p -= 1;
+        }
+        let ident_byte_start = p;
+        let ident = &result[ident_byte_start..method_abs];
+
+        if ident.is_empty()
+            || !ident
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        {
+            return (0, String::new(), 0);
+        }
+
+        // Walk back past optional whitespace before ident
+        let mut q = ident_byte_start;
+        while q > 0 && bytes[q - 1] == b' ' {
+            q -= 1;
+        }
+
+        if q >= 2 && bytes[q - 1] == b'*' && bytes[q - 2] == b'*' {
+            // Double-star pattern: **ident.method(
+            let sp = q - 2;
+            // Guard: don't rewrite if already `*(*ident).method(`
+            if sp >= 1 && bytes[sp - 1] == b'(' && bytes[sp] == b'*' {
+                (0, String::new(), 0)
+            } else {
+                (2, ident.to_string(), sp)
+            }
+        } else if q >= 1 && bytes[q - 1] == b'*' {
+            let sp = q - 1;
+            // Guard: don't rewrite `*mut `/ `*const ` type syntax
+            if sp >= 4 && result[..sp + 1].ends_with("*mut ") {
+                (0, String::new(), 0)
+            } else if sp >= 7 && result[..sp + 1].ends_with("*const ") {
+                (0, String::new(), 0)
+            } else if sp >= 1
+                && bytes[sp - 1] == b'('
+                && method_abs < result.len()
+                && bytes[method_abs] == b')'
+            {
+                // Already parenthesized: (*ident).method(
+                (0, String::new(), 0)
+            } else {
+                (1, ident.to_string(), sp)
+            }
+        } else {
+            (0, String::new(), 0)
+        }
+    }
+
     /// Some varargs lowerings cast `&mut __va_args` directly to
     /// `*mut FragileVaList`, which is rejected by rustc. Cast through an
     /// untyped raw pointer first.
@@ -29646,6 +29852,12 @@ impl AstCodeGen {
         // Late pointer/call-shape rewrites can reintroduce redundant
         // dereferences around ref-to-pointer cast arguments.
         output = Self::normalize_redundant_deref_in_pointer_casts(&output);
+        // Fix Rust operator precedence: `*var.method()` is parsed as
+        // `*(var.method())`, but the intent is `(*var).method()` when var is
+        // a double-pointer being dereferenced before a pointer-arithmetic
+        // method call (offset_from, sub, add, etc.).  E0614 errors result
+        // when the method return type (isize, i8, etc.) gets dereferenced.
+        output = Self::normalize_deref_method_call_precedence(&output);
         // Final pass: late normalizations can still reintroduce statement-only
         // degraded preface expressions and default tail returns in helper bodies.
         output = Self::normalize_default_preface_local_assignment_artifacts(&output);
@@ -115321,6 +115533,94 @@ pub fn parseArg(argv: *const *const i8, index: i32) -> *const i8 {
         assert!(
             output.contains("(unsafe { *argv.add((index) as usize) }) as *const i8"),
             "redundant-deref pointer-cast normalization should preserve required deref when loading pointer table entries, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_deref_method_call_precedence_offset_from() {
+        // *__g_end.offset_from(__g) → (*__g_end).offset_from(__g)
+        let input = "if (unsafe { *__g_end.offset_from(__g) }) < ((40) as isize) {";
+        let output = AstCodeGen::normalize_deref_method_call_precedence(input);
+        assert!(
+            output.contains("(*__g_end).offset_from(__g)"),
+            "should parenthesize *ident.offset_from to (*ident).offset_from, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("*__g_end.offset_from"),
+            "should not leave un-parenthesized *ident.offset_from, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_deref_method_call_precedence_double_deref_sub() {
+        // **__a_end.sub(1 as usize) → *(*__a_end).sub(1 as usize)
+        let input = "toupper_1((unsafe { **__a_end.sub(1 as usize) }) as i32)";
+        let output = AstCodeGen::normalize_deref_method_call_precedence(input);
+        assert!(
+            output.contains("*(*__a_end).sub(1 as usize)"),
+            "should parenthesize **ident.sub to *(*ident).sub, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_deref_method_call_precedence_preserves_already_parenthesized() {
+        // (*ptr).offset_from(other) should not be double-parenthesized
+        let input = "let diff = (*ptr).offset_from(other);";
+        let output = AstCodeGen::normalize_deref_method_call_precedence(input);
+        assert_eq!(
+            output, input,
+            "should preserve already-parenthesized (*ptr).method(), got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_deref_method_call_precedence_preserves_ptr_add_no_deref() {
+        // ptr.add(5) without leading * should not be modified
+        let input = "let p = ptr.add(5 as usize);";
+        let output = AstCodeGen::normalize_deref_method_call_precedence(input);
+        assert_eq!(
+            output, input,
+            "should not modify ptr.method() without leading *, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_deref_method_call_precedence_single_deref_sub_preserved() {
+        // *ptr.sub(1) is valid Rust: *(ptr.sub(1)) — should NOT be modified
+        let input = "let val = *ptr.sub(1 as usize);";
+        let output = AstCodeGen::normalize_deref_method_call_precedence(input);
+        assert_eq!(
+            output, input,
+            "should preserve valid *ptr.sub() (means *(ptr.sub())), got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_deref_method_call_precedence_no_false_positive_on_ptr_type() {
+        // *mut T.sub should not be modified — the * is part of a type, not deref
+        let input = "let p: *mut i8 = std::ptr::null_mut();";
+        let output = AstCodeGen::normalize_deref_method_call_precedence(input);
+        assert_eq!(
+            output, input,
+            "should not modify type annotations, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_deref_method_call_precedence_multiple_occurrences() {
+        let input = "if *a.offset_from(b) < *c.offset_from(d) {";
+        let output = AstCodeGen::normalize_deref_method_call_precedence(input);
+        assert!(
+            output.contains("(*a).offset_from(b)") && output.contains("(*c).offset_from(d)"),
+            "should fix multiple occurrences on the same line, got:\n{}",
             output
         );
     }
