@@ -4793,3 +4793,105 @@ fn m9_2c_iv_e9_atomic_degraded_new_params() {
         "M9.2.c.iv.e.9: atomic_i64::new_1 should have () arg"
     );
 }
+
+// -----------------------------------------------------------------------
+// M9.2.c.iv.e.10 closure tests
+// -----------------------------------------------------------------------
+
+/// M9.2.c.iv.e.10: Task documented in TODO.md
+#[test]
+fn m9_2c_iv_e10_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("M9.2.c.iv.e.10"),
+        "M9.2.c.iv.e.10 task should be documented in TODO.md"
+    );
+}
+
+/// M9.2.c.iv.e.10: Struct literal zero-init normalizes non-primitive fields.
+#[test]
+fn m9_2c_iv_e10_struct_literal_zero_init_normalizes_struct_fields() {
+    use fragile_clang::AstCodeGen;
+    let input = "\
+pub struct Foo {
+    _M_data: SomeStruct,
+    _count: u32,
+}
+impl Foo {
+    pub fn new_0() -> Self {
+        Self {
+            _M_data: 0,
+            _count: 0,
+        }
+    }
+}
+";
+    let output = AstCodeGen::normalize_struct_literal_zero_init(input);
+    assert!(
+        output.contains("_M_data: unsafe { std::mem::zeroed() }"),
+        "M9.2.c.iv.e.10: struct field with non-primitive type should be zeroed()"
+    );
+    assert!(
+        output.contains("_count: 0"),
+        "M9.2.c.iv.e.10: primitive u32 field should stay as 0"
+    );
+}
+
+/// M9.2.c.iv.e.10: Enum flag bitwise operators get return type transmute.
+#[test]
+fn m9_2c_iv_e10_enum_flag_bitwise_return_cast() {
+    use fragile_clang::AstCodeGen;
+    let input = "\
+pub extern \"C\" fn op_bitand_1(__a: std__Ios_Fmtflags, __b: std__Ios_Fmtflags) -> std__Ios_Fmtflags {
+    return ((__a as i32) as i32) & ((__b as i32) as i32);
+}
+";
+    let output = AstCodeGen::normalize_enum_flag_bitwise_return_cast(input);
+    assert!(
+        output.contains("transmute::<i32, std__Ios_Fmtflags>"),
+        "M9.2.c.iv.e.10: bitwise & on enum-flag types should be transmuted back"
+    );
+}
+
+/// M9.2.c.iv.e.10: Mixed-signedness compound assignment gets cast.
+#[test]
+fn m9_2c_iv_e10_mixed_signedness_compound_ops() {
+    use fragile_clang::AstCodeGen;
+    let input = "    __err |= 2i32;\n";
+    let output = AstCodeGen::normalize_mixed_signedness_compound_ops(input);
+    assert!(
+        output.contains("2i32 as u32"),
+        "M9.2.c.iv.e.10: i32 literal in |= should be cast to u32"
+    );
+}
+
+/// M9.2.c.iv.e.10: Degraded () params in struct literal init get Default.
+#[test]
+fn m9_2c_iv_e10_struct_literal_degraded_param_default() {
+    use fragile_clang::AstCodeGen;
+    let input = "\
+pub struct Helper {
+    _val: i32,
+}
+impl Helper {
+    pub fn new_1(__v: ()) -> Self {
+        Self {
+            _val: __v,
+        }
+    }
+}
+";
+    let output = AstCodeGen::normalize_struct_literal_zero_init(input);
+    assert!(
+        output.contains("_val: Default::default()"),
+        "M9.2.c.iv.e.10: () param assigned to i32 field should become Default::default()"
+    );
+}
