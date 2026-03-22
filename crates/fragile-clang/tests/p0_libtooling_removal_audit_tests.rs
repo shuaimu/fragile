@@ -58,15 +58,16 @@ fn p0a_audit_fragile_driver_has_libtooling_backend_variant() {
 #[test]
 fn p0a_audit_fragile_driver_has_escape_hatch_enum() {
     let src = read_project_file("crates/fragile-driver/src/lib.rs");
-    // ParserCoreCodegenEscapeHatch enum exists with Libtooling variant.
-    // P0.b removal: remove entire enum and all references.
+    // ParserCoreCodegenEscapeHatch enum still exists (empty after P0.b.2.b.1.b.1.2).
+    // P0.b.2.d/e removal: remove entire enum and all references.
     assert!(
         src.contains("ParserCoreCodegenEscapeHatch"),
         "audit: expected ParserCoreCodegenEscapeHatch enum in fragile-driver"
     );
+    // P0.b.2.b.1.b.1.2: Libtooling variant removed from fragile-driver.
     assert!(
-        src.contains("ParserCoreCodegenEscapeHatch::Libtooling"),
-        "audit: expected Libtooling variant in ParserCoreCodegenEscapeHatch"
+        !src.contains("ParserCoreCodegenEscapeHatch::Libtooling"),
+        "audit: ParserCoreCodegenEscapeHatch::Libtooling should have been removed in P0.b.2.b.1.b.1.2"
     );
 }
 

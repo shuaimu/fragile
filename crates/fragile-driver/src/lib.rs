@@ -40,7 +40,9 @@ enum StrictParserBackend {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ParserCoreCodegenEscapeHatch {
-    Libtooling,
+    // P0.b.2.b.1.b.1.2: Libtooling variant removed 2026-03-22.
+    // Enum retained as empty (uninhabited) until remaining escape-hatch
+    // infrastructure is removed in follow-up tasks (P0.b.2.d, P0.b.2.e).
 }
 
 #[derive(Debug, Clone)]
@@ -631,15 +633,12 @@ fn supported_parser_core_codegen_escape_hatch_values_message() -> &'static str {
 fn parse_parser_core_codegen_escape_hatch_value(
     raw: &str,
 ) -> Result<ParserCoreCodegenEscapeHatch, String> {
+    // P0.b.2.b.1.b.1.2: Libtooling variant removed — no valid escape hatches remain.
     let normalized = raw.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        "libtooling" => Ok(ParserCoreCodegenEscapeHatch::Libtooling),
-        other => Err(format!(
-            "unsupported FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH value `{}`; expected one of: {}",
-            other,
-            supported_parser_core_codegen_escape_hatch_values_message()
-        )),
-    }
+    Err(format!(
+        "unsupported FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH value `{}`; no escape hatches are currently supported (libtooling removed in P0.b.2.b.1.b.1.2)",
+        normalized,
+    ))
 }
 
 fn parser_core_codegen_escape_hatch_from_value(
@@ -1206,7 +1205,9 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
         .map(|raw| raw.trim().to_string())
         .filter(|raw| !raw.is_empty())
         .map(PathBuf::from);
-    let parser_core_codegen_escape_hatch = parser_core_codegen_escape_hatch_from_env()?;
+    // P0.b.2.b.1.b.1.2: escape hatch still parsed from env (to reject unsupported values)
+    // but the result is unused now that Libtooling variant is removed.
+    let _parser_core_codegen_escape_hatch = parser_core_codegen_escape_hatch_from_env()?;
     let mut use_libtooling_codegen_escape_hatch = false;
     let keep_rs = std::env::var(FRAGILEC_KEEP_RS_ENV)
         .map(|v| v == "1")
@@ -1284,10 +1285,11 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
             backend_id.as_str(),
             cwd,
         )?;
-        if matches!(
-            parser_core_codegen_escape_hatch,
-            Some(ParserCoreCodegenEscapeHatch::Libtooling)
-        ) {
+        // P0.b.2.b.1.b.1.2: Libtooling variant removed — escape hatch path is
+        // now unreachable. The surrounding if/else structure is retained until
+        // follow-up tasks (P0.b.2.d, P0.b.2.e) remove the entire escape-hatch
+        // infrastructure.
+        if false {
             // Enforce escape hatch policy for codegen escape hatch.
             enforce_escape_hatch_policy(
                 "FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH=libtooling",
@@ -1746,18 +1748,46 @@ mod tests {
                 .expect("empty value should disable"),
             None
         );
-        assert_eq!(
-            parser_core_codegen_escape_hatch_from_value(Some("LIBTOOLING"))
-                .expect("libtooling value should parse"),
-            Some(ParserCoreCodegenEscapeHatch::Libtooling)
+        // P0.b.2.b.1.b.1.2: "libtooling" is no longer a valid escape hatch.
+        let err = parser_core_codegen_escape_hatch_from_value(Some("LIBTOOLING"))
+            .expect_err("libtooling escape hatch should be rejected after variant removal");
+        assert!(
+            err.contains("FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH"),
+            "unexpected escape hatch rejection error: {}",
+            err
         );
         let err = parser_core_codegen_escape_hatch_from_value(Some("unsupported"))
             .expect_err("unsupported escape hatch should fail");
         assert!(
-            err.contains("FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH")
-                && err.contains("libtooling"),
+            err.contains("FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH"),
             "unexpected escape hatch validation error: {}",
             err
+        );
+    }
+
+    #[test]
+    fn parser_core_codegen_escape_hatch_libtooling_variant_removed() {
+        // P0.b.2.b.1.b.1.2: verify the Libtooling variant is no longer accepted.
+        // After variant removal, "libtooling" should be rejected by the parser.
+        let result = parse_parser_core_codegen_escape_hatch_value("libtooling");
+        assert!(
+            result.is_err(),
+            "libtooling should be rejected after variant removal"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("libtooling removed"),
+            "rejection message should mention libtooling removal: {}",
+            err
+        );
+        // None/empty values should still be accepted (no escape hatch active).
+        assert!(
+            parser_core_codegen_escape_hatch_from_value(None).is_ok(),
+            "None value should still be accepted"
+        );
+        assert!(
+            parser_core_codegen_escape_hatch_from_value(Some("")).is_ok(),
+            "empty value should still be accepted"
         );
     }
 
