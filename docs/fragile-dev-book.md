@@ -21337,3 +21337,34 @@ Implemented:
 Result:
 - `P0.b.2.b.1.b` now has a bounded and test-locked cutover map while preserving the 2026-04-18 gate.
 - Cutover-day edit risk for `fragile-driver` is reduced without crossing ownership boundaries.
+
+## 2026-03-21: `P0.b.2.b.1.b.1` decomposition and enum-declaration patch spec (`P0.b.2.b.1.b.1.0`)
+
+Task sizing analysis:
+- First undone leaf under top-priority `P0` became `P0.b.2.b.1.b.1`, which is date-gated to on/after 2026-04-18.
+- Estimated direct declaration removal in `crates/fragile-driver/src/lib.rs` is ~7-18 LOC, comfortably below the 1000-LOC target.
+- Since date gating blocks cutover-day code deletion now, executed the first honest pre-cutover sub-leaf (`b.1.0`) to lock declaration-scope boundaries.
+
+Plan before execution:
+- decompose `P0.b.2.b.1.b.1` into bounded sub-leaves (`b.1.0`..`b.1.2`);
+- publish enum-declaration-only patch spec with explicit `b.1`/`b.2`/`b.3` ownership;
+- add audit tests enforcing TODO decomposition and spec contracts.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific bypasses, no force-native switches, and no fake semantic fallback/stub behavior added.
+
+Implemented:
+- `TODO.md`
+  - decomposed `P0.b.2.b.1.b.1` into:
+    - `P0.b.2.b.1.b.1.0` (pre-cutover, done)
+    - `P0.b.2.b.1.b.1.1` / `.b.1.2` (on/after 2026-04-18)
+- `docs/dev/p0b2b1b1_driver_enum_decl_removal_patch_spec.md`
+  - declaration-only line anchors for `StrictParserBackend` / `ParserCoreCodegenEscapeHatch` removal;
+  - explicit boundaries deferring adapter cleanup to `b.2` and variant-match cleanup to `b.3`.
+- `crates/fragile-clang/tests/p0_libtooling_removal_audit_tests.rs`
+  - added decomposition/doc-contract tests for `P0.b.2.b.1.b.1`.
+
+Result:
+- `P0.b.2.b.1.b.1` is now a narrow, test-locked declaration-hunk cutover with explicit cross-leaf ownership.
+- Cutover prep progresses without violating the 2026-04-18 hardening gate.
