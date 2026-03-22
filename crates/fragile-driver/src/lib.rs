@@ -903,23 +903,6 @@ pub fn assert_escape_hatch_trending_to_zero(
     Ok(())
 }
 
-#[cfg(test)]
-fn strict_parser_backend_from_legacy_backend(
-    backend: ClangParserBackend,
-) -> Result<StrictParserBackend, String> {
-    match backend {
-        ClangParserBackend::Libtooling => Ok(StrictParserBackend::Libtooling),
-        ClangParserBackend::Libclang | ClangParserBackend::Hybrid => Err(format!(
-            "legacy parser backend alias `{}` is unsupported in strict mode; expected one of: {}",
-            match backend {
-                ClangParserBackend::Libclang => "libclang",
-                ClangParserBackend::Hybrid => "hybrid",
-                ClangParserBackend::Libtooling => "libtooling",
-            },
-            supported_parser_backend_values_message()
-        )),
-    }
-}
 
 fn parser_core_language(language: ClangParserLanguage) -> CoreParserLanguage {
     match language {
@@ -1697,13 +1680,8 @@ mod tests {
 
     #[test]
     fn strict_parser_backend_validation_accepts_parser_core_backend() {
-        assert_eq!(
-            strict_parser_backend_from_legacy_backend(ClangParserBackend::Libtooling)
-                .expect("legacy libtooling alias should map"),
-            StrictParserBackend::Libtooling
-        );
-        strict_parser_backend_from_legacy_backend(ClangParserBackend::Libclang)
-            .expect_err("legacy libclang alias should be rejected");
+        // NOTE: strict_parser_backend_from_legacy_backend removed in P0.b.2.b.1.b.2
+        // (adapter had no valid mapping target after StrictParserBackend::Libtooling removal).
         assert_eq!(
             parse_parser_backend_value("libtooling").expect("libtooling should parse"),
             StrictParserBackend::Libtooling
