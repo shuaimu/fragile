@@ -30093,6 +30093,16 @@ impl AstCodeGen {
         output = Self::normalize_enum_flag_bitwise_return_cast(&output);
         // Fix E0277 mixed-signedness compound assignment: `u32_var |= i32_literal`.
         output = Self::normalize_mixed_signedness_compound_ops(&output);
+        // Fix E0308: `let __X: &TYPE = &0;` degraded facet reference init.
+        output = Self::normalize_degraded_ref_zero_init(&output);
+        // Fix E0605: `(unsafe { *__p }) as u64` where __p is *const ().
+        output = Self::normalize_degraded_deref_as_integer_cast(&output);
+        // Fix E0308: `unsafe { __gv_max.clone() }` assigned to chrono_duration type.
+        output = Self::normalize_chrono_global_type_mismatch(&output);
+        // Fix E0605: `__result_float as i64` where __result_float is chrono type.
+        output = Self::normalize_chrono_as_primitive_cast(&output);
+        // Fix E0308: `return unsafe { __gv_max };` in chrono-returning function.
+        output = Self::normalize_chrono_global_return_mismatch(&output);
         // Final pass: late normalizations can still reintroduce statement-only
         // degraded preface expressions and default tail returns in helper bodies.
         output = Self::normalize_default_preface_local_assignment_artifacts(&output);
@@ -34980,6 +34990,312 @@ impl FragileAtomicBoolCompat for atomic_bool {
                     out.push_str(&new_line);
                     out.push('\n');
                     rewritten = true;
+                }
+            }
+
+            if !rewritten {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix E0308: `let __X: &TYPE = &0;` where TYPE is a non-primitive degraded
+    /// template parameter type (e.g. numpunct_type_parameter_0_0,
+    /// ctype_type_parameter_0_0). The `&0` comes from a degraded `use_facet<T>()`
+    /// call where the transpiler can't resolve the template type. Replace with
+    /// `unsafe { &*std::ptr::null::<TYPE>() }` to match the declared reference type.
+    pub fn normalize_degraded_ref_zero_init(code: &str) -> String {
+        if !code.contains("= &0;") {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len() + 512);
+
+        for line in code.lines() {
+            let trimmed = line.trim();
+            let mut rewritten = false;
+
+            // Pattern: `let __X: &TYPE = &0;` or `let mut __X: &TYPE = &0;`
+            if trimmed.contains("= &0;") && trimmed.starts_with("let ") {
+                // Extract the type from `&TYPE`
+                if let Some(colon_pos) = trimmed.find(": &") {
+                    let after_colon = &trimmed[colon_pos + 3..]; // skip ": &"
+                    if let Some(eq_pos) = after_colon.find(" = &0;") {
+                        let ref_type = &after_colon[..eq_pos];
+                        let ref_type = ref_type.trim();
+                        // Only fix non-primitive types (degraded template params)
+                        let is_primitive = matches!(
+                            ref_type,
+                            "i8" | "i16" | "i32" | "i64" | "i128" | "isize"
+                                | "u8" | "u16" | "u32" | "u64" | "u128" | "usize"
+                                | "f32" | "f64" | "bool" | "str" | "char"
+                        );
+                        if !is_primitive && !ref_type.is_empty() {
+                            let indent = &line[..line.len() - trimmed.len()];
+                            let prefix = &trimmed[..colon_pos + 3 + eq_pos + 3]; // up to "= "
+                            out.push_str(indent);
+                            out.push_str(prefix);
+                            out.push_str(&format!(
+                                "unsafe {{ &*std::ptr::null::<{}>() }};",
+                                ref_type
+                            ));
+                            out.push('\n');
+                            rewritten = true;
+                        }
+                    }
+                }
+            }
+
+            if !rewritten {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix E0605: `(unsafe { *__p }) as u64` where __p is `*const ()` — the
+    /// deref produces `()` which can't be cast to u64. Replace with
+    /// `(unsafe { *(__p as *const u64) })` to reinterpret the bytes.
+    pub fn normalize_degraded_deref_as_integer_cast(code: &str) -> String {
+        if !code.contains("*__p") {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len() + 256);
+        // Collect variables declared as *const () or *mut ()
+        let mut void_ptr_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for line in code.lines() {
+            let trimmed = line.trim();
+
+            // Track `let [mut] VAR: *const () = ...` or `*mut ()`
+            if trimmed.starts_with("let ") && (trimmed.contains(": *const ()") || trimmed.contains(": *mut ()")) {
+                let rest = trimmed.strip_prefix("let mut ").unwrap_or(trimmed.strip_prefix("let ").unwrap_or(""));
+                if let Some(colon_pos) = rest.find(':') {
+                    let var_name = rest[..colon_pos].trim().to_string();
+                    if !var_name.is_empty() {
+                        void_ptr_vars.insert(var_name);
+                    }
+                }
+            }
+
+            // Check for (unsafe { *VAR }) as INTTYPE pattern
+            let mut new_line = line.to_string();
+            let mut modified = false;
+            for var in &void_ptr_vars {
+                for int_type in &["u64", "u32", "i64", "i32", "u8", "i8", "usize", "isize"] {
+                    let pattern = format!("(unsafe {{ *{} }}) as {}", var, int_type);
+                    if new_line.contains(&pattern) {
+                        let replacement = format!(
+                            "(unsafe {{ *({} as *const {}) }})",
+                            var, int_type
+                        );
+                        new_line = new_line.replace(&pattern, &replacement);
+                        modified = true;
+                    }
+                }
+            }
+
+            if modified {
+                out.push_str(&new_line);
+            } else {
+                out.push_str(line);
+            }
+            out.push('\n');
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix E0308: `unsafe { __gv_max.clone() }` / `unsafe { __gv_min }` assigned
+    /// to chrono_duration type variables. The globals are typed as `i64` but are
+    /// semantically chrono_duration values. Wrap in `unsafe { std::mem::transmute(...) }`
+    /// when the declared type is a chrono_duration variant.
+    pub fn normalize_chrono_global_type_mismatch(code: &str) -> String {
+        if !code.contains("__gv_max") && !code.contains("__gv_min") {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len() + 512);
+
+        for line in code.lines() {
+            let trimmed = line.trim();
+            let mut rewritten = false;
+
+            // Pattern 1: `let [mut] VAR: CHRONO_TYPE = unsafe { __gv_max.clone() };`
+            // Pattern 2: `return unsafe { __gv_max };` in function returning chrono type
+            if trimmed.contains("chrono_") && (trimmed.contains("__gv_max") || trimmed.contains("__gv_min")) {
+                // Detect let binding with chrono type
+                if trimmed.starts_with("let ") && trimmed.contains("= unsafe {") {
+                    // `let mut X: CHRONO_TYPE = unsafe { __gv_max.clone() };`
+                    if let Some(colon_pos) = trimmed.find(": ") {
+                        let after_colon = &trimmed[colon_pos + 2..];
+                        if let Some(eq_pos) = after_colon.find(" = ") {
+                            let declared_type = after_colon[..eq_pos].trim();
+                            if declared_type.starts_with("chrono_") {
+                                // Extract the unsafe expression
+                                if let Some(unsafe_start) = trimmed.find("unsafe { ") {
+                                    if let Some(unsafe_end) = trimmed[unsafe_start..].find(" }") {
+                                        let inner_expr = &trimmed[unsafe_start + 9..unsafe_start + unsafe_end];
+                                        let indent = &line[..line.len() - trimmed.len()];
+                                        let prefix = &trimmed[..colon_pos + 2 + eq_pos + 3]; // "let mut X: TYPE = "
+                                        out.push_str(indent);
+                                        out.push_str(prefix);
+                                        out.push_str(&format!(
+                                            "unsafe {{ std::mem::transmute::<i64, {}>({}) }};",
+                                            declared_type, inner_expr
+                                        ));
+                                        out.push('\n');
+                                        rewritten = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !rewritten {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix E0605: `__result_float as i64` where __result_float is a chrono_duration
+    /// type (non-primitive cast). Replace with `unsafe { std::mem::transmute(...) }`.
+    pub fn normalize_chrono_as_primitive_cast(code: &str) -> String {
+        if !code.contains("chrono_") {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len() + 256);
+        // Track local variable types
+        let mut local_types: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
+        for line in code.lines() {
+            let trimmed = line.trim();
+
+            // Track `let [mut] VAR: CHRONO_TYPE = ...`
+            if trimmed.starts_with("let ") && trimmed.contains("chrono_") {
+                let rest = trimmed.strip_prefix("let mut ").unwrap_or(trimmed.strip_prefix("let ").unwrap_or(""));
+                if let Some(colon_pos) = rest.find(": ") {
+                    let var_name = rest[..colon_pos].trim().to_string();
+                    let after_colon = &rest[colon_pos + 2..];
+                    if let Some(eq_pos) = after_colon.find(" = ") {
+                        let var_type = after_colon[..eq_pos].trim().to_string();
+                        if var_type.starts_with("chrono_") {
+                            local_types.insert(var_name, var_type);
+                        }
+                    }
+                }
+            }
+
+            // Reset types at function boundaries
+            if (trimmed.starts_with("pub fn ") || trimmed.starts_with("fn ")) && trimmed.contains("(") {
+                local_types.clear();
+            }
+
+            let mut new_line = line.to_string();
+            let mut modified = false;
+
+            // Pattern: `return VAR as i64;` where VAR is chrono type
+            if trimmed.starts_with("return ") && trimmed.contains(" as i64;") {
+                if let Some(rest) = trimmed.strip_prefix("return ") {
+                    if let Some(expr) = rest.strip_suffix(" as i64;") {
+                        let expr = expr.trim();
+                        if local_types.contains_key(expr) {
+                            let indent = &line[..line.len() - trimmed.len()];
+                            new_line = format!("{}return unsafe {{ std::mem::transmute::<_, i64>({}) }};", indent, expr);
+                            modified = true;
+                        }
+                    }
+                }
+            }
+
+            if modified {
+                out.push_str(&new_line);
+            } else {
+                out.push_str(line);
+            }
+            out.push('\n');
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix E0308: `return unsafe { __gv_max };` / `return unsafe { __gv_min };`
+    /// where function return type is a chrono type. The global is i64 but return
+    /// type expects chrono_nanoseconds or similar.
+    pub fn normalize_chrono_global_return_mismatch(code: &str) -> String {
+        if !code.contains("__gv_max") && !code.contains("__gv_min") {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len() + 512);
+        let mut current_fn_return_type: Option<String> = None;
+
+        for line in code.lines() {
+            let trimmed = line.trim();
+
+            // Track function return types
+            if (trimmed.starts_with("pub fn ") || trimmed.starts_with("pub unsafe fn ")
+                || trimmed.starts_with("pub extern \"C\" fn ") || trimmed.starts_with("fn "))
+                && trimmed.contains("-> ")
+            {
+                if let Some(arrow_pos) = trimmed.rfind("-> ") {
+                    let ret_part = &trimmed[arrow_pos + 3..];
+                    let ret_type = ret_part.trim_end_matches('{').trim_end_matches(' ');
+                    if ret_type.starts_with("chrono_") {
+                        current_fn_return_type = Some(ret_type.to_string());
+                    } else {
+                        current_fn_return_type = None;
+                    }
+                }
+            }
+
+            let mut rewritten = false;
+
+            // Pattern: `return unsafe { __gv_max };` or `return unsafe { __gv_min };`
+            if let Some(ref ret_type) = current_fn_return_type {
+                if trimmed.starts_with("return unsafe {") && trimmed.ends_with("};") {
+                    let inner = trimmed.strip_prefix("return unsafe {")
+                        .and_then(|s| s.strip_suffix("};"))
+                        .map(|s| s.trim());
+                    if let Some(inner) = inner {
+                        if inner == "__gv_max" || inner == "__gv_min" {
+                            let indent = &line[..line.len() - trimmed.len()];
+                            out.push_str(indent);
+                            out.push_str(&format!(
+                                "return unsafe {{ std::mem::transmute::<i64, {}>({})}};",
+                                ret_type, inner
+                            ));
+                            out.push('\n');
+                            rewritten = true;
+                        }
+                    }
                 }
             }
 
@@ -133254,5 +133570,187 @@ pub extern \"C\" fn op_bitxor_1(__a: std__Ios_Fmtflags, __b: std__Ios_Fmtflags) 
         let input = "    __err |= 2i32 as u32;\n";
         let output = AstCodeGen::normalize_mixed_signedness_compound_ops(input);
         assert_eq!(output, input, "Should not double-cast");
+    }
+
+    // normalize_degraded_ref_zero_init tests (e.11)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_degraded_ref_zero_init_numpunct() {
+        let input = "        let __np: &numpunct_type_parameter_0_0 = &0;\n";
+        let output = AstCodeGen::normalize_degraded_ref_zero_init(input);
+        assert!(
+            output.contains("unsafe { &*std::ptr::null::<numpunct_type_parameter_0_0>() }"),
+            "Should replace &0 with null ptr ref, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_degraded_ref_zero_init_ctype() {
+        let input = "        let __ct: &ctype_type_parameter_0_0 = &0;\n";
+        let output = AstCodeGen::normalize_degraded_ref_zero_init(input);
+        assert!(
+            output.contains("unsafe { &*std::ptr::null::<ctype_type_parameter_0_0>() }"),
+            "Should replace &0 with null ptr ref for ctype, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_degraded_ref_zero_init_preserves_primitive() {
+        let input = "        let __x: &i32 = &0;\n";
+        let output = AstCodeGen::normalize_degraded_ref_zero_init(input);
+        assert_eq!(output, input, "Should not modify primitive ref type");
+    }
+
+    #[test]
+    fn test_degraded_ref_zero_init_preserves_non_zero() {
+        let input = "        let __np: &numpunct_type_parameter_0_0 = &__loc;\n";
+        let output = AstCodeGen::normalize_degraded_ref_zero_init(input);
+        assert_eq!(output, input, "Should not modify non-&0 init");
+    }
+
+    #[test]
+    fn test_degraded_ref_zero_init_mut_binding() {
+        let input = "        let mut __ct: &c_void = &0;\n";
+        let output = AstCodeGen::normalize_degraded_ref_zero_init(input);
+        assert!(
+            output.contains("unsafe { &*std::ptr::null::<c_void>() }"),
+            "Should handle mut bindings, got: {}",
+            output
+        );
+    }
+
+    // normalize_degraded_deref_as_integer_cast tests (e.11)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_degraded_deref_as_u64_cast() {
+        let input = "\
+        let mut __p: *const () = __lo as *const ();\n\
+        { __h = (((unsafe { *__p }) as u64) as u64) ;};\n";
+        let output = AstCodeGen::normalize_degraded_deref_as_integer_cast(input);
+        assert!(
+            output.contains("*(__p as *const u64)"),
+            "Should reinterpret void ptr deref as u64, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_degraded_deref_preserves_non_void_ptr() {
+        let input = "\
+        let mut __p: *const u8 = ptr;\n\
+        { __h = (((unsafe { *__p }) as u64) as u64) ;};\n";
+        let output = AstCodeGen::normalize_degraded_deref_as_integer_cast(input);
+        assert!(
+            !output.contains("*(__p as *const u64)"),
+            "Should not modify non-void ptr deref"
+        );
+    }
+
+    // normalize_chrono_global_type_mismatch tests (e.11)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_chrono_global_max_mismatch() {
+        let input = "    let mut __result_max: chrono_duration_long_long__ratio_1__1000000000 = unsafe { __gv_max.clone() };\n";
+        let output = AstCodeGen::normalize_chrono_global_type_mismatch(input);
+        assert!(
+            output.contains("std::mem::transmute::<i64, chrono_duration_long_long__ratio_1__1000000000>(__gv_max.clone())"),
+            "Should transmute i64 global to chrono type, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_chrono_global_min_mismatch() {
+        let input = "    let mut __result_min: chrono_duration_long_long__ratio_1__1000000000 = unsafe { __gv_min.clone() };\n";
+        let output = AstCodeGen::normalize_chrono_global_type_mismatch(input);
+        assert!(
+            output.contains("std::mem::transmute::<i64, chrono_duration_long_long__ratio_1__1000000000>(__gv_min.clone())"),
+            "Should transmute i64 global to chrono type, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_chrono_global_no_change_non_chrono() {
+        let input = "    let mut x: i64 = unsafe { __gv_max.clone() };\n";
+        let output = AstCodeGen::normalize_chrono_global_type_mismatch(input);
+        assert_eq!(output, input, "Should not modify non-chrono binding");
+    }
+
+    // normalize_chrono_as_primitive_cast tests (e.11)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_chrono_as_i64_cast() {
+        let input = "\
+    let mut __result_float: chrono_duration_long_long__ratio_1__1000000000 = Default::default();\n\
+    return __result_float as i64;\n";
+        let output = AstCodeGen::normalize_chrono_as_primitive_cast(input);
+        assert!(
+            output.contains("return unsafe { std::mem::transmute::<_, i64>(__result_float) };"),
+            "Should transmute chrono to i64, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_chrono_as_i64_preserves_non_chrono() {
+        let input = "\
+    let mut x: i64 = 0;\n\
+    return x as i64;\n";
+        let output = AstCodeGen::normalize_chrono_as_primitive_cast(input);
+        assert!(
+            !output.contains("transmute"),
+            "Should not modify non-chrono cast"
+        );
+    }
+
+    // normalize_chrono_global_return_mismatch tests (e.11)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_chrono_global_return_max() {
+        let input = "\
+pub fn __safe_nanosecond_cast(__d: chrono_duration_long_long__ratio_1__1000000000) -> chrono_nanoseconds {\n\
+    return unsafe { __gv_max };\n\
+}\n";
+        let output = AstCodeGen::normalize_chrono_global_return_mismatch(input);
+        assert!(
+            output.contains("std::mem::transmute::<i64, chrono_nanoseconds>(__gv_max)"),
+            "Should transmute __gv_max return to chrono type, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_chrono_global_return_min() {
+        let input = "\
+pub fn __safe_nanosecond_cast(__d: chrono_duration_long_long__ratio_1__1000000000) -> chrono_nanoseconds {\n\
+    return unsafe { __gv_min };\n\
+}\n";
+        let output = AstCodeGen::normalize_chrono_global_return_mismatch(input);
+        assert!(
+            output.contains("std::mem::transmute::<i64, chrono_nanoseconds>(__gv_min)"),
+            "Should transmute __gv_min return to chrono type, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_chrono_global_return_preserves_non_chrono_fn() {
+        let input = "\
+pub fn some_fn() -> i64 {\n\
+    return unsafe { __gv_max };\n\
+}\n";
+        let output = AstCodeGen::normalize_chrono_global_return_mismatch(input);
+        assert!(
+            !output.contains("transmute"),
+            "Should not modify non-chrono return type function"
+        );
     }
 }
