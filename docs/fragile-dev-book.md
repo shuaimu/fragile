@@ -21455,3 +21455,32 @@ Implemented:
 Result:
 - `P0.b.2.b.1.b.1.1` now has rehearsal, anchor-drift, and single-hunk guard contracts ahead of cutover day.
 - Date-gated declaration deletion remains deferred while cutover execution risk is further reduced.
+
+## 2026-03-22: `P0.b.2.b.1.b.1.1` declaration/reference count invariants (`P0.b.2.b.1.b.1.1.3`)
+
+Task sizing analysis:
+- Top-priority first undone leaf remains `P0.b.2.b.1.b.1.1`, still date-gated to on/after 2026-04-18.
+- The real cutover edit is small (~4-12 LOC), but cannot be executed before the gate date.
+- Executed a bounded pre-cutover child leaf (`P0.b.2.b.1.b.1.1.3`) to lock measurable declaration/reference count invariants and prevent collateral edits.
+
+Plan before execution:
+- add one pre-cutover child under `P0.b.2.b.1.b.1.1`;
+- document baseline and post-hunk counts for strict-backend declaration and qualified references;
+- add audit tests that enforce TODO decomposition and required count-check contract content.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific behavior, no force-native bypass, and no semantic fake/stub logic introduced.
+- Scope remains planning/contracts and regression guards.
+
+Implemented:
+- `TODO.md`
+  - added/completed `P0.b.2.b.1.b.1.1.3` (pre-cutover) while keeping `P0.b.2.b.1.b.1.1` date-gated.
+- `docs/dev/p0b2b1b1b1113_count_invariant_guard.md`
+  - added baseline/post-hunk count commands, expected values, and ownership boundaries.
+- `crates/fragile-clang/tests/p0_libtooling_removal_audit_tests.rs`
+  - added contract tests for TODO decomposition, document existence, and required count-invariant checks.
+
+Result:
+- `P0.b.2.b.1.b.1.1` now has rehearsal, anchor drift, single-hunk, and count-invariant guards before cutover day.
+- Date-gated declaration removal remains deferred while operator certainty and non-collateral safety checks increase.

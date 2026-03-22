@@ -1046,6 +1046,64 @@ fn p0b_2b1b1b1112_single_hunk_contract_contains_required_checks() {
     }
 }
 
+#[test]
+fn p0b_2b1b1b1113_task_decomposed_in_todo() {
+    let todo = read_project_file("TODO.md");
+    for expected_leaf in [
+        "P0.b.2.b.1.b.1.1.3 (pre-cutover)",
+        "P0.b.2.b.1.b.1.1 (on/after 2026-04-18)",
+        "P0.b.2.b.1.b.1.2 (on/after 2026-04-18)",
+    ] {
+        assert!(
+            todo.contains(expected_leaf),
+            "audit: TODO should contain decomposition for P0.b.2.b.1.b.1.1 count-invariant guard leaf `{}`",
+            expected_leaf
+        );
+    }
+}
+
+#[test]
+fn p0b_2b1b1b1113_count_invariant_guard_document_exists() {
+    let doc_path = project_root().join("docs/dev/p0b2b1b1b1113_count_invariant_guard.md");
+    assert!(
+        doc_path.exists(),
+        "audit: expected P0.b.2.b.1.b.1.1.3 count-invariant guard doc to exist at {}",
+        doc_path.display()
+    );
+}
+
+#[test]
+fn p0b_2b1b1b1113_count_invariant_guard_contains_required_checks() {
+    let doc = read_project_file("docs/dev/p0b2b1b1b1113_count_invariant_guard.md");
+    for required in [
+        "P0.b.2.b.1.b.1.1.3",
+        "P0.b.2.b.1.b.1.1",
+        "crates/fragile-driver/src/lib.rs",
+        "sed -n '36,39p' crates/fragile-driver/src/lib.rs | rg -n '^\\s*Libtooling,$' | wc -l",
+        "expected: 1",
+        "sed -n '42,44p' crates/fragile-driver/src/lib.rs | rg -n '^\\s*Libtooling,$' | wc -l",
+        "expected: 6",
+        "rg -n \"StrictParserBackend::Libtooling\" crates/fragile-driver/src/lib.rs | wc -l",
+        "594",
+        "622",
+        "912",
+        "1270",
+        "1701",
+        "1707",
+        "P0.b.2.b.1.b.1.2",
+        "P0.b.2.b.1.b.2",
+        "P0.b.2.b.1.b.3",
+        "P0.b.2.c",
+        "cargo test -p fragile-driver",
+    ] {
+        assert!(
+            doc.contains(required),
+            "audit: P0.b.2.b.1.b.1.1.3 count-invariant guard doc should contain `{}`",
+            required
+        );
+    }
+}
+
 /// Comprehensive summary test that produces the full audit inventory.
 #[test]
 fn p0a_audit_comprehensive_site_inventory() {
