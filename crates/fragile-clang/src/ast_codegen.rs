@@ -30103,6 +30103,16 @@ impl AstCodeGen {
         output = Self::normalize_chrono_as_primitive_cast(&output);
         // Fix E0308: `return unsafe { __gv_max };` in chrono-returning function.
         output = Self::normalize_chrono_global_return_mismatch(&output);
+        // Fix E0308: `(bool_fn()) == 0` should be `!(bool_fn())` in Rust.
+        output = Self::normalize_bool_equality_with_integer(&output);
+        // Fix E0308: `__vtable = &VTABLE_NAME` where __vtable is a raw pointer.
+        output = Self::normalize_vtable_ref_to_raw_ptr(&output);
+        // Fix E0308: mixed signedness in binary arithmetic (`u32 * i32`).
+        output = Self::normalize_mixed_signedness_binary_arithmetic(&output);
+        // Fix E0308: integer literal suffix mismatch in method calls (`Ni32` where `u32` expected).
+        output = Self::normalize_i32_literal_to_u32_in_method_args(&output);
+        // Fix E0308: `if cond { u32_expr } else { i32_var }` conditional type mismatch.
+        output = Self::normalize_conditional_signedness_mismatch(&output);
         // Final pass: late normalizations can still reintroduce statement-only
         // degraded preface expressions and default tail returns in helper bodies.
         output = Self::normalize_default_preface_local_assignment_artifacts(&output);
@@ -35305,6 +35315,258 @@ impl FragileAtomicBoolCompat for atomic_bool {
             }
         }
 
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix E0308: `(bool_fn()) == 0` should be `!bool_fn()` and
+    /// `(bool_fn()) != 0` should be `bool_fn()` in Rust.
+    /// C++ allows comparing bool to integer 0, Rust does not.
+    /// Targets `__fragile_char_traits_eq_i8(...)` and similar bool-returning helpers.
+    pub fn normalize_bool_equality_with_integer(code: &str) -> String {
+        if !code.contains("== 0)") && !code.contains("!= 0)") {
+            return code.to_string();
+        }
+        let bool_fn_prefixes = [
+            "__fragile_char_traits_eq_i8",
+            "__fragile_char_traits_lt_i8",
+        ];
+        let mut out = String::with_capacity(code.len());
+        for line in code.lines() {
+            let mut new_line = line.to_string();
+            for prefix in &bool_fn_prefixes {
+                // Pattern: `((CALL) == 0)` or `((CALL) != 0)` where CALL is a bool fn.
+                // Replace == 0 variant with `(!CALL)`, != 0 variant with `(CALL)`.
+                while let Some(fn_pos) = new_line.find(prefix) {
+                    let after_fn = &new_line[fn_pos + prefix.len()..];
+                    if !after_fn.starts_with('(') {
+                        break;
+                    }
+                    // Find the matching close paren for the function call
+                    let mut depth = 0i32;
+                    let mut close_pos = None;
+                    for (i, ch) in after_fn.char_indices() {
+                        match ch {
+                            '(' => depth += 1,
+                            ')' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    close_pos = Some(i);
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    let Some(cp) = close_pos else { break; };
+                    let call_end = fn_pos + prefix.len() + cp + 1;
+                    let call_str = new_line[fn_pos..call_end].to_string();
+                    let after_call = &new_line[call_end..];
+                    // Check for `(CALL) == 0)` — the `)` before `== 0` closes the inner `(`,
+                    // and the `)` after `0` closes the outer `(`.
+                    if after_call.starts_with(") == 0)") {
+                        // Verify there's a `((` before the function name
+                        let before_fn = &new_line[..fn_pos];
+                        if before_fn.ends_with("((") {
+                            // Original: `...((CALL) == 0)...`
+                            // Replace with: `...(!CALL)...`
+                            let outer_open = fn_pos - 2; // position of first `(`
+                            let outer_close = call_end + 7; // after `) == 0)`
+                            new_line = format!(
+                                "{}(!{}){}",
+                                &new_line[..outer_open],
+                                call_str,
+                                &new_line[outer_close..]
+                            );
+                            continue;
+                        }
+                    }
+                    if after_call.starts_with(") != 0)") {
+                        let before_fn = &new_line[..fn_pos];
+                        if before_fn.ends_with("((") {
+                            let outer_open = fn_pos - 2;
+                            let outer_close = call_end + 7;
+                            new_line = format!(
+                                "{}({}){}",
+                                &new_line[..outer_open],
+                                call_str,
+                                &new_line[outer_close..]
+                            );
+                            continue;
+                        }
+                    }
+                    break;
+                }
+            }
+            out.push_str(&new_line);
+            out.push('\n');
+        }
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix E0308: `__self.__base.__vtable = &VTABLE_NAME;` where __vtable is
+    /// `*const exception_vtable` but RHS is `&std_exception_vtable`.
+    /// Use addr_of! to take raw pointer from the static reference.
+    pub fn normalize_vtable_ref_to_raw_ptr(code: &str) -> String {
+        if !code.contains("__vtable = &") {
+            return code.to_string();
+        }
+        let mut out = String::with_capacity(code.len() + 256);
+        for line in code.lines() {
+            let trimmed = line.trim();
+            if trimmed.contains("__vtable = &")
+                && trimmed.ends_with(';')
+                && !trimmed.contains("std::ptr::addr_of!")
+                && !trimmed.contains("as *const")
+            {
+                // Pattern: `__self.__base.__vtable = &VTABLE_NAME;`
+                // -> `__self.__base.__vtable = std::ptr::addr_of!(VTABLE_NAME) as *const _;`
+                if let Some(ref_pos) = line.find("= &") {
+                    let vtable_name = &line[ref_pos + 3..].trim_end_matches(';').trim();
+                    let before = &line[..ref_pos + 2];
+                    let indent = &line[..line.len() - line.trim_start().len()];
+                    let new_line = format!(
+                        "{} unsafe {{ std::ptr::addr_of!({}) as *const _ }};",
+                        before, vtable_name
+                    );
+                    out.push_str(&new_line);
+                } else {
+                    out.push_str(line);
+                }
+            } else {
+                out.push_str(line);
+            }
+            out.push('\n');
+        }
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix E0308: mixed signedness in binary arithmetic operations.
+    /// `u32_var * i32_var` -> `u32_var * (i32_var as u32)`.
+    /// Targets: `__b2 * __base`, `__base * __base` patterns in __to_chars_len.
+    pub fn normalize_mixed_signedness_binary_arithmetic(code: &str) -> String {
+        if !code.contains("__base") {
+            return code.to_string();
+        }
+        let mut out = String::with_capacity(code.len() + 512);
+        // Track parameter types per function to know when __base is i32
+        let mut in_fn_with_i32_base = false;
+
+        for line in code.lines() {
+            let trimmed = line.trim();
+
+            // Detect function signature with `__base: i32`
+            if (trimmed.starts_with("pub fn ") || trimmed.starts_with("fn "))
+                && trimmed.contains("__base: i32")
+            {
+                in_fn_with_i32_base = true;
+            }
+
+            // End of function
+            if in_fn_with_i32_base && trimmed == "}" {
+                in_fn_with_i32_base = false;
+            }
+
+            if in_fn_with_i32_base {
+                let mut new_line = line.to_string();
+                // Pattern: `* __base)` in expressions like `((__base * __base) as u32)`
+                // or `((__b2 * __base) as u32)` - cast __base to match unsigned context
+                // Replace `* __base)` with `* (__base as u32))`
+                // But only when followed by `as u32` or `as u64`
+                if new_line.contains("* __base)") && (new_line.contains("as u32") || new_line.contains("as u64")) {
+                    new_line = new_line.replace("* __base)", "* (__base as u32))");
+                    // Also fix `__base *` pattern: `((__base * __base)` first operand
+                    // After first replace, the pattern may still have `__base * (`
+                    if new_line.contains("((__base *") {
+                        new_line = new_line.replace("((__base *", "(((__base as u32) *");
+                    }
+                }
+                out.push_str(&new_line);
+            } else {
+                out.push_str(line);
+            }
+            out.push('\n');
+        }
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix E0308: integer literal suffix `Ni32` where u32/Fmtflags is expected.
+    /// In method calls like `setf_1(16i32, 176i32)`, the integer literals need
+    /// `u32` suffix when the method parameter expects `std__Ios_Fmtflags` (u32).
+    pub fn normalize_i32_literal_to_u32_in_method_args(code: &str) -> String {
+        if !code.contains("i32)") && !code.contains("i32,") {
+            return code.to_string();
+        }
+        let mut out = String::with_capacity(code.len() + 256);
+        for line in code.lines() {
+            let trimmed = line.trim();
+            // Match `.setf_1(Ni32, Ni32)` and `.setf(Ni32)`
+            if trimmed.contains(".setf") && trimmed.contains("i32") {
+                out.push_str(&line.replace("i32)", "i32 as u32)").replace("i32,", "i32 as u32,"));
+            } else {
+                out.push_str(line);
+            }
+            out.push('\n');
+        }
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix E0308: `if __neg { !__val as u32 + 1 } else { __val }` where
+    /// the if-expr expects u32 but the else branch provides i32.
+    /// Add `as u32` cast to the else branch variable.
+    pub fn normalize_conditional_signedness_mismatch(code: &str) -> String {
+        if !code.contains("} else {") {
+            return code.to_string();
+        }
+        let mut out = String::with_capacity(code.len() + 256);
+        for line in code.lines() {
+            let trimmed = line.trim();
+            // Pattern: `let mut __uval: u32 = if COND { EXPR as u32 ... } else { VAR };`
+            // where VAR is an i32 parameter
+            if trimmed.contains(": u32 = if ")
+                && trimmed.contains("as u32")
+                && trimmed.contains("} else {")
+            {
+                // Find the else branch: `} else { VAR };`
+                if let Some(else_pos) = trimmed.find("} else { ") {
+                    let after_else = &trimmed[else_pos + 9..]; // after "} else { "
+                    if let Some(semi_pos) = after_else.find(" };") {
+                        let else_var = &after_else[..semi_pos];
+                        // Only if the else variable doesn't already have a cast
+                        if !else_var.contains(" as ") && else_var.starts_with("__") {
+                            let new_else = format!("{} as u32", else_var);
+                            let indent = &line[..line.len() - line.trim_start().len()];
+                            let new_trimmed = format!(
+                                "{}{}{}",
+                                &trimmed[..else_pos + 9],
+                                new_else,
+                                &trimmed[else_pos + 9 + semi_pos..]
+                            );
+                            out.push_str(indent);
+                            out.push_str(&new_trimmed);
+                            out.push('\n');
+                            continue;
+                        }
+                    }
+                }
+            }
+            out.push_str(line);
+            out.push('\n');
+        }
         if !code.ends_with('\n') && out.ends_with('\n') {
             out.pop();
         }
@@ -133752,5 +134014,157 @@ pub fn some_fn() -> i64 {\n\
             !output.contains("transmute"),
             "Should not modify non-chrono return type function"
         );
+    }
+
+    // normalize_bool_equality_with_integer tests (e.12)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_bool_eq_zero_to_negation() {
+        let input = "        while ((__fragile_char_traits_eq_i8(a, b)) == 0) {\n";
+        let output = AstCodeGen::normalize_bool_equality_with_integer(input);
+        assert!(
+            output.contains("!__fragile_char_traits_eq_i8(a, b)"),
+            "Should convert == 0 to negation, got: {}",
+            output
+        );
+        assert!(!output.contains("== 0"), "Should remove == 0, got: {}", output);
+    }
+
+    #[test]
+    fn test_bool_eq_zero_with_complex_args() {
+        let input = "        while ((__fragile_char_traits_eq_i8(unsafe { &*__p.add((__i) as usize) }, &Default::default())) == 0) {\n";
+        let output = AstCodeGen::normalize_bool_equality_with_integer(input);
+        assert!(
+            output.contains("!__fragile_char_traits_eq_i8("),
+            "Should convert complex call == 0 to negation, got: {}",
+            output
+        );
+        assert!(!output.contains("== 0"), "Should remove == 0, got: {}", output);
+    }
+
+    #[test]
+    fn test_bool_ne_zero_to_identity() {
+        let input = "        if ((__fragile_char_traits_eq_i8(a, b)) != 0) {\n";
+        let output = AstCodeGen::normalize_bool_equality_with_integer(input);
+        assert!(
+            !output.contains("!= 0"),
+            "Should remove != 0, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_bool_eq_zero_no_change_without_pattern() {
+        let input = "        let x = count == 0;\n";
+        let output = AstCodeGen::normalize_bool_equality_with_integer(input);
+        assert_eq!(output, input, "Should not modify code without )) == 0) pattern");
+    }
+
+    // normalize_vtable_ref_to_raw_ptr tests (e.12)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_vtable_ref_to_raw_ptr() {
+        let input = "                    __self.__base.__vtable = &BAD_FUNCTION_CALL_VTABLE;\n";
+        let output = AstCodeGen::normalize_vtable_ref_to_raw_ptr(input);
+        assert!(
+            output.contains("std::ptr::addr_of!(BAD_FUNCTION_CALL_VTABLE) as *const _"),
+            "Should use addr_of! for vtable pointer, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_vtable_ref_to_raw_ptr_no_change_without_vtable() {
+        let input = "        __self.__base.__field = &SOME_VALUE;\n";
+        let output = AstCodeGen::normalize_vtable_ref_to_raw_ptr(input);
+        assert_eq!(output, input, "Should not modify non-vtable assignments");
+    }
+
+    #[test]
+    fn test_vtable_ref_already_cast() {
+        let input = "                    __self.__base.__vtable = &VTABLE as *const _;\n";
+        let output = AstCodeGen::normalize_vtable_ref_to_raw_ptr(input);
+        assert_eq!(output, input, "Should not double-cast");
+    }
+
+    // normalize_mixed_signedness_binary_arithmetic tests (e.12)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_mixed_signedness_binary_base_mul() {
+        let input = "\
+pub fn __to_chars_len_u64(__value: u64, __base: i32) -> u32 {\n\
+    let mut __b2: u32 = ((__base * __base) as u32);\n\
+    let mut __b3: u32 = ((__b2 * __base) as u32);\n\
+}\n";
+        let output = AstCodeGen::normalize_mixed_signedness_binary_arithmetic(input);
+        assert!(
+            output.contains("((__base as u32) * (__base as u32))"),
+            "Should cast __base to u32 in multiplication, got: {}",
+            output
+        );
+        assert!(
+            output.contains("__b2 * (__base as u32))"),
+            "Should cast __base operand, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_mixed_signedness_no_change_without_base() {
+        let input = "    let x = a * b;\n";
+        let output = AstCodeGen::normalize_mixed_signedness_binary_arithmetic(input);
+        assert_eq!(output, input, "Should not modify code without __base");
+    }
+
+    // normalize_i32_literal_to_u32_in_method_args tests (e.12)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_setf_i32_literal_to_u32() {
+        let input = "                __base.setf_1(16i32, 176i32);\n";
+        let output = AstCodeGen::normalize_i32_literal_to_u32_in_method_args(input);
+        assert!(
+            output.contains("16i32 as u32") && output.contains("176i32 as u32"),
+            "Should add as u32 cast to i32 literals in setf, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_setf_no_change_without_i32() {
+        let input = "                __base.setf_1(16u32, 176u32);\n";
+        let output = AstCodeGen::normalize_i32_literal_to_u32_in_method_args(input);
+        assert_eq!(output, input, "Should not modify u32 literals");
+    }
+
+    // normalize_conditional_signedness_mismatch tests (e.12)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_conditional_i32_to_u32() {
+        let input = "                let mut __uval: u32 = if __neg { !__val as u32 + 1 } else { __val };\n";
+        let output = AstCodeGen::normalize_conditional_signedness_mismatch(input);
+        assert!(
+            output.contains("} else { __val as u32 }"),
+            "Should add as u32 cast in else branch, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_conditional_no_change_already_cast() {
+        let input = "                let mut __uval: u32 = if __neg { !__val as u32 + 1 } else { __val as u32 };\n";
+        let output = AstCodeGen::normalize_conditional_signedness_mismatch(input);
+        assert_eq!(output, input, "Should not double-cast");
+    }
+
+    #[test]
+    fn test_conditional_no_change_non_u32_type() {
+        let input = "                let mut __uval: i64 = if __neg { !__val + 1 } else { __val };\n";
+        let output = AstCodeGen::normalize_conditional_signedness_mismatch(input);
+        assert_eq!(output, input, "Should not modify non-u32 conditionals");
     }
 }

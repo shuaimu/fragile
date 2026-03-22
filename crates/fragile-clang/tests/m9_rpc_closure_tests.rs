@@ -4975,3 +4975,81 @@ pub fn __safe_nanosecond_cast(__d: chrono_duration_long_long__ratio_1__100000000
         output
     );
 }
+
+// ======================================================================
+// M9.2.c.iv.e.12: Bool equality, vtable ref, mixed signedness, setf literal, conditional cast
+// ======================================================================
+
+#[test]
+fn m9_2c_iv_e12_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md must exist");
+    assert!(
+        todo.contains("M9.2.c.iv.e.12"),
+        "M9.2.c.iv.e.12 must be documented in TODO.md"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e12_bool_eq_zero_converted_to_negation() {
+    use fragile_clang::AstCodeGen;
+    let input = "\
+        while ((__fragile_char_traits_eq_i8(unsafe { &*__p.add((__i) as usize) }, &Default::default())) == 0) {
+";
+    let output = AstCodeGen::normalize_bool_equality_with_integer(input);
+    assert!(
+        output.contains("!__fragile_char_traits_eq_i8("),
+        "M9.2.c.iv.e.12: bool == 0 should become negation, got: {}",
+        output
+    );
+    assert!(
+        !output.contains("== 0"),
+        "M9.2.c.iv.e.12: == 0 should be removed, got: {}",
+        output
+    );
+}
+
+#[test]
+fn m9_2c_iv_e12_vtable_ref_gets_raw_ptr_cast() {
+    use fragile_clang::AstCodeGen;
+    let input = "\
+                    __self.__base.__vtable = &BAD_FUNCTION_CALL_VTABLE;
+";
+    let output = AstCodeGen::normalize_vtable_ref_to_raw_ptr(input);
+    assert!(
+        output.contains("std::ptr::addr_of!(BAD_FUNCTION_CALL_VTABLE) as *const _"),
+        "M9.2.c.iv.e.12: vtable ref should use addr_of!, got: {}",
+        output
+    );
+}
+
+#[test]
+fn m9_2c_iv_e12_mixed_signedness_binary_arithmetic_fixed() {
+    use fragile_clang::AstCodeGen;
+    let input = "\
+pub fn __to_chars_len_u64(__value: u64, __base: i32) -> u32 {
+    let mut __b2: u32 = ((__base * __base) as u32);
+    let mut __b3: u32 = ((__b2 * __base) as u32);
+}
+";
+    let output = AstCodeGen::normalize_mixed_signedness_binary_arithmetic(input);
+    assert!(
+        output.contains("(__base as u32)"),
+        "M9.2.c.iv.e.12: __base should be cast to u32, got: {}",
+        output
+    );
+}
+
+#[test]
+fn m9_2c_iv_e12_setf_i32_literal_cast_to_u32() {
+    use fragile_clang::AstCodeGen;
+    let input = "                __base.setf_1(16i32, 176i32);\n";
+    let output = AstCodeGen::normalize_i32_literal_to_u32_in_method_args(input);
+    assert!(
+        output.contains("16i32 as u32") && output.contains("176i32 as u32"),
+        "M9.2.c.iv.e.12: setf i32 literals should be cast to u32, got: {}",
+        output
+    );
+}
