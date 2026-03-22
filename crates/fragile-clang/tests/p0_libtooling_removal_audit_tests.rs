@@ -931,6 +931,121 @@ fn p0b_2b1b1b1110_rehearsal_document_contains_required_boundaries() {
     }
 }
 
+#[test]
+fn p0b_2b1b1b1111_task_decomposed_in_todo() {
+    let todo = read_project_file("TODO.md");
+    for expected_leaf in [
+        "P0.b.2.b.1.b.1.1.1 (pre-cutover)",
+        "P0.b.2.b.1.b.1.1 (on/after 2026-04-18)",
+        "P0.b.2.b.1.b.1.2 (on/after 2026-04-18)",
+    ] {
+        assert!(
+            todo.contains(expected_leaf),
+            "audit: TODO should contain decomposition for P0.b.2.b.1.b.1.1 drift-guard leaf `{}`",
+            expected_leaf
+        );
+    }
+}
+
+#[test]
+fn p0b_2b1b1b1111_drift_guard_document_exists() {
+    let doc_path =
+        project_root().join("docs/dev/p0b2b1b1b1111_declaration_anchor_drift_guard.md");
+    assert!(
+        doc_path.exists(),
+        "audit: expected P0.b.2.b.1.b.1.1.1 drift-guard doc to exist at {}",
+        doc_path.display()
+    );
+}
+
+#[test]
+fn p0b_2b1b1b1111_drift_guard_document_contains_required_checks() {
+    let doc = read_project_file("docs/dev/p0b2b1b1b1111_declaration_anchor_drift_guard.md");
+    for required in [
+        "P0.b.2.b.1.b.1.1.1",
+        "P0.b.2.b.1.b.1.1",
+        "crates/fragile-driver/src/lib.rs",
+        "enum StrictParserBackend",
+        "Libtooling,",
+        "ParserCore { backend_id: String },",
+        "nl -ba crates/fragile-driver/src/lib.rs | sed -n '34,40p'",
+        "rg -n \"StrictParserBackend::Libtooling\" crates/fragile-driver/src/lib.rs",
+        "594",
+        "622",
+        "912",
+        "1270",
+        "1701",
+        "1707",
+        "P0.b.2.b.1.b.2",
+        "P0.b.2.b.1.b.3",
+        "P0.b.2.c",
+        "P0.b.2.b.1.b.1.2",
+        "cargo test -p fragile-driver",
+    ] {
+        assert!(
+            doc.contains(required),
+            "audit: P0.b.2.b.1.b.1.1.1 drift-guard doc should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn p0b_2b1b1b1112_task_decomposed_in_todo() {
+    let todo = read_project_file("TODO.md");
+    for expected_leaf in [
+        "P0.b.2.b.1.b.1.1.2 (pre-cutover)",
+        "P0.b.2.b.1.b.1.1 (on/after 2026-04-18)",
+        "P0.b.2.b.1.b.1.2 (on/after 2026-04-18)",
+    ] {
+        assert!(
+            todo.contains(expected_leaf),
+            "audit: TODO should contain decomposition for P0.b.2.b.1.b.1.1 single-hunk contract leaf `{}`",
+            expected_leaf
+        );
+    }
+}
+
+#[test]
+fn p0b_2b1b1b1112_single_hunk_contract_document_exists() {
+    let doc_path =
+        project_root().join("docs/dev/p0b2b1b1b1112_single_hunk_patch_contract.md");
+    assert!(
+        doc_path.exists(),
+        "audit: expected P0.b.2.b.1.b.1.1.2 single-hunk contract doc to exist at {}",
+        doc_path.display()
+    );
+}
+
+#[test]
+fn p0b_2b1b1b1112_single_hunk_contract_contains_required_checks() {
+    let doc = read_project_file("docs/dev/p0b2b1b1b1112_single_hunk_patch_contract.md");
+    for required in [
+        "P0.b.2.b.1.b.1.1.2",
+        "P0.b.2.b.1.b.1.1",
+        "crates/fragile-driver/src/lib.rs",
+        "StrictParserBackend::Libtooling",
+        "enum StrictParserBackend {",
+        "-    Libtooling,",
+        "ParserCore { backend_id: String },",
+        "rg -n '^\\s*Libtooling,$' crates/fragile-driver/src/lib.rs",
+        "nl -ba crates/fragile-driver/src/lib.rs | sed -n '34,40p'",
+        "rg -n 'ParserCore \\{ backend_id: String \\},' crates/fragile-driver/src/lib.rs",
+        "rg -n \"StrictParserBackend::Libtooling\" crates/fragile-driver/src/lib.rs",
+        "P0.b.2.b.1.b.2",
+        "P0.b.2.b.1.b.3",
+        "P0.b.2.c",
+        "P0.b.2.b.1.b.1.2",
+        "cargo test -p fragile-driver",
+    ] {
+        assert!(
+            doc.contains(required),
+            "audit: P0.b.2.b.1.b.1.1.2 single-hunk contract doc should contain `{}`",
+            required
+        );
+    }
+}
+
 /// Comprehensive summary test that produces the full audit inventory.
 #[test]
 fn p0a_audit_comprehensive_site_inventory() {

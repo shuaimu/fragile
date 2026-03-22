@@ -21397,3 +21397,61 @@ Implemented:
 Result:
 - `P0.b.2.b.1.b.1.1` now has a narrow, test-locked rehearsal contract that preserves the 2026-04-18 date gate.
 - Cutover-day declaration deletion can proceed with explicit downstream ownership and no shortcut behavior.
+
+## 2026-03-22: `P0.b.2.b.1.b.1.1` declaration-anchor drift guard (`P0.b.2.b.1.b.1.1.1`)
+
+Task sizing analysis:
+- Top-priority first undone leaf remained `P0.b.2.b.1.b.1.1`, which is still date-gated to on/after 2026-04-18.
+- Direct declaration deletion is still small (~4-10 LOC), but blocked by date gate.
+- Executed a bounded pre-cutover child leaf (`P0.b.2.b.1.b.1.1.1`) to lock declaration-anchor/reference checks and prevent cutover-day drift.
+
+Plan before execution:
+- add one pre-cutover TODO child under `P0.b.2.b.1.b.1.1`;
+- publish a declaration-anchor drift guard with concrete verification commands;
+- add audit tests that enforce TODO decomposition and drift-guard doc content.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific bypass, no `FRAGILEC_FORCE_NATIVE_SOURCES` usage, and no semantic fake/stub behavior was introduced.
+- Scope remains planning/contracts and regression guards only.
+
+Implemented:
+- `TODO.md`
+  - added/completed `P0.b.2.b.1.b.1.1.1` (pre-cutover) while keeping `P0.b.2.b.1.b.1.1` date-gated.
+- `docs/dev/p0b2b1b1b1111_declaration_anchor_drift_guard.md`
+  - captured declaration fingerprint, line-window verification, qualified reference inventory, and ownership boundaries.
+- `crates/fragile-clang/tests/p0_libtooling_removal_audit_tests.rs`
+  - added contract tests for TODO decomposition, drift-guard document existence, and required content.
+
+Result:
+- `P0.b.2.b.1.b.1.1` now has both a rehearsal contract and anchor-drift guard before cutover day.
+- Date-gated deletion remains deferred while operator certainty and auditability improve.
+
+## 2026-03-22: `P0.b.2.b.1.b.1.1` single-hunk delete contract (`P0.b.2.b.1.b.1.1.2`)
+
+Task sizing analysis:
+- Top-priority first undone leaf remains `P0.b.2.b.1.b.1.1`, but it is date-gated to on/after 2026-04-18.
+- Direct declaration deletion is still a small edit (~4-12 LOC) and below the 1000-LOC target.
+- Since the date gate blocks code deletion today, this run executed an additional pre-cutover child leaf (`P0.b.2.b.1.b.1.1.2`) to lock a delete-only hunk contract and collateral-edit guard.
+
+Plan before execution:
+- add one pre-cutover child under `P0.b.2.b.1.b.1.1`;
+- publish an exact single-hunk delete contract with pre/post grep checks;
+- add audit tests to enforce TODO decomposition and required contract content.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific behavior, no `FRAGILEC_FORCE_NATIVE_SOURCES` bypass, and no semantic fake/stub logic introduced.
+- Scope remains planning/contracts and regression guards only.
+
+Implemented:
+- `TODO.md`
+  - added/completed `P0.b.2.b.1.b.1.1.2` (pre-cutover) while preserving date-gated `P0.b.2.b.1.b.1.1`.
+- `docs/dev/p0b2b1b1b1112_single_hunk_patch_contract.md`
+  - added delete-only hunk shape, pre/post grep checks, collateral-edit guard, and ownership boundaries.
+- `crates/fragile-clang/tests/p0_libtooling_removal_audit_tests.rs`
+  - added contract tests for TODO decomposition, doc existence, and required content checks for `P0.b.2.b.1.b.1.1.2`.
+
+Result:
+- `P0.b.2.b.1.b.1.1` now has rehearsal, anchor-drift, and single-hunk guard contracts ahead of cutover day.
+- Date-gated declaration deletion remains deferred while cutover execution risk is further reduced.
