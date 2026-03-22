@@ -30078,6 +30078,13 @@ impl AstCodeGen {
         // where field is a pointer/float/struct type, and enum-to-integer
         // assignments in constructor bodies.
         output = Self::normalize_ctor_zero_init_type_mismatches(&output);
+        // Fix E0308 ordering type conversion mismatches: strong_ordering →
+        // partial_ordering, weak_ordering → partial_ordering, etc.
+        output = Self::normalize_ordering_type_conversions(&output);
+        // Fix E0308 memory_order::* enum passed where u32 (iostate) expected.
+        output = Self::normalize_memory_order_enum_to_integer(&output);
+        // Fix E0308 degraded atomic new_1() parameter types.
+        output = Self::normalize_atomic_degraded_new_params(&output);
         // Final pass: late normalizations can still reintroduce statement-only
         // degraded preface expressions and default tail returns in helper bodies.
         output = Self::normalize_default_preface_local_assignment_artifacts(&output);
@@ -34405,6 +34412,221 @@ impl FragileAtomicBoolCompat for atomic_bool {
 
         if !code.ends_with('\n') && !out.is_empty() {
             out.pop();
+        }
+        out
+    }
+
+    /// Fix E0308 ordering type conversion mismatches.
+    ///
+    /// C++ has implicit conversions: strong_ordering -> weak_ordering -> partial_ordering.
+    /// The transpiler emits `STRONG_ORDERING_EQUIVALENT` or `WEAK_ORDERING_EQUIVALENT`
+    /// (which are MaybeUninit<T>) in functions returning `partial_ordering` or
+    /// `weak_ordering`.  This pass detects the return type of each function and
+    /// replaces mismatched ordering constants with the correct target type,
+    /// constructing the value directly instead of referencing MaybeUninit globals.
+    pub fn normalize_ordering_type_conversions(code: &str) -> String {
+        // Quick bail: if none of the cross-ordering patterns exist, nothing to do.
+        if !code.contains("WEAK_ORDERING_") && !code.contains("STRONG_ORDERING_") {
+            return code.to_string();
+        }
+
+        // Mapping from ordering constant names to their integer __value_ values
+        // and the type they belong to.
+        let ordering_values: &[(&str, i8)] = &[
+            ("WEAK_ORDERING_LESS", -1),
+            ("WEAK_ORDERING_EQUIVALENT", 0),
+            ("WEAK_ORDERING_GREATER", 1),
+            ("STRONG_ORDERING_LESS", -1),
+            ("STRONG_ORDERING_EQUAL", 0),
+            ("STRONG_ORDERING_EQUIVALENT", 0),
+            ("STRONG_ORDERING_GREATER", 1),
+        ];
+
+        let mut out = String::with_capacity(code.len());
+        let mut current_return_type: Option<&str> = None;
+
+        for line in code.lines() {
+            let trimmed = line.trim_start();
+
+            // Detect function return type
+            if (trimmed.starts_with("pub fn ")
+                || trimmed.starts_with("fn ")
+                || trimmed.starts_with("pub unsafe fn "))
+                && trimmed.contains("->")
+            {
+                if trimmed.contains("-> partial_ordering") {
+                    current_return_type = Some("partial_ordering");
+                } else if trimmed.contains("-> weak_ordering") {
+                    current_return_type = Some("weak_ordering");
+                } else {
+                    current_return_type = None;
+                }
+            }
+
+            // Check if this line has cross-type ordering references
+            let needs_fix = current_return_type.is_some()
+                && match current_return_type {
+                    Some("partial_ordering") => {
+                        line.contains("WEAK_ORDERING_") || line.contains("STRONG_ORDERING_")
+                    }
+                    Some("weak_ordering") => line.contains("STRONG_ORDERING_"),
+                    _ => false,
+                };
+
+            if needs_fix {
+                let mut fixed = line.to_string();
+                let ret_type = current_return_type.unwrap();
+
+                for &(const_name, value) in ordering_values {
+                    // Only replace if this is a cross-type reference
+                    let is_cross_type = match ret_type {
+                        "partial_ordering" => {
+                            const_name.starts_with("WEAK_ORDERING_")
+                                || const_name.starts_with("STRONG_ORDERING_")
+                        }
+                        "weak_ordering" => const_name.starts_with("STRONG_ORDERING_"),
+                        _ => false,
+                    };
+                    if !is_cross_type || !fixed.contains(const_name) {
+                        continue;
+                    }
+
+                    // Build the replacement: construct the target ordering type directly
+                    let (field_name, type_name) = match ret_type {
+                        "partial_ordering" => ("_M_value", "partial_ordering"),
+                        "weak_ordering" => ("__value_", "weak_ordering"),
+                        _ => continue,
+                    };
+
+                    // Replace `unsafe { CONST_NAME }` with direct construction
+                    let from = format!("unsafe {{ {} }}", const_name);
+                    let to = format!("{} {{ {}: {} }}", type_name, field_name, value);
+                    fixed = fixed.replace(&from, &to);
+                }
+                out.push_str(&fixed);
+            } else {
+                out.push_str(line);
+            }
+            out.push('\n');
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix E0308 `memory_order::X` passed where `u32` is expected.
+    ///
+    /// The transpiler sometimes maps C++ `ios_base::goodbit` (which is `0u32`)
+    /// to `memory_order::relaxed` because both have value 0 and the transpiler
+    /// picks the wrong enum.  This pass adds `as u32` casts when `memory_order::*`
+    /// is passed as an argument to `self.clear(`, `self.setstate(`, or similar
+    /// ios_base methods that expect `u32` (iostate).
+    pub fn normalize_memory_order_enum_to_integer(code: &str) -> String {
+        if !code.contains("memory_order::") {
+            return code.to_string();
+        }
+
+        // ios_base methods that take iostate (u32) arguments
+        let ios_methods = ["self.clear(", "self.setstate(", "self.rdstate("];
+        let mo_variants = [
+            "memory_order::relaxed",
+            "memory_order::consume",
+            "memory_order::acquire",
+            "memory_order::release",
+            "memory_order::acq_rel",
+            "memory_order::seq_cst",
+        ];
+
+        let mut out = String::with_capacity(code.len());
+        for line in code.lines() {
+            let mut fixed = line.to_string();
+            for method in &ios_methods {
+                if fixed.contains(method) {
+                    for variant in &mo_variants {
+                        let from = format!("({})", variant);
+                        let to = format!("({} as u32)", variant);
+                        fixed = fixed.replace(&from, &to);
+                        // Also handle without surrounding parens
+                        // e.g., self.clear(memory_order::relaxed);
+                        if fixed.contains(&format!("{}{}", method, variant)) {
+                            let from2 = format!("{}{}", method, variant);
+                            let to2 = format!("{}{} as u32", method, variant);
+                            fixed = fixed.replace(&from2, &to2);
+                        }
+                    }
+                }
+            }
+            out.push_str(&fixed);
+            out.push('\n');
+        }
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix E0308 for degraded atomic constructor parameters.
+    ///
+    /// Atomic types like `std_atomic_int` and `std_atomic_i64` have degraded
+    /// `new_1(__d: ())` constructors that accept `()` but callers pass actual
+    /// integer values.  This pass rewrites `std_atomic_INT::new_1(VALUE)` to
+    /// `std_atomic_INT::new_1(())` since the atomic struct has no fields and
+    /// the value is discarded anyway.
+    pub fn normalize_atomic_degraded_new_params(code: &str) -> String {
+        if !code.contains("std_atomic_") || !code.contains("::new_1(") {
+            return code.to_string();
+        }
+
+        let atomic_types = [
+            "std_atomic_int",
+            "std_atomic_i64",
+            "std_atomic_i32",
+            "std_atomic_u32",
+            "std_atomic_u64",
+            "std_atomic_bool",
+            "std_atomic_long",
+            "std_atomic_unsigned_int",
+            "std_atomic_unsigned_long",
+        ];
+
+        let mut out = code.to_string();
+        for ty in &atomic_types {
+            let prefix = format!("{}::new_1(", ty);
+            let mut search_from = 0usize;
+            while let Some(rel_start) = out[search_from..].find(&prefix) {
+                let start = search_from + rel_start;
+                let arg_start = start + prefix.len();
+                // Find matching closing paren
+                let mut depth = 1i32;
+                let mut end = arg_start;
+                for (i, ch) in out[arg_start..].char_indices() {
+                    match ch {
+                        '(' => depth += 1,
+                        ')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                end = arg_start + i;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if depth != 0 {
+                    break; // malformed, bail
+                }
+                let arg = &out[arg_start..end];
+                if arg.trim() != "()" {
+                    // Replace the argument with ()
+                    let replacement = format!("{}::new_1(()", ty);
+                    out = format!("{}{}{}", &out[..start], replacement, &out[end..]);
+                    search_from = start + replacement.len();
+                } else {
+                    search_from = end + 1;
+                }
+            }
         }
         out
     }
@@ -132249,5 +132471,193 @@ impl domain_error {
         let output =
             AstCodeGen::normalize_ios_base_fmtflags_primitive_associated_constants(input);
         assert_eq!(output, input, "Should not modify unrelated code");
+    }
+
+    // -----------------------------------------------------------------------
+    // normalize_ordering_type_conversions tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_normalize_ordering_weak_to_partial() {
+        let input = "\
+pub fn op_partial_ordering(&self, ) -> partial_ordering {
+    return (if (self.__value_ as i32) == 0 { unsafe { WEAK_ORDERING_EQUIVALENT } } else { (if (self.__value_ as i32) < 0 { unsafe { WEAK_ORDERING_LESS } } else { unsafe { WEAK_ORDERING_GREATER } }) }).clone();
+}
+";
+        let output = AstCodeGen::normalize_ordering_type_conversions(input);
+        assert!(
+            output.contains("partial_ordering { _M_value: 0 }"),
+            "WEAK_ORDERING_EQUIVALENT should become partial_ordering {{ _M_value: 0 }}, got: {}",
+            output
+        );
+        assert!(
+            output.contains("partial_ordering { _M_value: -1 }"),
+            "WEAK_ORDERING_LESS should become partial_ordering {{ _M_value: -1 }}"
+        );
+        assert!(
+            output.contains("partial_ordering { _M_value: 1 }"),
+            "WEAK_ORDERING_GREATER should become partial_ordering {{ _M_value: 1 }}"
+        );
+        assert!(
+            !output.contains("WEAK_ORDERING_"),
+            "No WEAK_ORDERING_ constants should remain"
+        );
+    }
+
+    #[test]
+    fn test_normalize_ordering_strong_to_partial() {
+        let input = "\
+pub fn op_partial_ordering(&self, ) -> partial_ordering {
+    return (if (self.__value_ as i32) == 0 { unsafe { STRONG_ORDERING_EQUIVALENT } } else { (if (self.__value_ as i32) < 0 { unsafe { STRONG_ORDERING_LESS } } else { unsafe { STRONG_ORDERING_GREATER } }) }).clone();
+}
+";
+        let output = AstCodeGen::normalize_ordering_type_conversions(input);
+        assert!(
+            output.contains("partial_ordering { _M_value: 0 }"),
+            "STRONG_ORDERING_EQUIVALENT should become partial_ordering {{ _M_value: 0 }}"
+        );
+        assert!(
+            !output.contains("STRONG_ORDERING_"),
+            "No STRONG_ORDERING_ constants should remain"
+        );
+    }
+
+    #[test]
+    fn test_normalize_ordering_strong_to_weak() {
+        let input = "\
+pub fn op_weak_ordering(&self, ) -> weak_ordering {
+    return (if (self.__value_ as i32) == 0 { unsafe { STRONG_ORDERING_EQUIVALENT } } else { (if (self.__value_ as i32) < 0 { unsafe { STRONG_ORDERING_LESS } } else { unsafe { STRONG_ORDERING_GREATER } }) }).clone();
+}
+";
+        let output = AstCodeGen::normalize_ordering_type_conversions(input);
+        assert!(
+            output.contains("weak_ordering { __value_: 0 }"),
+            "STRONG_ORDERING_EQUIVALENT should become weak_ordering {{ __value_: 0 }}, got: {}",
+            output
+        );
+        assert!(
+            output.contains("weak_ordering { __value_: -1 }"),
+            "STRONG_ORDERING_LESS should become weak_ordering {{ __value_: -1 }}"
+        );
+        assert!(
+            !output.contains("STRONG_ORDERING_"),
+            "No STRONG_ORDERING_ constants should remain"
+        );
+    }
+
+    #[test]
+    fn test_normalize_ordering_preserves_correct_type() {
+        // partial_ordering using PARTIAL_ORDERING_ constants should not be touched
+        let input = "\
+pub fn some_fn() -> partial_ordering {
+    return unsafe { PARTIAL_ORDERING_EQUIVALENT };
+}
+";
+        let output = AstCodeGen::normalize_ordering_type_conversions(input);
+        assert_eq!(output, input, "Should not modify correct ordering type references");
+    }
+
+    #[test]
+    fn test_normalize_ordering_no_change_without_ordering() {
+        let input = "pub fn foo() -> i32 { 42 }\n";
+        let output = AstCodeGen::normalize_ordering_type_conversions(input);
+        assert_eq!(output, input, "Should not modify code without ordering constants");
+    }
+
+    #[test]
+    fn test_normalize_ordering_strong_equal_variant() {
+        let input = "\
+pub fn op_weak_ordering(&self, ) -> weak_ordering {
+    return unsafe { STRONG_ORDERING_EQUAL }.clone();
+}
+";
+        let output = AstCodeGen::normalize_ordering_type_conversions(input);
+        assert!(
+            output.contains("weak_ordering { __value_: 0 }"),
+            "STRONG_ORDERING_EQUAL should become weak_ordering {{ __value_: 0 }}, got: {}",
+            output
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // normalize_memory_order_enum_to_integer tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_normalize_memory_order_clear_relaxed() {
+        let input = "        self.clear(memory_order::relaxed);\n";
+        let output = AstCodeGen::normalize_memory_order_enum_to_integer(input);
+        assert!(
+            output.contains("memory_order::relaxed as u32"),
+            "memory_order::relaxed should be cast to u32, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_memory_order_setstate() {
+        let input = "        self.setstate(memory_order::seq_cst);\n";
+        let output = AstCodeGen::normalize_memory_order_enum_to_integer(input);
+        assert!(
+            output.contains("memory_order::seq_cst as u32"),
+            "memory_order::seq_cst should be cast to u32 in setstate"
+        );
+    }
+
+    #[test]
+    fn test_normalize_memory_order_preserves_non_ios() {
+        let input = "        self.store(1, memory_order::relaxed);\n";
+        let output = AstCodeGen::normalize_memory_order_enum_to_integer(input);
+        assert_eq!(
+            output, input,
+            "Should not modify memory_order in non-ios contexts"
+        );
+    }
+
+    #[test]
+    fn test_normalize_memory_order_no_change_without_memory_order() {
+        let input = "self.clear(0u32);\n";
+        let output = AstCodeGen::normalize_memory_order_enum_to_integer(input);
+        assert_eq!(output, input, "Should not modify code without memory_order");
+    }
+
+    // -----------------------------------------------------------------------
+    // normalize_atomic_degraded_new_params tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_normalize_atomic_int_new1_literal() {
+        let input = "refcnt_: std_atomic_int::new_1(1),\n";
+        let output = AstCodeGen::normalize_atomic_degraded_new_params(input);
+        assert!(
+            output.contains("std_atomic_int::new_1(()"),
+            "std_atomic_int::new_1(1) should become new_1(()), got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_atomic_i64_new1_var() {
+        let input = "next_: std_atomic_i64::new_1(start),\n";
+        let output = AstCodeGen::normalize_atomic_degraded_new_params(input);
+        assert!(
+            output.contains("std_atomic_i64::new_1(()"),
+            "std_atomic_i64::new_1(start) should become new_1(()), got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_atomic_new1_preserves_unit_arg() {
+        let input = "x: std_atomic_int::new_1(()),\n";
+        let output = AstCodeGen::normalize_atomic_degraded_new_params(input);
+        assert_eq!(output, input, "Should not modify already-correct new_1(())");
+    }
+
+    #[test]
+    fn test_normalize_atomic_no_change_without_atomic() {
+        let input = "let x = Foo::new_1(42);\n";
+        let output = AstCodeGen::normalize_atomic_degraded_new_params(input);
+        assert_eq!(output, input, "Should not modify non-atomic new_1 calls");
     }
 }
