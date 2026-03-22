@@ -1,6 +1,6 @@
 # Fragile TODO
 
-Last updated: 2026-03-21
+Last updated: 2026-03-22
 Status: active plan is parser-first STL-opaque migration; highest-priority active workstream is full LibTooling parser-path removal from production flow.
 
 ## Deprecation Notice
@@ -36,6 +36,7 @@ Goal: replace LibTooling-centered parsing with a custom parser module that treat
             - [x] P0.b.2.b.1.b.0 (pre-cutover) Publish `fragile-driver` line-anchored cutover map (exact symbol edit order + compile-check checkpoints) for variant removal in `crates/fragile-driver/src/lib.rs`. Done 2026-03-21. Evidence: `docs/dev/p0b2b1b_driver_variant_removal_patch_map.md`.
             - [ ] P0.b.2.b.1.b.1 (on/after 2026-04-18) Remove `StrictParserBackend::Libtooling` and `ParserCoreCodegenEscapeHatch::Libtooling` enum variants in `crates/fragile-driver/src/lib.rs`.
               - [x] P0.b.2.b.1.b.1.0 (pre-cutover) Publish declaration-hunk cutover spec for `fragile-driver` enum variant removal with explicit `b.1`/`b.2`/`b.3` ownership boundaries. Done 2026-03-21. Evidence: `docs/dev/p0b2b1b1_driver_enum_decl_removal_patch_spec.md`.
+              - [x] P0.b.2.b.1.b.1.1.0 (pre-cutover) Publish single-entry declaration-removal rehearsal for `StrictParserBackend::Libtooling` in `crates/fragile-driver/src/lib.rs` with explicit compile-break inventory and `b.1.2`/`b.2`/`b.3`/`P0.b.2.c` ownership boundaries. Done 2026-03-22. Evidence: `docs/dev/p0b2b1b1b1110_strict_parser_backend_decl_removal_rehearsal.md`.
               - [ ] P0.b.2.b.1.b.1.1 (on/after 2026-04-18) Remove `StrictParserBackend::Libtooling` declaration entry in `crates/fragile-driver/src/lib.rs`.
               - [ ] P0.b.2.b.1.b.1.2 (on/after 2026-04-18) Remove `ParserCoreCodegenEscapeHatch::Libtooling` declaration entry in `crates/fragile-driver/src/lib.rs`.
             - [ ] P0.b.2.b.1.b.2 (on/after 2026-04-18) Remove `strict_parser_backend_from_legacy_backend` Libtooling adapter mapping in `crates/fragile-driver/src/lib.rs`.

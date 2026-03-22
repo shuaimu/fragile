@@ -21368,3 +21368,32 @@ Implemented:
 Result:
 - `P0.b.2.b.1.b.1` is now a narrow, test-locked declaration-hunk cutover with explicit cross-leaf ownership.
 - Cutover prep progresses without violating the 2026-04-18 hardening gate.
+
+## 2026-03-22: `P0.b.2.b.1.b.1.1` pre-cutover single-entry rehearsal (`P0.b.2.b.1.b.1.1.0`)
+
+Task sizing analysis:
+- Top-priority first undone leaf was `P0.b.2.b.1.b.1.1`, but it is date-gated to on/after 2026-04-18.
+- Direct declaration edit size remains small (~4-10 LOC in `crates/fragile-driver/src/lib.rs`) and below the 1000-LOC bound.
+- Since gate date has not arrived, this run executed the first honest pre-cutover sub-leaf (`P0.b.2.b.1.b.1.1.0`) to lock single-entry cutover boundaries and compile-break ownership.
+
+Plan before execution:
+- add a pre-cutover TODO sub-leaf under `P0.b.2.b.1.b.1.1`;
+- publish single-entry declaration-removal rehearsal with line anchors and expected compile-break inventory;
+- add audit tests that enforce TODO decomposition and rehearsal doc contract fields.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific behavior, no `FRAGILEC_FORCE_NATIVE_SOURCES` bypass, and no semantic fake/stub code added.
+- Change scope is planning/contracts and regression guards only.
+
+Implemented:
+- `TODO.md`
+  - added and completed `P0.b.2.b.1.b.1.1.0` (pre-cutover) ahead of date-gated `P0.b.2.b.1.b.1.1`.
+- `docs/dev/p0b2b1b1b1110_strict_parser_backend_decl_removal_rehearsal.md`
+  - captured declaration anchor (`35-39`), expected post-delete compile-break inventory, and explicit ownership boundaries across `b.1.2`/`b.2`/`b.3`/`P0.b.2.c`.
+- `crates/fragile-clang/tests/p0_libtooling_removal_audit_tests.rs`
+  - added decomposition and doc-content contract tests for `P0.b.2.b.1.b.1.1.0`.
+
+Result:
+- `P0.b.2.b.1.b.1.1` now has a narrow, test-locked rehearsal contract that preserves the 2026-04-18 date gate.
+- Cutover-day declaration deletion can proceed with explicit downstream ownership and no shortcut behavior.
