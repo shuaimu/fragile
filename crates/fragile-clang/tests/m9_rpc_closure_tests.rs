@@ -4700,3 +4700,96 @@ fn m9_2c_iv_e8_non_unit_params_unaffected() {
         output
     );
 }
+
+// ---------------------------------------------------------------------------
+// M9.2.c.iv.e.9: E0308 ordering/memory_order/atomic type mismatch fixes
+// ---------------------------------------------------------------------------
+
+/// M9.2.c.iv.e.9: Verify task is documented in TODO.md.
+#[test]
+fn m9_2c_iv_e9_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("M9.2.c.iv.e.9"),
+        "TODO.md should document M9.2.c.iv.e.9"
+    );
+}
+
+/// M9.2.c.iv.e.9: Verify ordering type conversion normalization works correctly.
+/// weak_ordering::op_partial_ordering should return partial_ordering, not
+/// weak_ordering, and should not reference MaybeUninit globals.
+#[test]
+fn m9_2c_iv_e9_ordering_type_conversions_weak_to_partial() {
+    use fragile_clang::AstCodeGen;
+    let input = "\
+pub fn op_partial_ordering(&self, ) -> partial_ordering {
+    return (if (self.__value_ as i32) == 0 { unsafe { WEAK_ORDERING_EQUIVALENT } } else { (if (self.__value_ as i32) < 0 { unsafe { WEAK_ORDERING_LESS } } else { unsafe { WEAK_ORDERING_GREATER } }) }).clone();
+}
+";
+    let output = AstCodeGen::normalize_ordering_type_conversions(input);
+    assert!(
+        !output.contains("WEAK_ORDERING_"),
+        "M9.2.c.iv.e.9: No WEAK_ORDERING_ constants should remain in partial_ordering body"
+    );
+    assert!(
+        output.contains("partial_ordering { _M_value: 0 }"),
+        "M9.2.c.iv.e.9: Should construct partial_ordering directly"
+    );
+}
+
+/// M9.2.c.iv.e.9: Verify strong_ordering to weak_ordering conversion.
+#[test]
+fn m9_2c_iv_e9_ordering_type_conversions_strong_to_weak() {
+    use fragile_clang::AstCodeGen;
+    let input = "\
+pub fn op_weak_ordering(&self, ) -> weak_ordering {
+    return (if (self.__value_ as i32) == 0 { unsafe { STRONG_ORDERING_EQUIVALENT } } else { (if (self.__value_ as i32) < 0 { unsafe { STRONG_ORDERING_LESS } } else { unsafe { STRONG_ORDERING_GREATER } }) }).clone();
+}
+";
+    let output = AstCodeGen::normalize_ordering_type_conversions(input);
+    assert!(
+        !output.contains("STRONG_ORDERING_"),
+        "M9.2.c.iv.e.9: No STRONG_ORDERING_ constants should remain in weak_ordering body"
+    );
+    assert!(
+        output.contains("weak_ordering { __value_: 0 }"),
+        "M9.2.c.iv.e.9: Should construct weak_ordering directly"
+    );
+}
+
+/// M9.2.c.iv.e.9: Verify memory_order::relaxed gets cast to u32 in ios_base::clear().
+#[test]
+fn m9_2c_iv_e9_memory_order_enum_to_integer() {
+    use fragile_clang::AstCodeGen;
+    let input = "        self.clear(memory_order::relaxed);\n";
+    let output = AstCodeGen::normalize_memory_order_enum_to_integer(input);
+    assert!(
+        output.contains("as u32"),
+        "M9.2.c.iv.e.9: memory_order::relaxed should be cast to u32 in ios methods"
+    );
+}
+
+/// M9.2.c.iv.e.9: Verify atomic degraded new_1 params are normalized.
+#[test]
+fn m9_2c_iv_e9_atomic_degraded_new_params() {
+    use fragile_clang::AstCodeGen;
+    let input = "refcnt_: std_atomic_int::new_1(1),\n\
+                  next_: std_atomic_i64::new_1(start),\n";
+    let output = AstCodeGen::normalize_atomic_degraded_new_params(input);
+    assert!(
+        output.contains("std_atomic_int::new_1(()"),
+        "M9.2.c.iv.e.9: atomic_int::new_1 should have () arg"
+    );
+    assert!(
+        output.contains("std_atomic_i64::new_1(()"),
+        "M9.2.c.iv.e.9: atomic_i64::new_1 should have () arg"
+    );
+}
