@@ -21513,3 +21513,32 @@ Implemented:
 Result:
 - `P0.b.2.b.1.b.1.1` now has rehearsal, anchor drift, single-hunk, count-invariant, and compile-error fingerprint pre-cutover guards.
 - Date-gated declaration removal remains deferred while cutover-day verification determinism is improved.
+
+## 2026-03-22: `P0.b.2.b.1.b.1.1` cutover transition matrix guard (`P0.b.2.b.1.b.1.1.5`)
+
+Task sizing analysis:
+- Top-priority first undone leaf remains `P0.b.2.b.1.b.1.1`, which is still date-gated to on/after 2026-04-18.
+- The real declaration edit remains small (~4-12 LOC), but execution is intentionally blocked before the gate date.
+- Executed a bounded pre-cutover child leaf (`P0.b.2.b.1.b.1.1.5`) to define expected compile-error transition checkpoints across stacked sibling leaves.
+
+Plan before execution:
+- add one pre-cutover child under `P0.b.2.b.1.b.1.1`;
+- publish a cutover-day transition matrix for `b.1.1 -> b.1.2 -> b.2 -> b.3 -> P0.b.2.c` with expected diagnostic anchors;
+- add audit tests that enforce TODO decomposition and required matrix-doc content.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific behavior, no force-native bypass, and no semantic fake/stub logic introduced.
+- Scope remains planning/contracts and regression guards only.
+
+Implemented:
+- `TODO.md`
+  - added/completed `P0.b.2.b.1.b.1.1.5` (pre-cutover) while preserving date-gated `P0.b.2.b.1.b.1.1`.
+- `docs/dev/p0b2b1b1b1115_cutover_transition_matrix_guard.md`
+  - added step-by-step expected compile-error fingerprints and source-anchor transitions for stacked cutover leaves, plus verification commands.
+- `crates/fragile-clang/tests/p0_libtooling_removal_audit_tests.rs`
+  - added contract tests for TODO decomposition, doc existence, and required transition-matrix content.
+
+Result:
+- `P0.b.2.b.1.b.1.1` now has rehearsal, anchor drift, single-hunk, count-invariant, compile-fingerprint, and transition-matrix pre-cutover guards.
+- Date-gated declaration removal remains deferred while cutover sequencing and validation expectations are more deterministic.
