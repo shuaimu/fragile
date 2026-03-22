@@ -21629,3 +21629,32 @@ Implemented:
 Result:
 - `P0.b.2.b.1.b.1.1` now includes a test-locked freshness/provenance guard on top of prior stepwise and anchor-delta contracts.
 - Date-gated production deletion remains deferred while cutover-day evidence integrity is improved.
+
+## 2026-03-22: `P0.b.2.b.1.b.1.1` step-artifact integrity guard (`P0.b.2.b.1.b.1.1.9`)
+
+Task sizing analysis:
+- Top-priority first undone leaf remains `P0.b.2.b.1.b.1.1`, still date-gated to on/after 2026-04-18.
+- The production declaration edit remains small (~4-12 LOC), below the 1000-LOC target.
+- Since the date gate blocks direct deletion, this run executed bounded pre-cutover child leaf `P0.b.2.b.1.b.1.1.9` to lock checksum-based integrity checks for per-step logs and anchor artifacts.
+
+Plan before execution:
+- add one pre-cutover child under `P0.b.2.b.1.b.1.1` in `TODO.md`;
+- publish an integrity contract with per-file checksums, run-scoped manifest, and stale-sidecar cleanup checks;
+- add audit tests enforcing TODO decomposition and required integrity-contract content.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific behavior, no force-native bypass, and no semantic fake/stub logic introduced.
+- Scope remains planning/contracts and regression guards only.
+
+Implemented:
+- `TODO.md`
+  - added/completed `P0.b.2.b.1.b.1.1.9` (pre-cutover) while preserving date-gated `P0.b.2.b.1.b.1.1`.
+- `docs/dev/p0b2b1b1b1119_step_artifact_integrity_guard.md`
+  - added checksum sidecar generation (`sha256sum`), run-scoped manifest capture, integrity verification (`sha256sum -c`), and stale-sidecar cleanup checks for `b.1.1 -> b.1.2 -> b.2 -> b.3 -> P0.b.2.c`.
+- `crates/fragile-clang/tests/p0_libtooling_removal_audit_tests.rs`
+  - added decomposition/doc-contract tests for `P0.b.2.b.1.b.1.1.9`.
+
+Result:
+- `P0.b.2.b.1.b.1.1` now includes a checksum-backed integrity guard on top of prior freshness and anchor-delta controls.
+- Date-gated production deletion remains deferred while cutover-day artifact tamper/drift risk is reduced.
