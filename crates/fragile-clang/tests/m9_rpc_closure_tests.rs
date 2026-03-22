@@ -4631,3 +4631,72 @@ fn m9_2c_iv_e7_enum_to_int_via_alias() {
         output
     );
 }
+
+// ── M9.2.c.iv.e.8 closure tests ──────────────────────────────────────
+
+/// M9.2.c.iv.e.8: task is documented in TODO.md
+#[test]
+fn m9_2c_iv_e8_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("TODO.md"),
+    )
+    .expect("TODO.md must exist");
+    assert!(
+        todo.contains("M9.2.c.iv.e.8"),
+        "TODO.md must document M9.2.c.iv.e.8"
+    );
+}
+
+/// M9.2.c.iv.e.8: unit-typed inline post-increment is rewritten.
+#[test]
+fn m9_2c_iv_e8_unit_typed_inline_postinc_rewritten() {
+    use fragile_clang::AstCodeGen;
+    let input = "pub fn get(&self, mut __b: (), __e: ()) -> () {\n    { __b += 1; __b };\n    return __b;\n}\n";
+    let output = AstCodeGen::normalize_unit_typed_increment_artifacts(input);
+    assert!(
+        !output.contains("__b += 1"),
+        "unit-typed __b += 1 should be elided, got:\n{}",
+        output
+    );
+    assert!(
+        output.contains("{ __b }"),
+        "should rewrite to {{ __b }}, got:\n{}",
+        output
+    );
+}
+
+/// M9.2.c.iv.e.8: unit-typed post-increment with save is rewritten.
+#[test]
+fn m9_2c_iv_e8_unit_typed_postinc_with_save_rewritten() {
+    use fragile_clang::AstCodeGen;
+    let input = "pub fn put(&self, mut __s: ()) -> () {\n    { let __v = __s; __s += 1; __v };\n}\n";
+    let output = AstCodeGen::normalize_unit_typed_increment_artifacts(input);
+    assert!(
+        !output.contains("__s += 1"),
+        "unit-typed __s += 1 should be elided, got:\n{}",
+        output
+    );
+    assert!(
+        output.contains("{ let __v = __s; __v }"),
+        "should rewrite post-inc-with-save pattern, got:\n{}",
+        output
+    );
+}
+
+/// M9.2.c.iv.e.8: non-unit params are not affected.
+#[test]
+fn m9_2c_iv_e8_non_unit_params_unaffected() {
+    use fragile_clang::AstCodeGen;
+    let input = "pub fn step(mut __p: *mut i32) -> () {\n    { __p += 1; __p };\n}\n";
+    let output = AstCodeGen::normalize_unit_typed_increment_artifacts(input);
+    assert!(
+        output.contains("__p += 1"),
+        "pointer-typed __p should NOT be rewritten, got:\n{}",
+        output
+    );
+}

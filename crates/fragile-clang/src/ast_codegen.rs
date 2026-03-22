@@ -30007,6 +30007,7 @@ impl AstCodeGen {
         output = Self::normalize_spinmutex_guard_pointer_accessors(&output);
         output = Self::normalize_uninitarray_method_artifacts(&output);
         output = Self::normalize_pointer_augmented_assignments(&output);
+        output = Self::normalize_unit_typed_increment_artifacts(&output);
         output = Self::normalize_width_field_reference_aliases(&output);
         output = Self::normalize_primitive_scalar_field_access_artifacts(&output);
         output = Self::normalize_unit_negation_artifacts(&output);
@@ -34192,6 +34193,209 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 out.push_str(&rewritten);
                 out.push('\n');
             }
+            out.push_str(lines[j]);
+            if j + 1 < lines.len() || code.ends_with('\n') {
+                out.push('\n');
+            }
+            i = j + 1;
+        }
+
+        if !code.ends_with('\n') && !out.is_empty() {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix E0368: `+= 1` on unit-typed variables (degraded iterator increments).
+    ///
+    /// C++ iterator `++it` transpiles as `{ it += 1; it }` or
+    /// `{ let __v = it; it += 1; __v }`.  When the iterator type degrades to
+    /// `()`, the `+= 1` is invalid.  This pass collects `()` typed parameters
+    /// and local bindings per function and elides the increment expression.
+    pub fn normalize_unit_typed_increment_artifacts(code: &str) -> String {
+        // Quick bail: if no `+= 1` anywhere, nothing to do.
+        if !code.contains("+= 1") {
+            return code.to_string();
+        }
+
+        /// Collect parameter names whose declared type is `()`.
+        fn collect_unit_params(sig_line: &str) -> HashSet<String> {
+            let mut out = HashSet::new();
+            let Some(open) = sig_line.find('(') else {
+                return out;
+            };
+            // Find matching close paren (handles nested parens in types)
+            let mut depth = 0i32;
+            let mut close = None;
+            for (i, ch) in sig_line[open..].char_indices() {
+                match ch {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            close = Some(open + i);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let Some(close) = close else { return out; };
+            let params_src = &sig_line[open + 1..close];
+            for param in params_src.split(',') {
+                let param = param.trim();
+                if let Some((lhs, rhs)) = param.split_once(':') {
+                    let mut name = lhs.trim();
+                    if let Some(s) = name.strip_prefix("mut ") {
+                        name = s.trim();
+                    }
+                    name = name.trim_start_matches("r#");
+                    let ty = rhs.trim();
+                    if !name.is_empty() && ty == "()" {
+                        out.insert(name.to_string());
+                    }
+                }
+            }
+            out
+        }
+
+        /// Also collect local let bindings with type `()`.
+        fn collect_unit_locals(body_lines: &[&str]) -> HashSet<String> {
+            let mut out = HashSet::new();
+            for line in body_lines {
+                let trimmed = line.trim_start();
+                let rest = if let Some(r) = trimmed.strip_prefix("let mut ") {
+                    r
+                } else if let Some(r) = trimmed.strip_prefix("let ") {
+                    r
+                } else {
+                    continue;
+                };
+                // Extract name: identifier chars up to `:`
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '#')
+                    .collect();
+                let name = name.trim_start_matches("r#").to_string();
+                if name.is_empty() {
+                    continue;
+                }
+                // Check if type after `:` is `()`
+                let after_name = &rest[name.len()..].trim_start();
+                if let Some(after_colon) = after_name.strip_prefix(':') {
+                    let ty_and_init = after_colon.trim_start();
+                    // Type is everything before `=` or `;`
+                    let ty = ty_and_init
+                        .split(|c| c == '=' || c == ';')
+                        .next()
+                        .unwrap_or("")
+                        .trim();
+                    if ty == "()" {
+                        out.insert(name);
+                    }
+                }
+            }
+            out
+        }
+
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        let mut i = 0usize;
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim_end();
+            let is_fn_start =
+                (trimmed.contains(" fn ") || trimmed.starts_with("fn ")) && trimmed.ends_with('{');
+            if !is_fn_start {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            // Find matching end of function
+            let mut j = i;
+            let mut depth = 0isize;
+            while j < lines.len() {
+                let current = lines[j];
+                depth += current.chars().filter(|c| *c == '{').count() as isize;
+                depth -= current.chars().filter(|c| *c == '}').count() as isize;
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if j >= lines.len() || depth != 0 {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let body_lines: &[&str] = if j > i + 1 { &lines[i + 1..j] } else { &[] };
+            let mut unit_vars = collect_unit_params(trimmed);
+            unit_vars.extend(collect_unit_locals(body_lines));
+
+            if unit_vars.is_empty() || !body_lines.iter().any(|l| l.contains("+= 1")) {
+                // No unit-typed vars or no increments — emit verbatim
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+
+            // Emit function header
+            out.push_str(lines[i]);
+            out.push('\n');
+
+            // Process body lines
+            for body_line in body_lines {
+                let mut rewritten = body_line.to_string();
+                for var in &unit_vars {
+                    // Pattern 1: `{ VAR += 1; VAR }` -> `{ VAR }`
+                    let pat1 = format!("{{ {} += 1; {} }}", var, var);
+                    let rep1 = format!("{{ {} }}", var);
+                    if rewritten.contains(&pat1) {
+                        rewritten = rewritten.replace(&pat1, &rep1);
+                    }
+                    // Pattern 2: `{ let __v = VAR; VAR += 1; __v }` -> `{ let __v = VAR; __v }`
+                    let pat2 = format!("{{ let __v = {}; {} += 1; __v }}", var, var);
+                    let rep2 = format!("{{ let __v = {}; __v }}", var);
+                    if rewritten.contains(&pat2) {
+                        rewritten = rewritten.replace(&pat2, &rep2);
+                    }
+                    // Pattern 3: standalone `VAR += 1;` (at statement level)
+                    // Only replace when it's the whole statement (trimmed starts with VAR +=)
+                    let pat3 = format!("{} += 1;", var);
+                    if rewritten.trim_start().starts_with(&pat3) {
+                        let leading: String = rewritten
+                            .chars()
+                            .take_while(|c| c.is_whitespace())
+                            .collect();
+                        // Check what's after the pattern
+                        let trimmed_line = rewritten.trim_start();
+                        if trimmed_line == pat3 {
+                            rewritten = format!("{}// elided: {} (unit-typed iterator increment)", leading, pat3);
+                        }
+                    }
+                }
+                out.push_str(&rewritten);
+                out.push('\n');
+            }
+
+            // Emit closing brace
             out.push_str(lines[j]);
             if j + 1 < lines.len() || code.ends_with('\n') {
                 out.push('\n');
@@ -99871,6 +100075,128 @@ pub fn probe(mut __mem: *mut i32, __val: i32) {
             "pointer augmented assignment normalization should not leak block closers into wrapping_add args, got:\n{}",
             normalized
         );
+    }
+
+    #[test]
+    fn test_normalize_unit_typed_increment_inline_postinc() {
+        let input = r#"
+pub fn get(&self, mut __b: (), __e: ()) -> () {
+    { __b += 1; __b };
+    return __b;
+}
+"#;
+        let out = AstCodeGen::normalize_unit_typed_increment_artifacts(input);
+        assert!(
+            out.contains("{ __b }"),
+            "should rewrite {{ __b += 1; __b }} to {{ __b }}, got:\n{}",
+            out
+        );
+        assert!(
+            !out.contains("__b += 1"),
+            "should remove __b += 1 since __b is (), got:\n{}",
+            out
+        );
+    }
+
+    #[test]
+    fn test_normalize_unit_typed_increment_postinc_with_save() {
+        let input = r#"
+pub fn put(&self, mut __s: (), __iob: &mut i32) -> () {
+    unsafe { let __lhs: *mut _ = &mut ({ let __v = __s; __s += 1; __v }); *__lhs = *__pb; std::ptr::read(__lhs) };
+}
+"#;
+        let out = AstCodeGen::normalize_unit_typed_increment_artifacts(input);
+        assert!(
+            out.contains("{ let __v = __s; __v }"),
+            "should rewrite {{ let __v = __s; __s += 1; __v }} to {{ let __v = __s; __v }}, got:\n{}",
+            out
+        );
+        assert!(
+            !out.contains("__s += 1"),
+            "should remove __s += 1 since __s is (), got:\n{}",
+            out
+        );
+    }
+
+    #[test]
+    fn test_normalize_unit_typed_increment_preserves_non_unit_params() {
+        let input = r#"
+pub fn step(mut __p: *mut i32) -> () {
+    { __p += 1; __p };
+}
+"#;
+        let out = AstCodeGen::normalize_unit_typed_increment_artifacts(input);
+        assert!(
+            out.contains("__p += 1"),
+            "should NOT rewrite += 1 for pointer-typed __p, got:\n{}",
+            out
+        );
+    }
+
+    #[test]
+    fn test_normalize_unit_typed_increment_no_false_positive_on_integer() {
+        let input = r#"
+pub fn count(mut __n: i32) -> i32 {
+    __n += 1;
+    return __n;
+}
+"#;
+        let out = AstCodeGen::normalize_unit_typed_increment_artifacts(input);
+        assert!(
+            out.contains("__n += 1"),
+            "should NOT rewrite += 1 for i32-typed __n, got:\n{}",
+            out
+        );
+    }
+
+    #[test]
+    fn test_normalize_unit_typed_increment_standalone_statement() {
+        let input = r#"
+pub fn iter(mut __b: ()) -> () {
+    __b += 1;
+    return __b;
+}
+"#;
+        let out = AstCodeGen::normalize_unit_typed_increment_artifacts(input);
+        assert!(
+            out.contains("// elided:"),
+            "standalone __b += 1; should be elided for unit type, got:\n{}",
+            out
+        );
+        // The original line should be replaced with a comment
+        assert!(
+            !out.lines().any(|l| l.trim() == "__b += 1;"),
+            "standalone __b += 1; should not remain as executable code, got:\n{}",
+            out
+        );
+    }
+
+    #[test]
+    fn test_normalize_unit_typed_increment_multiple_vars() {
+        let input = r#"
+pub fn both(mut __b: (), __e: (), mut __s: ()) -> () {
+    { __b += 1; __b };
+    { let __v = __s; __s += 1; __v };
+}
+"#;
+        let out = AstCodeGen::normalize_unit_typed_increment_artifacts(input);
+        assert!(
+            !out.contains("__b += 1"),
+            "should rewrite __b += 1, got:\n{}",
+            out
+        );
+        assert!(
+            !out.contains("__s += 1"),
+            "should rewrite __s += 1, got:\n{}",
+            out
+        );
+    }
+
+    #[test]
+    fn test_normalize_unit_typed_increment_no_change_without_unit_params() {
+        let input = "pub fn foo(x: i32) -> i32 {\n    x += 1;\n    x\n}\n";
+        let out = AstCodeGen::normalize_unit_typed_increment_artifacts(input);
+        assert_eq!(out, input, "should not modify code without unit params");
     }
 
     #[test]
