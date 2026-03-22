@@ -21484,3 +21484,32 @@ Implemented:
 Result:
 - `P0.b.2.b.1.b.1.1` now has rehearsal, anchor drift, single-hunk, and count-invariant guards before cutover day.
 - Date-gated declaration removal remains deferred while operator certainty and non-collateral safety checks increase.
+
+## 2026-03-22: `P0.b.2.b.1.b.1.1` compile-error fingerprint guard (`P0.b.2.b.1.b.1.1.4`)
+
+Task sizing analysis:
+- Top-priority first undone leaf remains `P0.b.2.b.1.b.1.1`, still date-gated to on/after 2026-04-18.
+- The actual declaration deletion remains small (~4-12 LOC), but cannot be executed before the gate date.
+- Executed a bounded pre-cutover child leaf (`P0.b.2.b.1.b.1.1.4`) to lock expected post-delete compile-error fingerprints and keep sibling ownership explicit.
+
+Plan before execution:
+- add one pre-cutover child under `P0.b.2.b.1.b.1.1`;
+- publish compile-error fingerprint checks (`E0599` + fixed source anchors) for isolated declaration removal;
+- add audit tests enforcing TODO decomposition and required doc content.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific behavior, no force-native bypass, and no semantic fake/stub logic introduced.
+- Scope remains planning/contracts and regression guards.
+
+Implemented:
+- `TODO.md`
+  - added/completed `P0.b.2.b.1.b.1.1.4` (pre-cutover) while keeping `P0.b.2.b.1.b.1.1` date-gated.
+- `docs/dev/p0b2b1b1b1114_compile_error_fingerprint_guard.md`
+  - added post-delete `cargo test -p fragile-driver` capture flow and required `E0599` fingerprint anchors (`594`, `622`, `912`, `1270`, `1701`, `1707`), plus ownership boundaries.
+- `crates/fragile-clang/tests/p0_libtooling_removal_audit_tests.rs`
+  - added contract tests for TODO decomposition, document existence, and required compile-error fingerprint checks.
+
+Result:
+- `P0.b.2.b.1.b.1.1` now has rehearsal, anchor drift, single-hunk, count-invariant, and compile-error fingerprint pre-cutover guards.
+- Date-gated declaration removal remains deferred while cutover-day verification determinism is improved.
