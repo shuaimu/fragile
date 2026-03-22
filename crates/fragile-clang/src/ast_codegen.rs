@@ -21269,6 +21269,221 @@ impl AstCodeGen {
         out
     }
 
+    /// Fix E0308 constructor zero-initialization type mismatches.
+    ///
+    /// C++ zero-initializes fields with `= 0` regardless of type, but Rust requires
+    /// type-appropriate zero values:
+    /// - `*mut T` / `*const T` fields: `0` -> `std::ptr::null_mut()` / `std::ptr::null()`
+    /// - `f64` / `f32` fields: `0` -> `0.0`
+    /// - Struct/opaque fields: `0` -> `unsafe { std::mem::zeroed() }`
+    ///
+    /// Also fixes enum-to-integer assignments where a field's type alias resolves
+    /// to `u32` but the initializer uses an enum variant path like `Enum::Variant`.
+    pub fn normalize_ctor_zero_init_type_mismatches(code: &str) -> String {
+        // Quick bail: if no `__self.` assignment with `= 0;`, nothing to fix
+        if !code.contains("__self.") {
+            return code.to_string();
+        }
+
+        // Phase 1: Build struct field type map from `pub struct NAME { ... }` blocks
+        let mut struct_fields: HashMap<String, HashMap<String, String>> = HashMap::new();
+        // Also collect type aliases: `pub type NAME = UNDERLYING;`
+        let mut type_aliases: HashMap<String, String> = HashMap::new();
+        {
+            let mut current_struct: Option<String> = None;
+            for line in code.lines() {
+                let trimmed = line.trim();
+                if let Some(rest) = trimmed.strip_prefix("pub struct ") {
+                    if let Some(name_end) = rest.find(|c: char| c == ' ' || c == '{') {
+                        let name = rest[..name_end].trim().to_string();
+                        if trimmed.ends_with('{') {
+                            current_struct = Some(name);
+                        }
+                    }
+                } else if trimmed == "}" && current_struct.is_some() {
+                    current_struct = None;
+                } else if let Some(ref sname) = current_struct {
+                    // Parse field: `field_name: field_type,`
+                    let field_line = trimmed.trim_start_matches("pub ");
+                    if let Some((fname, ftype)) = field_line.split_once(':') {
+                        let fname = fname.trim();
+                        let ftype = ftype.trim().trim_end_matches(',').trim();
+                        if !fname.is_empty()
+                            && !fname.contains(' ')
+                            && !ftype.is_empty()
+                            && fname.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                        {
+                            struct_fields
+                                .entry(sname.clone())
+                                .or_default()
+                                .insert(fname.to_string(), ftype.to_string());
+                        }
+                    }
+                }
+                // Collect type aliases
+                if let Some(rest) = trimmed.strip_prefix("pub type ") {
+                    if let Some((alias_name, alias_target)) = rest.split_once(" = ") {
+                        let alias_name = alias_name.trim();
+                        let alias_target = alias_target.trim().trim_end_matches(';').trim();
+                        if !alias_name.is_empty() && !alias_target.is_empty() {
+                            type_aliases.insert(
+                                alias_name.to_string(),
+                                alias_target.to_string(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        if struct_fields.is_empty() {
+            return code.to_string();
+        }
+
+        // Phase 2: Track current impl block and fix assignments
+        let mut current_impl: Option<String> = None;
+        let mut out = String::with_capacity(code.len() + 512);
+
+        for line in code.lines() {
+            let trimmed = line.trim();
+
+            // Track impl blocks: `impl NAME {`
+            if trimmed.starts_with("impl ") && trimmed.ends_with('{') {
+                let rest = &trimmed[5..trimmed.len() - 1].trim();
+                // Handle `impl NAME {` and `impl NAME for ...` (skip trait impls)
+                if !rest.contains(" for ") {
+                    let name = rest.split_whitespace().next().unwrap_or("");
+                    if !name.is_empty() && struct_fields.contains_key(name) {
+                        current_impl = Some(name.to_string());
+                    }
+                }
+            }
+
+            // Detect `__self.FIELD = VALUE;` inside impl blocks
+            if let Some(ref impl_name) = current_impl {
+                if let Some(fields) = struct_fields.get(impl_name) {
+                    if let Some(rewritten) =
+                        Self::try_fix_ctor_zero_init_line(trimmed, fields, &type_aliases)
+                    {
+                        // Preserve original indentation
+                        let indent = &line[..line.len() - line.trim_start().len()];
+                        out.push_str(indent);
+                        out.push_str(&rewritten);
+                        out.push('\n');
+                        continue;
+                    }
+                }
+            }
+
+            out.push_str(line);
+            out.push('\n');
+        }
+
+        // Remove trailing newline to match input
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Try to fix a single `__self.FIELD = VALUE;` line.
+    /// Returns Some(rewritten_line) if a fix was applied, None otherwise.
+    fn try_fix_ctor_zero_init_line(
+        trimmed: &str,
+        fields: &HashMap<String, String>,
+        type_aliases: &HashMap<String, String>,
+    ) -> Option<String> {
+        // Match pattern: `__self.FIELD = VALUE;`
+        let rest = trimmed.strip_prefix("__self.")?;
+        let (field_name, rest) = rest.split_once(" = ")?;
+
+        // Field name must be a simple identifier
+        if !field_name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            return None;
+        }
+
+        let value = rest.strip_suffix(';')?.trim();
+        let field_type = fields.get(field_name)?;
+
+        // Resolve type aliases to their underlying type
+        let resolved_type = type_aliases.get(field_type.as_str()).map(|s| s.as_str()).unwrap_or(field_type.as_str());
+
+        // Case 1: Pointer field = 0 -> null_mut()/null()
+        if is_zero_integer_literal_str(value) {
+            if field_type.starts_with("*const ") {
+                return Some(format!(
+                    "__self.{} = std::ptr::null();",
+                    field_name
+                ));
+            }
+            if field_type.starts_with("*mut ") {
+                return Some(format!(
+                    "__self.{} = std::ptr::null_mut();",
+                    field_name
+                ));
+            }
+            // Case 2: Float field = integer -> 0.0
+            if field_type == "f64" || field_type == "f32" || resolved_type == "f64" || resolved_type == "f32" {
+                return Some(format!(
+                    "__self.{} = 0.0;",
+                    field_name
+                ));
+            }
+            // Case 3: Non-primitive named type = 0 -> zeroed()
+            // (integers, bool are fine with = 0)
+            let is_primitive = matches!(
+                resolved_type,
+                "i8" | "i16" | "i32" | "i64" | "i128" | "isize"
+                    | "u8" | "u16" | "u32" | "u64" | "u128" | "usize"
+                    | "f32" | "f64" | "bool" | "char" | "()"
+            ) || resolved_type.starts_with("*mut ")
+                || resolved_type.starts_with("*const ");
+            let field_is_primitive = matches!(
+                field_type.as_str(),
+                "i8" | "i16" | "i32" | "i64" | "i128" | "isize"
+                    | "u8" | "u16" | "u32" | "u64" | "u128" | "usize"
+                    | "f32" | "f64" | "bool" | "char" | "()"
+            ) || field_type.starts_with("*mut ")
+                || field_type.starts_with("*const ");
+            if !is_primitive && !field_is_primitive {
+                return Some(format!(
+                    "__self.{} = unsafe {{ std::mem::zeroed() }};",
+                    field_name
+                ));
+            }
+        }
+
+        // Case 4: Enum variant assigned to integer field
+        // Pattern: `EnumName::Variant` where field type is integer (possibly via alias)
+        if value.contains("::") && !value.contains(' ') {
+            let is_int_field = matches!(
+                resolved_type,
+                "u32" | "i32" | "u64" | "i64" | "u16" | "i16" | "u8" | "i8" | "usize" | "isize"
+                    | "u128" | "i128"
+            );
+            let field_is_int = matches!(
+                field_type.as_str(),
+                "u32" | "i32" | "u64" | "i64" | "u16" | "i16" | "u8" | "i8" | "usize" | "isize"
+                    | "u128" | "i128"
+            );
+            if is_int_field || field_is_int {
+                let target = if field_is_int { field_type.as_str() } else { resolved_type };
+                return Some(format!(
+                    "__self.{} = {} as {};",
+                    field_name, value, target
+                ));
+            }
+        }
+
+        // Case 5: `__clang_max_align_nonce2 = 0` where field is f64
+        // Already handled by Case 2 above
+
+        None
+    }
+
     /// Rewrite a single line, fixing deref-precedence issues.
     ///
     /// `single_deref_methods`: methods where `*IDENT.method(` must become
@@ -29858,6 +30073,10 @@ impl AstCodeGen {
         // method call (offset_from, sub, add, etc.).  E0614 errors result
         // when the method return type (isize, i8, etc.) gets dereferenced.
         output = Self::normalize_deref_method_call_precedence(&output);
+        // Fix E0308 constructor zero-init type mismatches: `__self.field = 0`
+        // where field is a pointer/float/struct type, and enum-to-integer
+        // assignments in constructor bodies.
+        output = Self::normalize_ctor_zero_init_type_mismatches(&output);
         // Final pass: late normalizations can still reintroduce statement-only
         // degraded preface expressions and default tail returns in helper bodies.
         output = Self::normalize_default_preface_local_assignment_artifacts(&output);
@@ -115535,6 +115754,163 @@ pub fn parseArg(argv: *const *const i8, index: i32) -> *const i8 {
             "redundant-deref pointer-cast normalization should preserve required deref when loading pointer table entries, got:\n{}",
             output
         );
+    }
+
+    #[test]
+    fn test_normalize_ctor_zero_init_pointer_field_becomes_null_mut() {
+        let input = r#"pub struct sentry {
+    __ok_: bool,
+    __os_: *mut basic_ostream,
+}
+
+impl sentry {
+    pub fn new_0() -> Self {
+        let mut __self: Self = Default::default();
+        __self.__os_ = 0;
+        __self
+    }
+}"#;
+        let output = AstCodeGen::normalize_ctor_zero_init_type_mismatches(input);
+        assert!(
+            output.contains("__self.__os_ = std::ptr::null_mut();"),
+            "pointer field should be null_mut(), got: {}",
+            output
+        );
+        assert!(
+            !output.contains("__self.__os_ = 0;"),
+            "raw 0 assignment should be gone"
+        );
+    }
+
+    #[test]
+    fn test_normalize_ctor_zero_init_const_pointer_becomes_null() {
+        let input = r#"pub struct foo {
+    __ptr_: *const u8,
+}
+
+impl foo {
+    pub fn new_0() -> Self {
+        let mut __self: Self = Default::default();
+        __self.__ptr_ = 0;
+        __self
+    }
+}"#;
+        let output = AstCodeGen::normalize_ctor_zero_init_type_mismatches(input);
+        assert!(
+            output.contains("__self.__ptr_ = std::ptr::null();"),
+            "const pointer field should be null(), got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_ctor_zero_init_f64_field_becomes_0_0() {
+        let input = r#"pub struct max_align_t {
+    __clang_max_align_nonce1: i64,
+    __clang_max_align_nonce2: f64,
+}
+
+impl max_align_t {
+    pub fn new_0() -> Self {
+        let mut __self: Self = Default::default();
+        __self.__clang_max_align_nonce2 = 0;
+        __self
+    }
+}"#;
+        let output = AstCodeGen::normalize_ctor_zero_init_type_mismatches(input);
+        assert!(
+            output.contains("__clang_max_align_nonce2 = 0.0;"),
+            "f64 field should get 0.0, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_ctor_zero_init_struct_field_becomes_zeroed() {
+        let input = r#"pub struct wrapper {
+    rand_: std_mt19937,
+    next_: std_atomic_i64,
+}
+
+impl wrapper {
+    pub fn new_0() -> Self {
+        let mut __self: Self = Default::default();
+        __self.rand_ = 0;
+        __self.next_ = 0;
+        __self
+    }
+}"#;
+        let output = AstCodeGen::normalize_ctor_zero_init_type_mismatches(input);
+        assert!(
+            output.contains("__self.rand_ = unsafe { std::mem::zeroed() };"),
+            "struct field should be zeroed(), got: {}",
+            output
+        );
+        assert!(
+            output.contains("__self.next_ = unsafe { std::mem::zeroed() };"),
+            "struct field should be zeroed(), got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_ctor_zero_init_enum_to_int_field_gets_as_cast() {
+        let input = r#"pub type my_rule_alias = u32;
+
+pub struct breaker {
+    __active_rule_: my_rule_alias,
+}
+
+impl breaker {
+    pub fn new_0() -> Self {
+        let mut __self: Self = Default::default();
+        __self.__active_rule_ = __rule::__none;
+        __self
+    }
+}"#;
+        let output = AstCodeGen::normalize_ctor_zero_init_type_mismatches(input);
+        assert!(
+            output.contains("__self.__active_rule_ = __rule::__none as u32;"),
+            "enum to int should have as cast, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_ctor_zero_init_preserves_valid_integer_assignments() {
+        let input = r#"pub struct counter {
+    count_: u32,
+    flag_: bool,
+}
+
+impl counter {
+    pub fn new_0() -> Self {
+        let mut __self: Self = Default::default();
+        __self.count_ = 0;
+        __self
+    }
+}"#;
+        let output = AstCodeGen::normalize_ctor_zero_init_type_mismatches(input);
+        assert!(
+            output.contains("__self.count_ = 0;"),
+            "integer field = 0 should be preserved, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_ctor_zero_init_no_change_without_self_pattern() {
+        let input = r#"pub struct foo {
+    x: i32,
+}
+
+impl foo {
+    pub fn bar(&self) -> i32 {
+        self.x
+    }
+}"#;
+        let output = AstCodeGen::normalize_ctor_zero_init_type_mismatches(input);
+        assert_eq!(input, output, "no __self pattern, no changes");
     }
 
     #[test]
