@@ -1351,6 +1351,70 @@ fn p0b_2b1b1b1117_anchor_delta_guard_document_contains_required_checks() {
     }
 }
 
+#[test]
+fn p0b_2b1b1b1118_task_decomposed_in_todo() {
+    let todo = read_project_file("TODO.md");
+    for expected_leaf in [
+        "P0.b.2.b.1.b.1.1.8 (pre-cutover)",
+        "P0.b.2.b.1.b.1.1 (on/after 2026-04-18)",
+        "P0.b.2.b.1.b.1.2 (on/after 2026-04-18)",
+    ] {
+        assert!(
+            todo.contains(expected_leaf),
+            "audit: TODO should contain decomposition for P0.b.2.b.1.b.1.1 step-artifact freshness leaf `{}`",
+            expected_leaf
+        );
+    }
+}
+
+#[test]
+fn p0b_2b1b1b1118_step_artifact_freshness_guard_document_exists() {
+    let doc_path =
+        project_root().join("docs/dev/p0b2b1b1b1118_step_artifact_freshness_guard.md");
+    assert!(
+        doc_path.exists(),
+        "audit: expected P0.b.2.b.1.b.1.1.8 step-artifact freshness guard doc to exist at {}",
+        doc_path.display()
+    );
+}
+
+#[test]
+fn p0b_2b1b1b1118_step_artifact_freshness_guard_document_contains_required_checks() {
+    let doc = read_project_file("docs/dev/p0b2b1b1b1118_step_artifact_freshness_guard.md");
+    for required in [
+        "P0.b.2.b.1.b.1.1.8",
+        "P0.b.2.b.1.b.1.1.6",
+        "P0.b.2.b.1.b.1.1.7",
+        "P0.b.2.b.1.b.1.1",
+        "P0.b.2.b.1.b.1.2",
+        "P0.b.2.b.1.b.2",
+        "P0.b.2.b.1.b.3",
+        "P0.b.2.c",
+        "START_EPOCH=\"$(date -u +%s)\"",
+        "RUN_ID=\"p0b2b1b1b1118_$(date -u +%Y%m%dT%H%M%SZ)\"",
+        "rm -f",
+        "/tmp/p0b2b1b1b1116_b111.log",
+        "/tmp/p0b2b1b1b1116_b112.log",
+        "/tmp/p0b2b1b1b1116_b2.log",
+        "/tmp/p0b2b1b1b1116_b3.log",
+        "/tmp/p0b2b1b1b1116_c.log",
+        "/tmp/p0b2b1b1b1117_b111.anchors",
+        "/tmp/p0b2b1b1b1117_c.anchors",
+        "RUN_ID=${RUN_ID} STEP=b111",
+        "RUN_ID=${RUN_ID} STEP=c",
+        "rg -n \"RUN_ID=${RUN_ID} STEP=b111\" /tmp/p0b2b1b1b1116_b111.log",
+        "test \"$(stat -c %Y /tmp/p0b2b1b1b1116_b111.log)\" -ge \"${START_EPOCH}\"",
+        "error[E0599]",
+        "cargo test -p fragile-clang --test p0_libtooling_removal_audit_tests",
+    ] {
+        assert!(
+            doc.contains(required),
+            "audit: P0.b.2.b.1.b.1.1.8 step-artifact freshness guard doc should contain `{}`",
+            required
+        );
+    }
+}
+
 /// Comprehensive summary test that produces the full audit inventory.
 #[test]
 fn p0a_audit_comprehensive_site_inventory() {

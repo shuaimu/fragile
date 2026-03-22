@@ -21600,3 +21600,32 @@ Implemented:
 Result:
 - `P0.b.2.b.1.b.1.1` now includes explicit anchor-delta validation on top of prior stepwise log and transition-matrix guards.
 - Date-gated production deletion remains deferred while cutover-day diagnostic verification is tightened.
+
+## 2026-03-22: `P0.b.2.b.1.b.1.1` step-artifact freshness guard (`P0.b.2.b.1.b.1.1.8`)
+
+Task sizing analysis:
+- Top-priority first undone leaf remains `P0.b.2.b.1.b.1.1`, which is date-gated to on/after 2026-04-18.
+- The production declaration deletion remains small (~4-12 LOC), below the 1000-LOC bound.
+- Since date-gated removal is not executable yet, this run executed bounded pre-cutover child leaf `P0.b.2.b.1.b.1.1.8` to prevent stale artifact reuse across stepwise diagnostic checks.
+
+Plan before execution:
+- add one pre-cutover child under `P0.b.2.b.1.b.1.1` in `TODO.md`;
+- publish a freshness contract for step logs/anchor artifacts (cleanup + run-id provenance + mtime checks);
+- add audit tests enforcing TODO decomposition and required freshness-contract content.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific behavior, no force-native bypass, and no semantic fake/stub logic introduced.
+- Scope remains planning/contracts and regression guards only.
+
+Implemented:
+- `TODO.md`
+  - added/completed `P0.b.2.b.1.b.1.1.8` (pre-cutover) while preserving date-gated `P0.b.2.b.1.b.1.1`.
+- `docs/dev/p0b2b1b1b1118_step_artifact_freshness_guard.md`
+  - added stale-artifact cleanup commands, run-id-tagged step log capture, fresh mtime checks, and anchor-regeneration assertions for `b.1.1 -> b.1.2 -> b.2 -> b.3 -> P0.b.2.c`.
+- `crates/fragile-clang/tests/p0_libtooling_removal_audit_tests.rs`
+  - added decomposition/doc-contract tests for `P0.b.2.b.1.b.1.1.8`.
+
+Result:
+- `P0.b.2.b.1.b.1.1` now includes a test-locked freshness/provenance guard on top of prior stepwise and anchor-delta contracts.
+- Date-gated production deletion remains deferred while cutover-day evidence integrity is improved.
