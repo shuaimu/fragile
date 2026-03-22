@@ -21542,3 +21542,32 @@ Implemented:
 Result:
 - `P0.b.2.b.1.b.1.1` now has rehearsal, anchor drift, single-hunk, count-invariant, compile-fingerprint, and transition-matrix pre-cutover guards.
 - Date-gated declaration removal remains deferred while cutover sequencing and validation expectations are more deterministic.
+
+## 2026-03-22: `P0.b.2.b.1.b.1.1` stepwise diagnostic capture contract (`P0.b.2.b.1.b.1.1.6`)
+
+Task sizing analysis:
+- Top-priority first undone leaf remains `P0.b.2.b.1.b.1.1`, and it is still date-gated to on/after 2026-04-18.
+- The cutover edit itself is still small (~4-12 LOC declaration deletion), below the 1000-LOC target.
+- Since code removal is date-blocked, this run executed another bounded pre-cutover child leaf (`P0.b.2.b.1.b.1.1.6`) to lock unique per-step evidence capture and anchor-transition checks.
+
+Plan before execution:
+- add one pre-cutover child under `P0.b.2.b.1.b.1.1` in `TODO.md`;
+- publish a per-step diagnostic log contract with unique artifact paths for `b.1.1 -> b.1.2 -> b.2 -> b.3 -> P0.b.2.c`;
+- add audit tests enforcing TODO decomposition and required contract content.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific behavior, no force-native bypass, and no semantic fake/stub logic introduced.
+- Scope remains planning/contracts and regression guards only.
+
+Implemented:
+- `TODO.md`
+  - added/completed `P0.b.2.b.1.b.1.1.6` (pre-cutover) while preserving date-gated `P0.b.2.b.1.b.1.1`.
+- `docs/dev/p0b2b1b1b1116_stepwise_diagnostic_log_contract.md`
+  - added deterministic per-step log paths, expected source-anchor progression, and verification commands.
+- `crates/fragile-clang/tests/p0_libtooling_removal_audit_tests.rs`
+  - added decomposition/doc-contract tests for `P0.b.2.b.1.b.1.1.6`.
+
+Result:
+- `P0.b.2.b.1.b.1.1` now includes a test-locked per-step evidence capture contract in addition to prior rehearsal/fingerprint matrix guards.
+- Date-gated code deletion remains deferred while cutover-day diagnostic traceability improves.
