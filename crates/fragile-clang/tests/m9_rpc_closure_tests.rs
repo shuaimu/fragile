@@ -4509,3 +4509,62 @@ fn m9_2c_iv_rerun_e0599_reduced_by_half() {
         "rerun inventory must show E0599 reduced from 223 to 111 (-112)"
     );
 }
+
+// ---------------------------------------------------------------------------
+// M9.2.c.iv.e.6: Deref-method precedence fix tests
+// ---------------------------------------------------------------------------
+
+/// M9.2.c.iv.e.6 is documented in TODO.md.
+#[test]
+fn m9_2c_iv_e6_task_documented_in_todo() {
+    let todo = fs::read_to_string(workspace_root_dir().join("TODO.md"))
+        .expect("read TODO.md");
+    assert!(
+        todo.contains("M9.2.c.iv.e.6"),
+        "TODO.md must document M9.2.c.iv.e.6"
+    );
+    assert!(
+        todo.contains("deref-precedence") || todo.contains("Deref-precedence")
+            || todo.contains("E0614") || todo.contains("offset_from"),
+        "TODO.md M9.2.c.iv.e.6 should mention deref-precedence or E0614 or offset_from"
+    );
+}
+
+/// Verify the normalization correctly parenthesizes *var.offset_from patterns.
+#[test]
+fn m9_2c_iv_e6_normalize_deref_offset_from() {
+    use fragile_clang::AstCodeGen;
+    let input = "if (unsafe { *__g_end.offset_from(__g) }) < 40 {";
+    let output = AstCodeGen::normalize_deref_method_call_precedence(input);
+    assert!(
+        output.contains("(*__g_end).offset_from(__g)"),
+        "should parenthesize *__g_end.offset_from to (*__g_end).offset_from, got: {}",
+        output
+    );
+}
+
+/// Verify the normalization correctly parenthesizes **var.sub patterns.
+#[test]
+fn m9_2c_iv_e6_normalize_double_deref_sub() {
+    use fragile_clang::AstCodeGen;
+    let input = "toupper_1((unsafe { **__a_end.sub(1 as usize) }) as i32)";
+    let output = AstCodeGen::normalize_deref_method_call_precedence(input);
+    assert!(
+        output.contains("*(*__a_end).sub(1 as usize)"),
+        "should parenthesize **__a_end.sub to *(*__a_end).sub, got: {}",
+        output
+    );
+}
+
+/// Verify that valid *ptr.sub(N) (meaning *(ptr.sub(N))) is preserved.
+#[test]
+fn m9_2c_iv_e6_preserves_valid_single_deref_sub() {
+    use fragile_clang::AstCodeGen;
+    let input = "let val = *ptr.sub(1 as usize);";
+    let output = AstCodeGen::normalize_deref_method_call_precedence(input);
+    assert_eq!(
+        output, input,
+        "should preserve valid *ptr.sub (means *(ptr.sub)), got: {}",
+        output
+    );
+}
