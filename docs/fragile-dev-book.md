@@ -21571,3 +21571,32 @@ Implemented:
 Result:
 - `P0.b.2.b.1.b.1.1` now includes a test-locked per-step evidence capture contract in addition to prior rehearsal/fingerprint matrix guards.
 - Date-gated code deletion remains deferred while cutover-day diagnostic traceability improves.
+
+## 2026-03-22: `P0.b.2.b.1.b.1.1` anchor-delta transition guard (`P0.b.2.b.1.b.1.1.7`)
+
+Task sizing analysis:
+- Top-priority first undone leaf remains `P0.b.2.b.1.b.1.1`, still date-gated to on/after 2026-04-18.
+- The cutover edit remains small (~4-12 LOC declaration deletion), below the 1000-LOC target.
+- Because direct removal is date-blocked, this run executed pre-cutover child leaf `P0.b.2.b.1.b.1.1.7` to lock step-to-step anchor-delta assertions across the stacked sequence.
+
+Plan before execution:
+- add one pre-cutover child under `P0.b.2.b.1.b.1.1` in `TODO.md`;
+- publish an anchor-delta contract that compares per-step anchor sets (added/removed anchors) using deterministic set-difference commands;
+- add audit tests enforcing TODO decomposition and required contract fields.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific behavior, no force-native bypass, and no semantic fake/stub logic introduced.
+- Scope remains planning/contracts and regression guards only.
+
+Implemented:
+- `TODO.md`
+  - added/completed `P0.b.2.b.1.b.1.1.7` (pre-cutover) while preserving date-gated `P0.b.2.b.1.b.1.1`.
+- `docs/dev/p0b2b1b1b1117_anchor_delta_transition_guard.md`
+  - added deterministic anchor-set normalization and step-to-step delta assertions for `b.1.1 -> b.1.2 -> b.2 -> b.3 -> P0.b.2.c`.
+- `crates/fragile-clang/tests/p0_libtooling_removal_audit_tests.rs`
+  - added decomposition/doc-contract tests for `P0.b.2.b.1.b.1.1.7`.
+
+Result:
+- `P0.b.2.b.1.b.1.1` now includes explicit anchor-delta validation on top of prior stepwise log and transition-matrix guards.
+- Date-gated production deletion remains deferred while cutover-day diagnostic verification is tightened.
