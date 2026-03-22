@@ -4895,3 +4895,83 @@ impl Helper {
         "M9.2.c.iv.e.10: () param assigned to i32 field should become Default::default()"
     );
 }
+
+// M9.2.c.iv.e.11 tests: degraded ref zero-init, chrono global mismatch, chrono casts
+// =================================================================================
+
+#[test]
+fn m9_2c_iv_e11_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md must exist");
+    assert!(
+        todo.contains("M9.2.c.iv.e.11"),
+        "M9.2.c.iv.e.11 must be documented in TODO.md"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e11_degraded_ref_zero_init_numpunct() {
+    use fragile_clang::AstCodeGen;
+    let input = "\
+pub fn __stage2_float_prep(__iob: &mut ios_base) -> std_string {
+    let __np: &numpunct_type_parameter_0_0 = &0;
+    return (*__np).clone();
+}
+";
+    let output = AstCodeGen::normalize_degraded_ref_zero_init(input);
+    assert!(
+        output.contains("unsafe { &*std::ptr::null::<numpunct_type_parameter_0_0>() }"),
+        "M9.2.c.iv.e.11: degraded numpunct ref should use null ptr, got: {}",
+        output
+    );
+    assert!(
+        !output.contains("= &0;"),
+        "M9.2.c.iv.e.11: &0 should be eliminated"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e11_degraded_ref_zero_init_ctype() {
+    use fragile_clang::AstCodeGen;
+    let input = "\
+pub fn get(&self, __iob: &mut ios_base) -> () {
+    let __ct: &ctype_type_parameter_0_0 = &0;
+}
+";
+    let output = AstCodeGen::normalize_degraded_ref_zero_init(input);
+    assert!(
+        output.contains("unsafe { &*std::ptr::null::<ctype_type_parameter_0_0>() }"),
+        "M9.2.c.iv.e.11: degraded ctype ref should use null ptr, got: {}",
+        output
+    );
+}
+
+#[test]
+fn m9_2c_iv_e11_chrono_global_transmute() {
+    use fragile_clang::AstCodeGen;
+    let input = "    let mut __result_max: chrono_duration_long_long__ratio_1__1000000000 = unsafe { __gv_max.clone() };\n";
+    let output = AstCodeGen::normalize_chrono_global_type_mismatch(input);
+    assert!(
+        output.contains("std::mem::transmute::<i64, chrono_duration_long_long__ratio_1__1000000000>"),
+        "M9.2.c.iv.e.11: chrono global should be transmuted, got: {}",
+        output
+    );
+}
+
+#[test]
+fn m9_2c_iv_e11_chrono_return_transmute() {
+    use fragile_clang::AstCodeGen;
+    let input = "\
+pub fn __safe_nanosecond_cast(__d: chrono_duration_long_long__ratio_1__1000000000) -> chrono_nanoseconds {
+    return unsafe { __gv_max };
+}
+";
+    let output = AstCodeGen::normalize_chrono_global_return_mismatch(input);
+    assert!(
+        output.contains("std::mem::transmute::<i64, chrono_nanoseconds>(__gv_max)"),
+        "M9.2.c.iv.e.11: chrono return mismatch should be transmuted, got: {}",
+        output
+    );
+}
