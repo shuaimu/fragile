@@ -4568,3 +4568,66 @@ fn m9_2c_iv_e6_preserves_valid_single_deref_sub() {
         output
     );
 }
+
+// ── M9.2.c.iv.e.7: constructor zero-initialization type mismatch fixes ──
+
+/// Verify M9.2.c.iv.e.7 is documented in TODO.md.
+#[test]
+fn m9_2c_iv_e7_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("TODO.md"),
+    )
+    .expect("read TODO.md");
+    assert!(
+        todo.contains("M9.2.c.iv.e.7"),
+        "TODO.md must document M9.2.c.iv.e.7"
+    );
+    assert!(
+        todo.contains("zero-init") || todo.contains("zero_init") || todo.contains("constructor"),
+        "TODO.md M9.2.c.iv.e.7 should mention zero-init or constructor"
+    );
+}
+
+/// Verify pointer field = 0 is normalized to null_mut().
+#[test]
+fn m9_2c_iv_e7_pointer_field_null_mut() {
+    use fragile_clang::AstCodeGen;
+    let input = "pub struct S {\n    p: *mut u8,\n}\n\nimpl S {\n    pub fn new_0() -> Self {\n        let mut __self: Self = Default::default();\n        __self.p = 0;\n        __self\n    }\n}";
+    let output = AstCodeGen::normalize_ctor_zero_init_type_mismatches(input);
+    assert!(
+        output.contains("__self.p = std::ptr::null_mut();"),
+        "pointer field should become null_mut(), got: {}",
+        output
+    );
+}
+
+/// Verify struct field = 0 is normalized to zeroed().
+#[test]
+fn m9_2c_iv_e7_struct_field_zeroed() {
+    use fragile_clang::AstCodeGen;
+    let input = "pub struct W {\n    mt: std_mt19937,\n}\n\nimpl W {\n    pub fn new_0() -> Self {\n        let mut __self: Self = Default::default();\n        __self.mt = 0;\n        __self\n    }\n}";
+    let output = AstCodeGen::normalize_ctor_zero_init_type_mismatches(input);
+    assert!(
+        output.contains("__self.mt = unsafe { std::mem::zeroed() };"),
+        "struct field should become zeroed(), got: {}",
+        output
+    );
+}
+
+/// Verify enum variant to u32 field gets as-cast via type alias resolution.
+#[test]
+fn m9_2c_iv_e7_enum_to_int_via_alias() {
+    use fragile_clang::AstCodeGen;
+    let input = "pub type rule_t = u32;\n\npub struct B {\n    r: rule_t,\n}\n\nimpl B {\n    pub fn new_0() -> Self {\n        let mut __self: Self = Default::default();\n        __self.r = MyEnum::Variant;\n        __self\n    }\n}";
+    let output = AstCodeGen::normalize_ctor_zero_init_type_mismatches(input);
+    assert!(
+        output.contains("__self.r = MyEnum::Variant as u32;"),
+        "enum to int-alias field should get as-cast, got: {}",
+        output
+    );
+}
