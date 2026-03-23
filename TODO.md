@@ -50,7 +50,7 @@ Goal: replace LibTooling-centered parsing with a custom parser module that treat
               - [x] P0.b.2.b.1.b.1.1 (immediate) Remove `StrictParserBackend::Libtooling` declaration entry in `crates/fragile-driver/src/lib.rs`. Done 2026-03-22. Evidence: `docs/dev/p0b2b1b1b111_immediate_strict_parser_backend_decl_removal.md`.
               - [x] P0.b.2.b.1.b.1.2 (immediate) Remove `ParserCoreCodegenEscapeHatch::Libtooling` declaration entry in `crates/fragile-driver/src/lib.rs`. Done 2026-03-22. Evidence: `docs/dev/p0b2b1b1b112_parser_core_codegen_escape_hatch_decl_removal.md`.
             - [x] P0.b.2.b.1.b.2 (immediate) Remove `strict_parser_backend_from_legacy_backend` Libtooling adapter mapping in `crates/fragile-driver/src/lib.rs`. Done 2026-03-22. Evidence: `docs/dev/p0b2b1b2_adapter_mapping_removal.md`.
-            - [~] P0.b.2.b.1.b.3 (immediate) Resolve `fragile-driver` strict-path variant-match compile breaks after variant deletion while keeping backend string/help removals in `P0.b.2.c`. WIP 2026-03-22.
+            - [x] P0.b.2.b.1.b.3 (immediate) Resolve `fragile-driver` strict-path variant-match compile breaks after variant deletion while keeping backend string/help removals in `P0.b.2.c`. Done 2026-03-22.
           - [ ] P0.b.2.b.1.c (immediate) Remove variant declarations and legacy-backend adapter mappings in `crates/fragile-cli/src/bin/fragilec.rs`.
           - [ ] P0.b.2.b.1.d (immediate) Resolve strict-path variant-match compile breaks after variant deletion while keeping backend string/help contract removals under `P0.b.2.c`.
         - [ ] P0.b.2.b.2 (immediate) Update production-driver tests that currently construct/assert Libtooling enum variants to parser-core-only strict-path invariants.

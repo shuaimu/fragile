@@ -1,7 +1,6 @@
 use fragile_clang::{
-    IncludeDirective, IncludeDirectiveKind, ParserBackend as ClangParserBackend,
-    ParserLanguage as ClangParserLanguage, ParserOutputCodegenOptions, TemplateParsingMode,
-    TranspileOptions,
+    IncludeDirective, IncludeDirectiveKind,
+    ParserLanguage as ClangParserLanguage, ParserOutputCodegenOptions,
 };
 use fragile_parser_clang::{FragileParserClangBackend, FRAGILE_PARSER_CLANG_BACKEND_ID};
 use fragile_parser_core::{
@@ -34,7 +33,9 @@ pub const ESCAPE_HATCH_HARDENING_EXPIRY: &str = "2026-04-18";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum StrictParserBackend {
-    Libtooling,
+    // P0.b.2.b.1.b.3: Libtooling variant removed 2026-03-22.
+    // Enum retained with ParserCore as sole variant until backend string/help
+    // removal in P0.b.2.c.
     ParserCore { backend_id: String },
 }
 
@@ -593,7 +594,13 @@ fn supported_parser_backend_values_message() -> String {
 fn parse_parser_backend_value(backend: &str) -> Result<StrictParserBackend, String> {
     let normalized = backend.trim().to_ascii_lowercase();
     match normalized.as_str() {
-        "libtooling" => Ok(StrictParserBackend::Libtooling),
+        // P0.b.2.b.1.b.3: Libtooling variant removed — "libtooling" is no longer
+        // a valid backend value.  The string parsing infrastructure is retained
+        // for P0.b.2.c removal.
+        "libtooling" => Err(format!(
+            "unsupported FRAGILEC_PARSER_BACKEND value `libtooling`; libtooling backend removed (P0.b.2.b.1.b.3). Supported: {}",
+            FRAGILE_PARSER_CLANG_BACKEND_ID,
+        )),
         FRAGILE_PARSER_CLANG_BACKEND_ID => Ok(StrictParserBackend::ParserCore {
             backend_id: FRAGILE_PARSER_CLANG_BACKEND_ID.to_string(),
         }),
@@ -621,11 +628,13 @@ fn strict_parser_backend_from_env() -> Result<StrictParserBackend, String> {
 
 fn strict_parser_backend_label(backend: &StrictParserBackend) -> &str {
     match backend {
-        StrictParserBackend::Libtooling => "libtooling",
+        // P0.b.2.b.1.b.3: Libtooling arm removed.
         StrictParserBackend::ParserCore { backend_id } => backend_id.as_str(),
     }
 }
 
+// Retained for P0.b.2.c (backend string/help removal).
+#[allow(dead_code)]
 fn supported_parser_core_codegen_escape_hatch_values_message() -> &'static str {
     "libtooling"
 }
@@ -1182,7 +1191,10 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
     }
 
     let language = source_language(&source);
-    let language_standard = extract_language_standard(args_for_meta, language);
+    // P0.b.2.b.1.b.3: language_standard was only consumed by the removed libtooling
+    // TranspileOptions path.  Retained as _unused until extract_language_standard
+    // itself is cleaned up.
+    let _language_standard = extract_language_standard(args_for_meta, language);
     let stage_timing_trace_path = std::env::var(FRAGILEC_TRANSPILE_STAGE_TIMING_PATH_ENV)
         .ok()
         .map(|raw| raw.trim().to_string())
@@ -1191,7 +1203,6 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
     // P0.b.2.b.1.b.1.2: escape hatch still parsed from env (to reject unsupported values)
     // but the result is unused now that Libtooling variant is removed.
     let _parser_core_codegen_escape_hatch = parser_core_codegen_escape_hatch_from_env()?;
-    let mut use_libtooling_codegen_escape_hatch = false;
     let keep_rs = std::env::var(FRAGILEC_KEEP_RS_ENV)
         .map(|v| v == "1")
         .unwrap_or(false);
@@ -1250,109 +1261,41 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
         Ok(())
     };
 
-    // Enforce escape hatch policy for explicit libtooling backend override.
-    if matches!(parser_backend, StrictParserBackend::Libtooling) {
-        enforce_escape_hatch_policy(
-            "FRAGILEC_PARSER_BACKEND=libtooling",
-            &source.display().to_string(),
-        )?;
-    }
-
-    if let StrictParserBackend::ParserCore { backend_id } = parser_backend {
-        let parser_output = run_parser_core_backend_parse(
-            &source,
-            language,
-            includes,
-            defines,
-            frontend_args,
-            backend_id.as_str(),
-            cwd,
-        )?;
-        // P0.b.2.b.1.b.1.2: Libtooling variant removed — escape hatch path is
-        // now unreachable. The surrounding if/else structure is retained until
-        // follow-up tasks (P0.b.2.d, P0.b.2.e) remove the entire escape-hatch
-        // infrastructure.
-        if false {
-            // Enforce escape hatch policy for codegen escape hatch.
-            enforce_escape_hatch_policy(
-                "FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH=libtooling",
-                &source.display().to_string(),
-            )?;
-            use_libtooling_codegen_escape_hatch = true;
-        } else {
-            let transpiled = with_current_dir(cwd, || {
-                fragile_clang::transpile_parser_output_to_rust_with_options(
-                    &parser_output,
-                    &ParserOutputCodegenOptions {
-                        ignored_error_patterns: strict_parser_ignored_error_patterns(language),
-                        stage_timing_trace_path: stage_timing_trace_path.clone(),
-                    },
-                )
-                .map_err(|e| {
-                    format!(
-                        "failed parser-output handoff transpile for {} with parser backend {}: {}",
-                        source.display(),
-                        strict_parser_backend_label(parser_backend),
-                        e
-                    )
-                })
-            })?;
-            compile_transpiled_text(transpiled, "parser-output-handoff")?;
-            if !keep_rs {
-                let _ = fs::remove_file(&transpiled_rs);
-            }
-            write_meta_file(&source, out_obj, args_for_meta)?;
-            return Ok(());
-        }
-    }
-
-    let codegen_backend_label = if use_libtooling_codegen_escape_hatch {
-        format!(
-            "{}+libtooling-escape-hatch",
-            strict_parser_backend_label(parser_backend)
+    // P0.b.2.b.1.b.3: Libtooling variant removed — ParserCore is the sole backend.
+    // The Libtooling variant match escape hatch
+    // enforcement and the libtooling transpile fallback path are now dead code and
+    // have been removed.  Escape-hatch infrastructure retained for P0.b.2.d/P0.b.2.e.
+    let StrictParserBackend::ParserCore { backend_id } = parser_backend;
+    let parser_output = run_parser_core_backend_parse(
+        &source,
+        language,
+        includes,
+        defines,
+        frontend_args,
+        backend_id.as_str(),
+        cwd,
+    )?;
+    let transpiled = with_current_dir(cwd, || {
+        fragile_clang::transpile_parser_output_to_rust_with_options(
+            &parser_output,
+            &ParserOutputCodegenOptions {
+                ignored_error_patterns: strict_parser_ignored_error_patterns(language),
+                stage_timing_trace_path: stage_timing_trace_path.clone(),
+            },
         )
-    } else {
-        strict_parser_backend_label(parser_backend).to_string()
-    };
-
-    with_current_dir(cwd, || {
-        let transpile_options = TranspileOptions {
-            include_paths: Vec::new(),
-            include_directives: includes.to_vec(),
-            frontend_args: frontend_args.to_vec(),
-            defines: defines.to_vec(),
-            language,
-            language_standard,
-            ignored_error_patterns: strict_parser_ignored_error_patterns(language),
-            backend: ClangParserBackend::Libtooling,
-            template_parsing_mode: TemplateParsingMode::Standard,
-            // Keep system headers visible by default so libc/kernel symbols
-            // (e.g. socket/epoll/netdb) retain full declaration surfaces.
-            libtooling_skip_system_headers: false,
-            stage_timing_trace_path,
-        };
-        let transpiled =
-            fragile_clang::transpile_cpp_to_rust_with_options(&source, &transpile_options)
-                .map_err(|e| {
-                    format!(
-                        "failed to transpile {} with parser backend {}: {}",
-                        source.display(),
-                        codegen_backend_label,
-                        e
-                    )
-                })?;
-        compile_transpiled_text(
-            transpiled,
-            format!("backend={}", codegen_backend_label).as_str(),
-        )?;
-
-        if !keep_rs {
-            let _ = fs::remove_file(&transpiled_rs);
-        }
-
-        Ok(())
+        .map_err(|e| {
+            format!(
+                "failed parser-output handoff transpile for {} with parser backend {}: {}",
+                source.display(),
+                strict_parser_backend_label(parser_backend),
+                e
+            )
+        })
     })?;
-
+    compile_transpiled_text(transpiled, "parser-output-handoff")?;
+    if !keep_rs {
+        let _ = fs::remove_file(&transpiled_rs);
+    }
     write_meta_file(&source, out_obj, args_for_meta)?;
     Ok(())
 }
@@ -1681,11 +1624,10 @@ mod tests {
     #[test]
     fn strict_parser_backend_validation_accepts_parser_core_backend() {
         // NOTE: strict_parser_backend_from_legacy_backend removed in P0.b.2.b.1.b.2
-        // (adapter had no valid mapping target after StrictParserBackend::Libtooling removal).
-        assert_eq!(
-            parse_parser_backend_value("libtooling").expect("libtooling should parse"),
-            StrictParserBackend::Libtooling
-        );
+        // (adapter had no valid mapping target after Libtooling variant removal).
+        // P0.b.2.b.1.b.3: "libtooling" is now rejected (variant removed).
+        parse_parser_backend_value("libtooling")
+            .expect_err("libtooling should be rejected after variant removal");
         assert_eq!(
             parse_parser_backend_value("FRAGILE-PARSER-CLANG")
                 .expect("parser-core backend should parse"),

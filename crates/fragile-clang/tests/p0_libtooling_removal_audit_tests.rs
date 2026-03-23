@@ -45,13 +45,12 @@ fn count_occurrences(haystack: &str, needle: &str) -> usize {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn p0a_audit_fragile_driver_has_libtooling_backend_variant() {
+fn p0a_audit_fragile_driver_libtooling_backend_variant_removed() {
     let src = read_project_file("crates/fragile-driver/src/lib.rs");
-    // The StrictParserBackend enum currently has a Libtooling variant.
-    // P0.b removal: remove this variant and all match arms.
+    // P0.b.2.b.1.b.3: StrictParserBackend::Libtooling variant removed 2026-03-22.
     assert!(
-        src.contains("StrictParserBackend::Libtooling"),
-        "audit: expected StrictParserBackend::Libtooling in fragile-driver (to be removed in P0.b)"
+        !src.contains("StrictParserBackend::Libtooling"),
+        "audit: StrictParserBackend::Libtooling should have been removed in P0.b.2.b.1.b.3"
     );
 }
 
@@ -208,13 +207,12 @@ fn p0a_audit_escape_hatch_functions_exist() {
 }
 
 #[test]
-fn p0a_audit_driver_use_libtooling_codegen_escape_hatch_variable() {
+fn p0a_audit_driver_use_libtooling_codegen_escape_hatch_variable_removed() {
     let driver_src = read_project_file("crates/fragile-driver/src/lib.rs");
-    // use_libtooling_codegen_escape_hatch controls the legacy codegen routing.
-    // P0.b removal: remove this variable and the associated branch.
+    // P0.b.2.b.1.b.3: use_libtooling_codegen_escape_hatch removed 2026-03-22.
     assert!(
-        driver_src.contains("use_libtooling_codegen_escape_hatch"),
-        "audit: expected use_libtooling_codegen_escape_hatch in fragile-driver"
+        !driver_src.contains("use_libtooling_codegen_escape_hatch"),
+        "audit: use_libtooling_codegen_escape_hatch should have been removed in P0.b.2.b.1.b.3"
     );
 }
 
@@ -464,15 +462,12 @@ fn p0a_audit_cli_main_libtooling_preparse_path() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn p0a_audit_driver_legacy_libtooling_codegen_fallthrough() {
+fn p0a_audit_driver_legacy_libtooling_codegen_fallthrough_removed() {
     let driver_src = read_project_file("crates/fragile-driver/src/lib.rs");
-    // When StrictParserBackend::Libtooling is selected, or when
-    // use_libtooling_codegen_escape_hatch is true, the driver falls through
-    // to transpile_cpp_to_rust_with_options with backend=Libtooling.
-    // P0.b removal: remove this fallthrough path entirely.
+    // P0.b.2.b.1.b.3: libtooling fallthrough path removed 2026-03-22.
     assert!(
-        driver_src.contains("ClangParserBackend::Libtooling"),
-        "audit: driver sets backend to ClangParserBackend::Libtooling in fallthrough"
+        !driver_src.contains("ClangParserBackend::Libtooling"),
+        "audit: ClangParserBackend::Libtooling fallthrough should have been removed in P0.b.2.b.1.b.3"
     );
 }
 
@@ -548,13 +543,13 @@ fn p0b_1_task_decomposed_in_todo() {
     // leaf identifiers exist. P0.b.3 through P0.b.9 have (on/after 2026-04-18) directly.
     for expected_leaf in [
         "P0.b.2 Remove strict-path backend",
-        "P0.b.3 (on/after 2026-04-18)",
-        "P0.b.4 (on/after 2026-04-18)",
-        "P0.b.5 (on/after 2026-04-18)",
-        "P0.b.6 (on/after 2026-04-18)",
-        "P0.b.7 (on/after 2026-04-18)",
-        "P0.b.8 (on/after 2026-04-18)",
-        "P0.b.9 (on/after 2026-04-18)",
+        "P0.b.3 (immediate)",
+        "P0.b.4 (immediate)",
+        "P0.b.5 (immediate)",
+        "P0.b.6 (immediate)",
+        "P0.b.7 (immediate)",
+        "P0.b.8 (immediate)",
+        "P0.b.9 (immediate)",
     ] {
         assert!(
             todo.contains(expected_leaf),
@@ -606,11 +601,11 @@ fn p0b_2a_task_decomposed_in_todo() {
         "audit: TODO should document completed P0.b.2.a pre-cutover leaf"
     );
     for expected_leaf in [
-        "P0.b.2.b (on/after 2026-04-18)",
-        "P0.b.2.c (on/after 2026-04-18)",
-        "P0.b.2.d (on/after 2026-04-18)",
-        "P0.b.2.e (on/after 2026-04-18)",
-        "P0.b.2.f (on/after 2026-04-18)",
+        "P0.b.2.b (immediate)",
+        "P0.b.2.c (immediate)",
+        "P0.b.2.d (immediate)",
+        "P0.b.2.e (immediate)",
+        "P0.b.2.f (immediate)",
     ] {
         assert!(
             todo.contains(expected_leaf),
@@ -661,8 +656,8 @@ fn p0b_2b0_task_decomposed_in_todo() {
         "audit: TODO should document completed pre-cutover leaf P0.b.2.b.0"
     );
     for expected_leaf in [
-        "P0.b.2.b.1 (on/after 2026-04-18)",
-        "P0.b.2.b.2 (on/after 2026-04-18)",
+        "P0.b.2.b.1 (immediate)",
+        "P0.b.2.b.2 (immediate)",
     ] {
         assert!(
             todo.contains(expected_leaf),
@@ -714,9 +709,9 @@ fn p0b_2b1_task_decomposed_in_todo() {
         "audit: TODO should document completed pre-cutover leaf P0.b.2.b.1.a"
     );
     for expected_leaf in [
-        "P0.b.2.b.1.b (on/after 2026-04-18)",
-        "P0.b.2.b.1.c (on/after 2026-04-18)",
-        "P0.b.2.b.1.d (on/after 2026-04-18)",
+        "P0.b.2.b.1.b (immediate)",
+        "P0.b.2.b.1.c (immediate)",
+        "P0.b.2.b.1.d (immediate)",
     ] {
         assert!(
             todo.contains(expected_leaf),
@@ -769,9 +764,9 @@ fn p0b_2b1b_task_decomposed_in_todo() {
     let todo = read_project_file("TODO.md");
     for expected_leaf in [
         "P0.b.2.b.1.b.0 (pre-cutover)",
-        "P0.b.2.b.1.b.1 (on/after 2026-04-18)",
-        "P0.b.2.b.1.b.2 (on/after 2026-04-18)",
-        "P0.b.2.b.1.b.3 (on/after 2026-04-18)",
+        "P0.b.2.b.1.b.1 (immediate)",
+        "P0.b.2.b.1.b.2 (immediate)",
+        "P0.b.2.b.1.b.3 (immediate)",
     ] {
         assert!(
             todo.contains(expected_leaf),
@@ -829,8 +824,8 @@ fn p0b_2b1b1_task_decomposed_in_todo() {
     let todo = read_project_file("TODO.md");
     for expected_leaf in [
         "P0.b.2.b.1.b.1.0 (pre-cutover)",
-        "P0.b.2.b.1.b.1.1 (on/after 2026-04-18)",
-        "P0.b.2.b.1.b.1.2 (on/after 2026-04-18)",
+        "P0.b.2.b.1.b.1.1 (immediate)",
+        "P0.b.2.b.1.b.1.2 (immediate)",
     ] {
         assert!(
             todo.contains(expected_leaf),
@@ -883,8 +878,8 @@ fn p0b_2b1b1b1110_task_decomposed_in_todo() {
     let todo = read_project_file("TODO.md");
     for expected_leaf in [
         "P0.b.2.b.1.b.1.1.0 (pre-cutover)",
-        "P0.b.2.b.1.b.1.1 (on/after 2026-04-18)",
-        "P0.b.2.b.1.b.1.2 (on/after 2026-04-18)",
+        "P0.b.2.b.1.b.1.1 (immediate)",
+        "P0.b.2.b.1.b.1.2 (immediate)",
     ] {
         assert!(
             todo.contains(expected_leaf),
@@ -937,8 +932,8 @@ fn p0b_2b1b1b1111_task_decomposed_in_todo() {
     let todo = read_project_file("TODO.md");
     for expected_leaf in [
         "P0.b.2.b.1.b.1.1.1 (pre-cutover)",
-        "P0.b.2.b.1.b.1.1 (on/after 2026-04-18)",
-        "P0.b.2.b.1.b.1.2 (on/after 2026-04-18)",
+        "P0.b.2.b.1.b.1.1 (immediate)",
+        "P0.b.2.b.1.b.1.2 (immediate)",
     ] {
         assert!(
             todo.contains(expected_leaf),
@@ -996,8 +991,8 @@ fn p0b_2b1b1b1112_task_decomposed_in_todo() {
     let todo = read_project_file("TODO.md");
     for expected_leaf in [
         "P0.b.2.b.1.b.1.1.2 (pre-cutover)",
-        "P0.b.2.b.1.b.1.1 (on/after 2026-04-18)",
-        "P0.b.2.b.1.b.1.2 (on/after 2026-04-18)",
+        "P0.b.2.b.1.b.1.1 (immediate)",
+        "P0.b.2.b.1.b.1.2 (immediate)",
     ] {
         assert!(
             todo.contains(expected_leaf),
@@ -1052,8 +1047,8 @@ fn p0b_2b1b1b1113_task_decomposed_in_todo() {
     let todo = read_project_file("TODO.md");
     for expected_leaf in [
         "P0.b.2.b.1.b.1.1.3 (pre-cutover)",
-        "P0.b.2.b.1.b.1.1 (on/after 2026-04-18)",
-        "P0.b.2.b.1.b.1.2 (on/after 2026-04-18)",
+        "P0.b.2.b.1.b.1.1 (immediate)",
+        "P0.b.2.b.1.b.1.2 (immediate)",
     ] {
         assert!(
             todo.contains(expected_leaf),
@@ -1110,8 +1105,8 @@ fn p0b_2b1b1b1114_task_decomposed_in_todo() {
     let todo = read_project_file("TODO.md");
     for expected_leaf in [
         "P0.b.2.b.1.b.1.1.4 (pre-cutover)",
-        "P0.b.2.b.1.b.1.1 (on/after 2026-04-18)",
-        "P0.b.2.b.1.b.1.2 (on/after 2026-04-18)",
+        "P0.b.2.b.1.b.1.1 (immediate)",
+        "P0.b.2.b.1.b.1.2 (immediate)",
     ] {
         assert!(
             todo.contains(expected_leaf),
@@ -1168,8 +1163,8 @@ fn p0b_2b1b1b1115_task_decomposed_in_todo() {
     let todo = read_project_file("TODO.md");
     for expected_leaf in [
         "P0.b.2.b.1.b.1.1.5 (pre-cutover)",
-        "P0.b.2.b.1.b.1.1 (on/after 2026-04-18)",
-        "P0.b.2.b.1.b.1.2 (on/after 2026-04-18)",
+        "P0.b.2.b.1.b.1.1 (immediate)",
+        "P0.b.2.b.1.b.1.2 (immediate)",
     ] {
         assert!(
             todo.contains(expected_leaf),
@@ -1229,8 +1224,8 @@ fn p0b_2b1b1b1116_task_decomposed_in_todo() {
     let todo = read_project_file("TODO.md");
     for expected_leaf in [
         "P0.b.2.b.1.b.1.1.6 (pre-cutover)",
-        "P0.b.2.b.1.b.1.1 (on/after 2026-04-18)",
-        "P0.b.2.b.1.b.1.2 (on/after 2026-04-18)",
+        "P0.b.2.b.1.b.1.1 (immediate)",
+        "P0.b.2.b.1.b.1.2 (immediate)",
     ] {
         assert!(
             todo.contains(expected_leaf),
@@ -1294,8 +1289,8 @@ fn p0b_2b1b1b1117_task_decomposed_in_todo() {
     let todo = read_project_file("TODO.md");
     for expected_leaf in [
         "P0.b.2.b.1.b.1.1.7 (pre-cutover)",
-        "P0.b.2.b.1.b.1.1 (on/after 2026-04-18)",
-        "P0.b.2.b.1.b.1.2 (on/after 2026-04-18)",
+        "P0.b.2.b.1.b.1.1 (immediate)",
+        "P0.b.2.b.1.b.1.2 (immediate)",
     ] {
         assert!(
             todo.contains(expected_leaf),
@@ -1357,8 +1352,8 @@ fn p0b_2b1b1b1118_task_decomposed_in_todo() {
     let todo = read_project_file("TODO.md");
     for expected_leaf in [
         "P0.b.2.b.1.b.1.1.8 (pre-cutover)",
-        "P0.b.2.b.1.b.1.1 (on/after 2026-04-18)",
-        "P0.b.2.b.1.b.1.2 (on/after 2026-04-18)",
+        "P0.b.2.b.1.b.1.1 (immediate)",
+        "P0.b.2.b.1.b.1.2 (immediate)",
     ] {
         assert!(
             todo.contains(expected_leaf),
@@ -1421,8 +1416,8 @@ fn p0b_2b1b1b1119_task_decomposed_in_todo() {
     let todo = read_project_file("TODO.md");
     for expected_leaf in [
         "P0.b.2.b.1.b.1.1.9 (pre-cutover)",
-        "P0.b.2.b.1.b.1.1 (on/after 2026-04-18)",
-        "P0.b.2.b.1.b.1.2 (on/after 2026-04-18)",
+        "P0.b.2.b.1.b.1.1 (immediate)",
+        "P0.b.2.b.1.b.1.2 (immediate)",
     ] {
         assert!(
             todo.contains(expected_leaf),
