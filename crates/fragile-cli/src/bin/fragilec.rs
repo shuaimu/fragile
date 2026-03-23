@@ -24,7 +24,6 @@ const FRAGILEC_ENFORCE_BUILD_ID_ENV: &str = "FRAGILEC_ENFORCE_BUILD_ID";
 const FRAGILEC_REQUIRE_META_ENV: &str = "FRAGILEC_REQUIRE_META";
 const FRAGILEC_KEEP_RS_ENV: &str = "FRAGILEC_KEEP_RS";
 const FRAGILEC_LINKER_ENV: &str = "FRAGILEC_LINKER";
-const FRAGILEC_PARSER_BACKEND_ENV: &str = "FRAGILEC_PARSER_BACKEND";
 const FRAGILEC_PARSER_CORE_MANIFEST_DIR_ENV: &str = "FRAGILEC_PARSER_CORE_MANIFEST_DIR";
 const FRAGILEC_SKIP_SYSTEM_HEADERS_ENV: &str = "FRAGILEC_SKIP_SYSTEM_HEADERS";
 const FRAGILEC_TRANSPILE_STAGE_TIMING_PATH_ENV: &str = "FRAGILEC_TRANSPILE_STAGE_TIMING_PATH";
@@ -34,10 +33,6 @@ const FRAGILEC_RUNTIME_LINK_CACHE_DIR_ENV: &str = "FRAGILEC_RUNTIME_LINK_CACHE_D
 const FRAGILEC_DUMP_UNRESOLVED_RS_ENV: &str = "FRAGILEC_DUMP_UNRESOLVED_RS";
 const FRAGILEC_NATIVE_FALLBACK_CXX_ENV: &str = "FRAGILEC_NATIVE_FALLBACK_CXX";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum StrictParserBackend {
-    ParserCore { backend_id: String },
-}
 
 fn validate_strict_mode_value(mode: &str) -> Result<(), String> {
     match mode.to_ascii_lowercase().as_str() {
@@ -1219,57 +1214,6 @@ fn source_language(source: &Path) -> ClangParserLanguage {
     }
 }
 
-fn normalize_language_standard(raw: &str, language: ClangParserLanguage) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let lower = trimmed.to_ascii_lowercase();
-    let is_cpp_standard = lower.contains("++");
-    let is_c_standard = !is_cpp_standard && (lower.starts_with('c') || lower.starts_with("gnu"));
-    match language {
-        ClangParserLanguage::Cpp => {
-            if is_cpp_standard {
-                Some(trimmed.to_string())
-            } else {
-                None
-            }
-        }
-        ClangParserLanguage::C => {
-            if is_c_standard {
-                Some(trimmed.to_string())
-            } else {
-                None
-            }
-        }
-    }
-}
-
-fn extract_language_standard(args: &[OsString], language: ClangParserLanguage) -> Option<String> {
-    let mut detected: Option<String> = None;
-    let mut i = 0usize;
-    while i < args.len() {
-        let arg = args[i].to_string_lossy();
-        let token = arg.as_ref();
-        if token == "-std" {
-            if i + 1 < args.len() {
-                let value = args[i + 1].to_string_lossy().to_string();
-                if let Some(normalized) = normalize_language_standard(value.as_str(), language) {
-                    detected = Some(normalized);
-                }
-                i += 2;
-                continue;
-            }
-        } else if let Some(value) = token.strip_prefix("-std=") {
-            if let Some(normalized) = normalize_language_standard(value, language) {
-                detected = Some(normalized);
-            }
-        }
-        i += 1;
-    }
-    detected
-}
-
 fn is_cmake_cxx_probe_source_name(name: &str) -> bool {
     matches!(
         name,
@@ -1323,43 +1267,6 @@ fn strict_parser_ignored_error_patterns(language: ClangParserLanguage) -> Vec<St
     Vec::new()
 }
 
-fn supported_parser_backend_values_message() -> String {
-    FRAGILE_PARSER_CLANG_BACKEND_ID.to_string()
-}
-
-fn parse_parser_backend_value(backend: &str) -> Result<StrictParserBackend, String> {
-    let normalized = backend.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        FRAGILE_PARSER_CLANG_BACKEND_ID => Ok(StrictParserBackend::ParserCore {
-            backend_id: FRAGILE_PARSER_CLANG_BACKEND_ID.to_string(),
-        }),
-        other => Err(format!(
-            "unsupported FRAGILEC_PARSER_BACKEND value `{}`; expected one of: {}",
-            other,
-            supported_parser_backend_values_message()
-        )),
-    }
-}
-
-fn strict_parser_backend_from_value(raw: Option<&str>) -> Result<StrictParserBackend, String> {
-    match raw.map(|v| v.trim()).filter(|v| !v.is_empty()) {
-        Some(backend) => parse_parser_backend_value(backend),
-        None => Ok(StrictParserBackend::ParserCore {
-            backend_id: FRAGILE_PARSER_CLANG_BACKEND_ID.to_string(),
-        }),
-    }
-}
-
-fn strict_parser_backend_from_env() -> Result<StrictParserBackend, String> {
-    let raw = std::env::var(FRAGILEC_PARSER_BACKEND_ENV).ok();
-    strict_parser_backend_from_value(raw.as_deref())
-}
-
-fn strict_parser_backend_label(backend: &StrictParserBackend) -> &str {
-    match backend {
-        StrictParserBackend::ParserCore { backend_id } => backend_id.as_str(),
-    }
-}
 
 fn parser_core_language(language: ClangParserLanguage) -> CoreParserLanguage {
     match language {
@@ -1801,27 +1708,24 @@ fn strict_compile_source_to_object(
     defines: &[String],
     args_for_meta: &[OsString],
 ) -> Result<(), String> {
-    let parser_backend = strict_parser_backend_from_env()?;
-    strict_compile_source_to_object_with_frontend_args_and_backend(
+    strict_compile_source_to_object_with_frontend_args(
         source_arg,
         out_obj,
         includes,
         defines,
         &[],
         args_for_meta,
-        &parser_backend,
     )
 }
 
 #[allow(dead_code)]
-fn strict_compile_source_to_object_with_frontend_args_and_backend(
+fn strict_compile_source_to_object_with_frontend_args(
     source_arg: &Path,
     out_obj: &Path,
     includes: &[IncludeDirective],
     defines: &[String],
     frontend_args: &[String],
     args_for_meta: &[OsString],
-    parser_backend: &StrictParserBackend,
 ) -> Result<(), String> {
     let cwd = std::env::current_dir().map_err(|e| format!("failed to read cwd: {}", e))?;
     let source = resolve_path(source_arg, &cwd);
@@ -1840,7 +1744,6 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
     }
 
     let language = source_language(&source);
-    let language_standard = extract_language_standard(args_for_meta, language);
     let stage_timing_trace_path = std::env::var(FRAGILEC_TRANSPILE_STAGE_TIMING_PATH_ENV)
         .ok()
         .map(|raw| raw.trim().to_string())
@@ -1903,14 +1806,13 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
         Ok(())
     };
 
-    let StrictParserBackend::ParserCore { backend_id } = parser_backend;
     let parser_output = run_parser_core_backend_parse(
         &source,
         language,
         includes,
         defines,
         frontend_args,
-        backend_id.as_str(),
+        FRAGILE_PARSER_CLANG_BACKEND_ID,
         &cwd,
     )?;
     let transpiled = with_current_dir(&cwd, || {
@@ -1925,7 +1827,7 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
             format!(
                 "failed parser-output handoff transpile for {} with parser backend {}: {}",
                 source.display(),
-                strict_parser_backend_label(parser_backend),
+                FRAGILE_PARSER_CLANG_BACKEND_ID,
                 e
             )
         })
@@ -2099,7 +2001,6 @@ fn run_fragile_compile(parsed: &ParsedInvocation) -> Result<(), String> {
     let cwd = std::env::current_dir().map_err(|e| format!("failed to read cwd: {}", e))?;
     let resolved_includes = resolve_include_directives(&parsed.includes, &cwd);
     let resolved_frontend_args = collect_resolved_frontend_args(&parsed.args, &cwd);
-    let parser_backend = strict_parser_backend_from_env()?;
     for source_arg in &parsed.sources {
         let out_obj = if parsed.sources.len() == 1 {
             match &parsed.output {
@@ -2110,14 +2011,13 @@ fn run_fragile_compile(parsed: &ParsedInvocation) -> Result<(), String> {
             default_object_output(source_arg, &cwd)?
         };
 
-        strict_compile_source_to_object_with_frontend_args_and_backend(
+        strict_compile_source_to_object_with_frontend_args(
             source_arg,
             &out_obj,
             &resolved_includes,
             &parsed.defines,
             &resolved_frontend_args,
             &parsed.args,
-            &parser_backend,
         )?;
     }
 
@@ -2408,21 +2308,19 @@ fn run_fragile_link(parsed: &ParsedInvocation) -> Result<(), String> {
     let mut compiled_positions: Vec<(usize, PathBuf)> = Vec::with_capacity(parsed.sources.len());
     let resolved_includes = resolve_include_directives(&parsed.includes, &cwd);
     let resolved_frontend_args = collect_resolved_frontend_args(&parsed.args, &cwd);
-    let parser_backend = strict_parser_backend_from_env()?;
     for (idx, source_arg) in parsed.sources.iter().enumerate() {
         let stem = source_arg
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("unit");
         let out_obj = temp_root.join(format!("{idx}_{stem}.o"));
-        strict_compile_source_to_object_with_frontend_args_and_backend(
+        strict_compile_source_to_object_with_frontend_args(
             source_arg,
             &out_obj,
             &resolved_includes,
             &parsed.defines,
             &resolved_frontend_args,
             &parsed.args,
-            &parser_backend,
         )?;
         let source_pos = parsed
             .source_indices
@@ -2508,7 +2406,6 @@ Compile flag:
 
 Environment:
   FRAGILEC_MODE=strict               Optional; strict-only mode (default: strict)
-  FRAGILEC_PARSER_BACKEND=<name>     Parser backend: fragile-parser-clang (default)
   FRAGILEC_PARSER_CORE_MANIFEST_DIR=<path>
                                      Optional parser-core parse summary output directory
   FRAGILEC_SKIP_SYSTEM_HEADERS=<0|1> Skip system/header-unit AST export (default: disabled)
@@ -3039,52 +2936,7 @@ pub fn rust_accumulator_drop(ptr: *mut RustAccumulator) {
     }
 
     #[test]
-    fn strict_parser_backend_validation_accepts_supported_values() {
-        assert_eq!(
-            strict_parser_backend_from_value(None).expect("missing backend should default"),
-            StrictParserBackend::ParserCore {
-                backend_id: FRAGILE_PARSER_CLANG_BACKEND_ID.to_string()
-            }
-        );
-        assert_eq!(
-            strict_parser_backend_from_value(Some("")).expect("empty backend should default"),
-            StrictParserBackend::ParserCore {
-                backend_id: FRAGILE_PARSER_CLANG_BACKEND_ID.to_string()
-            }
-        );
-        assert_eq!(
-            strict_parser_backend_from_value(Some(" fragile-parser-clang "))
-                .expect("parser-core backend should parse"),
-            StrictParserBackend::ParserCore {
-                backend_id: FRAGILE_PARSER_CLANG_BACKEND_ID.to_string()
-            }
-        );
-        strict_parser_backend_from_value(Some(" libclang "))
-            .expect_err("legacy libclang backend value should be rejected");
-        strict_parser_backend_from_value(Some(" hybrid "))
-            .expect_err("legacy hybrid backend value should be rejected");
-        parse_parser_backend_value("libtooling")
-            .expect_err("libtooling backend value should be rejected");
-    }
-
-    #[test]
-    fn strict_parser_backend_validation_rejects_unsupported_values() {
-        let err = parse_parser_backend_value("unsupported")
-            .expect_err("unsupported backend value must be rejected");
-        assert!(
-            err.contains("unsupported FRAGILEC_PARSER_BACKEND value"),
-            "unexpected error: {}",
-            err
-        );
-        assert!(
-            err.contains(FRAGILE_PARSER_CLANG_BACKEND_ID),
-            "error should list supported backend values, got: {}",
-            err
-        );
-    }
-
-    #[test]
-    fn strict_compile_parser_core_backend_routes_through_parser_output_handoff() {
+    fn strict_compile_routes_through_parser_output_handoff() {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock must be monotonic")
@@ -3095,16 +2947,13 @@ pub fn rust_accumulator_drop(ptr: *mut RustAccumulator) {
         let out_obj = temp_dir.join("program.o");
         fs::write(&source, "int main(void) { return 0; }\n").expect("failed to write source");
 
-        strict_compile_source_to_object_with_frontend_args_and_backend(
+        strict_compile_source_to_object_with_frontend_args(
             &source,
             &out_obj,
             &[],
             &[],
             &[],
             &[],
-            &StrictParserBackend::ParserCore {
-                backend_id: FRAGILE_PARSER_CLANG_BACKEND_ID.to_string(),
-            },
         )
         .expect("parser-core backend should compile through parser-output handoff");
         assert!(
@@ -3167,41 +3016,6 @@ pub fn rust_accumulator_drop(ptr: *mut RustAccumulator) {
         );
 
         let _ = fs::remove_dir_all(&temp_dir);
-    }
-
-    #[test]
-    fn extract_language_standard_supports_split_and_equals_forms() {
-        let split_form = extract_language_standard(
-            &args(&["-O2", "-std", "c++11", "-c", "unit.cpp"]),
-            ClangParserLanguage::Cpp,
-        );
-        assert_eq!(split_form.as_deref(), Some("c++11"));
-
-        let equals_form = extract_language_standard(
-            &args(&["-Wall", "-std=gnu++17", "-c", "unit.cpp"]),
-            ClangParserLanguage::Cpp,
-        );
-        assert_eq!(equals_form.as_deref(), Some("gnu++17"));
-    }
-
-    #[test]
-    fn extract_language_standard_prefers_last_matching_flag() {
-        let detected = extract_language_standard(
-            &args(&["-std=c++11", "-std=gnu++17", "-c", "unit.cpp"]),
-            ClangParserLanguage::Cpp,
-        );
-        assert_eq!(detected.as_deref(), Some("gnu++17"));
-    }
-
-    #[test]
-    fn extract_language_standard_ignores_mismatched_language_family() {
-        let c_from_cpp =
-            extract_language_standard(&args(&["-std=c++20", "-c", "unit.c"]), ClangParserLanguage::C);
-        assert_eq!(c_from_cpp, None);
-
-        let cpp_from_c =
-            extract_language_standard(&args(&["-std=c11", "-c", "unit.cpp"]), ClangParserLanguage::Cpp);
-        assert_eq!(cpp_from_c, None);
     }
 
     #[test]
@@ -3485,22 +3299,18 @@ pub fn rust_accumulator_drop(ptr: *mut RustAccumulator) {
         let cwd = std::env::current_dir().expect("failed to read cwd");
         let resolved_includes = resolve_include_directives(&parsed.includes, &cwd);
         let resolved_frontend_args = collect_resolved_frontend_args(&parsed.args, &cwd);
-        let parser_backend = StrictParserBackend::ParserCore {
-            backend_id: FRAGILE_PARSER_CLANG_BACKEND_ID.to_string(),
-        };
         for source_arg in &parsed.sources {
             let this_out = match &parsed.output {
                 Some(out) => resolve_path(out, &cwd),
                 None => default_object_output(source_arg, &cwd).unwrap(),
             };
-            strict_compile_source_to_object_with_frontend_args_and_backend(
+            strict_compile_source_to_object_with_frontend_args(
                 source_arg,
                 &this_out,
                 &resolved_includes,
                 &parsed.defines,
                 &resolved_frontend_args,
                 &parsed.args,
-                &parser_backend,
             )
             .expect(
                 "strict driver compile should resolve relative -include against invocation cwd",
