@@ -1815,7 +1815,7 @@ fn compile_example_with_cxx_env(
         .env("OUT", output_path.to_string_lossy().to_string())
         .env("FRAGILEC_MODE", "strict")
         // Keep this helper pinned to the currently supported strict backend lane.
-        .env("FRAGILEC_PARSER_BACKEND", "libtooling")
+        .env("FRAGILEC_PARSER_BACKEND", "fragile-parser-clang")
         .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string())
         .output()
         .map_err(|e| {

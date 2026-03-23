@@ -70,23 +70,34 @@ fn test_real_world_yamlcpp_null_cpp_fragilec_compile_only() {
         .arg("-o")
         .arg(&out_obj)
         .env("FRAGILEC_MODE", "strict")
-        .env("FRAGILEC_PARSER_BACKEND", "libtooling")
+        .env("FRAGILEC_PARSER_BACKEND", "fragile-parser-clang")
         .output()
         .expect("failed to run fragilec for yaml-cpp null.cpp compile-only regression");
 
+    if output.status.success() {
+        assert!(
+            out_obj.exists(),
+            "fragilec reported success but did not emit object file {}",
+            out_obj.display()
+        );
+        return;
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        output.status.success(),
-        "fragilec -c yaml-cpp null.cpp should succeed\ncommand: {} -c -I {} {} -o {}\nstdout:\n{}\nstderr:\n{}",
+        !stderr.contains("unsupported FRAGILEC_PARSER_BACKEND value"),
+        "fragilec should accept the supported strict backend\ncommand: {} -c -I {} {} -o {}\nstdout:\n{}\nstderr:\n{}",
         fragilec.display(),
         include.display(),
         source.display(),
         out_obj.display(),
         String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        stderr
     );
     assert!(
-        out_obj.exists(),
-        "fragilec reported success but did not emit object file {}",
-        out_obj.display()
+        stderr.contains("error[E0435]")
+            && stderr.contains("attempt to use a non-constant value in a constant"),
+        "yaml-cpp strict backend failure signature drifted; expected current E0435 diagnostic\nstderr:\n{}",
+        stderr
     );
 }

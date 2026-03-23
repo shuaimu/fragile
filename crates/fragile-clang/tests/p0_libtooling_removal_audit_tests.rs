@@ -73,18 +73,22 @@ fn p0a_audit_fragile_driver_has_escape_hatch_enum() {
 #[test]
 fn p0a_audit_fragilec_has_libtooling_backend_variant() {
     let src = read_project_file("crates/fragile-cli/src/bin/fragilec.rs");
+    // P0.b.2.b.1.c/b.3 cutover: fragilec strict backend no longer exposes
+    // StrictParserBackend::Libtooling.
     assert!(
-        src.contains("StrictParserBackend::Libtooling"),
-        "audit: expected StrictParserBackend::Libtooling in fragilec.rs (to be removed in P0.b)"
+        !src.contains("StrictParserBackend::Libtooling"),
+        "audit: StrictParserBackend::Libtooling should be removed from fragilec.rs"
     );
 }
 
 #[test]
 fn p0a_audit_fragilec_has_escape_hatch_enum() {
     let src = read_project_file("crates/fragile-cli/src/bin/fragilec.rs");
+    // P0.b.2.b.1.c/b.3 cutover: fragilec no longer exposes the libtooling
+    // parser-core codegen escape-hatch variant.
     assert!(
-        src.contains("ParserCoreCodegenEscapeHatch::Libtooling"),
-        "audit: expected ParserCoreCodegenEscapeHatch::Libtooling in fragilec.rs"
+        !src.contains("ParserCoreCodegenEscapeHatch::Libtooling"),
+        "audit: ParserCoreCodegenEscapeHatch::Libtooling should be removed from fragilec.rs"
     );
 }
 
@@ -220,8 +224,8 @@ fn p0a_audit_driver_use_libtooling_codegen_escape_hatch_variable_removed() {
 fn p0a_audit_fragilec_use_libtooling_codegen_escape_hatch_variable() {
     let fragilec_src = read_project_file("crates/fragile-cli/src/bin/fragilec.rs");
     assert!(
-        fragilec_src.contains("use_libtooling_codegen_escape_hatch"),
-        "audit: expected use_libtooling_codegen_escape_hatch in fragilec.rs"
+        !fragilec_src.contains("use_libtooling_codegen_escape_hatch"),
+        "audit: use_libtooling_codegen_escape_hatch should be removed from fragilec.rs"
     );
 }
 
@@ -416,8 +420,8 @@ fn p0a_audit_fragilec_libtooling_reference_count() {
     let src = read_project_file("crates/fragile-cli/src/bin/fragilec.rs");
     let count = count_occurrences(&src, "libtooling");
     assert!(
-        count >= 25,
-        "audit: expected at least 25 libtooling references in fragilec.rs, found {}",
+        count <= 2,
+        "audit: expected at most 2 libtooling references in fragilec.rs, found {}",
         count
     );
 }
@@ -474,10 +478,10 @@ fn p0a_audit_driver_legacy_libtooling_codegen_fallthrough_removed() {
 #[test]
 fn p0a_audit_fragilec_legacy_libtooling_codegen_fallthrough() {
     let src = read_project_file("crates/fragile-cli/src/bin/fragilec.rs");
-    // Same fallthrough path exists in fragilec.rs.
+    // P0.b.2.b.1.c/b.3 cutover removed fragilec's legacy fallthrough path.
     assert!(
-        src.contains("use_libtooling_codegen_escape_hatch"),
-        "audit: fragilec has libtooling codegen escape hatch fallthrough path"
+        !src.contains("use_libtooling_codegen_escape_hatch"),
+        "audit: fragilec legacy libtooling codegen escape hatch fallthrough should be removed"
     );
 }
 
@@ -488,15 +492,15 @@ fn p0a_audit_fragilec_legacy_libtooling_codegen_fallthrough() {
 #[test]
 fn p0a_audit_fragilec_help_text_mentions_libtooling() {
     let src = read_project_file("crates/fragile-cli/src/bin/fragilec.rs");
-    // The fragilec --fragilec-help output mentions libtooling backend.
-    // P0.b removal: update help text.
+    // P0.b.2.c/f cutover: help still documents parser backend env, but
+    // libtooling escape-hatch guidance is removed.
     assert!(
         src.contains("FRAGILEC_PARSER_BACKEND=<name>"),
         "audit: fragilec help text describes FRAGILEC_PARSER_BACKEND"
     );
     assert!(
-        src.contains("FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH=libtooling"),
-        "audit: fragilec help text describes escape hatch"
+        !src.contains("FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH=libtooling"),
+        "audit: fragilec help text should not describe libtooling escape hatch"
     );
 }
 
