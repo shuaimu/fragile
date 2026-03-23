@@ -9,11 +9,11 @@
 //!   1. Strict-path backend selection (fragilec.rs, fragile-driver/lib.rs)
 //!   2. Parser invocation sites (fragile-clang/src/lib.rs)
 //!   3. Escape-hatch support (fragile-driver, fragilec)
-//!   4. CLI --use-libtooling flag (fragile-cli/src/main.rs)
+//!   4. CLI --use-libtooling flag removal (fragile-cli/src/main.rs)
 //!   5. LibTooling module (fragile-clang/src/libtooling.rs)
 //!   6. CI workflow usage (.github/workflows/*.yml)
 //!   7. Public API exports (fragile-clang pub use libtooling)
-//!   8. Examples (examples/debug_libtooling.rs)
+//!   8. Example artifact removal (examples/debug_libtooling.rs)
 //!   9. Scripts (*.py)
 
 use std::path::Path;
@@ -228,17 +228,20 @@ fn p0a_audit_fragilec_use_libtooling_codegen_escape_hatch_variable() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn p0a_audit_cli_has_use_libtooling_flag() {
+fn p0b6_anti_regression_cli_use_libtooling_flag_removed() {
     let main_src = read_project_file("crates/fragile-cli/src/main.rs");
-    // The fragile CLI has --use-libtooling flag for explicit LibTooling enrichment.
-    // P0.b removal: remove flag and LibTooling pre-parse path.
+    // P0.b.6: remove deprecated --use-libtooling flag and no-op warning path.
     assert!(
-        main_src.contains("use_libtooling"),
-        "audit: expected --use-libtooling flag in fragile CLI main.rs"
+        !main_src.contains("use_libtooling"),
+        "anti-regression: --use-libtooling flag field should not be reintroduced in fragile CLI main.rs"
     );
     assert!(
-        main_src.contains("LibTooling for template method bodies"),
-        "audit: expected LibTooling help text in fragile CLI"
+        !main_src.contains("--use-libtooling"),
+        "anti-regression: --use-libtooling CLI option should not be reintroduced in fragile CLI main.rs"
+    );
+    assert!(
+        !main_src.contains("LibTooling for template method bodies"),
+        "anti-regression: LibTooling-specific CLI help text should not be reintroduced"
     );
 }
 
@@ -352,18 +355,12 @@ fn p0a_audit_ci_workflows_are_clean_of_libtooling_references() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn p0a_audit_debug_libtooling_example_exists() {
-    // examples/debug_libtooling.rs uses LibToolingParser directly.
-    // P0.b removal: remove or migrate this example.
+fn p0b6_anti_regression_debug_libtooling_example_removed() {
+    // P0.b.6: remove stale LibTooling debug example artifact.
     let example_path = project_root().join("examples/debug_libtooling.rs");
     assert!(
-        example_path.exists(),
-        "audit: expected examples/debug_libtooling.rs to exist"
-    );
-    let content = std::fs::read_to_string(&example_path).unwrap();
-    assert!(
-        content.contains("LibToolingParser"),
-        "audit: expected LibToolingParser usage in debug_libtooling.rs"
+        !example_path.exists(),
+        "anti-regression: examples/debug_libtooling.rs should not be reintroduced"
     );
 }
 
@@ -1487,10 +1484,9 @@ fn p0a_audit_comprehensive_site_inventory() {
     assert!(!script_path.exists(),
         "anti-regression: escape_hatch_usage_report.py should be removed");
 
-    // Files that still exist and have remaining LibTooling code (for P0.b.4+):
+    // Files that still have non-zero LibTooling reference budgets under P0.c.
     let remaining_files = vec![
-        ("crates/fragile-clang/src/libtooling.rs", "LibTooling module (P0.b.5)"),
-        ("crates/fragile-cli/src/main.rs", "--use-libtooling CLI flag (P0.b.6)"),
+        ("crates/fragile-clang/src/lib.rs", "LibTooling parser invocation paths"),
         ("crates/fragile-clang/src/ast_codegen.rs", "LibTooling enrichment state (P0.b.4)"),
     ];
 

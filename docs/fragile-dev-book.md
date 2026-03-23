@@ -21658,3 +21658,28 @@ Implemented:
 Result:
 - `P0.b.2.b.1.b.1.1` now includes a checksum-backed integrity guard on top of prior freshness and anchor-delta controls.
 - Date-gated production deletion remains deferred while cutover-day artifact tamper/drift risk is reduced.
+
+## 2026-03-23: P0.b.6 CLI `--use-libtooling` removal
+
+Task context:
+
+- Top active TODO leaf was `P0.b.6`: remove CLI `--use-libtooling` pre-parse path and related example/script artifacts.
+
+What changed:
+
+1. Removed `use_libtooling` CLI argument and its deprecated no-op warning branch from `crates/fragile-cli/src/main.rs`.
+2. Removed stale LibTooling debug example `examples/debug_libtooling.rs`.
+3. Updated `crates/fragile-clang/tests/p0_libtooling_removal_audit_tests.rs` to anti-regression checks asserting the CLI flag/example are not reintroduced.
+4. Updated `crates/fragile-clang/tests/p0c_anti_regression_tests.rs` ceilings for this leaf:
+- `main.rs` LibTooling ceiling: `7 -> 0`.
+- aggregate LibTooling ceiling: `64 -> 57`.
+
+Design rationale:
+
+- Keeping a deprecated no-op CLI path still preserves user-visible legacy surface and ongoing maintenance burden; hard removal aligns with P0 hard-removal goals.
+- The debug example was tied to LibTooling-only API surfaces and no longer represents a valid production-path workflow.
+
+Wrong-approach review:
+
+- Reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before implementation.
+- Applied generic cleanup and anti-regression tests only; no target-specific hacks, no fallback bypasses, no fake semantic stubs.

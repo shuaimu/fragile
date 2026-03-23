@@ -33,10 +33,6 @@ enum Commands {
         /// Generate stubs only (function signatures, no bodies)
         #[arg(long)]
         stubs_only: bool,
-
-        /// Use LibTooling for template method bodies (slower but more complete)
-        #[arg(long)]
-        use_libtooling: bool,
     },
 
     /// Parse C++ files and show AST information (deprecated, use 'transpile')
@@ -84,21 +80,11 @@ fn main() -> Result<()> {
             include,
             define,
             stubs_only,
-            use_libtooling,
         } => {
             let include_paths: Vec<String> = include
                 .iter()
                 .map(|p| p.to_string_lossy().to_string())
                 .collect();
-
-            // P0.b.5: --use-libtooling enrichment data types removed; flag is
-            // retained (P0.b.6 scope) but has no effect.
-            if use_libtooling {
-                eprintln!(
-                    "Warning: --use-libtooling is deprecated and has no effect. \
-                     LibTooling enrichment was removed in P0.b.4/P0.b.5."
-                );
-            }
 
             // Create parser with vendored libc++
             let parser =

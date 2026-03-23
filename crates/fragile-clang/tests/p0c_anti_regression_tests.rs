@@ -183,12 +183,12 @@ fn p0c_guard_ast_codegen_libtooling_ceiling() {
 // ---------------------------------------------------------------------------
 
 /// main.rs (fragile CLI) LibTooling references must not increase.
-/// Current ceiling: 7 (lowered from 23, P0.b.5 2026-03-23). After P0.b removal: 0.
+/// Current ceiling: 0 (lowered from 7, P0.b.6 2026-03-23).
 #[test]
 fn p0c_guard_fragile_cli_main_libtooling_ceiling() {
     let src = read_project_file("crates/fragile-cli/src/main.rs");
     let count = count_libtooling_refs(&src);
-    let ceiling = 7;
+    let ceiling = 0;
     assert!(
         count <= ceiling,
         "ANTI-REGRESSION: fragile CLI main.rs LibTooling references increased from {} ceiling to {}. \
@@ -290,7 +290,7 @@ fn scan_dir_for_libtooling(
 // ---------------------------------------------------------------------------
 
 /// Total LibTooling references across all tracked production files must not increase.
-/// Current aggregate ceiling: 64 (0+0+7+32+25, lowered from 185 in P0.b.5 2026-03-23).
+/// Current aggregate ceiling: 57 (0+0+0+32+25, lowered from 64 in P0.b.6 2026-03-23).
 /// After P0.b removal: 0.
 #[test]
 fn p0c_guard_aggregate_libtooling_ceiling() {
@@ -307,7 +307,7 @@ fn p0c_guard_aggregate_libtooling_ceiling() {
         .map(|f| count_libtooling_refs(&read_project_file(f)))
         .sum();
 
-    let ceiling = 64;
+    let ceiling = 57;
     assert!(
         total <= ceiling,
         "ANTI-REGRESSION: aggregate LibTooling references across production files \
