@@ -30067,6 +30067,11 @@ impl AstCodeGen {
         output = Self::normalize_ref_to_ptr_cast(&output);
         // Fix E0308: `if __err {` where __err is u32 (std__Ios_Iostate) — needs `!= 0`.
         output = Self::normalize_integer_condition_to_bool(&output);
+        // Fix E0610/E0599/E0308: error hierarchy subclasses have `__base: u128`
+        // instead of their actual parent type (logic_error, runtime_error).
+        output = Self::normalize_error_hierarchy_base_type(&output);
+        // Fix E0308: `static mut VAR: *mut T = std::ptr::null();` should use null_mut().
+        output = Self::normalize_null_for_mut_ptr_statics(&output);
         // Final pass: late normalizations can still reintroduce statement-only
         // degraded preface expressions and default tail returns in helper bodies.
         output = Self::normalize_default_preface_local_assignment_artifacts(&output);
@@ -35624,6 +35629,138 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 let indent = line.len() - line.trim_start().len();
                 out.push_str(&" ".repeat(indent));
                 out.push_str("if true {");
+            } else {
+                out.push_str(line);
+            }
+            out.push('\n');
+        }
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix E0610/E0599/E0308: error hierarchy subclasses have `__base: u128`
+    /// where they should inherit from their actual parent type (logic_error,
+    /// runtime_error).  The `/// Inherited from` comment tells us the real base.
+    /// Also rewrites `&u128`/`&mut u128` parameters in methods of those impls
+    /// to the concrete Self type (op_assign, swap, code).
+    pub fn normalize_error_hierarchy_base_type(code: &str) -> String {
+        // Quick bail: nothing to fix if no degraded base field
+        if !code.contains("/// Inherited from") || !code.contains("pub __base: u128") {
+            return code.to_string();
+        }
+
+        // Known error hierarchy: child -> parent
+        let hierarchy: &[(&str, &str)] = &[
+            ("domain_error", "logic_error"),
+            ("invalid_argument", "logic_error"),
+            ("length_error", "logic_error"),
+            ("out_of_range", "logic_error"),
+            ("range_error", "runtime_error"),
+            ("overflow_error", "runtime_error"),
+            ("underflow_error", "runtime_error"),
+            ("system_error", "runtime_error"),
+        ];
+
+        let mut result = code.to_string();
+        for (child, parent) in hierarchy {
+            // Fix struct field: `pub __base: u128` -> `pub __base: PARENT`
+            // Only when preceded by the matching "Inherited from" comment
+            let old_pattern = format!(
+                "/// Inherited from `{parent}`\n                pub __base: u128,"
+            );
+            let new_pattern = format!(
+                "/// Inherited from `{parent}`\n                pub __base: {parent},"
+            );
+            result = result.replace(&old_pattern, &new_pattern);
+
+            // Fix method signatures inside `impl CHILD {`:
+            // - `op_assign(&mut self, _unnamed: &u128) -> &mut u128`
+            //   → `op_assign(&mut self, _unnamed: &Self) -> &mut Self`
+            // (These degraded because the parameter type should be the same class)
+            let old_op_assign = format!(
+                "impl {child} {{\n                pub fn new_0"
+            );
+            // We only fix inside the impl block, so search for the impl boundary.
+            // Use targeted replacements within impl blocks.
+        }
+
+        // Fix `&u128` and `&mut u128` method params/returns in error-type impls.
+        // These are the method signatures where the self-type degraded.
+        // We do this for ALL exception-hierarchy types.
+        let error_types: &[&str] = &[
+            "domain_error", "invalid_argument", "length_error", "out_of_range",
+            "range_error", "overflow_error", "underflow_error", "system_error",
+        ];
+
+        for error_ty in error_types {
+            // Find each `impl TYPE {` block and fix u128 references within
+            let impl_marker = format!("impl {} {{", error_ty);
+            let mut search_from = 0;
+            while let Some(impl_start) = result[search_from..].find(&impl_marker) {
+                let impl_start = search_from + impl_start;
+                // Find matching closing brace (track brace depth)
+                let block_start = impl_start + impl_marker.len();
+                let mut depth = 1i32;
+                let mut impl_end = block_start;
+                for (i, ch) in result[block_start..].char_indices() {
+                    match ch {
+                        '{' => depth += 1,
+                        '}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                impl_end = block_start + i + 1;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if depth != 0 {
+                    search_from = block_start;
+                    continue;
+                }
+
+                // Extract impl block, fix u128 references, replace back
+                let impl_block = result[impl_start..impl_end].to_string();
+                let fixed_block = impl_block
+                    .replace("_unnamed: &u128) -> &mut u128", &format!("_unnamed: &{error_ty}) -> &mut {error_ty}"))
+                    .replace("_unnamed: &mut u128) -> &mut u128", &format!("_unnamed: &mut {error_ty}) -> &mut {error_ty}"))
+                    .replace("__other: &u128)", &format!("__other: &{error_ty})"))
+                    .replace("__other: &mut u128)", &format!("__other: &mut {error_ty})"))
+                    .replace("-> &u128{", "-> &error_code{")
+                    .replace("__ec: u128)", "__ec: error_code)")
+                    // Fix vtable access through inheritance chain:
+                    // error subclass.__base is logic_error/runtime_error which has
+                    // __base: exception (which has __vtable), so need one more level.
+                    .replace(".__base.__vtable", ".__base.__base.__vtable");
+
+                if fixed_block != impl_block {
+                    result = format!("{}{}{}", &result[..impl_start], fixed_block, &result[impl_end..]);
+                }
+                search_from = impl_start + fixed_block.len();
+            }
+        }
+
+        result
+    }
+
+    /// Fix E0308: `static mut VAR: *mut T = std::ptr::null();` should use
+    /// `std::ptr::null_mut()` since `null()` returns `*const T`, not `*mut T`.
+    pub fn normalize_null_for_mut_ptr_statics(code: &str) -> String {
+        if !code.contains("*mut") || !code.contains("std::ptr::null()") {
+            return code.to_string();
+        }
+        let mut out = String::with_capacity(code.len());
+        for line in code.lines() {
+            let trimmed = line.trim();
+            // Match: `static mut VAR: *mut SOMETHING = std::ptr::null();`
+            if trimmed.starts_with("static mut ")
+                && trimmed.contains(": *mut ")
+                && trimmed.contains("= std::ptr::null();")
+            {
+                out.push_str(&line.replace("std::ptr::null()", "std::ptr::null_mut()"));
             } else {
                 out.push_str(line);
             }
@@ -132755,6 +132892,153 @@ pub fn __to_chars_len_u64(__value: u64, __base: i32) -> u32 {\n\
         assert!(
             src.contains("self._M_value == 0 }"),
             "Ordering comparison stubs should use _M_value"
+        );
+    }
+
+    // normalize_error_hierarchy_base_type tests (e.15)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_error_hierarchy_domain_error_base_field() {
+        let input = concat!(
+            "            pub struct domain_error {\n",
+            "                /// Inherited from `logic_error`\n",
+            "                pub __base: u128,\n",
+            "            }\n",
+        );
+        let output = AstCodeGen::normalize_error_hierarchy_base_type(input);
+        assert!(output.contains("pub __base: logic_error,"), "got: {}", output);
+        assert!(!output.contains("pub __base: u128"), "u128 should be replaced");
+    }
+
+    #[test]
+    fn test_error_hierarchy_range_error_base_field() {
+        let input = concat!(
+            "            pub struct range_error {\n",
+            "                /// Inherited from `runtime_error`\n",
+            "                pub __base: u128,\n",
+            "            }\n",
+        );
+        let output = AstCodeGen::normalize_error_hierarchy_base_type(input);
+        assert!(output.contains("pub __base: runtime_error,"), "got: {}", output);
+    }
+
+    #[test]
+    fn test_error_hierarchy_system_error_base_field() {
+        let input = concat!(
+            "            pub struct system_error {\n",
+            "                /// Inherited from `runtime_error`\n",
+            "                pub __base: u128,\n",
+            "                _M_code: error_code,\n",
+            "            }\n",
+        );
+        let output = AstCodeGen::normalize_error_hierarchy_base_type(input);
+        assert!(output.contains("pub __base: runtime_error,"), "got: {}", output);
+        assert!(output.contains("_M_code: error_code,"), "other fields unchanged");
+    }
+
+    #[test]
+    fn test_error_hierarchy_fixes_method_signatures() {
+        let input = concat!(
+            "            pub struct domain_error {\n",
+            "                /// Inherited from `logic_error`\n",
+            "                pub __base: u128,\n",
+            "            }\n",
+            "            impl domain_error {\n",
+            "                pub fn op_assign(&mut self, _unnamed: &u128) -> &mut u128{\n",
+            "                    unsafe { std::mem::zeroed() }\n",
+            "                }\n",
+            "            }\n",
+        );
+        let output = AstCodeGen::normalize_error_hierarchy_base_type(input);
+        assert!(
+            output.contains("_unnamed: &domain_error) -> &mut domain_error"),
+            "op_assign should use domain_error, got: {}", output
+        );
+    }
+
+    #[test]
+    fn test_error_hierarchy_no_change_for_non_error_types() {
+        let input = concat!(
+            "            pub struct my_type {\n",
+            "                pub __base: u128,\n",
+            "            }\n",
+        );
+        let output = AstCodeGen::normalize_error_hierarchy_base_type(input);
+        assert!(output.contains("pub __base: u128"), "non-error types should keep u128");
+    }
+
+    #[test]
+    fn test_error_hierarchy_system_error_ec_param() {
+        let input = concat!(
+            "            pub struct system_error {\n",
+            "                /// Inherited from `runtime_error`\n",
+            "                pub __base: u128,\n",
+            "            }\n",
+            "            impl system_error {\n",
+            "                pub fn new_1(__ec: u128) -> Self{\n",
+            "                    Self { __base: unsafe { std::mem::zeroed() } }\n",
+            "                }\n",
+            "                pub fn code(&self, ) -> &u128{\n",
+            "                    return &self._M_code;\n",
+            "                }\n",
+            "            }\n",
+        );
+        let output = AstCodeGen::normalize_error_hierarchy_base_type(input);
+        assert!(
+            output.contains("__ec: error_code)"),
+            "system_error constructor should take error_code, got: {}", output
+        );
+        assert!(
+            output.contains("-> &error_code{"),
+            "code() should return &error_code, got: {}", output
+        );
+    }
+
+    // normalize_null_for_mut_ptr_statics tests (e.15)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_null_for_mut_ptr_static() {
+        let input = "            static mut _IMPL__S_ID_CTYPE: *mut *const locale_id = std::ptr::null();\n";
+        let output = AstCodeGen::normalize_null_for_mut_ptr_statics(input);
+        assert!(output.contains("std::ptr::null_mut()"), "got: {}", output);
+        assert!(!output.contains("std::ptr::null()"), "null() should be replaced");
+    }
+
+    #[test]
+    fn test_null_for_const_ptr_unchanged() {
+        let input = "            static mut _IMPL__S_ID: *const locale_id = std::ptr::null();\n";
+        let output = AstCodeGen::normalize_null_for_mut_ptr_statics(input);
+        assert!(output.contains("std::ptr::null()"), "const ptr should keep null()");
+    }
+
+    #[test]
+    fn test_null_for_non_static_unchanged() {
+        let input = "            let x: *mut i32 = std::ptr::null();\n";
+        let output = AstCodeGen::normalize_null_for_mut_ptr_statics(input);
+        assert!(output.contains("std::ptr::null()"), "non-static should be unchanged");
+    }
+
+    #[test]
+    fn test_error_hierarchy_vtable_chain_fix() {
+        let input = concat!(
+            "            pub struct domain_error {\n",
+            "                /// Inherited from `logic_error`\n",
+            "                pub __base: u128,\n",
+            "            }\n",
+            "            impl domain_error {\n",
+            "                pub fn new_0() -> Self {\n",
+            "                    let mut __self = Self::default();\n",
+            "                    __self.__base.__vtable = unsafe { std::ptr::addr_of!(VT) as *const _ };\n",
+            "                    __self\n",
+            "                }\n",
+            "            }\n",
+        );
+        let output = AstCodeGen::normalize_error_hierarchy_base_type(input);
+        assert!(
+            output.contains("__self.__base.__base.__vtable"),
+            "vtable access should go through two levels of __base, got: {}", output
         );
     }
 }
