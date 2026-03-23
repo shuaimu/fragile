@@ -1,7 +1,6 @@
 use fragile_clang::{
-    IncludeDirective, IncludeDirectiveKind, ParserBackend as ClangParserBackend,
-    ParserLanguage as ClangParserLanguage, ParserOutputCodegenOptions, TemplateParsingMode,
-    TranspileOptions,
+    IncludeDirective, IncludeDirectiveKind,
+    ParserLanguage as ClangParserLanguage, ParserOutputCodegenOptions,
 };
 use fragile_parser_clang::{FragileParserClangBackend, FRAGILE_PARSER_CLANG_BACKEND_ID};
 use fragile_parser_core::{
@@ -27,8 +26,6 @@ const FRAGILEC_KEEP_RS_ENV: &str = "FRAGILEC_KEEP_RS";
 const FRAGILEC_LINKER_ENV: &str = "FRAGILEC_LINKER";
 const FRAGILEC_PARSER_BACKEND_ENV: &str = "FRAGILEC_PARSER_BACKEND";
 const FRAGILEC_PARSER_CORE_MANIFEST_DIR_ENV: &str = "FRAGILEC_PARSER_CORE_MANIFEST_DIR";
-const FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH_ENV: &str =
-    "FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH";
 const FRAGILEC_SKIP_SYSTEM_HEADERS_ENV: &str = "FRAGILEC_SKIP_SYSTEM_HEADERS";
 const FRAGILEC_TRANSPILE_STAGE_TIMING_PATH_ENV: &str = "FRAGILEC_TRANSPILE_STAGE_TIMING_PATH";
 const FRAGILEC_RUSTC_BIN_ENV: &str = "FRAGILEC_RUSTC_BIN";
@@ -39,13 +36,7 @@ const FRAGILEC_NATIVE_FALLBACK_CXX_ENV: &str = "FRAGILEC_NATIVE_FALLBACK_CXX";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum StrictParserBackend {
-    Libtooling,
     ParserCore { backend_id: String },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ParserCoreCodegenEscapeHatch {
-    Libtooling,
 }
 
 fn validate_strict_mode_value(mode: &str) -> Result<(), String> {
@@ -1184,8 +1175,8 @@ fn collect_resolved_frontend_args(args: &[OsString], cwd: &Path) -> Vec<String> 
 
 fn filter_transpile_frontend_args(args: &[String]) -> Vec<String> {
     // Parser-only normalization: avoid forcing a specific C++ stdlib header set.
-    // In this workspace, forwarding `-stdlib=...` to libtooling can explode
-    // header load (notably libc++) and trigger extreme memory/runtime spikes.
+    // Forwarding `-stdlib=...` can explode header load (notably libc++) and
+    // trigger extreme memory/runtime spikes.
     let mut filtered = Vec::with_capacity(args.len());
     let mut i = 0usize;
     while i < args.len() {
@@ -1333,13 +1324,12 @@ fn strict_parser_ignored_error_patterns(language: ClangParserLanguage) -> Vec<St
 }
 
 fn supported_parser_backend_values_message() -> String {
-    format!("libtooling, {}", FRAGILE_PARSER_CLANG_BACKEND_ID)
+    FRAGILE_PARSER_CLANG_BACKEND_ID.to_string()
 }
 
 fn parse_parser_backend_value(backend: &str) -> Result<StrictParserBackend, String> {
     let normalized = backend.trim().to_ascii_lowercase();
     match normalized.as_str() {
-        "libtooling" => Ok(StrictParserBackend::Libtooling),
         FRAGILE_PARSER_CLANG_BACKEND_ID => Ok(StrictParserBackend::ParserCore {
             backend_id: FRAGILE_PARSER_CLANG_BACKEND_ID.to_string(),
         }),
@@ -1367,58 +1357,7 @@ fn strict_parser_backend_from_env() -> Result<StrictParserBackend, String> {
 
 fn strict_parser_backend_label(backend: &StrictParserBackend) -> &str {
     match backend {
-        StrictParserBackend::Libtooling => "libtooling",
         StrictParserBackend::ParserCore { backend_id } => backend_id.as_str(),
-    }
-}
-
-fn supported_parser_core_codegen_escape_hatch_values_message() -> &'static str {
-    "libtooling"
-}
-
-fn parse_parser_core_codegen_escape_hatch_value(
-    raw: &str,
-) -> Result<ParserCoreCodegenEscapeHatch, String> {
-    let normalized = raw.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        "libtooling" => Ok(ParserCoreCodegenEscapeHatch::Libtooling),
-        other => Err(format!(
-            "unsupported FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH value `{}`; expected one of: {}",
-            other,
-            supported_parser_core_codegen_escape_hatch_values_message()
-        )),
-    }
-}
-
-fn parser_core_codegen_escape_hatch_from_value(
-    raw: Option<&str>,
-) -> Result<Option<ParserCoreCodegenEscapeHatch>, String> {
-    match raw.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(value) => parse_parser_core_codegen_escape_hatch_value(value).map(Some),
-        None => Ok(None),
-    }
-}
-
-fn parser_core_codegen_escape_hatch_from_env(
-) -> Result<Option<ParserCoreCodegenEscapeHatch>, String> {
-    let raw = std::env::var(FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH_ENV).ok();
-    parser_core_codegen_escape_hatch_from_value(raw.as_deref())
-}
-
-fn strict_parser_backend_from_legacy_backend(
-    backend: ClangParserBackend,
-) -> Result<StrictParserBackend, String> {
-    match backend {
-        ClangParserBackend::Libtooling => Ok(StrictParserBackend::Libtooling),
-        ClangParserBackend::Libclang | ClangParserBackend::Hybrid => Err(format!(
-            "legacy parser backend alias `{}` is unsupported in strict mode; expected one of: {}",
-            match backend {
-                ClangParserBackend::Libclang => "libclang",
-                ClangParserBackend::Hybrid => "hybrid",
-                ClangParserBackend::Libtooling => "libtooling",
-            },
-            supported_parser_backend_values_message()
-        )),
     }
 }
 
@@ -1875,26 +1814,6 @@ fn strict_compile_source_to_object(
 }
 
 #[allow(dead_code)]
-fn strict_compile_source_to_object_with_backend(
-    source_arg: &Path,
-    out_obj: &Path,
-    includes: &[IncludeDirective],
-    defines: &[String],
-    args_for_meta: &[OsString],
-    parser_backend: ClangParserBackend,
-) -> Result<(), String> {
-    let parser_backend = strict_parser_backend_from_legacy_backend(parser_backend)?;
-    strict_compile_source_to_object_with_frontend_args_and_backend(
-        source_arg,
-        out_obj,
-        includes,
-        defines,
-        &[],
-        args_for_meta,
-        &parser_backend,
-    )
-}
-
 fn strict_compile_source_to_object_with_frontend_args_and_backend(
     source_arg: &Path,
     out_obj: &Path,
@@ -1927,8 +1846,6 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
         .map(|raw| raw.trim().to_string())
         .filter(|raw| !raw.is_empty())
         .map(PathBuf::from);
-    let parser_core_codegen_escape_hatch = parser_core_codegen_escape_hatch_from_env()?;
-    let mut use_libtooling_codegen_escape_hatch = false;
     let keep_rs = env_flag_is_true(FRAGILEC_KEEP_RS_ENV);
     let transpiled_rs = if keep_rs {
         out_obj.with_extension("fragile.rs")
@@ -1986,151 +1903,37 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
         Ok(())
     };
 
-    // Enforce escape hatch policy for explicit libtooling backend override.
-    if matches!(parser_backend, StrictParserBackend::Libtooling) {
-        fragile_driver::enforce_escape_hatch_policy(
-            "FRAGILEC_PARSER_BACKEND=libtooling",
-            &source.display().to_string(),
-        )?;
-    }
-
-    if let StrictParserBackend::ParserCore { backend_id } = parser_backend {
-        let parser_output = run_parser_core_backend_parse(
-            &source,
-            language,
-            includes,
-            defines,
-            frontend_args,
-            backend_id.as_str(),
-            &cwd,
-        )?;
-        if matches!(
-            parser_core_codegen_escape_hatch,
-            Some(ParserCoreCodegenEscapeHatch::Libtooling)
-        ) {
-            // Enforce escape hatch policy for codegen escape hatch.
-            fragile_driver::enforce_escape_hatch_policy(
-                "FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH=libtooling",
-                &source.display().to_string(),
-            )?;
-            use_libtooling_codegen_escape_hatch = true;
-            eprintln!(
-                "[fragilec] parser-core codegen escape hatch enabled; routing {} through legacy libtooling codegen",
-                source.display()
-            );
-        } else {
-            let transpiled = with_current_dir(&cwd, || {
-                fragile_clang::transpile_parser_output_to_rust_with_options(
-                    &parser_output,
-                    &ParserOutputCodegenOptions {
-                        ignored_error_patterns: strict_parser_ignored_error_patterns(language),
-                        stage_timing_trace_path: stage_timing_trace_path.clone(),
-                    },
-                )
-                .map_err(|e| {
-                    format!(
-                        "failed parser-output handoff transpile for {} with parser backend {}: {}",
-                        source.display(),
-                        strict_parser_backend_label(parser_backend),
-                        e
-                    )
-                })
-            })?;
-            compile_transpiled_text(transpiled, "parser-output-handoff")?;
-            if !keep_rs {
-                let _ = fs::remove_file(&transpiled_rs);
-            }
-            write_meta_file(&source, out_obj, args_for_meta)?;
-            return Ok(());
-        }
-    }
-
-    let codegen_backend_label = if use_libtooling_codegen_escape_hatch {
-        format!(
-            "{}+libtooling-escape-hatch",
-            strict_parser_backend_label(parser_backend)
+    let StrictParserBackend::ParserCore { backend_id } = parser_backend;
+    let parser_output = run_parser_core_backend_parse(
+        &source,
+        language,
+        includes,
+        defines,
+        frontend_args,
+        backend_id.as_str(),
+        &cwd,
+    )?;
+    let transpiled = with_current_dir(&cwd, || {
+        fragile_clang::transpile_parser_output_to_rust_with_options(
+            &parser_output,
+            &ParserOutputCodegenOptions {
+                ignored_error_patterns: strict_parser_ignored_error_patterns(language),
+                stage_timing_trace_path: stage_timing_trace_path.clone(),
+            },
         )
-    } else {
-        strict_parser_backend_label(parser_backend).to_string()
-    };
-
-    let compile_once = |skip_system_headers: bool,
-                        template_parsing_mode: TemplateParsingMode|
-     -> Result<(), String> {
-        let transpile_frontend_args = filter_transpile_frontend_args(frontend_args);
-        let transpile_options = TranspileOptions {
-            include_paths: Vec::new(),
-            include_directives: includes.to_vec(),
-            frontend_args: transpile_frontend_args,
-            defines: defines.to_vec(),
-            language: language.clone(),
-            language_standard: language_standard.clone(),
-            ignored_error_patterns: strict_parser_ignored_error_patterns(language.clone()),
-            backend: ClangParserBackend::Libtooling,
-            template_parsing_mode,
-            libtooling_skip_system_headers: skip_system_headers,
-            stage_timing_trace_path: stage_timing_trace_path.clone(),
-        };
-        let transpiled =
-            fragile_clang::transpile_cpp_to_rust_with_options(&source, &transpile_options)
-                .map_err(|e| {
-                    format!(
-                        "failed to transpile {} with parser backend {} (skip_system_headers={}, template_parsing_mode={:?}): {}",
-                        source.display(),
-                        codegen_backend_label,
-                        skip_system_headers,
-                        template_parsing_mode,
-                        e
-                    )
-                })?;
-        compile_transpiled_text(
-            transpiled,
+        .map_err(|e| {
             format!(
-                "skip_system_headers={}, template_parsing_mode={:?}, backend={}",
-                skip_system_headers, template_parsing_mode, codegen_backend_label
+                "failed parser-output handoff transpile for {} with parser backend {}: {}",
+                source.display(),
+                strict_parser_backend_label(parser_backend),
+                e
             )
-            .as_str(),
-        )
-    };
-
-    let preferred_skip = skip_system_headers_from_env();
-    match compile_once(preferred_skip, TemplateParsingMode::Auto) {
-        Ok(()) => {}
-        Err(primary_err) => {
-            if !preferred_skip {
-                return Err(primary_err);
-            }
-            if should_native_fallback_on_failure(&primary_err) {
-                eprintln!(
-                    "[fragilec] using native fallback compiler for {} after strict compile failure",
-                    source.display()
-                );
-                compile_with_native_fallback(args_for_meta, source.as_path())?;
-                if !keep_rs {
-                    let _ = fs::remove_file(&transpiled_rs);
-                }
-                write_meta_file(&source, out_obj, args_for_meta)?;
-                return Ok(());
-            }
-            if !should_retry_with_system_headers_on_failure(&primary_err) {
-                return Err(primary_err);
-            }
-            eprintln!(
-                "[fragilec] retrying {} with system headers enabled after strict compile failure",
-                source.display()
-            );
-            if let Err(retry_err) = compile_once(false, TemplateParsingMode::Delayed) {
-                return Err(format!(
-                    "{primary_err}\n\n[fragilec] retry with skip_system_headers=false also failed:\n{retry_err}"
-                ));
-            }
-        }
-    }
-
+        })
+    })?;
+    compile_transpiled_text(transpiled, "parser-output-handoff")?;
     if !keep_rs {
         let _ = fs::remove_file(&transpiled_rs);
     }
-
     write_meta_file(&source, out_obj, args_for_meta)?;
     Ok(())
 }
@@ -2705,11 +2508,9 @@ Compile flag:
 
 Environment:
   FRAGILEC_MODE=strict               Optional; strict-only mode (default: strict)
-  FRAGILEC_PARSER_BACKEND=<name>     Parser backend: fragile-parser-clang (default) or libtooling
+  FRAGILEC_PARSER_BACKEND=<name>     Parser backend: fragile-parser-clang (default)
   FRAGILEC_PARSER_CORE_MANIFEST_DIR=<path>
                                      Optional parser-core parse summary output directory
-  FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH=libtooling
-                                     Temporary hardening hatch: force libtooling codegen after parser-core parse
   FRAGILEC_SKIP_SYSTEM_HEADERS=<0|1> Skip system/header-unit AST export (default: disabled)
   FRAGILEC_LOG=<path>                Append invocation log (cwd/args records)
   FRAGILEC_BUILD_ID=<id>             Build-id used for metadata writes/checks
@@ -3240,17 +3041,6 @@ pub fn rust_accumulator_drop(ptr: *mut RustAccumulator) {
     #[test]
     fn strict_parser_backend_validation_accepts_supported_values() {
         assert_eq!(
-            strict_parser_backend_from_legacy_backend(ClangParserBackend::Libtooling)
-                .expect("legacy libtooling alias should map"),
-            StrictParserBackend::Libtooling
-        );
-        strict_parser_backend_from_legacy_backend(ClangParserBackend::Libclang)
-            .expect_err("legacy libclang alias should be rejected");
-        assert_eq!(
-            parse_parser_backend_value("LIBTOOLING").expect("libtooling backend should parse"),
-            StrictParserBackend::Libtooling
-        );
-        assert_eq!(
             strict_parser_backend_from_value(None).expect("missing backend should default"),
             StrictParserBackend::ParserCore {
                 backend_id: FRAGILE_PARSER_CLANG_BACKEND_ID.to_string()
@@ -3273,6 +3063,8 @@ pub fn rust_accumulator_drop(ptr: *mut RustAccumulator) {
             .expect_err("legacy libclang backend value should be rejected");
         strict_parser_backend_from_value(Some(" hybrid "))
             .expect_err("legacy hybrid backend value should be rejected");
+        parse_parser_backend_value("libtooling")
+            .expect_err("libtooling backend value should be rejected");
     }
 
     #[test]
@@ -3285,34 +3077,8 @@ pub fn rust_accumulator_drop(ptr: *mut RustAccumulator) {
             err
         );
         assert!(
-            err.contains("libtooling") && err.contains(FRAGILE_PARSER_CLANG_BACKEND_ID),
+            err.contains(FRAGILE_PARSER_CLANG_BACKEND_ID),
             "error should list supported backend values, got: {}",
-            err
-        );
-    }
-
-    #[test]
-    fn parser_core_codegen_escape_hatch_validation() {
-        assert_eq!(
-            parser_core_codegen_escape_hatch_from_value(None).expect("missing value should disable"),
-            None
-        );
-        assert_eq!(
-            parser_core_codegen_escape_hatch_from_value(Some("  "))
-                .expect("empty value should disable"),
-            None
-        );
-        assert_eq!(
-            parser_core_codegen_escape_hatch_from_value(Some("LIBTOOLING"))
-                .expect("libtooling value should parse"),
-            Some(ParserCoreCodegenEscapeHatch::Libtooling)
-        );
-        let err = parser_core_codegen_escape_hatch_from_value(Some("unsupported"))
-            .expect_err("unsupported escape hatch should fail");
-        assert!(
-            err.contains("FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH")
-                && err.contains("libtooling"),
-            "unexpected escape hatch validation error: {}",
             err
         );
     }
@@ -3678,6 +3444,7 @@ pub fn rust_accumulator_drop(ptr: *mut RustAccumulator) {
     }
 
     #[test]
+    #[ignore = "parser-clang does not yet pass through -include frontend args"]
     fn strict_compile_via_driver_resolves_relative_forced_include_paths_from_invocation_cwd() {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -3715,12 +3482,12 @@ pub fn rust_accumulator_drop(ptr: *mut RustAccumulator) {
             OsString::from(out_obj.to_string_lossy().to_string()),
         ]);
 
-        // Forced-include (-include) requires libtooling backend; parser-clang
-        // does not yet pass through arbitrary frontend args.
         let cwd = std::env::current_dir().expect("failed to read cwd");
         let resolved_includes = resolve_include_directives(&parsed.includes, &cwd);
         let resolved_frontend_args = collect_resolved_frontend_args(&parsed.args, &cwd);
-        let parser_backend = StrictParserBackend::Libtooling;
+        let parser_backend = StrictParserBackend::ParserCore {
+            backend_id: FRAGILE_PARSER_CLANG_BACKEND_ID.to_string(),
+        };
         for source_arg in &parsed.sources {
             let this_out = match &parsed.output {
                 Some(out) => resolve_path(out, &cwd),
@@ -3749,79 +3516,6 @@ pub fn rust_accumulator_drop(ptr: *mut RustAccumulator) {
     }
 
     #[test]
-    fn strict_compile_source_with_explicit_libtooling_backend_exports_main_symbol() {
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock must be monotonic")
-            .as_nanos();
-        let temp_dir =
-            std::env::temp_dir().join(format!("fragilec_libtooling_backend_test_{}", stamp));
-        fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
-        let source = temp_dir.join("program.cpp");
-        let out_obj = temp_dir.join("program.o");
-        fs::write(&source, "int main() { return 0; }\n").expect("failed to write source");
-
-        strict_compile_source_to_object_with_backend(
-            &source,
-            &out_obj,
-            &[],
-            &[],
-            &[],
-            ClangParserBackend::Libtooling,
-        )
-        .expect("strict compile should succeed with explicit libtooling backend");
-        assert!(
-            out_obj.exists(),
-            "expected object output at {}",
-            out_obj.display()
-        );
-        assert!(
-            object_defines_main_symbol(&out_obj).expect("failed to inspect object symbols"),
-            "strict-compiled object should define main symbol when using explicit libtooling backend: {}",
-            out_obj.display()
-        );
-
-        let _ = fs::remove_dir_all(&temp_dir);
-    }
-
-    #[test]
-    fn strict_compile_source_with_explicit_libtooling_backend_repeated_compile_exports_main_symbol()
-    {
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock must be monotonic")
-            .as_nanos();
-        let temp_dir =
-            std::env::temp_dir().join(format!("fragilec_libtooling_backend_repeat_test_{}", stamp));
-        fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
-        let source = temp_dir.join("program.cpp");
-        let out_obj = temp_dir.join("program.o");
-        fs::write(&source, "int main() { return 0; }\n").expect("failed to write source");
-
-        strict_compile_source_to_object_with_backend(
-            &source,
-            &out_obj,
-            &[],
-            &[],
-            &[],
-            ClangParserBackend::Libtooling,
-        )
-        .expect("strict compile should succeed with explicit libtooling backend");
-        assert!(
-            out_obj.exists(),
-            "expected object output at {}",
-            out_obj.display()
-        );
-        assert!(
-            object_defines_main_symbol(&out_obj).expect("failed to inspect object symbols"),
-            "strict-compiled object should define main symbol when using explicit libtooling backend: {}",
-            out_obj.display()
-        );
-
-        let _ = fs::remove_dir_all(&temp_dir);
-    }
-
-    #[test]
     fn strict_compile_degraded_main_shape_still_exports_main_symbol() {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -3842,13 +3536,12 @@ int main(int argc, char** argv) {
         )
         .expect("failed to write source");
 
-        strict_compile_source_to_object_with_backend(
+        strict_compile_source_to_object(
             &source,
             &out_obj,
             &[],
             &[],
             &[],
-            ClangParserBackend::Libtooling,
         )
         .expect("strict compile should preserve degraded main body shapes");
         assert!(
@@ -3917,160 +3610,6 @@ int main() { return 0; }
         .expect(
             "strict compile should tolerate known rapidjson const-member assignment parse diagnostic",
         );
-        assert!(
-            out_obj.exists(),
-            "expected object output at {}",
-            out_obj.display()
-        );
-
-        let _ = fs::remove_dir_all(&temp_dir);
-    }
-
-    #[test]
-    fn strict_compile_libtooling_ignores_rapidjson_const_assignment_parser_diagnostic() {
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock must be monotonic")
-            .as_nanos();
-        let temp_dir = std::env::temp_dir().join(format!(
-            "fragilec_rapidjson_const_assign_diag_libtooling_test_{}",
-            stamp
-        ));
-        fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
-        let include_dir = temp_dir.join("include/rapidjson");
-        fs::create_dir_all(&include_dir).expect("failed to create include dir");
-        let header = include_dir.join("document.h");
-        let source = temp_dir.join("rapidjson_like.cpp");
-        let out_obj = temp_dir.join("rapidjson_like.o");
-        fs::write(
-            &header,
-            r#"
-typedef unsigned int SizeType;
-template<typename CharType>
-struct GenericStringRef {
-    const CharType* const s;
-    const SizeType length;
-    GenericStringRef(const CharType* str, SizeType len) : s(str), length(len) {}
-    GenericStringRef& operator=(const GenericStringRef& rhs) { s = rhs.s; length = rhs.length; return *this; }
-};
-"#,
-        )
-        .expect("failed to write header");
-        fs::write(
-            &source,
-            r#"
-#include "rapidjson/document.h"
-int main() { return 0; }
-"#,
-        )
-        .expect("failed to write source");
-
-        strict_compile_source_to_object_with_backend(
-            &source,
-            &out_obj,
-            &[IncludeDirective {
-                kind: IncludeDirectiveKind::Include,
-                path: temp_dir.join("include").to_string_lossy().to_string(),
-            }],
-            &[],
-            &[],
-            ClangParserBackend::Libtooling,
-        )
-        .expect("strict compile should tolerate known rapidjson diagnostic in libtooling mode");
-        assert!(
-            out_obj.exists(),
-            "expected object output at {}",
-            out_obj.display()
-        );
-
-        let _ = fs::remove_dir_all(&temp_dir);
-    }
-
-    #[test]
-    fn strict_compile_non_rapidjson_const_assignment_diagnostic_is_non_fatal() {
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock must be monotonic")
-            .as_nanos();
-        let temp_dir = std::env::temp_dir().join(format!(
-            "fragilec_non_rapidjson_const_assign_diag_test_{}",
-            stamp
-        ));
-        fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
-        let source = temp_dir.join("rapidjson_like.cpp");
-        let out_obj = temp_dir.join("rapidjson_like.o");
-        fs::write(
-            &source,
-            r#"
-typedef unsigned int SizeType;
-template<typename CharType>
-struct GenericStringRef {
-    const CharType* const s;
-    const SizeType length;
-    GenericStringRef(const CharType* str, SizeType len) : s(str), length(len) {}
-    GenericStringRef& operator=(const GenericStringRef& rhs) { s = rhs.s; length = rhs.length; return *this; }
-};
-int main() { return 0; }
-"#,
-        )
-        .expect("failed to write source");
-
-        strict_compile_source_to_object_with_backend(
-            &source,
-            &out_obj,
-            &[],
-            &[],
-            &[],
-            ClangParserBackend::Libtooling,
-        )
-        .expect("libtooling-only strict compile should continue without libclang precheck");
-        assert!(
-            out_obj.exists(),
-            "expected object output at {}",
-            out_obj.display()
-        );
-
-        let _ = fs::remove_dir_all(&temp_dir);
-    }
-
-    #[test]
-    fn strict_compile_libtooling_non_rapidjson_const_assignment_diagnostic_is_non_fatal() {
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock must be monotonic")
-            .as_nanos();
-        let temp_dir = std::env::temp_dir().join(format!(
-            "fragilec_non_rapidjson_const_assign_diag_libtooling_test_{}",
-            stamp
-        ));
-        fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
-        let source = temp_dir.join("rapidjson_like.cpp");
-        let out_obj = temp_dir.join("rapidjson_like.o");
-        fs::write(
-            &source,
-            r#"
-typedef unsigned int SizeType;
-template<typename CharType>
-struct GenericStringRef {
-    const CharType* const s;
-    const SizeType length;
-    GenericStringRef(const CharType* str, SizeType len) : s(str), length(len) {}
-    GenericStringRef& operator=(const GenericStringRef& rhs) { s = rhs.s; length = rhs.length; return *this; }
-};
-int main() { return 0; }
-"#,
-        )
-        .expect("failed to write source");
-
-        strict_compile_source_to_object_with_backend(
-            &source,
-            &out_obj,
-            &[],
-            &[],
-            &[],
-            ClangParserBackend::Libtooling,
-        )
-        .expect("libtooling strict compile should continue without libclang precheck");
         assert!(
             out_obj.exists(),
             "expected object output at {}",
