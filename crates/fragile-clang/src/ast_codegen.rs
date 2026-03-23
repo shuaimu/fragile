@@ -30046,6 +30046,11 @@ impl AstCodeGen {
         output = Self::normalize_i32_literal_to_u32_in_method_args(&output);
         // Fix E0308: `if cond { u32_expr } else { i32_var }` conditional type mismatch.
         output = Self::normalize_conditional_signedness_mismatch(&output);
+        // Fix E0308: `static mut __gv_X: u128 = ENUM::VARIANT;` where ENUM is
+        // repr(i32) — add integer cast chain to make initialization valid.
+        output = Self::normalize_u128_static_enum_init(&output);
+        // Fix E0308: `let mut X: auto = EXPR;` where `auto` is degraded to c_void.
+        output = Self::normalize_auto_type_locals(&output);
         // Final pass: late normalizations can still reintroduce statement-only
         // degraded preface expressions and default tail returns in helper bodies.
         output = Self::normalize_default_preface_local_assignment_artifacts(&output);
@@ -35246,6 +35251,130 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 out.push_str(line);
                 out.push('\n');
             }
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix E0308: `static mut __gv_X: u128 = ENUM::VARIANT;` where the RHS
+    /// is an enum variant expression (detected by `IDENT::IDENT` pattern).
+    /// The enum is typically repr(i32) but the global is typed u128 (degraded).
+    /// Rewrite: add `as i32 as u128` cast chain.
+    pub fn normalize_u128_static_enum_init(code: &str) -> String {
+        if !code.contains(": u128 =") {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len() + 256);
+
+        for line in code.lines() {
+            let trimmed = line.trim();
+
+            // Pattern: `pub(crate) static mut __gv_X: u128 = ENUM::VARIANT;`
+            // or `static mut __gv_X: u128 = ENUM::VARIANT;`
+            if trimmed.contains("static mut") && trimmed.contains(": u128 = ") && trimmed.ends_with(';') {
+                if let Some(eq_pos) = trimmed.find("= ") {
+                    let rhs = &trimmed[eq_pos + 2..trimmed.len() - 1]; // strip trailing ;
+                    // Check if RHS is an enum variant: IDENT::IDENT (no parens, no braces)
+                    if rhs.contains("::")
+                        && !rhs.contains('(')
+                        && !rhs.contains('{')
+                        && !rhs.contains(' ')
+                    {
+                        let indent = &line[..line.len() - trimmed.len()];
+                        let prefix = &trimmed[..eq_pos + 2];
+                        out.push_str(indent);
+                        out.push_str(prefix);
+                        out.push_str(rhs);
+                        out.push_str(" as i32 as u128;");
+                        out.push('\n');
+                        continue;
+                    }
+                }
+            }
+
+            out.push_str(line);
+            out.push('\n');
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix E0308: `let mut X: auto = EXPR;` where `auto` resolves to `c_void`
+    /// (the transpiler failed to resolve C++ `auto` type). Replace `auto` with
+    /// the inferred type based on the RHS expression (e.g., multiplication of
+    /// u64 → u64, multiplication of u32 → u32).
+    pub fn normalize_auto_type_locals(code: &str) -> String {
+        if !code.contains(": auto =") && !code.contains(": auto=") {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len() + 256);
+        // Track parameter types in current function
+        let mut param_types: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
+        for line in code.lines() {
+            let trimmed = line.trim();
+
+            // Track function parameter types
+            if (trimmed.starts_with("pub fn ") || trimmed.starts_with("pub unsafe fn ")
+                || trimmed.starts_with("fn ") || trimmed.starts_with("pub extern"))
+                && trimmed.contains('(')
+            {
+                param_types.clear();
+                if let Some(paren_start) = trimmed.find('(') {
+                    let sig_rest = &trimmed[paren_start + 1..];
+                    if let Some(paren_end) = sig_rest.find(')') {
+                        let params_str = &sig_rest[..paren_end];
+                        for param in params_str.split(',') {
+                            let param = param.trim();
+                            if let Some(colon_pos) = param.find(": ") {
+                                let name = param[..colon_pos].trim()
+                                    .strip_prefix("mut ").unwrap_or(&param[..colon_pos].trim()).trim();
+                                let ptype = param[colon_pos + 2..].trim().to_string();
+                                param_types.insert(name.to_string(), ptype);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Pattern: `let [mut] VAR: auto = EXPR;`
+            if trimmed.contains(": auto =") || trimmed.contains(": auto=") {
+                // Try to infer the type from the RHS
+                if let Some(eq_pos) = trimmed.rfind("= ") {
+                    let rhs = &trimmed[eq_pos + 2..].trim_end_matches(';').trim();
+                    // Check if RHS is `VAR * N` where VAR has a known type
+                    let inferred_type = if rhs.contains(" * ") {
+                        let parts: Vec<&str> = rhs.splitn(2, " * ").collect();
+                        if parts.len() == 2 {
+                            let lhs_var = parts[0].trim();
+                            param_types.get(lhs_var).cloned()
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    if let Some(ref itype) = inferred_type {
+                        let new_line = line.replace(": auto =", &format!(": {} =", itype))
+                            .replace(": auto=", &format!(": {}=", itype));
+                        out.push_str(&new_line);
+                        out.push('\n');
+                        continue;
+                    }
+                }
+            }
+
+            out.push_str(line);
+            out.push('\n');
         }
 
         if !code.ends_with('\n') && out.ends_with('\n') {
@@ -132150,5 +132279,85 @@ pub fn __to_chars_len_u64(__value: u64, __base: i32) -> u32 {\n\
         let input = "                let mut __uval: i64 = if __neg { !__val + 1 } else { __val };\n";
         let output = AstCodeGen::normalize_conditional_signedness_mismatch(input);
         assert_eq!(output, input, "Should not modify non-u32 conditionals");
+    }
+
+    // normalize_u128_static_enum_init tests (e.13)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_u128_static_enum_init_adds_cast() {
+        let input = "                    pub(crate) static mut __gv_memory_order_relaxed: u128 = memory_order::relaxed;\n";
+        let output = AstCodeGen::normalize_u128_static_enum_init(input);
+        assert!(
+            output.contains("memory_order::relaxed as i32 as u128;"),
+            "Should add i32 -> u128 cast chain, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_u128_static_enum_init_all_variants() {
+        let input = concat!(
+            "pub(crate) static mut __gv_memory_order_relaxed: u128 = memory_order::relaxed;\n",
+            "pub(crate) static mut __gv_memory_order_seq_cst: u128 = memory_order::seq_cst;\n",
+        );
+        let output = AstCodeGen::normalize_u128_static_enum_init(input);
+        assert!(
+            output.contains("memory_order::relaxed as i32 as u128;"),
+            "Should fix relaxed, got: {}",
+            output
+        );
+        assert!(
+            output.contains("memory_order::seq_cst as i32 as u128;"),
+            "Should fix seq_cst, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_u128_static_no_change_for_integer_init() {
+        let input = "pub(crate) static mut __gv_foo: u128 = 42;\n";
+        let output = AstCodeGen::normalize_u128_static_enum_init(input);
+        assert_eq!(output, input, "Should not modify integer initializers");
+    }
+
+    // normalize_auto_type_locals tests (e.13)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_auto_type_inferred_from_multiplication() {
+        let input = concat!(
+            "pub fn __to_chars_10_impl_u64(__first: *mut i8, __len: u32, __val: u64) {\n",
+            "    let mut __num: auto = __val * 2;\n",
+            "}\n",
+        );
+        let output = AstCodeGen::normalize_auto_type_locals(input);
+        assert!(
+            output.contains("let mut __num: u64 = __val * 2;"),
+            "Should infer u64 from __val multiplication, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_auto_type_inferred_u32() {
+        let input = concat!(
+            "pub fn __to_chars_10_impl_u32(__first: *mut i8, __len: u32, __val: u32) {\n",
+            "    let mut __num: auto = __val * 2;\n",
+            "}\n",
+        );
+        let output = AstCodeGen::normalize_auto_type_locals(input);
+        assert!(
+            output.contains("let mut __num: u32 = __val * 2;"),
+            "Should infer u32 from __val multiplication, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_auto_type_no_change_without_auto() {
+        let input = "    let mut __num: i32 = __val * 2;\n";
+        let output = AstCodeGen::normalize_auto_type_locals(input);
+        assert_eq!(output, input, "Should not modify non-auto locals");
     }
 }

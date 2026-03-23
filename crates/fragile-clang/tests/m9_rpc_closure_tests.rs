@@ -5053,3 +5053,48 @@ fn m9_2c_iv_e12_setf_i32_literal_cast_to_u32() {
         output
     );
 }
+
+// =============================================================================
+// M9.2.c.iv.e.13 — chrono transmute return, degraded unit param return,
+//                   numpunct stage2 degraded assignments, mixed-width modulo
+// =============================================================================
+
+#[test]
+fn m9_2c_iv_e13_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("M9.2.c.iv.e.13"),
+        "M9.2.c.iv.e.13 should be documented in TODO.md"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e13_u128_static_enum_init_cast() {
+    use fragile_clang::AstCodeGen;
+    let input = "pub(crate) static mut __gv_memory_order_relaxed: u128 = memory_order::relaxed;\n";
+    let output = AstCodeGen::normalize_u128_static_enum_init(input);
+    assert!(
+        output.contains("as i32 as u128"),
+        "M9.2.c.iv.e.13: u128 static with enum init should have cast, got: {}",
+        output
+    );
+}
+
+#[test]
+fn m9_2c_iv_e13_auto_type_inference() {
+    use fragile_clang::AstCodeGen;
+    let input = concat!(
+        "pub fn __to_chars_10_impl_u64(__first: *mut i8, __len: u32, __val: u64) {\n",
+        "    let mut __num: auto = __val * 2;\n",
+        "}\n",
+    );
+    let output = AstCodeGen::normalize_auto_type_locals(input);
+    assert!(
+        output.contains(": u64 ="),
+        "M9.2.c.iv.e.13: auto type should be inferred as u64, got: {}",
+        output
+    );
+}
