@@ -165,7 +165,7 @@ fn p0c_guard_fragile_clang_lib_libtooling_ceiling() {
 fn p0c_guard_ast_codegen_libtooling_ceiling() {
     let src = read_project_file("crates/fragile-clang/src/ast_codegen.rs");
     let count = count_libtooling_refs(&src);
-    let ceiling = 102;
+    let ceiling = 25;
     assert!(
         count <= ceiling,
         "ANTI-REGRESSION: ast_codegen.rs LibTooling references increased from {} ceiling to {}. \
@@ -305,7 +305,7 @@ fn p0c_guard_aggregate_libtooling_ceiling() {
         .map(|f| count_libtooling_refs(&read_project_file(f)))
         .sum();
 
-    let ceiling = 262;
+    let ceiling = 185;
     assert!(
         total <= ceiling,
         "ANTI-REGRESSION: aggregate LibTooling references across production files \

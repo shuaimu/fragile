@@ -178,14 +178,11 @@ fn main() -> Result<()> {
                     }
                 }
 
-                let mut codegen = fragile_clang::AstCodeGen::new();
-                if !merged_method_bodies.is_empty() {
-                    codegen.set_libtooling_bodies(merged_method_bodies);
-                }
-                if !merged_field_types.is_empty() {
-                    codegen.set_specialization_field_types(merged_field_types);
-                }
-                codegen.generate(&combined_tu)
+                // P0.b.4: enrichment state removed from AstCodeGen; merged data
+                // is collected but no longer applied.
+                let _ = merged_method_bodies;
+                let _ = merged_field_types;
+                fragile_clang::AstCodeGen::new().generate(&combined_tu)
             } else {
                 fragile_clang::AstCodeGen::new().generate(&combined_tu)
             };

@@ -1253,15 +1253,6 @@ pub struct AstCodeGen {
     /// Inline namespace aliases: maps parent namespace path to full path with inline namespace
     /// e.g., "std" -> "std::__1" means std::map should resolve to std::__1::map
     inline_namespace_aliases: HashMap<String, String>,
-    /// LibTooling AST context for template method bodies
-    /// Key: (class_name, method_name), Value: method info (params + body)
-    libtooling_method_bodies: HashMap<(String, String), Vec<crate::libtooling::MethodInfo>>,
-    /// Resolved field types from LibTooling template specializations
-    /// Key: qualified type name (e.g., "std::pair"), Value: field info
-    specialization_field_types: HashMap<String, crate::libtooling::SpecializationFieldInfo>,
-    /// Resolved method signatures from LibTooling template specializations
-    /// Key: qualified type name (e.g., "std::unique_ptr<int, std::default_delete<int>>")
-    specialization_methods: HashMap<String, Vec<crate::libtooling::MethodSignature>>,
     /// Parser-output handoff placeholder mappings: placeholder node kind ->
     /// canonical pre-generated STL type prefix. Empty when not provided by
     /// parser-output handoff entry points.
@@ -1450,9 +1441,6 @@ impl AstCodeGen {
             used_types: HashMap::new(),
             opaque_types: HashMap::new(),
             inline_namespace_aliases: HashMap::new(),
-            libtooling_method_bodies: HashMap::new(),
-            specialization_field_types: HashMap::new(),
-            specialization_methods: HashMap::new(),
             parser_output_stl_placeholder_prefixes: BTreeMap::new(),
             parser_output_stl_placeholder_mapping_context_enabled: false,
             defined_structs: HashSet::new(),
@@ -1471,15 +1459,6 @@ impl AstCodeGen {
             current_function_unresolved_static_refs: RefCell::new(HashMap::new()),
             current_function_body_insert_pos: None,
         }
-    }
-
-    /// Set template method bodies from LibTooling AST.
-    /// This enables generating actual code instead of `todo!()` for template methods.
-    pub fn set_libtooling_bodies(
-        &mut self,
-        bodies: HashMap<(String, String), Vec<crate::libtooling::MethodInfo>>,
-    ) {
-        self.libtooling_method_bodies = bodies;
     }
 
     /// Set parser-output placeholder mappings for mapping-aware codegen closure
@@ -2120,24 +2099,6 @@ impl AstCodeGen {
         } else {
             format!("({}) as {}", fixed_expr, target_rust)
         }
-    }
-
-    /// Set resolved field types from LibTooling template specializations.
-    /// This enables using actual concrete types for fields in template instantiations.
-    pub fn set_specialization_field_types(
-        &mut self,
-        field_types: HashMap<String, crate::libtooling::SpecializationFieldInfo>,
-    ) {
-        self.specialization_field_types = field_types;
-    }
-
-    /// Set resolved method signatures from LibTooling template specializations.
-    /// This enables using actual concrete return/parameter types for template methods.
-    pub fn set_specialization_method_signatures(
-        &mut self,
-        sigs: HashMap<String, Vec<crate::libtooling::MethodSignature>>,
-    ) {
-        self.specialization_methods = sigs;
     }
 
     /// Log a diagnostic message if diagnostic mode is enabled.
@@ -29302,34 +29263,6 @@ impl AstCodeGen {
         false
     }
 
-    /// Unified validation for libtooling-generated method bodies.
-    /// Returns true if the code should be rolled back (is invalid).
-    fn should_rollback_libtooling(generated: &str, rust_name: &str) -> bool {
-        // Structural checks (libtooling generates only library code, all validators safe)
-        Self::has_cvoid_misuse(generated)
-            || Self::has_bad_syntax(generated)
-            || Self::has_undeclared_variables(generated)
-            || Self::has_unmapped_function_calls(generated)
-            || Self::has_stdlib_internal_bugs(generated)
-            || Self::has_bad_memory_order(generated)
-            || Self::has_broken_locale_constructors(generated)
-            || (generated.contains("._M_"))
-            // Only rollback __tree_ access if struct doesn't have __tree_ field
-            || (generated.contains(".__tree_") && !rust_name.starts_with("std_map_")
-                && !rust_name.starts_with("std_set_")
-                && !rust_name.starts_with("std_multimap_")
-                && !rust_name.starts_with("std_multiset_"))
-            // .__comp_ now caught by references_nonexistent_field for types with known fields
-            || (generated.contains("piecewise_construct"))
-            || (generated.contains("forward_as_tuple"))
-            // *mut () indicates unresolved template parameter in method signature/body
-            || (generated.contains("*mut ()"))
-            // Method body returns a value but signature has no return type (unresolved template param → ())
-            || (generated.contains("return ") && {
-                let first_line = generated.lines().next().unwrap_or("");
-                first_line.contains("pub fn ") && !first_line.contains("->") && first_line.ends_with('{')
-            })
-    }
 
     /// Generate Rust source code from a Clang AST.
     pub fn generate(mut self, ast: &ClangNode) -> String {
@@ -43890,12 +43823,9 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 }
             }
 
-            // Check if we have specialization field data for this type
-            let spec_info = self.find_specialization_by_rust_name(&rust_name);
-            let has_real_fields = spec_info.as_ref().map_or(false, |info| {
-                // Only use real fields if we have non-padding fields
-                info.field_types.keys().any(|k| !k.contains("padding"))
-            });
+            // Specialization field data was previously provided via LibTooling
+            // enrichment; without enrichment, stub types use opaque layouts.
+            let has_real_fields = false;
 
             let source_union_fields =
                 Self::recover_unnamed_union_fields_from_source(&cpp_name).unwrap_or_default();
@@ -43956,68 +43886,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 rust_name.contains("MemberIterator") || rust_name.contains("ConstMemberIterator");
             let mut emit_copy_impl = true;
 
-            if has_real_fields {
-                let info = spec_info.as_ref().unwrap();
-                // Generate fields from specialization data.
-                // For complex internal types (tree nodes, allocators, comparators), use opaque
-                // representations since these types aren't defined. Only map well-known types
-                // (size_type, pointers) to real Rust types.
-                let mut fields: Vec<_> = info
-                    .field_types
-                    .iter()
-                    .filter(|(name, _)| !name.contains("padding"))
-                    .collect();
-                fields.sort_by_key(|(name, _)| name.to_string());
-
-                for (field_name, field_type) in &fields {
-                    let sanitized = sanitize_identifier(field_name);
-                    let rust_type = field_type.to_rust_type_str();
-
-                    // Determine the Rust type for this field:
-                    // - Pointer fields: use *mut u8 (all internal node pointers are opaque)
-                    // - size_type / unsigned long fields: use usize
-                    // - Known primitive types: use as-is
-                    // - Complex/undefined types: use [u8; 8] as opaque placeholder
-                    let (effective_type, default_val) = if rust_type.starts_with("*") {
-                        ("*mut u8".to_string(), "std::ptr::null_mut()".to_string())
-                    } else if rust_type == "usize" || *field_name == "__size_" {
-                        // __size_ is size_type (unsigned long) regardless of what the
-                        // AST resolver reports (may come through as decltype)
-                        ("usize".to_string(), "0".to_string())
-                    } else if matches!(
-                        rust_type.as_str(),
-                        "bool"
-                            | "u8"
-                            | "u16"
-                            | "u32"
-                            | "u64"
-                            | "i8"
-                            | "i16"
-                            | "i32"
-                            | "i64"
-                            | "f32"
-                            | "f64"
-                            | "isize"
-                    ) {
-                        let default_val = if rust_type == "bool" {
-                            "false".to_string()
-                        } else {
-                            "0".to_string()
-                        };
-                        (rust_type.clone(), default_val)
-                    } else {
-                        // Complex internal type (tree_end_node, allocator, comparator, etc.)
-                        // Use pointer-sized opaque bytes since these are typically pointer-sized
-                        // or empty (zero-size comparators/allocators use EBO)
-                        ("[u8; 8]".to_string(), "[0u8; 8]".to_string())
-                    };
-
-                    self.writeln(&format!("pub {}: {},", sanitized, effective_type));
-                    field_defaults.push((sanitized.to_string(), default_val));
-                }
-                // Add padding for layout compatibility (tree nodes have vtable pointers, etc.)
-                self.writeln("_padding: [u8; 16], // padding for layout compatibility");
-                field_defaults.push(("_padding".to_string(), "[0u8; 16]".to_string()));
+            if is_member_iterator_placeholder {
             } else if is_member_iterator_placeholder {
                 // RapidJSON member iterators expose `name`/`value` as member fields.
                 emit_copy_impl = false;
@@ -44558,231 +44427,30 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 self.writeln(&format!("impl {} {{", rust_name));
                 self.indent += 1;
 
-                // Collect available LibTooling method bodies for __tree
-                let tree_methods: Vec<(String, crate::libtooling::MethodInfo)> = {
-                    let mut methods = Vec::new();
-                    for ((class_name, method_name), method_infos) in &self.libtooling_method_bodies
-                    {
-                        if class_name == "__tree" {
-                            for info in method_infos {
-                                if matches!(info.body.kind, ClangNodeKind::CompoundStmt) {
-                                    methods.push((method_name.clone(), info.clone()));
-                                }
-                            }
-                        }
-                    }
-                    methods
-                };
-
-                let mut generated_methods = std::collections::HashSet::new();
-
-                // Generate methods from LibTooling bodies
-                for (method_name, info) in &tree_methods {
-                    // Convert C++ name to Rust name
-                    let rust_method_name = match method_name.as_str() {
-                        "operator[]" => "op_index".to_string(),
-                        "operator()" => "op_call".to_string(),
-                        other => sanitize_identifier(other),
-                    };
-
-                    // Skip if already generated
-                    if generated_methods.contains(&rust_method_name) {
-                        continue;
-                    }
-
-                    // Skip methods whose bodies reference opaque fields in ways that can't compile
-                    // (e.g., __insert_node_at accesses __begin_node_ as *mut __tree_node_base,
-                    //  but it's actually *mut u8; destroy calls __node_alloc_() as a method)
-                    const TREE_SKIP_METHODS: &[&str] = &[
-                        "__insert_node_at", // uses __begin_node_ as typed pointer
-                        "destroy",          // calls __node_alloc_() as method
-                        "__destroy",        // same
-                    ];
-                    if TREE_SKIP_METHODS.contains(&rust_method_name.as_str()) {
-                        continue;
-                    }
-
-                    // For __tree internal methods, we only generate methods with
-                    // simple safe types. These are library internals, so we need
-                    // resolved signatures to know the types.
-                    let resolved_sig = self.find_resolved_method_signature_for_tree(
-                        &rust_name,
-                        method_name,
-                        info.param_names.len(),
-                    );
-
-                    let (param_list, return_type_str, body_return_type) = if let Some(ref sig) =
-                        resolved_sig
-                    {
-                        let ret_str = sig
-                            .return_type
-                            .as_ref()
-                            .map(|t| Self::cpp_type_to_rust_str(t))
-                            .unwrap_or_default();
-                        // Check if all types in the signature are resolvable.
-                        let is_resolvable = |s: &str| -> bool {
-                            let inner = s.trim_start_matches("*mut ").trim_start_matches("*const ");
-                            matches!(
-                                inner,
-                                "i8" | "i16"
-                                    | "i32"
-                                    | "i64"
-                                    | "i128"
-                                    | "u8"
-                                    | "u16"
-                                    | "u32"
-                                    | "u64"
-                                    | "u128"
-                                    | "f32"
-                                    | "f64"
-                                    | "bool"
-                                    | "char"
-                                    | "()"
-                                    | "usize"
-                                    | "isize"
-                                    | "std::ffi::c_void"
-                                    | ""
-                            ) || inner.starts_with("[u8;")
-                                || inner.is_empty()
-                                || self.generated_structs.contains(inner)
-                                || self.referenced_but_undefined_structs.contains(inner)
-                        };
-                        let ret_safe = is_resolvable(&ret_str);
-                        let params_safe = sig
-                            .param_types
-                            .iter()
-                            .all(|t| is_resolvable(&Self::cpp_type_to_rust_str(t)));
-                        if !ret_safe || !params_safe {
-                            continue; // Types not yet available — skip
-                        }
-
-                        let mut params = Vec::new();
-                        if !sig.is_static {
-                            params.push("&mut self".to_string());
-                        }
-                        let mut param_name_counts: HashMap<String, usize> = HashMap::new();
-                        for (i, ptype) in sig.param_types.iter().enumerate() {
-                            let mut pname = sig
-                                .param_names
-                                .get(i)
-                                .map(|s| sanitize_identifier(s))
-                                .unwrap_or_else(|| format!("_arg{}", i));
-                            // Deduplicate parameter names (variadic packs produce __args, __args, __args)
-                            let count = param_name_counts.entry(pname.clone()).or_insert(0);
-                            if *count > 0 {
-                                pname = format!("{}_{}", pname, *count);
-                            }
-                            *param_name_counts
-                                .get_mut(
-                                    &sig.param_names
-                                        .get(i)
-                                        .map(|s| sanitize_identifier(s))
-                                        .unwrap_or_else(|| format!("_arg{}", i)),
-                                )
-                                .unwrap() += 1;
-                            params.push(format!(
-                                "{}: {}",
-                                pname,
-                                Self::cpp_type_to_rust_str(ptype)
-                            ));
-                        }
-                        let ret = if method_name == "size" && (ret_str == "u64" || ret_str == "u32")
-                        {
-                            "usize".to_string()
-                        } else {
-                            ret_str
-                        };
-                        let body_ret = if method_name == "size" {
-                            CppType::Named("usize".to_string())
-                        } else {
-                            sig.return_type.clone().unwrap_or(CppType::Void)
-                        };
-                        (params.join(", "), ret, body_ret)
-                    } else {
-                        continue; // No resolved signature — skip
-                    };
-
-                    let method_output_start = self.output.len();
-
-                    let ret_str = if return_type_str.is_empty() || return_type_str == "()" {
-                        String::new()
-                    } else {
-                        format!(" -> {}", return_type_str)
-                    };
-                    self.writeln(&format!(
-                        "pub fn {}({}){} {{",
-                        rust_method_name, param_list, ret_str
-                    ));
-                    self.indent += 1;
-
-                    // Register parameter names as local variables
-                    for param_name in &info.param_names {
-                        if !param_name.is_empty() {
-                            self.local_vars.insert(sanitize_identifier(param_name));
-                        }
-                    }
-                    let body_vardecls = Self::extract_vardecl_names(&info.body);
-                    for var_name in &body_vardecls {
-                        self.local_vars.insert(sanitize_identifier(var_name));
-                    }
-
-                    self.generate_block_contents(&info.body.children, &body_return_type);
-
-                    self.indent -= 1;
-                    self.writeln("}");
-                    self.writeln("");
-
-                    // Validate: rollback if generated code has issues
-                    let generated = &self.output[method_output_start..];
-                    let has_template_dependent = generated.contains("template-dependent");
-                    // Check if generated code references fields on opaque types
-                    // (e.g., (*self.__begin_node_).__left_ where __begin_node_ is *mut u8)
-                    let has_opaque_field_access =
-                        if let Some(known_fields) = self.class_fields.get(&rust_name) {
-                            if !known_fields.is_empty() {
-                                Self::references_nonexistent_field(generated, known_fields)
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        };
-                    if has_template_dependent
-                        || has_opaque_field_access
-                        || Self::should_rollback_libtooling(generated, &rust_name)
-                    {
-                        self.output.truncate(method_output_start);
-                    } else {
-                        generated_methods.insert(rust_method_name);
-                    }
-                }
-
                 // __end_node accessor — returns pointer to the end_node_ field
                 // Transpiled body fails because it uses pointer_traits::pointer_to
-                if !generated_methods.contains("__end_node") {
+                {
                     self.writeln("pub fn __end_node(&mut self) -> *mut __tree_end_node {");
                     self.indent += 1;
                     self.writeln("&mut self.__end_node_ as *mut _ as *mut __tree_end_node");
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("");
-                    generated_methods.insert("__end_node".to_string());
                 }
 
                 // __root_ptr — returns pointer to __end_node_->__left_ (the root pointer)
                 // Transpiled body uses addressof() which doesn't exist in Rust
-                if !generated_methods.contains("__root_ptr") {
+                {
                     self.writeln("pub fn __root_ptr(&mut self) -> *mut *mut __tree_node_base {");
                     self.indent += 1;
                     self.writeln("unsafe { &mut (*self.__end_node()).__left_ as *mut _ }");
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("");
-                    generated_methods.insert("__root_ptr".to_string());
                 }
 
                 // Real __emplace_unique implementation for __tree (red-black tree insert)
-                if !generated_methods.contains("__emplace_unique") {
+                {
                     self.writeln("pub fn __emplace_unique<T1, T2>(&mut self, _tag: impl Copy, key_tuple: T1, _val_tuple: T2) -> __tree_emplace_result {");
                     self.indent += 1;
                     self.writeln("unsafe {");
@@ -44893,18 +44561,12 @@ impl FragileAtomicBoolCompat for atomic_bool {
                     self.writeln("");
                 }
 
-                // Generate size() if not already generated from LibTooling
-                if !generated_methods.contains("size") {
-                    if has_real_fields
-                        && spec_info
-                            .as_ref()
-                            .map_or(false, |i| i.field_types.contains_key("__size_"))
-                    {
-                        self.writeln("pub fn size(&self) -> usize { self.__size_ as usize }");
-                    } else {
-                        self.writeln("/// Stub for size - returns 0 (tree size not tracked)");
-                        self.writeln("pub fn size(&self) -> usize { 0 }");
-                    }
+                // Generate size() stub
+                if has_real_fields {
+                    self.writeln("pub fn size(&self) -> usize { self.__size_ as usize }");
+                } else {
+                    self.writeln("/// Stub for size - returns 0 (tree size not tracked)");
+                    self.writeln("pub fn size(&self) -> usize { 0 }");
                 }
                 self.indent -= 1;
                 self.writeln("}");
@@ -47702,17 +47364,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
             return;
         }
 
-        let resolved_fields = self
-            .find_specialization_by_rust_name(&rust_name)
-            .or_else(|| self.find_matching_specialization(inst_name));
-        if resolved_fields.as_ref().is_some_and(|info| {
-            matches!(
-                info.specialization_kind,
-                TemplateSpecializationKind::ExplicitInstantiationDeclaration
-            )
-        }) {
-            return;
-        }
+
 
         self.generated_structs.insert(rust_name.clone());
         if self.current_rust_module_path().is_empty() {
@@ -47923,31 +47575,10 @@ impl FragileAtomicBoolCompat for atomic_bool {
                     sanitize_identifier(name)
                 };
 
-                // Try to get resolved type from LibTooling first
-                let rust_type = if let Some(ref info) = resolved_fields {
-                    if let Some(resolved_type) = info.field_types.get(name) {
-                        // Use the LibTooling-resolved type
-                        resolved_type.to_rust_type_str_for_field()
-                    } else {
-                        // Fall back to template substitution
-                        let rust_type = self.substitute_template_type(ty, &subst_map);
-                        if Self::has_unresolved_template_placeholder(&rust_type) {
-                            // Use opaque types instead of c_void for better type preservation
-                            let (opaque_type, new_opaques) =
-                                self.convert_to_opaque_type(&rust_type);
-                            for (opaque_name, param_name) in new_opaques {
-                                self.opaque_types.insert(opaque_name, param_name);
-                            }
-                            opaque_type
-                        } else {
-                            rust_type
-                        }
-                    }
-                } else {
-                    // No LibTooling info - use template substitution
+                // Use template substitution for field types
+                let rust_type = {
                     let rust_type = self.substitute_template_type(ty, &subst_map);
                     if Self::has_unresolved_template_placeholder(&rust_type) {
-                        // Use opaque types instead of c_void for better type preservation
                         let (opaque_type, new_opaques) = self.convert_to_opaque_type(&rust_type);
                         for (opaque_name, param_name) in new_opaques {
                             self.opaque_types.insert(opaque_name, param_name);
@@ -47988,65 +47619,6 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 let vis = access_to_visibility(*access);
                 self.writeln(&format!("{}{}: {},", vis, sanitized_name, rust_type));
                 fields.push((sanitized_name, ty.clone()));
-            }
-        }
-
-        // If no fields were found from the template definition children, try using
-        // specialization field data from LibTooling. The template definition often has no
-        // FieldDecl children (libclang doesn't expose them for many types), but LibTooling's
-        // ClassTemplateSpecializationDecl visit captures the actual instantiated fields.
-        if fields.is_empty() {
-            let spec_info = resolved_fields.clone();
-            let has_real_fields = spec_info.as_ref().map_or(false, |info| {
-                info.field_types.keys().any(|k| !k.contains("padding"))
-            });
-
-            if has_real_fields {
-                let info = spec_info.as_ref().unwrap();
-                let mut spec_fields: Vec<_> = info
-                    .field_types
-                    .iter()
-                    .filter(|(name, _)| !name.contains("padding"))
-                    .collect();
-                spec_fields.sort_by_key(|(name, _)| name.to_string());
-
-                for (field_name, field_type) in &spec_fields {
-                    let sanitized = sanitize_identifier(field_name);
-                    let rust_type = field_type.to_rust_type_str_for_field();
-
-                    // Map field types to Rust:
-                    // - Pointers → *mut u8
-                    // - size_type / __size_ → usize
-                    // - Known primitives → as-is
-                    // - Complex/undefined types → [u8; 8] opaque
-                    let effective_type = if rust_type.starts_with('*') {
-                        "*mut u8".to_string()
-                    } else if rust_type == "usize" || *field_name == "__size_" {
-                        "usize".to_string()
-                    } else if matches!(
-                        rust_type.as_str(),
-                        "bool"
-                            | "u8"
-                            | "u16"
-                            | "u32"
-                            | "u64"
-                            | "i8"
-                            | "i16"
-                            | "i32"
-                            | "i64"
-                            | "f32"
-                            | "f64"
-                            | "isize"
-                    ) {
-                        rust_type.clone()
-                    } else {
-                        "[u8; 8]".to_string()
-                    };
-
-                    self.maybe_track_alias_target_for_stub(&effective_type);
-                    self.writeln(&format!("pub {}: {},", sanitized, effective_type));
-                    fields.push((sanitized.to_string(), CppType::Named(effective_type)));
-                }
             }
         }
 
@@ -48435,225 +48007,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
 
         false
     }
-
-    /// Find a matching specialization from LibTooling by comparing base name and template args.
-    /// LibTooling uses full template args (e.g., std::map<int, int, less<int>, allocator<...>>)
-    /// while libclang may use partial args (e.g., std::map<int, int>).
-    ///
-    /// Set FRAGILE_DEBUG_SPECIALIZATION=1 to enable debug logging for matching failures.
-    fn find_matching_specialization(
-        &self,
-        inst_name: &str,
-    ) -> Option<crate::libtooling::SpecializationFieldInfo> {
-        let debug = std::env::var("FRAGILE_DEBUG_SPECIALIZATION").is_ok();
-
-        // First try exact match
-        if let Some(info) = self.specialization_field_types.get(inst_name) {
-            if debug {
-                eprintln!("[SPEC DEBUG] Exact match found for: {}", inst_name);
-            }
-            return Some(info.clone());
-        }
-
-        // Parse base name and args from inst_name
-        let Some(angle_pos) = inst_name.find('<') else {
-            if debug {
-                eprintln!("[SPEC DEBUG] No template args in name: {}", inst_name);
-            }
-            return None;
-        };
-        let base_name = &inst_name[..angle_pos];
-        let args_str = &inst_name[angle_pos + 1..inst_name.len() - 1]; // Remove < and >
-        let inst_args: Vec<String> = crate::types::parse_template_args(args_str);
-
-        if debug {
-            eprintln!(
-                "[SPEC DEBUG] Looking for: base='{}', args={:?}",
-                base_name, inst_args
-            );
-            eprintln!(
-                "[SPEC DEBUG] Available specializations: {}",
-                self.specialization_field_types.len()
-            );
-        }
-
-        let mut best_candidate: Option<(&str, Vec<(usize, String, String)>)> = None;
-
-        // Search for a specialization with the same base name and matching first N args
-        for (key, info) in &self.specialization_field_types {
-            // Check if base names match
-            let Some(key_angle) = key.find('<') else {
-                continue;
-            };
-            let key_base = &key[..key_angle];
-
-            // Normalize outer base names (`Masstree::foo` vs `foo`).
-            let normalized_base = Self::normalize_template_base_name(base_name);
-            let normalized_key_base = Self::normalize_template_base_name(key_base);
-
-            if normalized_base != normalized_key_base {
-                continue;
-            }
-
-            // Check if the first N template args match (N = number of args in inst_name)
-            if info.template_args.len() >= inst_args.len() {
-                let mut all_match = true;
-                let mut mismatches: Vec<(usize, String, String)> = Vec::new();
-
-                for (i, inst_arg) in inst_args.iter().enumerate() {
-                    let key_arg = &info.template_args[i];
-
-                    // Check if types match using improved normalization
-                    if !Self::template_args_match(inst_arg, key_arg) {
-                        all_match = false;
-                        mismatches.push((i, inst_arg.to_string(), key_arg.to_string()));
-                    }
-                }
-                if all_match {
-                    if debug {
-                        eprintln!(
-                            "[SPEC DEBUG] Match found! key='{}', fields={:?}",
-                            key,
-                            info.field_types.keys().collect::<Vec<_>>()
-                        );
-                    }
-                    return Some(info.clone());
-                } else if debug && best_candidate.is_none() {
-                    // Track first candidate for debugging
-                    best_candidate = Some((key, mismatches));
-                }
-            }
-        }
-
-        if debug {
-            if let Some((key, mismatches)) = best_candidate {
-                eprintln!(
-                    "[SPEC DEBUG] No match for '{}'. Closest candidate: '{}'",
-                    inst_name, key
-                );
-                for (i, inst, key) in mismatches {
-                    eprintln!("[SPEC DEBUG]   Arg {} mismatch: '{}' vs '{}'", i, inst, key);
-                }
-            } else {
-                eprintln!(
-                    "[SPEC DEBUG] No match found for '{}' (no candidates with matching base name)",
-                    inst_name
-                );
-            }
-        }
-
-        None
-    }
-
-    /// Find a specialization by matching its qualified name against a rust_name.
-    /// This is used by generate_missing_type_stubs to find field data for types
-    /// that go through the opaque stub path (like __tree).
-    ///
-    /// The rust_name comes from field types encoded as `__tree<...>` (short base name)
-    /// while specialization keys use `std::__tree<...>` (qualified name). We try both forms.
-    /// Normalize a sanitized rust_name for fuzzy matching by removing noise words
-    /// that differ between encoding paths (visitRecordType vs VisitClassTemplateSpecializationDecl).
-    /// The specialization key includes "struct ", "class ", "std::" in template args,
-    /// while the field type from visitRecordType may or may not include them.
-    fn normalize_rust_name_for_matching(s: &str) -> String {
-        let mut result = s.to_string();
-        // Remove struct_, class_ prefixes that appear inside template arg encoding
-        // These come from elaborated type specifiers in Clang's args[i].print()
-        // Use loop to handle repeated patterns
-        loop {
-            let prev = result.clone();
-            result = result.replace("_struct_", "_");
-            result = result.replace("_class_", "_");
-            // Also at start
-            if result.starts_with("struct_") {
-                result = result["struct_".len()..].to_string();
-            }
-            if result.starts_with("class_") {
-                result = result["class_".len()..].to_string();
-            }
-            if result == prev {
-                break;
-            }
-        }
-        // Remove std_ prefixes before internal type names
-        // The key has std:: but visitRecordType uses getNameAsString() without std::
-        loop {
-            let prev = result.clone();
-            result = result.replace("_std_", "_");
-            if result.starts_with("std_") {
-                result = result["std_".len()..].to_string();
-            }
-            if result == prev {
-                break;
-            }
-        }
-        // Remove const_ qualifiers that may differ between encoding paths
-        // (e.g., pair<const int, int> vs pair<int, int>)
-        loop {
-            let prev = result.clone();
-            result = result.replace("_const_", "_");
-            if result.starts_with("const_") {
-                result = result["const_".len()..].to_string();
-            }
-            if result == prev {
-                break;
-            }
-        }
-        // Collapse multiple underscores that result from stripping
-        while result.contains("___") {
-            result = result.replace("___", "__");
-        }
-        // Remove trailing underscore
-        while result.ends_with('_') && result.len() > 1 {
-            result.pop();
-        }
-        result
-    }
-
-    fn find_specialization_by_rust_name(
-        &self,
-        rust_name: &str,
-    ) -> Option<crate::libtooling::SpecializationFieldInfo> {
-        let target_normalized = Self::normalize_rust_name_for_matching(rust_name);
-        for (key, info) in &self.specialization_field_types {
-            // Try exact match first
-            let key_rust = CppType::Named(key.clone()).to_rust_type_str();
-            if key_rust == rust_name {
-                return Some(info.clone());
-            }
-            // Try with std:: prefix stripped
-            if let Some(stripped) = key.strip_prefix("std::") {
-                let stripped_rust = CppType::Named(stripped.to_string()).to_rust_type_str();
-                if stripped_rust == rust_name {
-                    return Some(info.clone());
-                }
-            }
-            // Try normalized fuzzy matching - strip struct_, class_, std_ noise words
-            let key_rust_stripped = if let Some(stripped) = key.strip_prefix("std::") {
-                CppType::Named(stripped.to_string()).to_rust_type_str()
-            } else {
-                key_rust.clone()
-            };
-            let key_normalized = Self::normalize_rust_name_for_matching(&key_rust_stripped);
-            if key_normalized == target_normalized {
-                return Some(info.clone());
-            }
-        }
-        None
-    }
-
-    fn is_extern_template_instantiation(&self, inst_name: &str, rust_name: &str) -> bool {
-        self.find_specialization_by_rust_name(rust_name)
-            .or_else(|| self.find_matching_specialization(inst_name))
-            .is_some_and(|info| {
-                matches!(
-                    info.specialization_kind,
-                    TemplateSpecializationKind::ExplicitInstantiationDeclaration
-                )
-            })
-    }
-
-    /// Find the position of the matching closing `>` for a template argument list.
+ /// Find the position of the matching closing `>` for a template argument list.
     /// Returns None if the string is malformed or doesn't have a matching close.
     fn find_matching_close_angle(s: &str, open_pos: usize) -> Option<usize> {
         let mut depth = 0;
@@ -48810,120 +48164,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
             .unwrap_or(cleaned.as_str())
             .to_string()
     }
-
-    /// Normalize a C++ specialization name for fuzzy matching.
-    /// Strips elaboration keywords and normalizes top-level namespace qualification.
-    fn normalize_specialization_name(name: &str) -> String {
-        let cleaned = name
-            .trim()
-            .replace("class ", "")
-            .replace("struct ", "")
-            .replace("typename ", "")
-            .replace("std::__1::", "std::")
-            .replace(' ', "");
-        if let Some(angle_pos) = cleaned.find('<') {
-            let base = Self::normalize_template_base_name(&cleaned[..angle_pos]);
-            return format!("{}{}", base, &cleaned[angle_pos..]);
-        }
-        Self::normalize_template_base_name(&cleaned)
-    }
-
-    /// Return all resolved method signatures for a template instantiation.
-    fn find_resolved_method_signatures_for_inst(
-        &self,
-        inst_name: &str,
-    ) -> Option<Vec<crate::libtooling::MethodSignature>> {
-        if let Some(methods) = self.specialization_methods.get(inst_name) {
-            return Some(methods.clone());
-        }
-
-        if !inst_name.starts_with("std::") {
-            let std_name = format!("std::{}", inst_name);
-            if let Some(methods) = self.specialization_methods.get(&std_name) {
-                return Some(methods.clone());
-            }
-        }
-
-        let inst_normalized = Self::normalize_specialization_name(inst_name);
-        for (key, methods) in &self.specialization_methods {
-            let key_normalized = Self::normalize_specialization_name(key);
-            let matches = key_normalized == inst_normalized
-                || key_normalized
-                    .starts_with(&format!("{},", inst_normalized.trim_end_matches('>')))
-                    && key_normalized.ends_with('>');
-            if matches {
-                return Some(methods.clone());
-            }
-        }
-
-        None
-    }
-
-    /// Look up a resolved method signature from LibTooling specialization data.
-    /// Returns None if no resolved signature is available (falls back to libclang types).
-    fn find_resolved_method_signature(
-        &self,
-        inst_name: &str,
-        method_name: &str,
-        param_count: usize,
-    ) -> Option<crate::libtooling::MethodSignature> {
-        let debug = std::env::var("FRAGILE_DEBUG_SPECIALIZATION").is_ok();
-        if let Some(methods) = self.find_resolved_method_signatures_for_inst(inst_name) {
-            if let Some(sig) = methods
-                .iter()
-                .find(|m| m.name == method_name && m.param_types.len() == param_count)
-            {
-                return Some(sig.clone());
-            }
-            let by_name: Vec<_> = methods.iter().filter(|m| m.name == method_name).collect();
-            if by_name.len() == 1 {
-                return Some(by_name[0].clone());
-            }
-        }
-
-        if debug {
-            eprintln!(
-                "[SPEC METHOD] No match for inst_name='{}' method='{}' params={}",
-                inst_name, method_name, param_count
-            );
-        }
-        None
-    }
-
-    /// Find a resolved method signature for __tree types by scanning specialization keys.
-    /// __tree stub types have rust_names like `__tree___value_type_int__int__...` but
-    /// the specialization keys are like `std::__tree<struct std::__value_type<int, int>, ...>`.
-    fn find_resolved_method_signature_for_tree(
-        &self,
-        _rust_name: &str,
-        method_name: &str,
-        param_count: usize,
-    ) -> Option<crate::libtooling::MethodSignature> {
-        // Find any specialization key containing "__tree<"
-        for (key, methods) in &self.specialization_methods {
-            if key.contains("__tree<")
-                && !key.contains("__tree_node")
-                && !key.contains("__tree_end_node")
-                && !key.contains("__tree_iterator")
-                && !key.contains("__tree_const_iterator")
-            {
-                if let Some(sig) = methods
-                    .iter()
-                    .find(|m| m.name == method_name && m.param_types.len() == param_count)
-                {
-                    return Some(sig.clone());
-                }
-                // Fallback: match by name only if unique
-                let by_name: Vec<_> = methods.iter().filter(|m| m.name == method_name).collect();
-                if by_name.len() == 1 {
-                    return Some(by_name[0].clone());
-                }
-            }
-        }
-        None
-    }
-
-    fn is_template_impl_resolvable_type(&self, rust_type: &str) -> bool {
+ fn is_template_impl_resolvable_type(&self, rust_type: &str) -> bool {
         let inner = rust_type
             .trim_start_matches("*mut ")
             .trim_start_matches("*const ")
@@ -49059,225 +48300,6 @@ impl FragileAtomicBoolCompat for atomic_bool {
 
         (unresolved_score, suffix_hits)
     }
-
-    fn find_template_method_body_info(
-        &self,
-        inst_name: &str,
-        rust_name: &str,
-        method_name: &str,
-        param_count: usize,
-    ) -> Option<crate::libtooling::MethodInfo> {
-        fn collect_vardecl_summaries(
-            node: &ClangNode,
-            out: &mut Vec<(String, String)>,
-            unknown_expr_count: &mut usize,
-        ) {
-            if let ClangNodeKind::VarDecl { name, ty, .. } = &node.kind {
-                out.push((name.clone(), ty.to_rust_type_str()));
-            }
-            if matches!(&node.kind, ClangNodeKind::Unknown(_)) {
-                *unknown_expr_count += 1;
-            }
-            for child in &node.children {
-                collect_vardecl_summaries(child, out, unknown_expr_count);
-            }
-        }
-
-        #[derive(Clone)]
-        struct MethodBodyCandidate {
-            class_name: String,
-            method_name: String,
-            class_rank: usize,
-            param_delta: usize,
-            suffix_type_hits: usize,
-            unresolved_var_type_score: usize,
-            unknown_expr_count: usize,
-            var_count: usize,
-            info: crate::libtooling::MethodInfo,
-        }
-
-        let debug = std::env::var("FRAGILE_DEBUG_TEMPLATE_METHODS").is_ok();
-        let debug_target = debug
-            && (inst_name.contains("mbtree<")
-                || inst_name.contains("tcursor<")
-                || inst_name.contains("unlocked_tcursor<"));
-        let cpp_method_name = rust_method_name_to_cpp(method_name);
-        let mut raw_class_candidates: Vec<String> = Vec::new();
-        raw_class_candidates.push(rust_name.to_string());
-        raw_class_candidates.push(inst_name.to_string());
-        raw_class_candidates.push(inst_name.replace("class ", "").replace("struct ", ""));
-        if !inst_name.starts_with("std::") {
-            raw_class_candidates.push(format!("std::{}", inst_name));
-        }
-        if let Some((base, _)) = inst_name.split_once('<') {
-            raw_class_candidates.push(base.to_string());
-            raw_class_candidates.push(base.rsplit("::").next().unwrap_or(base).to_string());
-        }
-        let cpp_base_name = extract_cpp_base_class_name(rust_name);
-        raw_class_candidates.push(cpp_base_name);
-        // The empty-class fallback key is intentionally very broad and can pick
-        // unrelated overload bodies. Keep it only for non-template records.
-        if !inst_name.contains('<') {
-            raw_class_candidates.push(String::new());
-        }
-        let mut class_candidates: Vec<String> = Vec::new();
-        let mut seen_candidates: HashSet<String> = HashSet::new();
-        for candidate in raw_class_candidates {
-            let normalized = candidate.trim().to_string();
-            if normalized.is_empty() {
-                continue;
-            }
-            if seen_candidates.insert(normalized.clone()) {
-                class_candidates.push(normalized);
-            }
-        }
-        if !inst_name.contains('<') {
-            class_candidates.push(String::new());
-        }
-
-        let mut method_candidates = vec![method_name.to_string(), cpp_method_name];
-        method_candidates.sort();
-        method_candidates.dedup();
-        let method_candidate_set: HashSet<String> = method_candidates.iter().cloned().collect();
-
-        if debug_target {
-            eprintln!(
-                "[TMPL METHOD] lookup body: inst='{}' rust='{}' method='{}' params={} class_candidates={:?}",
-                inst_name, rust_name, method_name, param_count, class_candidates
-            );
-        }
-
-        let inst_norm = Self::normalize_specialization_name(inst_name);
-        let rust_norm = Self::normalize_specialization_name(rust_name);
-        let base_norm = inst_norm
-            .split_once('<')
-            .map(|(base, _)| base.to_string())
-            .unwrap_or_else(|| inst_norm.clone());
-        let mut normalized_targets: HashSet<String> = HashSet::new();
-        normalized_targets.insert(inst_norm.clone());
-        normalized_targets.insert(rust_norm.clone());
-        normalized_targets.insert(base_norm.clone());
-        for candidate in &class_candidates {
-            normalized_targets.insert(Self::normalize_specialization_name(candidate));
-        }
-
-        let mut candidates: Vec<MethodBodyCandidate> = Vec::new();
-        for ((class_name, method), methods) in &self.libtooling_method_bodies {
-            if !method_candidate_set.contains(method) {
-                continue;
-            }
-            let class_norm = Self::normalize_specialization_name(class_name);
-            let matches_class = normalized_targets.contains(&class_norm)
-                || class_norm == base_norm
-                || class_norm.starts_with(&format!("{}<", base_norm));
-            if !matches_class {
-                continue;
-            }
-            let class_rank = if class_norm == inst_norm || class_norm == rust_norm {
-                0
-            } else if class_norm.starts_with(&format!("{}<", base_norm)) {
-                1
-            } else if class_norm == base_norm {
-                2
-            } else {
-                3
-            };
-            if debug_target {
-                eprintln!(
-                    "[TMPL METHOD] body-key hit: class='{}' method='{}' overloads={} rank={}",
-                    class_name,
-                    method,
-                    methods.len(),
-                    class_rank
-                );
-            }
-            for (idx, candidate) in methods.iter().enumerate() {
-                if !matches!(candidate.body.kind, ClangNodeKind::CompoundStmt) {
-                    continue;
-                }
-                let mut vars = Vec::new();
-                let mut unknown_expr_count = 0usize;
-                collect_vardecl_summaries(&candidate.body, &mut vars, &mut unknown_expr_count);
-                let (unresolved_var_type_score, suffix_type_hits) =
-                    self.template_method_candidate_type_quality(&vars, rust_name);
-                let param_len = candidate.param_names.len();
-                let param_delta = if param_len >= param_count {
-                    param_len - param_count
-                } else {
-                    param_count - param_len
-                };
-                if debug_target {
-                    eprintln!(
-                        "[TMPL METHOD] candidate idx={} class='{}' method='{}' params={} delta={} rank={} suffix_hits={} unresolved_type_score={} vars={:?} unknown_nodes={}",
-                        idx,
-                        class_name,
-                        method,
-                        param_len,
-                        param_delta,
-                        class_rank,
-                        suffix_type_hits,
-                        unresolved_var_type_score,
-                        vars,
-                        unknown_expr_count
-                    );
-                }
-                candidates.push(MethodBodyCandidate {
-                    class_name: class_name.clone(),
-                    method_name: method.clone(),
-                    class_rank,
-                    param_delta,
-                    suffix_type_hits,
-                    unresolved_var_type_score,
-                    unknown_expr_count,
-                    var_count: vars.len(),
-                    info: candidate.clone(),
-                });
-            }
-        }
-
-        candidates.sort_by_key(|c| {
-            (
-                c.class_rank,
-                c.param_delta,
-                c.unknown_expr_count,
-                usize::MAX.saturating_sub(c.var_count),
-            )
-        });
-        if let Some(best) = candidates.first() {
-            if debug_target {
-                eprintln!(
-                    "[TMPL METHOD] selected class='{}' method='{}' rank={} delta={} suffix_hits={} unresolved_type_score={} unknown_nodes={} vars={}",
-                    best.class_name,
-                    best.method_name,
-                    best.class_rank,
-                    best.param_delta,
-                    best.suffix_type_hits,
-                    best.unresolved_var_type_score,
-                    best.unknown_expr_count,
-                    best.var_count
-                );
-            }
-            return Some(best.info.clone());
-        }
-
-        if debug_target {
-            let mut available: Vec<(String, String, usize)> = self
-                .libtooling_method_bodies
-                .iter()
-                .filter(|((_, m), _)| method_candidate_set.contains(m))
-                .map(|((c, m), infos)| (c.clone(), m.clone(), infos.len()))
-                .collect();
-            available.sort();
-            available.dedup();
-            eprintln!(
-                "[TMPL METHOD] body-key miss: method='{}' available={:?}",
-                method_name, available
-            );
-        }
-
-        None
-    }
-
     fn find_out_of_line_template_method_body(
         &self,
         inst_name: &str,
@@ -49309,204 +48331,8 @@ impl FragileAtomicBoolCompat for atomic_bool {
         }
         None
     }
-
-    fn emit_template_method_from_resolved_signature(
-        &mut self,
-        inst_name: &str,
-        rust_name: &str,
-        method_name: &str,
-        resolved_sig: &crate::libtooling::MethodSignature,
-        method_counts: &mut HashMap<String, usize>,
-    ) -> Option<(String, CppType)> {
-        let debug = std::env::var("FRAGILE_DEBUG_TEMPLATE_METHODS").is_ok();
-        let ret = resolved_sig
-            .return_type
-            .as_ref()
-            .map(|t| Self::cpp_type_to_rust_str(t))
-            .unwrap_or_default();
-        if !self.is_template_impl_resolvable_type(&ret)
-            || !resolved_sig
-                .param_types
-                .iter()
-                .all(|t| self.is_template_impl_resolvable_type(&Self::cpp_type_to_rust_str(t)))
-        {
-            if debug {
-                eprintln!(
-                    "[TMPL METHOD] skip unresolved signature: inst='{}' rust='{}' method='{}'",
-                    inst_name, rust_name, method_name
-                );
-            }
-            return None;
-        }
-
-        let mut param_entries: Vec<(String, String, String)> = Vec::new();
-        let mut param_name_counts: HashMap<String, usize> = HashMap::new();
-        for (i, ptype) in resolved_sig.param_types.iter().enumerate() {
-            let pname_raw = resolved_sig
-                .param_names
-                .get(i)
-                .map(|s| s.as_str())
-                .unwrap_or("_arg");
-            let base_name = sanitize_identifier(pname_raw);
-            let count = param_name_counts.entry(base_name.clone()).or_insert(0);
-            let pname = if *count == 0 {
-                base_name.clone()
-            } else {
-                format!("{}_{}", base_name, *count)
-            };
-            *count += 1;
-            let rust_ty = Self::cpp_type_to_rust_str(ptype);
-            param_entries.push((pname, pname_raw.to_string(), rust_ty));
-        }
-        Self::normalize_unit_pointer_param_entries(&mut param_entries);
-
-        let mut param_strs = Vec::new();
-        if !resolved_sig.is_static {
-            param_strs.push("&mut self".to_string());
-        }
-        for (name, _, ty) in &param_entries {
-            param_strs.push(format!("{}: {}", name, ty));
-        }
-
-        let ret_type = if method_name == "size" && (ret == "u64" || ret == "u32") {
-            "usize".to_string()
-        } else {
-            ret
-        };
-        let resolved_return_type = if method_name == "size" {
-            CppType::Named("usize".to_string())
-        } else {
-            resolved_sig.return_type.clone().unwrap_or(CppType::Void)
-        };
-        let ret_str = if ret_type == "()" || ret_type.is_empty() || ret_type == "_" {
-            String::new()
-        } else {
-            format!(" -> {}", Self::sanitize_return_type(&ret_type))
-        };
-
-        let base_method_name = sanitize_identifier(method_name);
-        if base_method_name.is_empty() {
-            if debug {
-                eprintln!(
-                    "[TMPL METHOD] skip empty sanitized method: inst='{}' method='{}'",
-                    inst_name, method_name
-                );
-            }
-            return None;
-        }
-        let count = method_counts.entry(base_method_name.clone()).or_insert(0);
-        let rust_method_name = if *count == 0 {
-            *count += 1;
-            base_method_name
-        } else {
-            *count += 1;
-            format!("{}_{}", base_method_name, *count - 1)
-        };
-
-        let mut method_info_opt = if let Some(info) = self.find_template_method_body_info(
-            inst_name,
-            rust_name,
-            method_name,
-            resolved_sig.param_types.len(),
-        ) {
-            Some(info)
-        } else if let Some((param_names, body)) = self.find_out_of_line_template_method_body(
-            inst_name,
-            rust_name,
-            method_name,
-            resolved_sig.param_types.len(),
-        ) {
-            if debug {
-                eprintln!(
-                    "[TMPL METHOD] using out-of-line body: inst='{}' rust='{}' method='{}'",
-                    inst_name, rust_name, method_name
-                );
-            }
-            Some(crate::libtooling::MethodInfo { param_names, body })
-        } else {
-            None
-        };
-        if method_info_opt.is_none() {
-            if debug {
-                eprintln!(
-                    "[TMPL METHOD] missing body: inst='{}' rust='{}' method='{}' params={}",
-                    inst_name,
-                    rust_name,
-                    method_name,
-                    resolved_sig.param_types.len()
-                );
-            }
-            return None;
-        }
-
-        let method_output_start = self.output.len();
-        self.writeln(&format!(
-            "pub fn {}({}){} {{",
-            rust_method_name,
-            param_strs.join(", "),
-            ret_str
-        ));
-        self.indent += 1;
-
-        if let Some(method_info) = method_info_opt.take() {
-            for param_name in &method_info.param_names {
-                if !param_name.is_empty() {
-                    self.local_vars.insert(sanitize_identifier(param_name));
-                }
-            }
-            let body_vardecls = Self::extract_vardecl_names(&method_info.body);
-            for var_name in &body_vardecls {
-                self.local_vars.insert(sanitize_identifier(var_name));
-            }
-            self.generate_block_contents(&method_info.body.children, &resolved_return_type);
-        } else {
-            self.output.truncate(method_output_start);
-            return None;
-        }
-
-        self.indent -= 1;
-        self.writeln("}");
-        self.writeln("");
-
-        self.fix_field_as_method_calls(rust_name, Some(inst_name), method_output_start);
-
-        let generated = &self.output[method_output_start..];
-        let has_wrong_fields = if let Some(known_fields) = self.class_fields.get(inst_name) {
-            if !known_fields.is_empty() {
-                Self::references_nonexistent_field(generated, known_fields)
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-        if has_wrong_fields || Self::should_rollback_template_impl(generated, rust_name) {
-            if debug {
-                eprintln!(
-                    "[TMPL METHOD] rollback: inst='{}' rust='{}' method='{}'",
-                    inst_name, rust_name, method_name
-                );
-                eprintln!("[TMPL METHOD] rollback body:\n{}", generated);
-            }
-            self.output.truncate(method_output_start);
-            return None;
-        }
-
-        if debug {
-            eprintln!(
-                "[TMPL METHOD] emitted: inst='{}' rust='{}' method='{}' as '{}'",
-                inst_name, rust_name, method_name, rust_method_name
-            );
-        }
-
-        Some((rust_method_name, resolved_return_type))
-    }
-
     /// Generate impl block for a template instantiation.
     fn generate_template_impl(&mut self, inst_name: &str, rust_name: &str, children: &[ClangNode]) {
-        if self.is_extern_template_instantiation(inst_name, rust_name) {
-            return;
-        }
 
         // Skip impl blocks for PRIMARY TEMPLATE types (types with unresolved generic params).
         // These types have method bodies that reference internal fields (._M_current, .__ptr_, etc.)
@@ -49530,10 +48356,6 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 break;
             }
         }
-        let resolved_methods_for_inst = self
-            .find_resolved_method_signatures_for_inst(inst_name)
-            .unwrap_or_default();
-        let has_resolved_methods = !resolved_methods_for_inst.is_empty();
 
         // For container types (std_list_, std_map_, etc.), we need to generate an impl block
         // even if there are no methods, so we can add stub methods like size() and new_0()
@@ -49566,7 +48388,6 @@ impl FragileAtomicBoolCompat for atomic_bool {
             || inst_name.contains("rapidjson::GenericStringBuffer<");
 
         if !has_methods
-            && !has_resolved_methods
             && !is_container_type
             && !is_rapidjson_document_surface_type
             && !is_rapidjson_template_surface_type
@@ -49578,7 +48399,6 @@ impl FragileAtomicBoolCompat for atomic_bool {
         // internal fields that don't exist in the generated struct. Container types
         // are exempt because they need stub methods for compilation.
         if is_primary_template
-            && !has_resolved_methods
             && !is_container_type
             && !is_rapidjson_document_surface_type
             && !is_rapidjson_template_surface_type
@@ -49592,7 +48412,7 @@ impl FragileAtomicBoolCompat for atomic_bool {
         self.current_struct_methods.clear();
 
         // Track method names within this impl block to handle overloads
-        let mut method_counts: HashMap<String, usize> = HashMap::new();
+        let mut _method_counts: HashMap<String, usize> = HashMap::new();
 
         // For primary template container types, skip generating methods from AST children
         // (they would be broken) but still fall through to generate stub methods below.
@@ -49650,300 +48470,11 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 self.fix_non_pointer_field_forced_deref_calls(inst_name, method_output_start);
                 continue;
             }
-            if let ClangNodeKind::CXXMethodDecl {
-                name,
-                params,
-                is_definition,
-                ..
-            } = &child.kind
-            {
-                // Generate method stub using resolved types from LibTooling only.
-                // Methods without resolved signatures or with non-primitive types are skipped.
-                {
-                    let resolved_sig =
-                        match self.find_resolved_method_signature(inst_name, name, params.len()) {
-                            Some(sig) => sig,
-                            None => continue, // No resolved signature — skip method
-                        };
-
-                    let ret = resolved_sig
-                        .return_type
-                        .as_ref()
-                        .map(|t| Self::cpp_type_to_rust_str(t))
-                        .unwrap_or_default();
-
-                    // Check if all types in the signature are resolvable.
-                    // Accept primitives, types already generated, and types that will
-                    // get opaque stubs from generate_missing_type_stubs.
-                    let is_resolvable_type = |s: &str| -> bool {
-                        let inner = s
-                            .trim_start_matches("*mut ")
-                            .trim_start_matches("*const ")
-                            .trim_start_matches("&mut ")
-                            .trim_start_matches("&");
-                        matches!(
-                            inner,
-                            "i8" | "i16"
-                                | "i32"
-                                | "i64"
-                                | "i128"
-                                | "u8"
-                                | "u16"
-                                | "u32"
-                                | "u64"
-                                | "u128"
-                                | "f32"
-                                | "f64"
-                                | "bool"
-                                | "char"
-                                | "()"
-                                | "usize"
-                                | "isize"
-                                | "std::ffi::c_void"
-                                | ""
-                        ) || inner.starts_with("[u8;")
-                            || inner.is_empty()
-                            || self.generated_structs.contains(inner)
-                            || self.referenced_but_undefined_structs.contains(inner)
-                    };
-                    if !is_resolvable_type(&ret)
-                        || !resolved_sig
-                            .param_types
-                            .iter()
-                            .all(|t| is_resolvable_type(&Self::cpp_type_to_rust_str(t)))
-                    {
-                        continue;
-                    }
-
-                    let mut param_strs = Vec::new();
-                    if !resolved_sig.is_static {
-                        param_strs.push("&mut self".to_string());
-                    }
-                    let mut param_name_counts: HashMap<String, usize> = HashMap::new();
-                    for (i, ptype) in resolved_sig.param_types.iter().enumerate() {
-                        let pname_raw = resolved_sig
-                            .param_names
-                            .get(i)
-                            .map(|s| s.as_str())
-                            .unwrap_or("_arg");
-                        let mut pname = sanitize_identifier(pname_raw);
-                        let count = param_name_counts.entry(pname.clone()).or_insert(0);
-                        if *count > 0 {
-                            pname = format!("{}_{}", pname, *count);
-                        }
-                        *param_name_counts
-                            .get_mut(&sanitize_identifier(pname_raw))
-                            .unwrap() += 1;
-                        let mut rust_ty = Self::cpp_type_to_rust_str(ptype);
-                        // Populate() is a noop stub — take reader by &mut to avoid
-                        // moving the caller's value (C++ copies, Rust moves).
-                        if name == "Populate"
-                            && !rust_ty.starts_with("*")
-                            && !rust_ty.starts_with("&")
-                        {
-                            rust_ty = format!("&mut {}", rust_ty);
-                        }
-                        param_strs.push(format!("{}: {}", pname, rust_ty));
-                    }
-
-                    // Normalize size() return type to usize (C++ size_t → Rust usize)
-                    let ret_type = if name == "size" && (ret == "u64" || ret == "u32") {
-                        "usize".to_string()
-                    } else {
-                        ret
-                    };
-                    let resolved_return_type = if name == "size" {
-                        CppType::Named("usize".to_string())
-                    } else {
-                        resolved_sig.return_type.clone().unwrap_or(CppType::Void)
-                    };
-
-                    let ret_str = if ret_type == "()" || ret_type.is_empty() || ret_type == "_" {
-                        String::new()
-                    } else {
-                        format!(" -> {}", Self::sanitize_return_type(&ret_type))
-                    };
-
-                    // Handle method overloading by appending suffix for duplicates
-                    let base_method_name = sanitize_identifier(name);
-                    let count = method_counts.entry(base_method_name.clone()).or_insert(0);
-                    let method_name = if *count == 0 {
-                        *count += 1;
-                        base_method_name
-                    } else {
-                        *count += 1;
-                        format!("{}_{}", base_method_name, *count - 1)
-                    };
-
-                    // Track output position for potential rollback
-                    let method_output_start = self.output.len();
-
-                    self.writeln(&format!(
-                        "pub fn {}({}){} {{",
-                        method_name,
-                        param_strs.join(", "),
-                        ret_str
-                    ));
-                    self.indent += 1;
-
-                    // Try to look up the method body from LibTooling AST
-                    // LibTooling uses simple C++ class names (e.g., "map", "vector")
-                    // while rust_name includes template args (e.g., "std_map_int__int")
-                    // Also, LibTooling uses C++ operator names (e.g., "operator[]")
-                    // while we use sanitized names (e.g., "op_index")
-
-                    // Convert Rust method name back to C++ operator name for lookup
-                    let cpp_method_name = rust_method_name_to_cpp(&name);
-
-                    let key = (rust_name.to_string(), name.clone());
-
-                    // Extract base C++ class name from rust_name
-                    // e.g., "std_map_int__int" -> "map", "std___tree_node_base_void__" -> "__tree_node_base"
-                    let cpp_base_name = extract_cpp_base_class_name(rust_name);
-                    let cpp_key = (cpp_base_name.clone(), name.clone());
-
-                    // Also try with C++ operator name
-                    let cpp_op_key = (cpp_base_name.clone(), cpp_method_name.clone());
-
-                    let fallback_key = (String::new(), name.clone());
-                    let fallback_cpp_key = (String::new(), cpp_method_name.clone());
-
-                    let method_info_opt = if *is_definition {
-                        let body_opt = child
-                            .children
-                            .iter()
-                            .find(|c| matches!(c.kind, ClangNodeKind::CompoundStmt))
-                            .cloned();
-                        body_opt.map(|body| crate::libtooling::MethodInfo {
-                            param_names: params.iter().map(|(pname, _)| pname.clone()).collect(),
-                            body,
-                        })
-                    } else {
-                        None
-                    }
-                    .or_else(|| {
-                        self.libtooling_method_bodies
-                            .get(&key)
-                            .or_else(|| self.libtooling_method_bodies.get(&cpp_key))
-                            .or_else(|| self.libtooling_method_bodies.get(&cpp_op_key))
-                            .or_else(|| self.libtooling_method_bodies.get(&fallback_key))
-                            .or_else(|| self.libtooling_method_bodies.get(&fallback_cpp_key))
-                            .and_then(|methods| {
-                                // Find method with matching parameter count
-                                let param_count = params.len();
-                                methods
-                                    .iter()
-                                    .find(|m| {
-                                        m.param_names.len() == param_count
-                                            && matches!(m.body.kind, ClangNodeKind::CompoundStmt)
-                                    })
-                                    .or_else(|| {
-                                        // Fall back to first available body if param count doesn't match
-                                        methods.iter().find(|m| {
-                                            matches!(m.body.kind, ClangNodeKind::CompoundStmt)
-                                        })
-                                    })
-                                    .cloned()
-                            })
-                    });
-
-                    if let Some(method_info) = method_info_opt {
-                        // Register LibTooling parameter names as local variables
-                        // This ensures DeclRefExpr lookups work for parameters
-                        for param_name in &method_info.param_names {
-                            if !param_name.is_empty() {
-                                self.local_vars.insert(sanitize_identifier(param_name));
-                            }
-                        }
-                        // Also register all VarDecls from the method body as local variables
-                        // This ensures that variables declared inside the C++ method body are recognized
-                        let body_vardecls = Self::extract_vardecl_names(&method_info.body);
-                        for var_name in &body_vardecls {
-                            self.local_vars.insert(sanitize_identifier(var_name));
-                        }
-                        // Generate the actual method body
-                        self.generate_block_contents(
-                            &method_info.body.children,
-                            &resolved_return_type,
-                        );
-                    } else {
-                        self.writeln("todo!(\"Template method body\")");
-                    }
-
-                    self.indent -= 1;
-                    self.writeln("}");
-                    self.writeln("");
-
-                    // Post-process: fix field-as-method calls in template impl methods
-                    self.fix_field_as_method_calls(rust_name, Some(inst_name), method_output_start);
-
-                    // Validate generated method: check field references against actual struct fields
-                    let generated = &self.output[method_output_start..];
-                    let has_wrong_fields =
-                        if let Some(known_fields) = self.class_fields.get(inst_name) {
-                            if !known_fields.is_empty() {
-                                Self::references_nonexistent_field(generated, known_fields)
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        };
-                    if has_wrong_fields || Self::should_rollback_template_impl(generated, rust_name)
-                    {
-                        self.output.truncate(method_output_start);
-                    }
-                }
-            }
+            // Template method generation previously required LibTooling resolved
+            // signatures; without enrichment data, template methods are skipped.
         }
 
-        if !resolved_methods_for_inst.is_empty() {
-            let debug_template_methods = std::env::var("FRAGILE_DEBUG_TEMPLATE_METHODS").is_ok();
-            if debug_template_methods {
-                eprintln!(
-                    "[TMPL METHOD] inst='{}' rust='{}' resolved_methods={}",
-                    inst_name,
-                    rust_name,
-                    resolved_methods_for_inst.len()
-                );
-            }
-            for resolved_sig in &resolved_methods_for_inst {
-                let method_name = resolved_sig.name.as_str();
-                let base_method_name = sanitize_identifier(method_name);
-                if base_method_name.is_empty()
-                    || self.impl_contains_method(rust_name, &base_method_name)
-                {
-                    continue;
-                }
-                if let Some((rust_method_name, resolved_return_type)) = self
-                    .emit_template_method_from_resolved_signature(
-                        inst_name,
-                        rust_name,
-                        method_name,
-                        resolved_sig,
-                        &mut method_counts,
-                    )
-                {
-                    self.register_synthetic_class_method_overload(
-                        inst_name,
-                        method_name,
-                        &rust_method_name,
-                        resolved_sig.param_types.clone(),
-                        resolved_return_type,
-                        false,
-                        resolved_sig.is_static,
-                    );
-                }
-            }
-        }
-
-        // Before adding stubs, try to look up methods from LibTooling bodies
-        // that weren't in the AST children. This is needed for operator[] and other
-        // methods that libclang may not expose for template instantiations.
-        let cpp_base_name = extract_cpp_base_class_name(rust_name);
-        self.generate_libtooling_only_methods(rust_name, &cpp_base_name);
-
-        // Special case: add size() method for std::map, std::set, std::list, and hash-based containers
+                // Special case: add size() method for std::map, std::set, std::list, and hash-based containers
         // These containers delegate to internal types but the size() method often gets filtered out
         // due to unresolved template types
         if rust_name.starts_with("std_map_")
@@ -50532,196 +49063,6 @@ impl FragileAtomicBoolCompat for atomic_bool {
             }
         }
     }
-
-    /// Generate methods from LibTooling bodies that weren't already generated from AST.
-    ///
-    /// This handles methods like operator[] that libclang may not expose for template
-    /// instantiations, but LibTooling does have bodies for.
-    fn generate_libtooling_only_methods(&mut self, rust_name: &str, cpp_base_name: &str) {
-        // Find methods from LibTooling that might not be in the AST
-        // Look for methods with the C++ base class name
-        // ONLY use exact class name matches - empty class name fallback is too broad
-        let methods_to_generate: Vec<(String, String, crate::libtooling::MethodInfo)> = {
-            let mut methods = Vec::new();
-            let debug = std::env::var("FRAGILE_DEBUG_LIBTOOLING").is_ok();
-            if debug {
-                eprintln!(
-                    "=== generate_libtooling_only_methods for rust_name={}, cpp_base_name={} ===",
-                    rust_name, cpp_base_name
-                );
-                eprintln!(
-                    "  libtooling_method_bodies has {} entries",
-                    self.libtooling_method_bodies.len()
-                );
-                // Show available class names
-                let class_names: std::collections::HashSet<&String> = self
-                    .libtooling_method_bodies
-                    .keys()
-                    .map(|(c, _)| c)
-                    .collect();
-                eprintln!(
-                    "  Available classes: {:?}",
-                    class_names.iter().take(10).collect::<Vec<_>>()
-                );
-            }
-            for ((class_name, method_name), method_infos) in &self.libtooling_method_bodies {
-                // Match by exact base class name (e.g., "map" matches std_map_int__int)
-                // Don't use empty string fallback as it's too ambiguous
-                if debug && class_name == cpp_base_name {
-                    eprintln!(
-                        "  Found match: class_name={}, method_name={}, count={}",
-                        class_name,
-                        method_name,
-                        method_infos.len()
-                    );
-                }
-                if class_name == cpp_base_name {
-                    for info in method_infos {
-                        // Convert C++ operator name to Rust method name
-                        let rust_method_name = match method_name.as_str() {
-                            "operator[]" => "op_index",
-                            "operator()" => "op_call",
-                            "operator*" => "op_deref",
-                            "operator->" => "op_arrow",
-                            "operator+" => "op_plus",
-                            "operator-" => "op_minus",
-                            "operator==" => "op_eq",
-                            "operator!=" => "op_ne",
-                            "operator<" => "op_lt",
-                            "operator>" => "op_gt",
-                            "operator<=" => "op_le",
-                            "operator>=" => "op_ge",
-                            "operator+=" => "op_plus_assign",
-                            "operator-=" => "op_minus_assign",
-                            "operator=" => "op_assign",
-                            "operator++" => "op_pre_inc",
-                            "operator--" => "op_pre_dec",
-                            _ => method_name.as_str(),
-                        };
-
-                        // Check if this method is already in the generated output
-                        let impl_start = self
-                            .output
-                            .rfind(&format!("impl {} {{", rust_name))
-                            .unwrap_or(0);
-                        let method_sig = format!("pub fn {}(", rust_method_name);
-                        if !self.output[impl_start..].contains(&method_sig) {
-                            methods.push((
-                                class_name.clone(),
-                                rust_method_name.to_string(),
-                                info.clone(),
-                            ));
-                        }
-                    }
-                }
-            }
-            methods
-        };
-
-        // Generate each method
-        // Find impl block start to check for already-generated methods
-        let impl_start = self
-            .output
-            .rfind(&format!("impl {} {{", rust_name))
-            .unwrap_or(0);
-
-        for (_class_name, rust_method_name, info) in methods_to_generate {
-            // Skip if body isn't a compound statement
-            if !matches!(info.body.kind, ClangNodeKind::CompoundStmt) {
-                continue;
-            }
-
-            // Allow specific methods we have working implementations for
-            let allowed_methods = ["op_index", "size"];
-            if !allowed_methods.contains(&rust_method_name.as_str()) {
-                continue;
-            }
-
-            // Skip if this method was already generated (e.g., from resolved signatures path)
-            let method_sig = format!("pub fn {}(", rust_method_name);
-            if self.output[impl_start..].contains(&method_sig) {
-                continue;
-            }
-
-            // Determine return type and parameter list based on the method name
-            let (return_type, param_list, body_return_type) = match rust_method_name.as_str() {
-                "size" => {
-                    // size() takes no parameters, returns usize, and is const (&self)
-                    (
-                        "usize".to_string(),
-                        "&self".to_string(),
-                        CppType::Named("usize".to_string()),
-                    )
-                }
-                "op_index" => {
-                    // operator[] returns reference to value type, takes key parameter
-                    let ret_type = if rust_name.starts_with("std_map_")
-                        || rust_name.starts_with("std_unordered_map_")
-                    {
-                        "*mut i32".to_string() // Default for now
-                    } else {
-                        "std::ffi::c_void".to_string()
-                    };
-                    let params = if info.param_names.is_empty() {
-                        "&mut self".to_string()
-                    } else {
-                        let param_name = sanitize_identifier(&info.param_names[0]);
-                        format!("&mut self, {}: i32", param_name)
-                    };
-                    let body_ret = CppType::Pointer {
-                        pointee: Box::new(CppType::Int { signed: true }),
-                        is_const: false,
-                    };
-                    (ret_type, params, body_ret)
-                }
-                _ => continue, // Skip unknown methods
-            };
-
-            let method_output_start = self.output.len();
-
-            self.writeln(&format!(
-                "pub fn {}({}) -> {} {{",
-                rust_method_name, param_list, return_type
-            ));
-            self.indent += 1;
-
-            // Register parameter names as local variables
-            for param_name in &info.param_names {
-                if !param_name.is_empty() {
-                    self.local_vars.insert(sanitize_identifier(param_name));
-                }
-            }
-
-            // Also register all VarDecls from the method body as local variables
-            // This ensures that variables declared inside the C++ method body are recognized
-            // as declared when generating the Rust code
-            let body_vardecls = Self::extract_vardecl_names(&info.body);
-            for var_name in &body_vardecls {
-                self.local_vars.insert(sanitize_identifier(var_name));
-            }
-
-            self.generate_block_contents(&info.body.children, &body_return_type);
-
-            self.indent -= 1;
-            self.writeln("}");
-            self.writeln("");
-
-            // Post-process: fix field-as-method calls in libtooling methods
-            self.fix_field_as_method_calls(rust_name, None, method_output_start);
-
-            // Validate generated libtooling method and rollback if invalid
-            let generated = &self.output[method_output_start..];
-            if Self::should_rollback_libtooling(generated, rust_name) {
-                if std::env::var("FRAGILE_DEBUG_ROLLBACK").is_ok() {
-                    eprintln!("=== ROLLBACK {} :: {} ===", rust_name, rust_method_name);
-                    eprintln!("{}", generated);
-                    eprintln!("=== END ROLLBACK ===\n");
-                }
-                self.output.truncate(method_output_start);
-            }
-        }
-    }
-
     /// Generate function implementations for pending function template instantiations.
     fn generate_fn_template_instantiations(&mut self) {
         // Consume the current pending map to avoid clone-heavy staging.
@@ -88538,29 +86879,6 @@ mod tests {
             location: SourceLocation::default(),
         }
     }
-
-    fn make_specialization_field_info(
-        qualified_name: &str,
-        template_args: Vec<String>,
-        specialization_kind: TemplateSpecializationKind,
-    ) -> crate::libtooling::SpecializationFieldInfo {
-        crate::libtooling::SpecializationFieldInfo {
-            type_name: qualified_name.to_string(),
-            qualified_name: qualified_name.to_string(),
-            template_args,
-            specialization_kind,
-            is_implicit_instantiation: matches!(
-                specialization_kind,
-                TemplateSpecializationKind::ImplicitInstantiation
-            ),
-            is_explicit_specialization: matches!(
-                specialization_kind,
-                TemplateSpecializationKind::ExplicitSpecialization
-            ),
-            field_types: HashMap::new(),
-        }
-    }
-
     fn problematic_callshape_profile_env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
@@ -104016,45 +102334,6 @@ impl Default for rrr::Server {
             code
         );
     }
-
-    #[test]
-    fn test_missing_stub_prefers_concrete_specialization_over_known_enum_fallback() {
-        let mut codegen = AstCodeGen::new();
-        codegen.writeln(
-            "pub type rusty_MutexGuard_conststruct_rrr_Future_State = std::sync::MutexGuard<'static, rrr_Future_State>;",
-        );
-        codegen.writeln("");
-        codegen
-            .generated_aliases
-            .insert("rusty_MutexGuard_conststruct_rrr_Future_State".to_string());
-
-        codegen.generated_enums.insert("State".to_string());
-        codegen
-            .enum_variant_map
-            .insert(("State".to_string(), 0), "Idle".to_string());
-
-        codegen.used_types.insert(
-            "rusty_MutexGuard_struct_rrr_Future_State".to_string(),
-            "rusty::MutexGuard::struct::rrr::Future::State".to_string(),
-        );
-
-        codegen.generate_missing_type_stubs();
-        let code = codegen.output;
-
-        assert!(
-            code.contains(
-                "pub type rusty_MutexGuard_struct_rrr_Future_State = rusty_MutexGuard_conststruct_rrr_Future_State;",
-            ),
-            "missing-stub generation should prefer concrete specialization aliases before known-enum fallback matching, got:\n{}",
-            code
-        );
-        assert!(
-            !code.contains("pub type rusty_MutexGuard_struct_rrr_Future_State = State;"),
-            "missing-stub generation should avoid replacing concrete specialization aliases with enum fallback targets when both are available, got:\n{}",
-            code
-        );
-    }
-
     #[test]
     fn test_template_struct_std_vector_instantiation_emits_generic_alias() {
         let mut codegen = AstCodeGen::new();
@@ -104255,132 +102534,7 @@ impl Default for rrr::Server {
             codegen.output
         );
     }
-
-    #[test]
-    fn test_template_struct_skips_extern_template_instantiation_declarations() {
-        let mut codegen = AstCodeGen::new();
-        let inst_name = "Widget<int>";
-        let rust_name = CppType::Named(inst_name.to_string()).to_rust_type_str();
-
-        codegen.specialization_field_types.insert(
-            inst_name.to_string(),
-            make_specialization_field_info(
-                "Widget",
-                vec!["int".to_string()],
-                TemplateSpecializationKind::ExplicitInstantiationDeclaration,
-            ),
-        );
-
-        codegen.generate_template_struct(
-            inst_name,
-            &[String::from("T")],
-            &[String::from("int")],
-            &[make_node(
-                ClangNodeKind::FieldDecl {
-                    name: "value".to_string(),
-                    ty: CppType::Int { signed: true },
-                    is_static: false,
-                    access: AccessSpecifier::Public,
-                    bit_field_width: None,
-                },
-                vec![],
-            )],
-        );
-
-        assert!(
-            codegen.output.is_empty(),
-            "extern template instantiation declarations should not emit concrete struct/impl, got:\n{}",
-            codegen.output
-        );
-        assert!(
-            !codegen.generated_structs.contains(&rust_name),
-            "extern template instantiation declarations should not be tracked as generated structs"
-        );
-    }
-
-    #[test]
-    fn test_template_struct_emits_explicit_instantiation_definitions() {
-        let mut codegen = AstCodeGen::new();
-        let inst_name = "Widget<int>";
-        let rust_name = CppType::Named(inst_name.to_string()).to_rust_type_str();
-
-        codegen.specialization_field_types.insert(
-            inst_name.to_string(),
-            make_specialization_field_info(
-                "Widget",
-                vec!["int".to_string()],
-                TemplateSpecializationKind::ExplicitInstantiationDefinition,
-            ),
-        );
-
-        codegen.generate_template_struct(
-            inst_name,
-            &[String::from("T")],
-            &[String::from("int")],
-            &[make_node(
-                ClangNodeKind::FieldDecl {
-                    name: "value".to_string(),
-                    ty: CppType::Int { signed: true },
-                    is_static: false,
-                    access: AccessSpecifier::Public,
-                    bit_field_width: None,
-                },
-                vec![],
-            )],
-        );
-
-        assert!(
-            codegen
-                .output
-                .contains(&format!("pub struct {} {{", rust_name)),
-            "explicit template instantiation definitions should emit a concrete struct, got:\n{}",
-            codegen.output
-        );
-    }
-
-    #[test]
-    fn test_template_impl_skips_extern_template_instantiation_declarations() {
-        let mut codegen = AstCodeGen::new();
-        let inst_name = "Widget<int>";
-        let rust_name = CppType::Named(inst_name.to_string()).to_rust_type_str();
-
-        codegen.specialization_field_types.insert(
-            inst_name.to_string(),
-            make_specialization_field_info(
-                "Widget",
-                vec!["int".to_string()],
-                TemplateSpecializationKind::ExplicitInstantiationDeclaration,
-            ),
-        );
-
-        let children = vec![make_node(
-            ClangNodeKind::CXXMethodDecl {
-                class_name: inst_name.to_string(),
-                name: "size".to_string(),
-                return_type: CppType::Int { signed: true },
-                params: vec![],
-                is_definition: true,
-                is_static: false,
-                is_virtual: false,
-                is_pure_virtual: false,
-                is_override: false,
-                is_final: false,
-                is_const: true,
-                access: AccessSpecifier::Public,
-            },
-            vec![],
-        )];
-
-        codegen.generate_template_impl(inst_name, &rust_name, &children);
-
-        assert!(
-            codegen.output.is_empty(),
-            "extern template instantiation declarations should not emit template impl blocks, got:\n{}",
-            codegen.output
-        );
-    }
-
-    #[test]
+  #[test]
     fn test_template_stack_instantiation_emits_default_clone_copy_fallbacks() {
         let mut codegen = AstCodeGen::new();
         codegen.generate_template_struct(
@@ -106189,47 +104343,6 @@ pub mod rusty {
             code
         );
     }
-
-    #[test]
-    fn test_missing_stub_default_uses_false_for_bool_specialization_fields() {
-        let mut codegen = AstCodeGen::new();
-        let rust_name = "ConnState".to_string();
-        let cpp_name = "ConnState".to_string();
-        codegen
-            .used_types
-            .insert(rust_name.clone(), cpp_name.clone());
-
-        let mut spec_info = make_specialization_field_info(
-            &cpp_name,
-            vec![],
-            TemplateSpecializationKind::ImplicitInstantiation,
-        );
-        spec_info
-            .field_types
-            .insert("joined_".to_string(), CppType::Bool);
-        codegen
-            .specialization_field_types
-            .insert(cpp_name.clone(), spec_info);
-
-        codegen.generate_missing_type_stubs();
-        let code = codegen.output;
-        let struct_impl = code
-            .split("impl Default for ConnState {")
-            .nth(1)
-            .unwrap_or("");
-
-        assert!(
-            struct_impl.contains("joined_: false,"),
-            "bool specialization fields in placeholder defaults should use `false`, got:\n{}",
-            code
-        );
-        assert!(
-            !struct_impl.contains("joined_: 0"),
-            "bool specialization fields must not default to integer zero, got:\n{}",
-            code
-        );
-    }
-
     #[test]
     fn test_record_with_unqualified_vector_field_does_not_derive_copy() {
         let ast = make_node(
@@ -106538,135 +104651,6 @@ pub mod rusty {
             code
         );
     }
-
-    #[test]
-    fn test_rapidjson_concrete_document_template_impl_emits_resolved_methods_without_generic_surface_fallbacks(
-    ) {
-        let mut codegen = AstCodeGen::new();
-        let inst_name = "GenericDocument<UTF8<>, MemoryPoolAllocator<CrtAllocator>, CrtAllocator>";
-        let rust_name = "GenericDocument_UTF8_";
-
-        codegen
-            .generated_structs
-            .insert("FilterKeyReader_FileReadStream".to_string());
-        codegen
-            .generated_structs
-            .insert("Writer_FileWriteStream".to_string());
-        codegen.specialization_methods.insert(
-            inst_name.to_string(),
-            vec![
-                crate::libtooling::MethodSignature {
-                    name: "Populate".to_string(),
-                    return_type: Some(CppType::Void),
-                    param_names: vec!["_reader".to_string()],
-                    param_types: vec![CppType::Named("FilterKeyReader_FileReadStream".to_string())],
-                    is_static: false,
-                },
-                crate::libtooling::MethodSignature {
-                    name: "Accept".to_string(),
-                    return_type: Some(CppType::Bool),
-                    param_names: vec!["_writer".to_string()],
-                    param_types: vec![CppType::Pointer {
-                        pointee: Box::new(CppType::Named("Writer_FileWriteStream".to_string())),
-                        is_const: true,
-                    }],
-                    is_static: false,
-                },
-            ],
-        );
-        codegen.libtooling_method_bodies.insert(
-            (rust_name.to_string(), "Populate".to_string()),
-            vec![crate::libtooling::MethodInfo {
-                param_names: vec!["_reader".to_string()],
-                body: make_node(ClangNodeKind::CompoundStmt, vec![]),
-            }],
-        );
-        codegen.libtooling_method_bodies.insert(
-            (rust_name.to_string(), "Accept".to_string()),
-            vec![crate::libtooling::MethodInfo {
-                param_names: vec!["_writer".to_string()],
-                body: make_node(
-                    ClangNodeKind::CompoundStmt,
-                    vec![make_node(
-                        ClangNodeKind::ReturnStmt,
-                        vec![make_node(ClangNodeKind::BoolLiteral(true), vec![])],
-                    )],
-                ),
-            }],
-        );
-
-        let children = vec![
-            make_node(
-                ClangNodeKind::CXXMethodDecl {
-                    class_name: inst_name.to_string(),
-                    name: "Populate".to_string(),
-                    return_type: CppType::Void,
-                    params: vec![(
-                        "_reader".to_string(),
-                        CppType::Named("FilterKeyReader_FileReadStream".to_string()),
-                    )],
-                    is_definition: true,
-                    is_static: false,
-                    is_virtual: false,
-                    is_pure_virtual: false,
-                    is_override: false,
-                    is_final: false,
-                    is_const: false,
-                    access: AccessSpecifier::Public,
-                },
-                vec![],
-            ),
-            make_node(
-                ClangNodeKind::CXXMethodDecl {
-                    class_name: inst_name.to_string(),
-                    name: "Accept".to_string(),
-                    return_type: CppType::Bool,
-                    params: vec![(
-                        "_writer".to_string(),
-                        CppType::Pointer {
-                            pointee: Box::new(CppType::Named("Writer_FileWriteStream".to_string())),
-                            is_const: true,
-                        },
-                    )],
-                    is_definition: true,
-                    is_static: false,
-                    is_virtual: false,
-                    is_pure_virtual: false,
-                    is_override: false,
-                    is_final: false,
-                    is_const: true,
-                    access: AccessSpecifier::Public,
-                },
-                vec![],
-            ),
-        ];
-        codegen.generate_template_impl(inst_name, rust_name, &children);
-        let code = codegen.output;
-
-        assert!(
-            code.contains("pub fn Populate(&mut self, _reader: &mut FilterKeyReader_FileReadStream) {"),
-            "concrete GenericDocument template impl should emit resolved Populate method signature, got:\n{}",
-            code
-        );
-        assert!(
-            code.contains(
-                "pub fn Accept(&mut self, _writer: *const Writer_FileWriteStream) -> bool {"
-            ),
-            "concrete GenericDocument template impl should emit resolved Accept method signature, got:\n{}",
-            code
-        );
-        assert!(
-            !code.contains("pub fn Populate<T>(&mut self, _reader: &mut T) {"),
-            "resolved GenericDocument Populate should prevent generic fallback stub emission, got:\n{}",
-            code
-        );
-        assert!(
-            !code.contains("pub fn Accept<T>(&self, _writer: &T) -> bool {"),
-            "resolved GenericDocument Accept should prevent generic fallback stub emission, got:\n{}",
-            code
-        );
-    }
-
     #[test]
     fn test_non_pointer_member_receiver_does_not_force_pointer_deref_call_lowering() {
         let mut codegen = AstCodeGen::new();

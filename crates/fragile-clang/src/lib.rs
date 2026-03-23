@@ -1472,21 +1472,11 @@ fn translation_unit_from_libtooling_context(ctx: &AstContext) -> ClangNode {
     ClangNode::new(ClangNodeKind::TranslationUnit).with_children(children)
 }
 
-fn apply_libtooling_enrichment(codegen: &mut AstCodeGen, ctx: &AstContext) {
-    let method_bodies = extract_method_bodies_with_params(ctx);
-    if !method_bodies.is_empty() {
-        codegen.set_libtooling_bodies(method_bodies);
-    }
-
-    let field_types = extract_specialization_field_types(ctx);
-    if !field_types.is_empty() {
-        codegen.set_specialization_field_types(field_types);
-    }
-
-    let method_sigs = extract_specialization_method_signatures(ctx);
-    if !method_sigs.is_empty() {
-        codegen.set_specialization_method_signatures(method_sigs);
-    }
+fn apply_libtooling_enrichment(_codegen: &mut AstCodeGen, _ctx: &AstContext) {
+    // P0.b.4: LibTooling enrichment state (method bodies, specialization field
+    // types, specialization method signatures) has been removed from AstCodeGen.
+    // This function is retained as a no-op until P0.b.5 removes the enrichment
+    // stage entirely.
 }
 
 /// Parse a C++ source file and transpile to Rust source code.

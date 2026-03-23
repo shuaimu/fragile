@@ -293,36 +293,28 @@ fn p0a_audit_libtooling_public_exports_inventory() {
 }
 
 #[test]
-fn p0a_audit_ast_codegen_has_libtooling_state() {
+fn p0b4_anti_regression_ast_codegen_libtooling_enrichment_state_removed() {
     let codegen_src = read_project_file("crates/fragile-clang/src/ast_codegen.rs");
-    // AstCodeGen carries libtooling state for enrichment.
-    // P0.b removal: remove these fields and set_libtooling_bodies.
+    // P0.b.4: LibTooling enrichment state has been removed from AstCodeGen.
     assert!(
-        codegen_src.contains("libtooling_method_bodies"),
-        "audit: expected libtooling_method_bodies field in AstCodeGen"
+        !codegen_src.contains("libtooling_method_bodies: HashMap"),
+        "anti-regression: libtooling_method_bodies field should be removed from AstCodeGen"
     );
     assert!(
-        codegen_src.contains("specialization_field_types"),
-        "audit: expected specialization_field_types field in AstCodeGen"
+        !codegen_src.contains("specialization_field_types: HashMap"),
+        "anti-regression: specialization_field_types field should be removed from AstCodeGen"
     );
     assert!(
-        codegen_src.contains("specialization_methods"),
-        "audit: expected specialization_methods field in AstCodeGen"
+        !codegen_src.contains("specialization_methods: HashMap"),
+        "anti-regression: specialization_methods field should be removed from AstCodeGen"
     );
     assert!(
-        codegen_src.contains("fn set_libtooling_bodies"),
-        "audit: expected set_libtooling_bodies method in AstCodeGen"
+        !codegen_src.contains("fn set_libtooling_bodies"),
+        "anti-regression: set_libtooling_bodies method should be removed from AstCodeGen"
     );
-}
-
-#[test]
-fn p0a_audit_ast_codegen_has_libtooling_rollback_validator() {
-    let codegen_src = read_project_file("crates/fragile-clang/src/ast_codegen.rs");
-    // should_rollback_libtooling is a dedicated validator for libtooling-generated bodies.
-    // P0.b removal: remove function if no longer needed.
     assert!(
-        codegen_src.contains("fn should_rollback_libtooling"),
-        "audit: expected should_rollback_libtooling validator in ast_codegen.rs"
+        !codegen_src.contains("fn should_rollback_libtooling"),
+        "anti-regression: should_rollback_libtooling should be removed from AstCodeGen"
     );
 }
 
@@ -449,9 +441,10 @@ fn p0a_audit_cli_main_libtooling_preparse_path() {
         src.contains("libtooling_field_types"),
         "audit: expected libtooling_field_types variable in CLI main.rs"
     );
+    // P0.b.4: set_libtooling_bodies removed; CLI now discards merged bodies.
     assert!(
-        src.contains("set_libtooling_bodies"),
-        "audit: expected set_libtooling_bodies call in CLI main.rs"
+        !src.contains("set_libtooling_bodies"),
+        "anti-regression: set_libtooling_bodies should be removed from CLI main.rs"
     );
 }
 
