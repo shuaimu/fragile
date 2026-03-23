@@ -696,6 +696,28 @@ fn p0b_2b_task_marked_done_in_todo() {
 }
 
 #[test]
+fn p0b_2_task_marked_done_in_todo() {
+    let todo = read_project_file("TODO.md");
+    assert!(
+        todo.contains("- [x] P0.b.2 Remove strict-path backend/escape-hatch selection"),
+        "audit: TODO should mark P0.b.2 as completed"
+    );
+    assert!(
+        !todo.contains("- [ ] P0.b.2 Remove strict-path backend/escape-hatch selection"),
+        "audit: TODO should not keep a stale unchecked P0.b.2 entry"
+    );
+    assert!(
+        todo.contains("P0.b.2.a")
+            && todo.contains("P0.b.2.b")
+            && todo.contains("P0.b.2.c")
+            && todo.contains("P0.b.2.d")
+            && todo.contains("P0.b.2.e")
+            && todo.contains("P0.b.2.f"),
+        "audit: P0.b.2 completion should continue to reference closed execution leaves"
+    );
+}
+
+#[test]
 fn p0b_2b0_task_decomposed_in_todo() {
     let todo = read_project_file("TODO.md");
     assert!(
