@@ -718,6 +718,31 @@ fn p0b_2_task_marked_done_in_todo() {
 }
 
 #[test]
+fn p0b_task_marked_done_in_todo() {
+    let todo = read_project_file("TODO.md");
+    assert!(
+        todo.contains("- [x] P0.b Execute hard removal cutover immediately"),
+        "audit: TODO should mark P0.b as completed"
+    );
+    assert!(
+        !todo.contains("- [ ] P0.b Execute hard removal cutover immediately"),
+        "audit: TODO should not keep a stale unchecked P0.b entry"
+    );
+    assert!(
+        todo.contains("P0.b.1")
+            && todo.contains("P0.b.2")
+            && todo.contains("P0.b.3")
+            && todo.contains("P0.b.4")
+            && todo.contains("P0.b.5")
+            && todo.contains("P0.b.6")
+            && todo.contains("P0.b.7")
+            && todo.contains("P0.b.8")
+            && todo.contains("P0.b.9"),
+        "audit: P0.b completion should continue to reference closed execution slices"
+    );
+}
+
+#[test]
 fn p0b_2b0_task_decomposed_in_todo() {
     let todo = read_project_file("TODO.md");
     assert!(

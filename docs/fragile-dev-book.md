@@ -21749,3 +21749,19 @@ Plan before execution:
 Wrong-approach check:
 - Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
 - No target-specific hacks, force-native bypasses, semantic stubs, or rollback-pattern additions were introduced.
+
+## 2026-03-23: P0.b closure state correction
+
+Task sizing analysis:
+- Scope is checklist-state correction + audit coverage only (<200 LOC).
+- Well below the <1000 LOC threshold; no decomposition was needed.
+
+Plan before execution:
+- confirm `P0.b.1` through `P0.b.9` are already closed with evidence;
+- correct stale unchecked `P0.b` parent entry in `TODO.md`;
+- add anti-regression coverage to fail on stale unchecked reintroduction;
+- run full regression gates before commit.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific hacks, force-native bypasses, semantic stubs, or rollback-pattern additions were introduced.
