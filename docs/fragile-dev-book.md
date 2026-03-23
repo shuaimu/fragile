@@ -21765,3 +21765,20 @@ Plan before execution:
 Wrong-approach check:
 - Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
 - No target-specific hacks, force-native bypasses, semantic stubs, or rollback-pattern additions were introduced.
+
+## 2026-03-23: M9.2.c.iv.e.15 decomposition and first leaf execution
+
+Task sizing analysis:
+- `M9.2.c.iv.e.15` is broad and cannot be completed in one bounded implementation leaf.
+- Decomposed into `e.15.a`..`e.15.d` so each leaf remains <1000 LOC.
+- Executed `e.15.a` in this cycle (plan/inventory publication + regression guards).
+
+Plan before execution:
+- update `TODO.md` with bounded `e.15` leaves;
+- publish decomposition/inventory anchor doc in `docs/dev`;
+- add regression tests for TODO/doc contract;
+- run full Rust + Python suites before commit.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific conditions, semantic stubs, rollback-pattern additions, or force-native bypasses were introduced.

@@ -5098,3 +5098,72 @@ fn m9_2c_iv_e13_auto_type_inference() {
         output
     );
 }
+
+// =============================================================================
+// M9.2.c.iv.e.15 — post-e.14 dominant-class decomposition
+// =============================================================================
+
+#[test]
+fn m9_2c_iv_e15_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("M9.2.c.iv.e.15"),
+        "M9.2.c.iv.e.15 should be documented in TODO.md"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e15a_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.15.a (pre-cutover) Publish post-e.14 dominant-error decomposition"),
+        "M9.2.c.iv.e.15.a should be marked done in TODO.md"
+    );
+    assert!(
+        todo.contains("M9.2.c.iv.e.15.b")
+            && todo.contains("M9.2.c.iv.e.15.c")
+            && todo.contains("M9.2.c.iv.e.15.d"),
+        "M9.2.c.iv.e.15 decomposition should enumerate follow-on bounded leaves"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e15a_decomposition_document_exists() {
+    let doc_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/dev/m9_2c_iv_e15_post_e14_decomposition.md");
+    assert!(
+        doc_path.exists(),
+        "expected e.15 decomposition document to exist at {}",
+        doc_path.display()
+    );
+}
+
+#[test]
+fn m9_2c_iv_e15a_decomposition_document_contains_bounded_leaf_contract() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e15_post_e14_decomposition.md"),
+    )
+    .expect("e.15 decomposition document should be readable");
+    for required in [
+        "M9.2.c.iv.e.15 Post-e.14 Decomposition Plan",
+        "M9.2.c.iv.e.15.a",
+        "M9.2.c.iv.e.15.b",
+        "M9.2.c.iv.e.15.c",
+        "M9.2.c.iv.e.15.d",
+        "<1000 LOC",
+        "cargo test -p fragile-clang --tests",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.15 decomposition document should contain `{}`",
+            required
+        );
+    }
+}
