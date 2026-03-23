@@ -30011,6 +30011,10 @@ impl AstCodeGen {
         // where field is a pointer/float/struct type, and enum-to-integer
         // assignments in constructor bodies.
         output = Self::normalize_ctor_zero_init_type_mismatches(&output);
+        // Fix E0609/E0560: ordering struct field name inconsistency.
+        // libc++ uses __value_, but comparison operator stubs and struct literals
+        // all reference _M_value (libstdc++ convention used in preamble).
+        output = Self::normalize_ordering_field_name_consistency(&output);
         // Fix E0308 ordering type conversion mismatches: strong_ordering →
         // partial_ordering, weak_ordering → partial_ordering, etc.
         output = Self::normalize_ordering_type_conversions(&output);
@@ -30036,6 +30040,10 @@ impl AstCodeGen {
         output = Self::normalize_chrono_as_primitive_cast(&output);
         // Fix E0308: `return unsafe { __gv_max };` in chrono-returning function.
         output = Self::normalize_chrono_global_return_mismatch(&output);
+        // Fix E0308: `return transmute::<_, i64>(expr)` in chrono-returning function.
+        output = Self::normalize_chrono_transmute_return_type(&output);
+        // Fix E0308: `let mut __X: chrono_* = 0;` zero-init of chrono wrapper types.
+        output = Self::normalize_chrono_local_zero_init(&output);
         // Fix E0308: `(bool_fn()) == 0` should be `!(bool_fn())` in Rust.
         output = Self::normalize_bool_equality_with_integer(&output);
         // Fix E0308: `__vtable = &VTABLE_NAME` where __vtable is a raw pointer.
@@ -35272,6 +35280,176 @@ impl FragileAtomicBoolCompat for atomic_bool {
                 out.push_str(line);
                 out.push('\n');
             }
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix E0609/E0560: ordering struct field name inconsistency.
+    ///
+    /// libc++ `weak_ordering` and `strong_ordering` use `__value_` as their
+    /// field name, but the transpiler's comparison operator stubs, struct
+    /// literals in ordering type conversions, and the `partial_ordering`
+    /// preamble type all use `_M_value`.  This pass renames `__value_` to
+    /// `_M_value` inside `weak_ordering` and `strong_ordering` struct
+    /// definitions and their impl blocks so every reference is consistent.
+    pub fn normalize_ordering_field_name_consistency(code: &str) -> String {
+        if !code.contains("weak_ordering") && !code.contains("strong_ordering") {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        let mut in_ordering_struct = false;
+        let mut in_ordering_impl = false;
+        let mut brace_depth: i32 = 0;
+
+        for line in code.lines() {
+            let trimmed = line.trim();
+
+            // Detect ordering struct definitions
+            if trimmed.starts_with("pub struct weak_ordering")
+                || trimmed.starts_with("pub struct strong_ordering")
+            {
+                in_ordering_struct = true;
+                brace_depth = 0;
+            }
+
+            // Detect ordering impl blocks
+            if (trimmed.starts_with("impl weak_ordering")
+                || trimmed.starts_with("impl strong_ordering"))
+                && !in_ordering_impl
+            {
+                in_ordering_impl = true;
+                brace_depth = 0;
+            }
+
+            // Track brace depth for struct/impl blocks
+            if in_ordering_struct || in_ordering_impl {
+                for ch in trimmed.bytes() {
+                    if ch == b'{' {
+                        brace_depth += 1;
+                    } else if ch == b'}' {
+                        brace_depth -= 1;
+                    }
+                }
+
+                // Replace __value_ with _M_value in struct fields and method bodies
+                let fixed = line.replace("__value_", "_M_value");
+                out.push_str(&fixed);
+
+                if brace_depth <= 0 {
+                    in_ordering_struct = false;
+                    in_ordering_impl = false;
+                }
+            } else {
+                out.push_str(line);
+            }
+            out.push('\n');
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix E0308: `return unsafe { transmute::<_, i64>(expr) };` in a function
+    /// that returns a `chrono_*` wrapper type.  The transmute produces `i64`
+    /// but the function expects a chrono wrapper (which wraps i64 in `_M_r`).
+    /// Rewrite: wrap the transmute result in the chrono constructor.
+    pub fn normalize_chrono_transmute_return_type(code: &str) -> String {
+        if !code.contains("chrono_") || !code.contains("transmute") {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len() + 256);
+        let mut current_fn_return_type: Option<String> = None;
+
+        for line in code.lines() {
+            let trimmed = line.trim();
+
+            // Track function return types
+            if (trimmed.starts_with("pub fn ")
+                || trimmed.starts_with("pub unsafe fn ")
+                || trimmed.starts_with("pub extern \"C\" fn ")
+                || trimmed.starts_with("fn "))
+                && trimmed.contains("-> ")
+            {
+                if let Some(arrow_pos) = trimmed.rfind("-> ") {
+                    let ret_part = &trimmed[arrow_pos + 3..];
+                    let ret_type = ret_part
+                        .split(|c: char| c == '{' || c == ' ')
+                        .next()
+                        .unwrap_or("")
+                        .trim();
+                    if ret_type.starts_with("chrono_") {
+                        current_fn_return_type = Some(ret_type.to_string());
+                    } else {
+                        current_fn_return_type = None;
+                    }
+                }
+            }
+
+            // Pattern: `return unsafe { std::mem::transmute::<_, i64>(EXPR) };`
+            // in a chrono-returning function
+            if let Some(ref ret_type) = current_fn_return_type {
+                if trimmed.contains("return")
+                    && trimmed.contains("transmute::<_, i64>(")
+                    && trimmed.ends_with("};")
+                {
+                    // Extract the transmute expression and wrap it
+                    let fixed = line.replace(
+                        "transmute::<_, i64>(",
+                        &format!("transmute::<_, {}>(", ret_type),
+                    );
+                    out.push_str(&fixed);
+                    out.push('\n');
+                    continue;
+                }
+            }
+
+            out.push_str(line);
+            out.push('\n');
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix E0308: `let mut __X: chrono_TYPE = 0;` where chrono_TYPE is a
+    /// wrapper struct containing an integer field.  Zero-initializing with
+    /// a bare `0` literal fails because Rust expects the struct type.
+    /// Rewrite: replace `= 0;` with `= unsafe { std::mem::zeroed() };`.
+    pub fn normalize_chrono_local_zero_init(code: &str) -> String {
+        if !code.contains("chrono_") {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+
+        for line in code.lines() {
+            let trimmed = line.trim();
+
+            // Pattern: `let mut __X: chrono_TYPE = 0;`
+            if trimmed.starts_with("let mut ")
+                && trimmed.contains(": chrono_")
+                && trimmed.ends_with("= 0;")
+            {
+                let indent = &line[..line.len() - trimmed.len()];
+                let eq_pos = trimmed.rfind("= 0;").unwrap();
+                let prefix = &trimmed[..eq_pos];
+                out.push_str(indent);
+                out.push_str(prefix);
+                out.push_str("= unsafe { std::mem::zeroed() };");
+            } else {
+                out.push_str(line);
+            }
+            out.push('\n');
         }
 
         if !code.ends_with('\n') && out.ends_with('\n') {
@@ -132021,6 +132199,175 @@ pub fn op_weak_ordering(&self, ) -> weak_ordering {
             "STRONG_ORDERING_EQUAL should become weak_ordering {{ __value_: 0 }}, got: {}",
             output
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // normalize_ordering_field_name_consistency tests (e.16)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_normalize_ordering_field_weak_ordering_struct() {
+        let input = "\
+pub struct weak_ordering {
+    __value_: i8,
+}
+";
+        let output = AstCodeGen::normalize_ordering_field_name_consistency(input);
+        assert!(
+            output.contains("_M_value: i8"),
+            "weak_ordering __value_ should be renamed to _M_value, got: {}",
+            output
+        );
+        assert!(
+            !output.contains("__value_"),
+            "No __value_ should remain, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_ordering_field_strong_ordering_struct() {
+        let input = "\
+pub struct strong_ordering {
+    __value_: i8,
+}
+";
+        let output = AstCodeGen::normalize_ordering_field_name_consistency(input);
+        assert!(
+            output.contains("_M_value: i8"),
+            "strong_ordering __value_ should be renamed to _M_value, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_ordering_field_impl_block() {
+        let input = "\
+impl weak_ordering {
+    pub fn op_eq(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ == 0 }
+    pub fn op_lt(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ < 0 }
+}
+";
+        let output = AstCodeGen::normalize_ordering_field_name_consistency(input);
+        assert!(
+            output.contains("self._M_value == 0"),
+            "self.__value_ should be renamed to self._M_value, got: {}",
+            output
+        );
+        assert!(
+            output.contains("self._M_value < 0"),
+            "all self.__value_ references should be renamed, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_ordering_field_preserves_other_structs() {
+        let input = "\
+pub struct some_other_type {
+    __value_: i32,
+}
+pub struct weak_ordering {
+    __value_: i8,
+}
+";
+        let output = AstCodeGen::normalize_ordering_field_name_consistency(input);
+        // weak_ordering should be renamed
+        assert!(
+            output.contains("pub struct weak_ordering {\n    _M_value: i8,"),
+            "weak_ordering __value_ should be _M_value, got: {}",
+            output
+        );
+        // some_other_type should NOT be renamed
+        assert!(
+            output.contains("pub struct some_other_type {\n    __value_: i32,"),
+            "other types should keep __value_, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_ordering_field_no_change_without_ordering() {
+        let input = "pub fn foo() -> i32 { self.__value_ }\n";
+        let output = AstCodeGen::normalize_ordering_field_name_consistency(input);
+        assert_eq!(output, input, "should not change code without ordering types");
+    }
+
+    // -----------------------------------------------------------------------
+    // normalize_chrono_transmute_return_type tests (e.16)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_normalize_chrono_transmute_return_wraps_type() {
+        let input = "\
+pub fn __safe_nanosecond_cast(__d: chrono_duration) -> chrono_nanoseconds {
+    return unsafe { std::mem::transmute::<_, i64>(__result_float) };
+}
+";
+        let output = AstCodeGen::normalize_chrono_transmute_return_type(input);
+        assert!(
+            output.contains("transmute::<_, chrono_nanoseconds>(__result_float)"),
+            "transmute target should be chrono_nanoseconds, got: {}",
+            output
+        );
+        assert!(
+            !output.contains("transmute::<_, i64>"),
+            "should not contain transmute to i64, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_chrono_transmute_return_no_change_non_chrono() {
+        let input = "\
+pub fn foo() -> i64 {
+    return unsafe { std::mem::transmute::<_, i64>(__result_float) };
+}
+";
+        let output = AstCodeGen::normalize_chrono_transmute_return_type(input);
+        assert!(
+            output.contains("transmute::<_, i64>"),
+            "non-chrono function should keep i64 transmute, got: {}",
+            output
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // normalize_chrono_local_zero_init tests (e.16)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_normalize_chrono_local_zero_init() {
+        let input = "            let mut __max: chrono_duration_long_double = 0;\n";
+        let output = AstCodeGen::normalize_chrono_local_zero_init(input);
+        assert!(
+            output.contains("= unsafe { std::mem::zeroed() };"),
+            "chrono zero init should use zeroed(), got: {}",
+            output
+        );
+        assert!(
+            !output.contains("= 0;"),
+            "should not contain = 0, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_chrono_local_zero_init_nanoseconds() {
+        let input = "            let mut __ns: chrono_nanoseconds = 0;\n";
+        let output = AstCodeGen::normalize_chrono_local_zero_init(input);
+        assert!(
+            output.contains("= unsafe { std::mem::zeroed() };"),
+            "chrono_nanoseconds zero init should use zeroed(), got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_chrono_local_zero_init_preserves_non_chrono() {
+        let input = "            let mut __x: i32 = 0;\n";
+        let output = AstCodeGen::normalize_chrono_local_zero_init(input);
+        assert_eq!(output, input, "non-chrono zero init should be unchanged");
     }
 
     // -----------------------------------------------------------------------
