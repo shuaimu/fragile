@@ -4751,7 +4751,7 @@ fn m9_2c_iv_e9_ordering_type_conversions_strong_to_weak() {
     use fragile_clang::AstCodeGen;
     let input = "\
 pub fn op_weak_ordering(&self, ) -> weak_ordering {
-    return (if (self.__value_ as i32) == 0 { unsafe { STRONG_ORDERING_EQUIVALENT } } else { (if (self.__value_ as i32) < 0 { unsafe { STRONG_ORDERING_LESS } } else { unsafe { STRONG_ORDERING_GREATER } }) }).clone();
+    return (if (self._M_value as i32) == 0 { unsafe { STRONG_ORDERING_EQUIVALENT } } else { (if (self._M_value as i32) < 0 { unsafe { STRONG_ORDERING_LESS } } else { unsafe { STRONG_ORDERING_GREATER } }) }).clone();
 }
 ";
     let output = AstCodeGen::normalize_ordering_type_conversions(input);
@@ -4760,7 +4760,7 @@ pub fn op_weak_ordering(&self, ) -> weak_ordering {
         "M9.2.c.iv.e.9: No STRONG_ORDERING_ constants should remain in weak_ordering body"
     );
     assert!(
-        output.contains("weak_ordering { __value_: 0 }"),
+        output.contains("weak_ordering { _M_value: 0 }"),
         "M9.2.c.iv.e.9: Should construct weak_ordering directly"
     );
 }
