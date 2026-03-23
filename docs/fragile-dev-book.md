@@ -21683,3 +21683,37 @@ Wrong-approach review:
 
 - Reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before implementation.
 - Applied generic cleanup and anti-regression tests only; no target-specific hacks, no fallback bypasses, no fake semantic stubs.
+
+## 2026-03-23: P0.b.8 full regression gate artifact finalization
+
+Task sizing analysis:
+- Scope remained documentation + validation only (<1000 LOC).
+- No further TODO decomposition was required.
+
+Plan before execution:
+- complete full regression gates for post-P0.b cutover;
+- persist exact command/result artifacts for reproducibility;
+- enforce artifact completeness via P0 audit tests.
+
+Wrong-approach check:
+- Re-reviewed Section 1.3 and `docs/dev/wrong.md`.
+- No target-specific hacks, no force-native bypass, no semantic stubs, and no rollback-scope expansion were introduced.
+
+Execution notes:
+- Python suite completed:
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+  - Result: `Ran 84 tests ... OK (skipped=1)`.
+- Rust regression completed via deterministic split due known long libc++ integration tests:
+  - Workspace (non-`fragile-clang`): `cargo test --workspace --all-targets --exclude fragile-clang` (pass).
+  - `fragile-clang` integration bulk: `cargo test -p fragile-clang --test integration_test -- --skip test_libcxx_iostream_transpilation --skip test_libcxx_thread_transpilation --skip test_libcxx_vector_transpilation --skip test_operator_new_delete_mapping --skip test_runtime_function_name_mapping` (pass).
+  - Isolated long tests (all pass):
+    - `test_libcxx_iostream_transpilation` (1625.10s)
+    - `test_libcxx_thread_transpilation` (1531.37s)
+    - `test_libcxx_vector_transpilation` (1323.90s)
+    - `test_runtime_function_name_mapping` (89.13s)
+    - `test_operator_new_delete_mapping` (53.75s)
+  - Remaining `fragile-clang` test binaries (`grammar`, `m7`, `m8`, `m9`, `p0*`, parity, real-world suites, runtime correctness, zlib repro) completed with zero failures after updating the P0.b.8 artifact doc.
+
+Closure:
+- Updated `docs/dev/p0b8_full_regression_gate_artifacts.md` with concrete command/result records.
+- Cleared `p0b8_regression_artifact_doc_exists_and_contains_required_gates` by removing pending placeholders and recording final evidence.

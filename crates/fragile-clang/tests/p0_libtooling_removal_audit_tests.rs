@@ -585,6 +585,47 @@ fn p0b_1_playbook_mentions_gate_and_slice_bounds() {
 }
 
 #[test]
+fn p0b8_task_marked_done_in_todo() {
+    let todo = read_project_file("TODO.md");
+    assert!(
+        todo.contains("- [x] P0.b.8 (immediate)"),
+        "audit: TODO should mark P0.b.8 as completed"
+    );
+    assert!(
+        todo.contains("docs/dev/p0b8_full_regression_gate_artifacts.md"),
+        "audit: P0.b.8 TODO entry should reference the recorded regression artifact document"
+    );
+}
+
+#[test]
+fn p0b8_regression_artifact_doc_exists_and_contains_required_gates() {
+    let doc_path = project_root().join("docs/dev/p0b8_full_regression_gate_artifacts.md");
+    assert!(
+        doc_path.exists(),
+        "audit: expected P0.b.8 artifact doc to exist at {}",
+        doc_path.display()
+    );
+
+    let doc = read_project_file("docs/dev/p0b8_full_regression_gate_artifacts.md");
+    for required in [
+        "P0.b.8 Full Regression Gate Artifacts",
+        "cargo test --workspace --all-targets",
+        "python3 -m unittest discover -s tests/python -p 'test_*.py'",
+        "Run Artifacts",
+    ] {
+        assert!(
+            doc.contains(required),
+            "audit: P0.b.8 artifact doc should contain `{}`",
+            required
+        );
+    }
+    assert!(
+        !doc.contains("_Pending final execution for this leaf update._"),
+        "audit: P0.b.8 artifact doc should record final command results, not pending placeholders"
+    );
+}
+
+#[test]
 fn p0b_2a_task_decomposed_in_todo() {
     let todo = read_project_file("TODO.md");
     assert!(
