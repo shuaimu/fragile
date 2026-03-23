@@ -7,7 +7,7 @@
 //! 1. Prove that stubs are not sufficient (tests fail)
 //! 2. Define the expected behavior for correct transpilation (tests pass when fixed)
 
-use fragile_clang::transpile_cpp_to_rust_with_libtooling;
+use fragile_clang::transpile_cpp_to_rust;
 use std::fs;
 use std::process::Command;
 use std::sync::OnceLock;
@@ -54,7 +54,7 @@ fn compile_and_run(cpp_code: &str, test_name: &str) -> Option<i32> {
     let cpp_path = temp_dir.join("test.cpp");
     fs::write(&cpp_path, cpp_code).expect("Failed to write C++ source");
 
-    let rust_code = match transpile_cpp_to_rust_with_libtooling(&cpp_path) {
+    let rust_code = match transpile_cpp_to_rust(&cpp_path) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("Transpilation failed for {}: {}", test_name, e);
@@ -266,7 +266,7 @@ int main() {
     fs::write(&cpp_path, cpp_code).expect("Failed to write C++ source");
 
     let rust_code =
-        transpile_cpp_to_rust_with_libtooling(&cpp_path).expect("Transpilation should succeed");
+        transpile_cpp_to_rust(&cpp_path).expect("Transpilation should succeed");
 
     let rs_path = temp_dir.join("test.rs");
     fs::write(&rs_path, &rust_code).expect("Failed to write Rust source");
@@ -382,7 +382,7 @@ int main() {
     fs::write(&cpp_path, cpp_code).expect("Failed to write C++ source");
 
     let rust_code =
-        transpile_cpp_to_rust_with_libtooling(&cpp_path).expect("Transpilation should succeed");
+        transpile_cpp_to_rust(&cpp_path).expect("Transpilation should succeed");
 
     // The std_map struct should reference a __tree type with template args
     // (not just bare "__tree") in its field type
@@ -550,7 +550,7 @@ int main() {
     fs::write(&cpp_path, cpp_code).expect("Failed to write C++ source");
 
     let rust_code =
-        transpile_cpp_to_rust_with_libtooling(&cpp_path).expect("Transpilation should succeed");
+        transpile_cpp_to_rust(&cpp_path).expect("Transpilation should succeed");
 
     // The __tree struct should NOT be opaque
     // Find the __tree struct that has __value_type in its name (the actual tree instantiation)

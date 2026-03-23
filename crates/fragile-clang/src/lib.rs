@@ -47,17 +47,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// Parser backend selection for transpilation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ParserBackend {
-    /// Legacy alias retained for compatibility; transpilation uses LibTooling.
-    Libclang,
-    /// Parse translation unit with LibTooling conversion only.
-    Libtooling,
-    /// Legacy alias retained for compatibility; transpilation uses LibTooling.
-    Hybrid,
-}
-
 /// Header search directive kinds supported by transpile options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IncludeDirectiveKind {
@@ -66,9 +55,10 @@ pub enum IncludeDirectiveKind {
     Quote,
 }
 
-/// Template parsing strategy used for LibTooling export.
+/// Template parsing strategy used internally for LibTooling export.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TemplateParsingMode {
+#[allow(dead_code)]
+enum TemplateParsingMode {
     /// Try standard parsing first, then retry with delayed template parsing.
     Auto,
     /// Use standard template parsing only.
@@ -99,9 +89,6 @@ pub struct TranspileOptions {
     pub language: ParserLanguage,
     pub language_standard: Option<String>,
     pub ignored_error_patterns: Vec<String>,
-    pub backend: ParserBackend,
-    pub template_parsing_mode: TemplateParsingMode,
-    pub libtooling_skip_system_headers: bool,
     pub stage_timing_trace_path: Option<PathBuf>,
 }
 
@@ -115,9 +102,6 @@ impl Default for TranspileOptions {
             language: ParserLanguage::Cpp,
             language_standard: None,
             ignored_error_patterns: Vec::new(),
-            backend: ParserBackend::Libtooling,
-            template_parsing_mode: TemplateParsingMode::Auto,
-            libtooling_skip_system_headers: false,
             stage_timing_trace_path: None,
         }
     }
@@ -224,14 +208,6 @@ const PARSER_OUTPUT_MAPPED_FAMILY_ALIAS_PREFIX_SPECS: &[(&str, &str, &[&str])] =
     ),
 ];
 
-fn parser_backend_label(backend: ParserBackend) -> &'static str {
-    match backend {
-        ParserBackend::Libclang => "libclang",
-        ParserBackend::Libtooling => "libtooling",
-        ParserBackend::Hybrid => "hybrid",
-    }
-}
-
 fn append_stage_trace_line(trace_path: Option<&Path>, line: &str) {
     let Some(path) = trace_path else {
         return;
@@ -264,10 +240,6 @@ fn initialize_stage_trace_with_backend_label(
     initial.push_str(&format!("backend={backend_label}\n"));
     initial.push_str("status=started\n");
     let _ = fs::write(path, initial);
-}
-
-fn initialize_stage_trace(trace_path: Option<&Path>, source: &Path, backend: ParserBackend) {
-    initialize_stage_trace_with_backend_label(trace_path, source, parser_backend_label(backend));
 }
 
 fn stage_start(trace_path: Option<&Path>, stage: &str) {
@@ -481,9 +453,6 @@ fn libtooling_parser_for_path(
         parser = parser.with_compile_commands_dir(&cwd.to_string_lossy());
     } else if let Some(parent) = path.parent() {
         parser = parser.with_compile_commands_dir(&parent.to_string_lossy());
-    }
-    if options.libtooling_skip_system_headers {
-        parser = parser.with_skip_system_headers(true);
     }
     parser
 }
@@ -1137,7 +1106,7 @@ fn add_missing_header_stub_search_path(
 fn parse_libtooling_context(path: &Path, options: &TranspileOptions) -> Result<AstContext> {
     let mut errors: Vec<String> = Vec::new();
     for &delayed_template_parsing in
-        template_parsing_attempts(options.language, options.template_parsing_mode)
+        template_parsing_attempts(options.language, TemplateParsingMode::Auto)
     {
         let parser = libtooling_parser_for_path(path, options, delayed_template_parsing);
         match parser.parse_file(path) {
@@ -1159,7 +1128,7 @@ fn parse_libtooling_context(path: &Path, options: &TranspileOptions) -> Result<A
             Ok(stub_dir) => {
                 let stubbed_options = add_missing_header_stub_search_path(options, &stub_dir);
                 for &delayed_template_parsing in
-                    template_parsing_attempts(options.language, options.template_parsing_mode)
+                    template_parsing_attempts(options.language, TemplateParsingMode::Auto)
                 {
                     let parser = libtooling_parser_for_path(
                         path,
@@ -1535,16 +1504,7 @@ fn apply_libtooling_enrichment(codegen: &mut AstCodeGen, ctx: &AstContext) {
 /// println!("{}", rust_code);
 /// ```
 pub fn transpile_cpp_to_rust(path: &Path) -> Result<String> {
-    transpile_cpp_to_rust_with_backend(path, ParserBackend::Libtooling)
-}
-
-/// Parse a C++ source file and transpile to Rust source code with the selected parser backend.
-pub fn transpile_cpp_to_rust_with_backend(path: &Path, backend: ParserBackend) -> Result<String> {
-    let options = TranspileOptions {
-        backend,
-        ..TranspileOptions::default()
-    };
-    transpile_cpp_to_rust_with_options(path, &options)
+    transpile_cpp_to_rust_with_options(path, &TranspileOptions::default())
 }
 
 /// Parse a source file and transpile with explicit parser + codegen options.
@@ -1553,7 +1513,7 @@ pub fn transpile_cpp_to_rust_with_options(
     options: &TranspileOptions,
 ) -> Result<String> {
     let trace_path = options.stage_timing_trace_path.as_deref();
-    initialize_stage_trace(trace_path, path, options.backend);
+    initialize_stage_trace_with_backend_label(trace_path, path, "libtooling");
     let mut timings = TranspileStageTimings::default();
     let mut codegen = AstCodeGen::new();
     let transpile_result: Result<String> = (|| {
@@ -1686,11 +1646,6 @@ pub fn generate_stubs(path: &Path) -> Result<String> {
     let ctx = parse_libtooling_context(path, &options)?;
     let translation_unit = translation_unit_from_libtooling_context(&ctx);
     Ok(AstCodeGen::new().generate_stubs(&translation_unit))
-}
-
-/// Parse a C++ source file and transpile to Rust source code with LibTooling.
-pub fn transpile_cpp_to_rust_with_libtooling(path: &Path) -> Result<String> {
-    transpile_cpp_to_rust_with_backend(path, ParserBackend::Libtooling)
 }
 
 #[cfg(test)]

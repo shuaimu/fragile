@@ -8,7 +8,7 @@
 /// infrastructure hard-removed 2026-03-22).
 
 use fragile_clang::{
-    transpile_parser_output_to_rust, ParserBackend, ParserLanguage, TemplateParsingMode,
+    transpile_parser_output_to_rust, ParserLanguage,
     TranspileOptions, transpile_cpp_to_rust_with_options,
 };
 use fragile_parser_clang::{FragileParserClangBackend, FRAGILE_PARSER_CLANG_BACKEND_ID};
@@ -181,9 +181,6 @@ fn m8_1_libtooling_backend_still_available_via_explicit_request() {
         language: ParserLanguage::C,
         language_standard: None,
         ignored_error_patterns: Vec::new(),
-        backend: ParserBackend::Libtooling,
-        template_parsing_mode: TemplateParsingMode::Standard,
-        libtooling_skip_system_headers: false,
         stage_timing_trace_path: None,
     };
 
@@ -255,9 +252,6 @@ fn m8_1_parity_both_backends_transpile_arithmetic_fixture() {
         language: ParserLanguage::C,
         language_standard: None,
         ignored_error_patterns: Vec::new(),
-        backend: ParserBackend::Libtooling,
-        template_parsing_mode: TemplateParsingMode::Standard,
-        libtooling_skip_system_headers: false,
         stage_timing_trace_path: None,
     };
     let legacy_transpiled = transpile_cpp_to_rust_with_options(&source, &legacy_opts)
@@ -305,9 +299,6 @@ extern "C" int sum_point(Point p) { return p.x + p.y; }
         language: ParserLanguage::Cpp,
         language_standard: None,
         ignored_error_patterns: Vec::new(),
-        backend: ParserBackend::Libtooling,
-        template_parsing_mode: TemplateParsingMode::Standard,
-        libtooling_skip_system_headers: false,
         stage_timing_trace_path: None,
     };
     let legacy_transpiled = transpile_cpp_to_rust_with_options(&source, &legacy_opts)

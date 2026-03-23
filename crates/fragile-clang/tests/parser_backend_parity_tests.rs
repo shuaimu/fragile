@@ -1,6 +1,6 @@
 use fragile_clang::{
     convert_to_clang_node, transpile_cpp_to_rust_with_options, ClangNode, ClangNodeKind,
-    ClangParser, CppType, LibToolingParser, ParserBackend, ParserLanguage, TemplateParsingMode,
+    CppType, LibToolingParser, ParserLanguage,
     TranspileOptions,
 };
 use std::fs;
@@ -227,14 +227,10 @@ int mul(int x, int y) {
         )
     })?;
 
-    let backends: [(&str, ParserBackend); 3] = [
-        ("libclang", ParserBackend::Libclang),
-        ("hybrid", ParserBackend::Hybrid),
-        ("libtooling", ParserBackend::Libtooling),
-    ];
+    let backends: [&str; 1] = ["libtooling"];
     let mut results = Vec::new();
 
-    for (backend_name, backend) in backends {
+    for backend_name in backends {
         let options = TranspileOptions {
             include_paths: Vec::new(),
             include_directives: Vec::new(),
@@ -243,9 +239,6 @@ int mul(int x, int y) {
             language: ParserLanguage::Cpp,
             language_standard: None,
             ignored_error_patterns: Vec::new(),
-            backend,
-            template_parsing_mode: TemplateParsingMode::Auto,
-            libtooling_skip_system_headers: false,
             stage_timing_trace_path: None,
         };
 
@@ -385,172 +378,44 @@ fn test_parser_backend_parity_local_fixture_replay() {
 
     assert_eq!(
         results.len(),
-        3,
-        "expected parity replay results for libclang/hybrid/libtooling"
+        1,
+        "expected single backend replay result (libtooling)"
     );
 
-    let reference = results
-        .iter()
-        .find(|entry| entry.backend_name == "libclang")
-        .expect("missing libclang reference result");
-    for result in &results {
-        assert_eq!(
-            result.rustc_status,
-            0,
-            "expected backend {} generated Rust to compile; logs: {}",
-            result.backend_name,
-            log_dir.display()
-        );
-    }
+    let result = &results[0];
+    assert_eq!(
+        result.rustc_status,
+        0,
+        "expected generated Rust to compile; logs: {}",
+        log_dir.display()
+    );
 
     assert!(
-        reference.has_fn_add
-            && reference.has_fn_mul
-            && reference.has_return_add
-            && reference.has_return_mul
-            && reference.has_typedef_count
-            && reference.has_alias_distance
-            && reference.has_enum_mode
-            && reference.has_enum_mode_a
-            && reference.has_enum_mode_b
-            && reference.has_struct_point
-            && reference.has_struct_point_x
-            && reference.has_struct_point_y
-            && reference.has_namespace_math
-            && reference.has_namespace_ns_add
-            && reference.has_template_fn_identity_i32
-            && reference.has_template_struct_box_int
-            && reference.has_typedef_intarray4
-            && reference.has_decltype_scalar_fn_sig
-            && reference.has_const_ptr_fn_sig
-            && reference.has_mut_ref_fn_sig
-            && reference.has_array_decay_fn_sig
-            && reference.has_typedef_fragile_file_alias
-            && reference.has_template_placeholder_value_type_alias
-            && reference.has_dependent_type_placeholder_struct,
-        "reference backend marker-set should contain expected function/return markers; logs: {}",
-        log_dir.display()
-    );
-
-    let hybrid = results
-        .iter()
-        .find(|entry| entry.backend_name == "hybrid")
-        .expect("missing hybrid parity result");
-    assert_eq!(
-        [
-            hybrid.has_fn_add,
-            hybrid.has_fn_mul,
-            hybrid.has_return_add,
-            hybrid.has_return_mul,
-            hybrid.has_typedef_count,
-            hybrid.has_alias_distance,
-            hybrid.has_enum_mode,
-            hybrid.has_enum_mode_a,
-            hybrid.has_enum_mode_b,
-            hybrid.has_struct_point,
-            hybrid.has_struct_point_x,
-            hybrid.has_struct_point_y,
-            hybrid.has_namespace_math,
-            hybrid.has_namespace_ns_add,
-            hybrid.has_template_fn_identity_i32,
-            hybrid.has_template_struct_box_int,
-            hybrid.has_typedef_intarray4,
-            hybrid.has_decltype_scalar_fn_sig,
-            hybrid.has_const_ptr_fn_sig,
-            hybrid.has_mut_ref_fn_sig,
-            hybrid.has_array_decay_fn_sig,
-            hybrid.has_typedef_fragile_file_alias,
-            hybrid.has_template_placeholder_value_type_alias,
-            hybrid.has_dependent_type_placeholder_struct
-        ],
-        [
-            reference.has_fn_add,
-            reference.has_fn_mul,
-            reference.has_return_add,
-            reference.has_return_mul,
-            reference.has_typedef_count,
-            reference.has_alias_distance,
-            reference.has_enum_mode,
-            reference.has_enum_mode_a,
-            reference.has_enum_mode_b,
-            reference.has_struct_point,
-            reference.has_struct_point_x,
-            reference.has_struct_point_y,
-            reference.has_namespace_math,
-            reference.has_namespace_ns_add,
-            reference.has_template_fn_identity_i32,
-            reference.has_template_struct_box_int,
-            reference.has_typedef_intarray4,
-            reference.has_decltype_scalar_fn_sig,
-            reference.has_const_ptr_fn_sig,
-            reference.has_mut_ref_fn_sig,
-            reference.has_array_decay_fn_sig,
-            reference.has_typedef_fragile_file_alias,
-            reference.has_template_placeholder_value_type_alias,
-            reference.has_dependent_type_placeholder_struct
-        ],
-        "hybrid backend should currently match libclang marker-set parity; logs: {}",
-        log_dir.display()
-    );
-
-    let libtooling = results
-        .iter()
-        .find(|entry| entry.backend_name == "libtooling")
-        .expect("missing libtooling parity result");
-    assert_eq!(
-        [
-            libtooling.has_fn_add,
-            libtooling.has_fn_mul,
-            libtooling.has_return_add,
-            libtooling.has_return_mul,
-            libtooling.has_typedef_count,
-            libtooling.has_alias_distance,
-            libtooling.has_enum_mode,
-            libtooling.has_enum_mode_a,
-            libtooling.has_enum_mode_b,
-            libtooling.has_struct_point,
-            libtooling.has_struct_point_x,
-            libtooling.has_struct_point_y,
-            libtooling.has_namespace_math,
-            libtooling.has_namespace_ns_add,
-            libtooling.has_template_fn_identity_i32,
-            libtooling.has_template_struct_box_int,
-            libtooling.has_typedef_intarray4,
-            libtooling.has_decltype_scalar_fn_sig,
-            libtooling.has_const_ptr_fn_sig,
-            libtooling.has_mut_ref_fn_sig,
-            libtooling.has_array_decay_fn_sig,
-            libtooling.has_typedef_fragile_file_alias,
-            libtooling.has_template_placeholder_value_type_alias,
-            libtooling.has_dependent_type_placeholder_struct
-        ],
-        [
-            reference.has_fn_add,
-            reference.has_fn_mul,
-            reference.has_return_add,
-            reference.has_return_mul,
-            reference.has_typedef_count,
-            reference.has_alias_distance,
-            reference.has_enum_mode,
-            reference.has_enum_mode_a,
-            reference.has_enum_mode_b,
-            reference.has_struct_point,
-            reference.has_struct_point_x,
-            reference.has_struct_point_y,
-            reference.has_namespace_math,
-            reference.has_namespace_ns_add,
-            reference.has_template_fn_identity_i32,
-            reference.has_template_struct_box_int,
-            reference.has_typedef_intarray4,
-            reference.has_decltype_scalar_fn_sig,
-            reference.has_const_ptr_fn_sig,
-            reference.has_mut_ref_fn_sig,
-            reference.has_array_decay_fn_sig,
-            reference.has_typedef_fragile_file_alias,
-            reference.has_template_placeholder_value_type_alias,
-            reference.has_dependent_type_placeholder_struct
-        ],
-        "libtooling backend should match libclang marker-set parity for this fixture; logs: {}",
+        result.has_fn_add
+            && result.has_fn_mul
+            && result.has_return_add
+            && result.has_return_mul
+            && result.has_typedef_count
+            && result.has_alias_distance
+            && result.has_enum_mode
+            && result.has_enum_mode_a
+            && result.has_enum_mode_b
+            && result.has_struct_point
+            && result.has_struct_point_x
+            && result.has_struct_point_y
+            && result.has_namespace_math
+            && result.has_namespace_ns_add
+            && result.has_template_fn_identity_i32
+            && result.has_template_struct_box_int
+            && result.has_typedef_intarray4
+            && result.has_decltype_scalar_fn_sig
+            && result.has_const_ptr_fn_sig
+            && result.has_mut_ref_fn_sig
+            && result.has_array_decay_fn_sig
+            && result.has_typedef_fragile_file_alias
+            && result.has_template_placeholder_value_type_alias
+            && result.has_dependent_type_placeholder_struct,
+        "libtooling backend marker-set should contain expected function/return markers; logs: {}",
         log_dir.display()
     );
 }
@@ -574,12 +439,8 @@ int add(int a, int b) {
     )
     .expect("failed to write transpile-stage timing fixture source");
 
-    let backends: [(&str, ParserBackend); 3] = [
-        ("libclang", ParserBackend::Libclang),
-        ("hybrid", ParserBackend::Hybrid),
-        ("libtooling", ParserBackend::Libtooling),
-    ];
-    for (backend_name, backend) in backends {
+    let backends: [&str; 1] = ["libtooling"];
+    for backend_name in backends {
         let stage_timing_trace_path =
             log_dir.join(format!("transpile_stage_timing_{backend_name}.log"));
         let options = TranspileOptions {
@@ -590,9 +451,6 @@ int add(int a, int b) {
             language: ParserLanguage::Cpp,
             language_standard: None,
             ignored_error_patterns: Vec::new(),
-            backend,
-            template_parsing_mode: TemplateParsingMode::Auto,
-            libtooling_skip_system_headers: false,
             stage_timing_trace_path: Some(stage_timing_trace_path.clone()),
         };
         let generated =
@@ -696,42 +554,24 @@ int add(int a, int b) {
 
 fn parse_translation_unit_for_backend(
     source_path: &Path,
-    backend: ParserBackend,
 ) -> Result<ClangNode, String> {
-    match backend {
-        ParserBackend::Libclang | ParserBackend::Hybrid => {
-            let parser = ClangParser::with_paths_defines_language_and_ignored_errors(
-                Vec::new(),
-                Vec::new(),
-                ParserLanguage::Cpp,
-                Vec::new(),
-            )
-            .map_err(|e| format!("failed to create libclang parser: {e}"))?;
-            let ast = parser
-                .parse_file(source_path)
-                .map_err(|e| format!("libclang parse failed for {}: {e}", source_path.display()))?;
-            Ok(ast.translation_unit)
-        }
-        ParserBackend::Libtooling => {
-            let compile_dir = source_path
-                .parent()
-                .ok_or_else(|| format!("missing parent directory for {}", source_path.display()))?;
-            let parser = LibToolingParser::new().with_compile_commands_dir(
-                compile_dir.to_str().ok_or_else(|| {
-                    format!("non UTF-8 compile dir path: {}", compile_dir.display())
-                })?,
-            );
-            let ctx = parser.parse_file(source_path).map_err(|e| {
-                format!("libtooling parse failed for {}: {e}", source_path.display())
-            })?;
-            let children = ctx
-                .top_nodes
-                .iter()
-                .filter_map(|id| convert_to_clang_node(&ctx, *id))
-                .collect();
-            Ok(ClangNode::new(ClangNodeKind::TranslationUnit).with_children(children))
-        }
-    }
+    let compile_dir = source_path
+        .parent()
+        .ok_or_else(|| format!("missing parent directory for {}", source_path.display()))?;
+    let parser = LibToolingParser::new().with_compile_commands_dir(
+        compile_dir.to_str().ok_or_else(|| {
+            format!("non UTF-8 compile dir path: {}", compile_dir.display())
+        })?,
+    );
+    let ctx = parser.parse_file(source_path).map_err(|e| {
+        format!("libtooling parse failed for {}: {e}", source_path.display())
+    })?;
+    let children = ctx
+        .top_nodes
+        .iter()
+        .filter_map(|id| convert_to_clang_node(&ctx, *id))
+        .collect();
+    Ok(ClangNode::new(ClangNodeKind::TranslationUnit).with_children(children))
 }
 
 fn collect_cpp_type_snapshot(node: &ClangNode, snapshot: &mut BackendCppTypeSnapshot) {
@@ -903,16 +743,12 @@ decltype(1 + 2) decltype_direct_identity(decltype(1 + 2) value) {
         )
     })?;
 
-    let backends: [(&str, ParserBackend); 3] = [
-        ("libclang", ParserBackend::Libclang),
-        ("hybrid", ParserBackend::Hybrid),
-        ("libtooling", ParserBackend::Libtooling),
-    ];
+    let backends: [&str; 1] = ["libtooling"];
 
     let mut snapshots = Vec::new();
-    for (backend_name, backend) in backends {
+    for backend_name in backends {
         let translation_unit =
-            parse_translation_unit_for_backend(&source_path, backend).map_err(|e| {
+            parse_translation_unit_for_backend(&source_path).map_err(|e| {
                 format!(
                     "backend {} failed to parse fixture {}: {}",
                     backend_name,
@@ -1014,137 +850,27 @@ fn test_parser_backend_cpp_type_snapshot_decltype_and_template_families() {
     );
     assert_eq!(
         snapshots.len(),
-        3,
-        "expected snapshot results for libclang/hybrid/libtooling"
+        1,
+        "expected single backend snapshot (libtooling)"
     );
 
-    let reference = snapshots
-        .iter()
-        .find(|entry| entry.backend_name == "libclang")
-        .expect("missing libclang snapshot");
-    let hybrid = snapshots
-        .iter()
-        .find(|entry| entry.backend_name == "hybrid")
-        .expect("missing hybrid snapshot");
-    let libtooling = snapshots
-        .iter()
-        .find(|entry| entry.backend_name == "libtooling")
-        .expect("missing libtooling snapshot");
+    let libtooling = &snapshots[0];
 
-    for snapshot in &snapshots {
-        assert!(
-            snapshot.decltype_alias_underlying.is_some()
-                && snapshot.decltype_alias_fn_return.is_some()
-                && snapshot.decltype_alias_fn_param0.is_some()
-                && snapshot.decltype_direct_fn_return.is_some()
-                && snapshot.decltype_direct_fn_param0.is_some()
-                && snapshot.dependent_identity_return.is_some()
-                && snapshot.dependent_identity_param0.is_some()
-                && snapshot.dependent_holder_identity_return.is_some()
-                && snapshot.dependent_holder_identity_param0.is_some(),
-            "backend {} should expose all target CppType snapshot entries; logs: {}",
-            snapshot.backend_name,
-            log_dir.display()
-        );
-    }
-
-    // Hybrid currently shares direct parser shape with libclang; keep this parity explicit.
-    assert_eq!(
-        [
-            &hybrid.decltype_alias_underlying,
-            &hybrid.decltype_alias_fn_return,
-            &hybrid.decltype_alias_fn_param0,
-            &hybrid.decltype_direct_fn_return,
-            &hybrid.decltype_direct_fn_param0,
-            &hybrid.dependent_identity_return,
-            &hybrid.dependent_identity_param0,
-            &hybrid.dependent_holder_identity_return,
-            &hybrid.dependent_holder_identity_param0,
-        ],
-        [
-            &reference.decltype_alias_underlying,
-            &reference.decltype_alias_fn_return,
-            &reference.decltype_alias_fn_param0,
-            &reference.decltype_direct_fn_return,
-            &reference.decltype_direct_fn_param0,
-            &reference.dependent_identity_return,
-            &reference.dependent_identity_param0,
-            &reference.dependent_holder_identity_return,
-            &reference.dependent_holder_identity_param0,
-        ],
-        "hybrid snapshot should match libclang direct-parser snapshot; logs: {}",
+    assert!(
+        libtooling.decltype_alias_underlying.is_some()
+            && libtooling.decltype_alias_fn_return.is_some()
+            && libtooling.decltype_alias_fn_param0.is_some()
+            && libtooling.decltype_direct_fn_return.is_some()
+            && libtooling.decltype_direct_fn_param0.is_some()
+            && libtooling.dependent_identity_return.is_some()
+            && libtooling.dependent_identity_param0.is_some()
+            && libtooling.dependent_holder_identity_return.is_some()
+            && libtooling.dependent_holder_identity_param0.is_some(),
+        "libtooling backend should expose all target CppType snapshot entries; logs: {}",
         log_dir.display()
     );
 
-    // Lock current libclang/hybrid parse-roundtrip snapshot for decltype + dependent families.
-    assert_eq!(
-        reference.decltype_alias_underlying,
-        Some(CppType::Named("decltype(1 + 2)".to_string())),
-        "libclang decltype alias underlying snapshot changed; logs: {}",
-        log_dir.display()
-    );
-    assert_eq!(
-        reference.decltype_alias_fn_return,
-        Some(CppType::Int { signed: true }),
-        "libclang decltype alias return snapshot changed; logs: {}",
-        log_dir.display()
-    );
-    assert_eq!(
-        reference.decltype_alias_fn_param0,
-        Some(CppType::Int { signed: true }),
-        "libclang decltype alias param snapshot changed; logs: {}",
-        log_dir.display()
-    );
-    assert_eq!(
-        reference.decltype_direct_fn_return,
-        Some(CppType::Named("decltype(1 + 2)".to_string())),
-        "libclang direct decltype return snapshot changed; logs: {}",
-        log_dir.display()
-    );
-    assert_eq!(
-        reference.decltype_direct_fn_param0,
-        Some(CppType::Named("decltype(1 + 2)".to_string())),
-        "libclang direct decltype param snapshot changed; logs: {}",
-        log_dir.display()
-    );
-    assert_eq!(
-        reference.dependent_identity_return,
-        Some(CppType::TemplateParam {
-            name: "T".to_string(),
-            depth: 0,
-            index: 0,
-        }),
-        "libclang dependent identity return snapshot changed; logs: {}",
-        log_dir.display()
-    );
-    assert_eq!(
-        reference.dependent_identity_param0,
-        Some(CppType::TemplateParam {
-            name: "T".to_string(),
-            depth: 0,
-            index: 0,
-        }),
-        "libclang dependent identity param snapshot changed; logs: {}",
-        log_dir.display()
-    );
-    assert_eq!(
-        reference.dependent_holder_identity_return,
-        Some(CppType::DependentType {
-            spelling: "typename Holder<T>::value_type".to_string(),
-        }),
-        "libclang dependent holder return snapshot changed; logs: {}",
-        log_dir.display()
-    );
-    assert_eq!(
-        reference.dependent_holder_identity_param0,
-        Some(CppType::DependentType {
-            spelling: "typename Holder<T>::value_type".to_string(),
-        }),
-        "libclang dependent holder param snapshot changed; logs: {}",
-        log_dir.display()
-    );
-
-    // Lock current libtooling parse-roundtrip snapshot for the same families.
+    // Lock current libtooling parse-roundtrip snapshot for decltype + dependent families.
     assert_eq!(
         libtooling.decltype_alias_underlying,
         Some(CppType::Int { signed: true }),
@@ -1255,16 +981,12 @@ int preserve_array_ref_boundary(int (&value)[4]) {
         )
     })?;
 
-    let backends: [(&str, ParserBackend); 3] = [
-        ("libclang", ParserBackend::Libclang),
-        ("hybrid", ParserBackend::Hybrid),
-        ("libtooling", ParserBackend::Libtooling),
-    ];
+    let backends: [&str; 1] = ["libtooling"];
 
     let mut snapshots = Vec::new();
-    for (backend_name, backend) in backends {
+    for backend_name in backends {
         let translation_unit =
-            parse_translation_unit_for_backend(&source_path, backend).map_err(|e| {
+            parse_translation_unit_for_backend(&source_path).map_err(|e| {
                 format!(
                     "backend {} failed to parse qualifier/decay fixture {}: {}",
                     backend_name,
@@ -1355,65 +1077,23 @@ fn test_parser_backend_cpp_type_snapshot_pointer_ref_qualifiers_and_array_decay_
     );
     assert_eq!(
         snapshots.len(),
-        3,
-        "expected snapshot results for libclang/hybrid/libtooling"
+        1,
+        "expected single backend snapshot (libtooling)"
     );
 
-    let reference = snapshots
-        .iter()
-        .find(|entry| entry.backend_name == "libclang")
-        .expect("missing libclang snapshot");
-    let hybrid = snapshots
-        .iter()
-        .find(|entry| entry.backend_name == "hybrid")
-        .expect("missing hybrid snapshot");
-    let libtooling = snapshots
-        .iter()
-        .find(|entry| entry.backend_name == "libtooling")
-        .expect("missing libtooling snapshot");
+    let libtooling = &snapshots[0];
 
-    for snapshot in &snapshots {
-        assert!(
-            snapshot.const_ptr_param0.is_some()
-                && snapshot.mut_ptr_param0.is_some()
-                && snapshot.const_ref_param0.is_some()
-                && snapshot.mut_ref_param0.is_some()
-                && snapshot.sized_array_alias_underlying.is_some()
-                && snapshot.unsized_array_alias_underlying.is_some()
-                && snapshot.decay_sized_array_param0.is_some()
-                && snapshot.decay_unsized_array_param0.is_some()
-                && snapshot.preserve_array_ref_boundary_param0.is_some(),
-            "backend {} should expose all qualifier/decay snapshot entries; logs: {}",
-            snapshot.backend_name,
-            log_dir.display()
-        );
-    }
-
-    // Hybrid currently shares direct parser shape with libclang; keep this parity explicit.
-    assert_eq!(
-        [
-            &hybrid.const_ptr_param0,
-            &hybrid.mut_ptr_param0,
-            &hybrid.const_ref_param0,
-            &hybrid.mut_ref_param0,
-            &hybrid.sized_array_alias_underlying,
-            &hybrid.unsized_array_alias_underlying,
-            &hybrid.decay_sized_array_param0,
-            &hybrid.decay_unsized_array_param0,
-            &hybrid.preserve_array_ref_boundary_param0,
-        ],
-        [
-            &reference.const_ptr_param0,
-            &reference.mut_ptr_param0,
-            &reference.const_ref_param0,
-            &reference.mut_ref_param0,
-            &reference.sized_array_alias_underlying,
-            &reference.unsized_array_alias_underlying,
-            &reference.decay_sized_array_param0,
-            &reference.decay_unsized_array_param0,
-            &reference.preserve_array_ref_boundary_param0,
-        ],
-        "hybrid snapshot should match libclang direct-parser snapshot; logs: {}",
+    assert!(
+        libtooling.const_ptr_param0.is_some()
+            && libtooling.mut_ptr_param0.is_some()
+            && libtooling.const_ref_param0.is_some()
+            && libtooling.mut_ref_param0.is_some()
+            && libtooling.sized_array_alias_underlying.is_some()
+            && libtooling.unsized_array_alias_underlying.is_some()
+            && libtooling.decay_sized_array_param0.is_some()
+            && libtooling.decay_unsized_array_param0.is_some()
+            && libtooling.preserve_array_ref_boundary_param0.is_some(),
+        "libtooling backend should expose all qualifier/decay snapshot entries; logs: {}",
         log_dir.display()
     );
 
@@ -1456,83 +1136,41 @@ fn test_parser_backend_cpp_type_snapshot_pointer_ref_qualifiers_and_array_decay_
         is_rvalue: false,
     });
 
-    // Lock current libclang/hybrid parse-roundtrip snapshot for qualifier + decay/boundary families.
+    // Lock libtooling qualifier/decay snapshot values.
     assert_eq!(
-        reference.const_ptr_param0,
+        libtooling.const_ptr_param0,
         expected_const_ptr,
-        "libclang const pointer qualifier snapshot changed; logs: {}",
+        "libtooling const pointer qualifier snapshot changed; logs: {}",
         log_dir.display()
     );
     assert_eq!(
-        reference.mut_ptr_param0,
+        libtooling.mut_ptr_param0,
         expected_mut_ptr.clone(),
-        "libclang mutable pointer qualifier snapshot changed; logs: {}",
+        "libtooling mutable pointer qualifier snapshot changed; logs: {}",
         log_dir.display()
     );
     assert_eq!(
-        reference.const_ref_param0,
+        libtooling.const_ref_param0,
         expected_const_ref,
-        "libclang const reference qualifier snapshot changed; logs: {}",
+        "libtooling const reference qualifier snapshot changed; logs: {}",
         log_dir.display()
     );
     assert_eq!(
-        reference.mut_ref_param0,
+        libtooling.mut_ref_param0,
         expected_mut_ref.clone(),
-        "libclang mutable reference qualifier snapshot changed; logs: {}",
+        "libtooling mutable reference qualifier snapshot changed; logs: {}",
         log_dir.display()
     );
     assert_eq!(
-        reference.sized_array_alias_underlying,
-        expected_sized_array.clone(),
-        "libclang sized-array alias snapshot changed; logs: {}",
+        libtooling.sized_array_alias_underlying,
+        expected_sized_array,
+        "libtooling sized-array alias snapshot changed; logs: {}",
         log_dir.display()
     );
     assert_eq!(
-        reference.unsized_array_alias_underlying,
+        libtooling.unsized_array_alias_underlying,
         expected_unsized_array,
-        "libclang unsized-array alias snapshot changed; logs: {}",
-        log_dir.display()
-    );
-    assert_eq!(
-        reference.decay_sized_array_param0,
-        expected_sized_array.clone(),
-        "libclang sized-array param snapshot changed; logs: {}",
-        log_dir.display()
-    );
-    assert_eq!(
-        reference.decay_unsized_array_param0,
-        expected_unsized_array.clone(),
-        "libclang unsized-array param snapshot changed; logs: {}",
-        log_dir.display()
-    );
-    assert_eq!(
-        reference.preserve_array_ref_boundary_param0,
-        expected_array_ref_boundary,
-        "libclang array-reference boundary snapshot changed; logs: {}",
-        log_dir.display()
-    );
-
-    // Lock libtooling to current direct-parser shape for these families.
-    assert_eq!(
-        [
-            &libtooling.const_ptr_param0,
-            &libtooling.mut_ptr_param0,
-            &libtooling.const_ref_param0,
-            &libtooling.mut_ref_param0,
-            &libtooling.sized_array_alias_underlying,
-            &libtooling.unsized_array_alias_underlying,
-            &libtooling.preserve_array_ref_boundary_param0,
-        ],
-        [
-            &reference.const_ptr_param0,
-            &reference.mut_ptr_param0,
-            &reference.const_ref_param0,
-            &reference.mut_ref_param0,
-            &reference.sized_array_alias_underlying,
-            &reference.unsized_array_alias_underlying,
-            &reference.preserve_array_ref_boundary_param0,
-        ],
-        "libtooling qualifier + non-decay-boundary snapshot should match libclang direct-parser snapshot; logs: {}",
+        "libtooling unsized-array alias snapshot changed; logs: {}",
         log_dir.display()
     );
     assert_eq!(
@@ -1545,6 +1183,12 @@ fn test_parser_backend_cpp_type_snapshot_pointer_ref_qualifiers_and_array_decay_
         libtooling.decay_unsized_array_param0,
         expected_decayed_mut_ptr,
         "libtooling unsized-array decay snapshot changed; logs: {}",
+        log_dir.display()
+    );
+    assert_eq!(
+        libtooling.preserve_array_ref_boundary_param0,
+        expected_array_ref_boundary,
+        "libtooling array-reference boundary snapshot changed; logs: {}",
         log_dir.display()
     );
 }

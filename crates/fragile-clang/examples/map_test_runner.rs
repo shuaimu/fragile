@@ -1,4 +1,4 @@
-use fragile_clang::transpile_cpp_to_rust_with_libtooling;
+use fragile_clang::transpile_cpp_to_rust;
 use std::fs;
 use std::process::Command;
 
@@ -25,7 +25,7 @@ fn main() {
     fs::write(&cpp_path, cpp_source).expect("Failed to write C++ source");
 
     // Use LibTooling for full template method body transpilation
-    let rust_code = match transpile_cpp_to_rust_with_libtooling(&cpp_path) {
+    let rust_code = match transpile_cpp_to_rust(&cpp_path) {
         Ok(code) => code,
         Err(e) => {
             println!("Transpilation failed: {}", e);

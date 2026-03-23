@@ -8,8 +8,8 @@
 /// unresolved-name deltas) and M7.A2 (runtime behavior parity for covered smoke fixtures).
 
 use fragile_clang::{
-    transpile_cpp_to_rust_with_options, transpile_parser_output_to_rust, ParserBackend,
-    ParserLanguage, TemplateParsingMode, TranspileOptions,
+    transpile_cpp_to_rust_with_options, transpile_parser_output_to_rust,
+    ParserLanguage, TranspileOptions,
 };
 use fragile_parser_clang::FragileParserClangBackend;
 use fragile_parser_core::{ParseRequest, ParserBackend as ParserBackendTrait, ParserLanguage as ParserCoreLanguage};
@@ -210,9 +210,6 @@ fn run_legacy_backend(source_path: &Path, log_dir: &Path) -> ShadowModeResult {
         language: ParserLanguage::Cpp,
         language_standard: None,
         ignored_error_patterns: Vec::new(),
-        backend: ParserBackend::Libtooling,
-        template_parsing_mode: TemplateParsingMode::Auto,
-        libtooling_skip_system_headers: false,
         stage_timing_trace_path: None,
     };
 
@@ -518,9 +515,6 @@ fn test_m7_shadow_mode_m2_a1_corpus_pipeline_cpp() {
         language: ParserLanguage::Cpp,
         language_standard: None,
         ignored_error_patterns: Vec::new(),
-        backend: ParserBackend::Libtooling,
-        template_parsing_mode: TemplateParsingMode::Auto,
-        libtooling_skip_system_headers: false,
         stage_timing_trace_path: None,
     };
 
@@ -614,9 +608,6 @@ fn test_m7_shadow_mode_m2_a1_corpus_dispatch_cpp() {
         language: ParserLanguage::Cpp,
         language_standard: None,
         ignored_error_patterns: Vec::new(),
-        backend: ParserBackend::Libtooling,
-        template_parsing_mode: TemplateParsingMode::Auto,
-        libtooling_skip_system_headers: false,
         stage_timing_trace_path: None,
     };
 
@@ -719,9 +710,6 @@ fn test_m7_shadow_mode_m2_a1_corpus_metrics_c() {
         language: ParserLanguage::C,
         language_standard: None,
         ignored_error_patterns: Vec::new(),
-        backend: ParserBackend::Libtooling,
-        template_parsing_mode: TemplateParsingMode::Auto,
-        libtooling_skip_system_headers: false,
         stage_timing_trace_path: None,
     };
 
@@ -847,9 +835,6 @@ fn run_both_backends_on_source(
         language: ParserLanguage::Cpp,
         language_standard: None,
         ignored_error_patterns: Vec::new(),
-        backend: ParserBackend::Libtooling,
-        template_parsing_mode: TemplateParsingMode::Auto,
-        libtooling_skip_system_headers: false,
         stage_timing_trace_path: None,
     };
     let legacy_code = transpile_cpp_to_rust_with_options(&source_path, &legacy_options)
@@ -1103,9 +1088,6 @@ int main() {
         language: ParserLanguage::Cpp,
         language_standard: None,
         ignored_error_patterns: Vec::new(),
-        backend: ParserBackend::Libtooling,
-        template_parsing_mode: TemplateParsingMode::Auto,
-        libtooling_skip_system_headers: false,
         stage_timing_trace_path: None,
     };
     let legacy_rust = transpile_cpp_to_rust_with_options(&source_path, &legacy_options)

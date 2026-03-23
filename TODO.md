@@ -60,7 +60,7 @@ Goal: replace LibTooling-centered parsing with a custom parser module that treat
       - [x] P0.b.2.f (immediate) Update `fragilec` help/UX text and driver tests to remove deprecated parser-backend/escape-hatch documentation. Done 2026-03-22. Removed `FRAGILEC_PARSER_BACKEND=<name>` from help text, removed parser backend validation tests, removed language standard extraction tests.
       - [x] P0.b.2 Remove strict-path backend/escape-hatch selection from production drivers (`fragile-driver`, `fragilec`) and update env/help contracts. Done 2026-03-22.
     - [x] P0.b.7 (immediate) Replace P0.a audit tests with anti-regression tests asserting no LibTooling parser path reintroduction in strict production flow. Done 2026-03-22. Converted 13 failing P0.a audit tests to anti-regression gates asserting ABSENCE of removed symbols. Updated p0c ceilings.
-    - [~] P0.b.3 (immediate) Remove parser invocation fallback APIs and deprecated backend variants from `fragile-clang/src/lib.rs`; keep parser-output handoff path only. WIP 2026-03-22.
+    - [x] P0.b.3 (immediate) Remove parser invocation fallback APIs and deprecated backend variants from `fragile-clang/src/lib.rs`; keep parser-output handoff path only. Done 2026-03-22.
     - [ ] P0.b.4 (immediate) Remove LibTooling enrichment state/methods from `AstCodeGen` and delete dependent callsites.
     - [ ] P0.b.5 (immediate) Delete `fragile-clang/src/libtooling.rs` and remove module re-exports/imports that expose LibTooling symbols.
     - [ ] P0.b.6 (immediate) Remove CLI `--use-libtooling` pre-parse path and related example/script artifacts.

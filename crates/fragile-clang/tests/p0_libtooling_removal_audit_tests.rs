@@ -108,24 +108,22 @@ fn p0a_audit_lib_rs_has_libtooling_parse_invocation() {
 }
 
 #[test]
-fn p0a_audit_lib_rs_has_libtooling_public_transpile_fn() {
+fn p0b3_anti_regression_lib_rs_no_libtooling_public_transpile_fn() {
     let src = read_project_file("crates/fragile-clang/src/lib.rs");
-    // transpile_cpp_to_rust_with_libtooling is a public API function.
-    // P0.b removal: remove function.
+    // P0.b.3: transpile_cpp_to_rust_with_libtooling removed 2026-03-22.
     assert!(
-        src.contains("pub fn transpile_cpp_to_rust_with_libtooling"),
-        "audit: expected transpile_cpp_to_rust_with_libtooling public function"
+        !src.contains("pub fn transpile_cpp_to_rust_with_libtooling"),
+        "anti-regression: transpile_cpp_to_rust_with_libtooling should not be reintroduced"
     );
 }
 
 #[test]
-fn p0a_audit_lib_rs_parser_backend_enum_has_libtooling() {
+fn p0b3_anti_regression_lib_rs_no_parser_backend_enum() {
     let src = read_project_file("crates/fragile-clang/src/lib.rs");
-    // ParserBackend::Libtooling variant exists.
-    // P0.b removal: remove variant, simplify enum.
+    // P0.b.3: ParserBackend enum removed 2026-03-22.
     assert!(
-        src.contains("Libtooling,"),
-        "audit: expected Libtooling variant in ParserBackend enum"
+        !src.contains("pub enum ParserBackend"),
+        "anti-regression: ParserBackend enum should not be reintroduced"
     );
 }
 
@@ -1492,9 +1490,8 @@ fn p0a_audit_comprehensive_site_inventory() {
     assert!(!script_path.exists(),
         "anti-regression: escape_hatch_usage_report.py should be removed");
 
-    // Files that still exist and have remaining LibTooling code (for P0.b.3+):
+    // Files that still exist and have remaining LibTooling code (for P0.b.4+):
     let remaining_files = vec![
-        ("crates/fragile-clang/src/lib.rs", "ParserBackend::Libtooling variant (P0.b.3)"),
         ("crates/fragile-clang/src/libtooling.rs", "LibTooling module (P0.b.5)"),
         ("crates/fragile-cli/src/main.rs", "--use-libtooling CLI flag (P0.b.6)"),
         ("crates/fragile-clang/src/ast_codegen.rs", "LibTooling enrichment state (P0.b.4)"),
