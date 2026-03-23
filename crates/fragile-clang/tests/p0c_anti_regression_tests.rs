@@ -349,46 +349,22 @@ fn p0c_guard_aggregate_escape_hatch_ceiling() {
 // Category 8: Strict production path invariants
 // ---------------------------------------------------------------------------
 
-/// The default strict parser backend must be parser-core (fragile-parser-clang), NOT libtooling.
-/// This guards against someone reverting the M8.1 cutover.
+/// The production driver must use FRAGILE_PARSER_CLANG_BACKEND_ID directly, with no
+/// StrictParserBackend enum or parser backend selection infrastructure.
+/// P0.b.2.c: StrictParserBackend enum and parser backend selection removed 2026-03-22.
 #[test]
 fn p0c_guard_default_strict_backend_is_parser_core() {
     let src = read_project_file("crates/fragile-driver/src/lib.rs");
-    // The default backend: empty/unset FRAGILEC_PARSER_BACKEND -> ParserCore.
-    // If someone changes the default to Libtooling, this test must fail.
+    // The backend is now hardcoded — no StrictParserBackend enum should exist.
     assert!(
-        src.contains("StrictParserBackend::ParserCore"),
-        "fragile-driver must have StrictParserBackend::ParserCore variant"
+        !src.contains("StrictParserBackend"),
+        "ANTI-REGRESSION: StrictParserBackend should not be reintroduced in fragile-driver. \
+         The parser backend is hardcoded to FRAGILE_PARSER_CLANG_BACKEND_ID."
     );
-    // The None/empty case in parse_parser_backend_value should map to ParserCore, not Libtooling.
-    // Verify that the None arm does NOT contain "Libtooling".
-    let lines: Vec<&str> = src.lines().collect();
-    let mut in_none_arm = false;
-    let mut none_arm_has_libtooling = false;
-    for line in &lines {
-        if line.contains("None") && line.contains("=>") && line.contains("Ok(StrictParserBackend") {
-            if line.contains("Libtooling") {
-                none_arm_has_libtooling = true;
-            }
-        }
-    }
-    // Also check multi-line None arm pattern.
-    for (i, line) in lines.iter().enumerate() {
-        if line.trim().starts_with("None") && line.contains("=>") {
-            in_none_arm = true;
-        } else if in_none_arm {
-            if line.contains("StrictParserBackend::Libtooling") {
-                none_arm_has_libtooling = true;
-            }
-            if line.contains("StrictParserBackend::") || line.trim().starts_with("}") || (i > 0 && line.trim().starts_with("\"")) {
-                in_none_arm = false;
-            }
-        }
-    }
+    // The driver must reference the parser-clang backend ID.
     assert!(
-        !none_arm_has_libtooling,
-        "ANTI-REGRESSION: the default (None) parser backend has been changed back to Libtooling. \
-         The default must remain ParserCore (fragile-parser-clang)."
+        src.contains("FRAGILE_PARSER_CLANG_BACKEND_ID"),
+        "fragile-driver must use FRAGILE_PARSER_CLANG_BACKEND_ID for the parser backend"
     );
 }
 
@@ -408,23 +384,14 @@ fn p0c_guard_escape_hatch_expiry_not_extended() {
     // If ESCAPE_HATCH_HARDENING_EXPIRY doesn't exist, that's fine — it means P0.b removed it.
 }
 
-/// No new StrictParserBackend variants beyond ParserCore and Libtooling should exist.
-/// This prevents proliferation of backend variants.
+/// StrictParserBackend enum has been removed (P0.b.2.c).
+/// No parser backend selection infrastructure should exist in production drivers.
 #[test]
 fn p0c_guard_no_new_backend_variants() {
     let src = read_project_file("crates/fragile-driver/src/lib.rs");
-    // Count enum variant references for StrictParserBackend.
-    // Currently: ParserCore { backend_id }, Libtooling (2 variants).
-    // After P0.b: only ParserCore (1 variant).
-    let parser_core = src.matches("StrictParserBackend::ParserCore").count();
-    let libtooling = src.matches("StrictParserBackend::Libtooling").count();
-    let total_backend_refs = src.matches("StrictParserBackend::").count();
-    let other = total_backend_refs - parser_core - libtooling;
+    // P0.b.2.c: StrictParserBackend enum removed 2026-03-22.
     assert!(
-        other == 0,
-        "ANTI-REGRESSION: found {} references to unknown StrictParserBackend variants \
-         (beyond ParserCore and Libtooling). Do not add new backend variants. \
-         (ParserCore={}, Libtooling={}, total={})",
-        other, parser_core, libtooling, total_backend_refs
+        src.matches("StrictParserBackend").count() == 0,
+        "ANTI-REGRESSION: StrictParserBackend should not be reintroduced in fragile-driver."
     );
 }

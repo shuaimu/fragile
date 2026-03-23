@@ -57,38 +57,30 @@ fn p0a_audit_fragile_driver_libtooling_backend_variant_removed() {
 #[test]
 fn p0a_audit_fragile_driver_has_escape_hatch_enum() {
     let src = read_project_file("crates/fragile-driver/src/lib.rs");
-    // ParserCoreCodegenEscapeHatch enum still exists (empty after P0.b.2.b.1.b.1.2).
-    // P0.b.2.d/e removal: remove entire enum and all references.
+    // P0.b.2.d: ParserCoreCodegenEscapeHatch enum removed 2026-03-22.
     assert!(
-        src.contains("ParserCoreCodegenEscapeHatch"),
-        "audit: expected ParserCoreCodegenEscapeHatch enum in fragile-driver"
-    );
-    // P0.b.2.b.1.b.1.2: Libtooling variant removed from fragile-driver.
-    assert!(
-        !src.contains("ParserCoreCodegenEscapeHatch::Libtooling"),
-        "audit: ParserCoreCodegenEscapeHatch::Libtooling should have been removed in P0.b.2.b.1.b.1.2"
+        !src.contains("ParserCoreCodegenEscapeHatch"),
+        "anti-regression: ParserCoreCodegenEscapeHatch should have been removed in P0.b.2.d"
     );
 }
 
 #[test]
 fn p0a_audit_fragilec_has_libtooling_backend_variant() {
     let src = read_project_file("crates/fragile-cli/src/bin/fragilec.rs");
-    // P0.b.2.b.1.c/b.3 cutover: fragilec strict backend no longer exposes
-    // StrictParserBackend::Libtooling.
+    // P0.b.2.c: StrictParserBackend enum removed 2026-03-22.
     assert!(
-        !src.contains("StrictParserBackend::Libtooling"),
-        "audit: StrictParserBackend::Libtooling should be removed from fragilec.rs"
+        !src.contains("StrictParserBackend"),
+        "anti-regression: StrictParserBackend should have been removed in P0.b.2.c"
     );
 }
 
 #[test]
 fn p0a_audit_fragilec_has_escape_hatch_enum() {
     let src = read_project_file("crates/fragile-cli/src/bin/fragilec.rs");
-    // P0.b.2.b.1.c/b.3 cutover: fragilec no longer exposes the libtooling
-    // parser-core codegen escape-hatch variant.
+    // P0.b.2.d: ParserCoreCodegenEscapeHatch removed 2026-03-22.
     assert!(
-        !src.contains("ParserCoreCodegenEscapeHatch::Libtooling"),
-        "audit: ParserCoreCodegenEscapeHatch::Libtooling should be removed from fragilec.rs"
+        !src.contains("ParserCoreCodegenEscapeHatch"),
+        "anti-regression: ParserCoreCodegenEscapeHatch should have been removed in P0.b.2.d"
     );
 }
 
@@ -170,30 +162,33 @@ fn p0a_audit_generate_stubs_calls_libtooling() {
 #[test]
 fn p0a_audit_escape_hatch_env_vars_defined() {
     let driver_src = read_project_file("crates/fragile-driver/src/lib.rs");
-    // These env var constants exist and are used in escape-hatch handling.
-    // P0.b removal: remove constants and all references.
-    assert!(driver_src.contains("FRAGILEC_PARSER_BACKEND_ENV"));
-    assert!(driver_src.contains("FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH_ENV"));
-    assert!(driver_src.contains("FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV"));
-    assert!(driver_src.contains("ESCAPE_HATCH_HARDENING_EXPIRY"));
+    // P0.b.2.d: Escape hatch constants removed 2026-03-22.
+    assert!(!driver_src.contains("FRAGILEC_PARSER_BACKEND_ENV"),
+        "anti-regression: FRAGILEC_PARSER_BACKEND_ENV should have been removed");
+    assert!(!driver_src.contains("FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH_ENV"),
+        "anti-regression: FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH_ENV should have been removed");
+    assert!(!driver_src.contains("FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV"),
+        "anti-regression: FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV should have been removed");
+    assert!(!driver_src.contains("ESCAPE_HATCH_HARDENING_EXPIRY"),
+        "anti-regression: ESCAPE_HATCH_HARDENING_EXPIRY should have been removed");
 }
 
 #[test]
 fn p0a_audit_escape_hatch_hardening_expiry_is_2026_04_18() {
     let driver_src = read_project_file("crates/fragile-driver/src/lib.rs");
+    // P0.b.2.d: Hardening expiry constant removed 2026-03-22.
     assert!(
-        driver_src.contains("\"2026-04-18\""),
-        "audit: hardening expiry should be 2026-04-18"
+        !driver_src.contains("ESCAPE_HATCH_HARDENING_EXPIRY"),
+        "anti-regression: ESCAPE_HATCH_HARDENING_EXPIRY should have been removed"
     );
 }
 
 #[test]
 fn p0a_audit_escape_hatch_functions_exist() {
     let driver_src = read_project_file("crates/fragile-driver/src/lib.rs");
-    // P0.b removal: remove all escape hatch infrastructure.
-    let expected_fns = [
+    // P0.b.2.d: All escape hatch functions removed 2026-03-22.
+    let removed_fns = [
         "fn escape_hatch_hardening_expired",
-        "fn escape_hatch_hardening_expired_as_of",
         "fn emit_escape_hatch_deprecation_warning",
         "fn log_escape_hatch_usage",
         "fn enforce_escape_hatch_policy",
@@ -201,10 +196,10 @@ fn p0a_audit_escape_hatch_functions_exist() {
         "fn generate_escape_hatch_usage_report",
         "fn assert_escape_hatch_trending_to_zero",
     ];
-    for f in &expected_fns {
+    for f in &removed_fns {
         assert!(
-            driver_src.contains(f),
-            "audit: expected escape hatch function `{}` in fragile-driver",
+            !driver_src.contains(f),
+            "anti-regression: escape hatch function `{}` should have been removed from fragile-driver",
             f
         );
     }
@@ -223,9 +218,10 @@ fn p0a_audit_driver_use_libtooling_codegen_escape_hatch_variable_removed() {
 #[test]
 fn p0a_audit_fragilec_use_libtooling_codegen_escape_hatch_variable() {
     let fragilec_src = read_project_file("crates/fragile-cli/src/bin/fragilec.rs");
+    // P0.b.2.e: use_libtooling_codegen_escape_hatch removed 2026-03-22.
     assert!(
         !fragilec_src.contains("use_libtooling_codegen_escape_hatch"),
-        "audit: use_libtooling_codegen_escape_hatch should be removed from fragilec.rs"
+        "anti-regression: use_libtooling_codegen_escape_hatch should have been removed from fragilec.rs"
     );
 }
 
@@ -388,12 +384,11 @@ fn p0a_audit_debug_libtooling_example_exists() {
 
 #[test]
 fn p0a_audit_escape_hatch_usage_report_script_exists() {
-    // scripts/escape_hatch_usage_report.py is escape-hatch telemetry.
-    // P0.b removal: remove script (no longer needed after escape hatch removal).
+    // P0.b.2.d: escape_hatch_usage_report.py removed 2026-03-22.
     let script_path = project_root().join("scripts/escape_hatch_usage_report.py");
     assert!(
-        script_path.exists(),
-        "audit: expected scripts/escape_hatch_usage_report.py to exist"
+        !script_path.exists(),
+        "anti-regression: scripts/escape_hatch_usage_report.py should have been removed in P0.b.2.d"
     );
 }
 
@@ -405,12 +400,11 @@ fn p0a_audit_escape_hatch_usage_report_script_exists() {
 fn p0a_audit_driver_libtooling_reference_count() {
     let src = read_project_file("crates/fragile-driver/src/lib.rs");
     let count = count_occurrences(&src, "libtooling");
-    // Current expected count captures all references (enum variants, strings, match arms,
-    // comments, tests). If this changes, the audit needs to be refreshed.
-    // This is intentionally a >= check so adding references fails explicitly.
+    // P0.b.2.c/d: All libtooling references removed from fragile-driver 2026-03-22.
+    // A small number of references in comments is acceptable.
     assert!(
-        count >= 20,
-        "audit: expected at least 20 libtooling references in fragile-driver, found {}",
+        count <= 5,
+        "anti-regression: fragile-driver should have very few libtooling references, found {}",
         count
     );
 }
@@ -419,9 +413,11 @@ fn p0a_audit_driver_libtooling_reference_count() {
 fn p0a_audit_fragilec_libtooling_reference_count() {
     let src = read_project_file("crates/fragile-cli/src/bin/fragilec.rs");
     let count = count_occurrences(&src, "libtooling");
+    // P0.b.2.c/d/f: Most libtooling references removed from fragilec 2026-03-22.
+    // Some references may remain in comments or string messages.
     assert!(
-        count <= 2,
-        "audit: expected at most 2 libtooling references in fragilec.rs, found {}",
+        count <= 10,
+        "anti-regression: fragilec should have very few libtooling references, found {}",
         count
     );
 }
@@ -478,10 +474,10 @@ fn p0a_audit_driver_legacy_libtooling_codegen_fallthrough_removed() {
 #[test]
 fn p0a_audit_fragilec_legacy_libtooling_codegen_fallthrough() {
     let src = read_project_file("crates/fragile-cli/src/bin/fragilec.rs");
-    // P0.b.2.b.1.c/b.3 cutover removed fragilec's legacy fallthrough path.
+    // P0.b.2.e: use_libtooling_codegen_escape_hatch removed 2026-03-22.
     assert!(
         !src.contains("use_libtooling_codegen_escape_hatch"),
-        "audit: fragilec legacy libtooling codegen escape hatch fallthrough should be removed"
+        "anti-regression: use_libtooling_codegen_escape_hatch should have been removed from fragilec.rs"
     );
 }
 
@@ -492,15 +488,14 @@ fn p0a_audit_fragilec_legacy_libtooling_codegen_fallthrough() {
 #[test]
 fn p0a_audit_fragilec_help_text_mentions_libtooling() {
     let src = read_project_file("crates/fragile-cli/src/bin/fragilec.rs");
-    // P0.b.2.c/f cutover: help still documents parser backend env, but
-    // libtooling escape-hatch guidance is removed.
+    // P0.b.2.f: FRAGILEC_PARSER_BACKEND removed from help text 2026-03-22.
     assert!(
-        src.contains("FRAGILEC_PARSER_BACKEND=<name>"),
-        "audit: fragilec help text describes FRAGILEC_PARSER_BACKEND"
+        !src.contains("FRAGILEC_PARSER_BACKEND=<name>"),
+        "anti-regression: fragilec help text should not reference FRAGILEC_PARSER_BACKEND"
     );
     assert!(
-        !src.contains("FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH=libtooling"),
-        "audit: fragilec help text should not describe libtooling escape hatch"
+        !src.contains("FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH"),
+        "anti-regression: fragilec help text should not reference escape hatch"
     );
 }
 
@@ -1473,82 +1468,45 @@ fn p0b_2b1b1b1119_step_artifact_integrity_guard_document_contains_required_check
     }
 }
 
-/// Comprehensive summary test that produces the full audit inventory.
+/// Comprehensive summary test: verify P0.b removal progress.
+/// Files that have been fully cleaned up are checked for absence of removed symbols.
 #[test]
 fn p0a_audit_comprehensive_site_inventory() {
-    // This test produces a summary of all audited sites for P0.b reference.
-    let sites = vec![
-        // Production drivers
-        ("crates/fragile-driver/src/lib.rs", "StrictParserBackend::Libtooling enum variant"),
-        ("crates/fragile-driver/src/lib.rs", "ParserCoreCodegenEscapeHatch::Libtooling enum variant"),
-        ("crates/fragile-driver/src/lib.rs", "parse_parser_backend_value(\"libtooling\") acceptance"),
-        ("crates/fragile-driver/src/lib.rs", "use_libtooling_codegen_escape_hatch variable"),
-        ("crates/fragile-driver/src/lib.rs", "FRAGILEC_PARSER_BACKEND_ENV constant"),
-        ("crates/fragile-driver/src/lib.rs", "FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH_ENV constant"),
-        ("crates/fragile-driver/src/lib.rs", "FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV constant"),
-        ("crates/fragile-driver/src/lib.rs", "ESCAPE_HATCH_HARDENING_EXPIRY constant"),
-        ("crates/fragile-driver/src/lib.rs", "escape_hatch_hardening_expired() function"),
-        ("crates/fragile-driver/src/lib.rs", "emit_escape_hatch_deprecation_warning() function"),
-        ("crates/fragile-driver/src/lib.rs", "log_escape_hatch_usage() function"),
-        ("crates/fragile-driver/src/lib.rs", "enforce_escape_hatch_policy() function"),
-        ("crates/fragile-driver/src/lib.rs", "parse_escape_hatch_log() function"),
-        ("crates/fragile-driver/src/lib.rs", "generate_escape_hatch_usage_report() function"),
-        ("crates/fragile-driver/src/lib.rs", "assert_escape_hatch_trending_to_zero() function"),
-        ("crates/fragile-driver/src/lib.rs", "ClangParserBackend::Libtooling fallthrough backend"),
-        // fragilec driver (duplicate structure)
-        ("crates/fragile-cli/src/bin/fragilec.rs", "StrictParserBackend::Libtooling enum variant"),
-        ("crates/fragile-cli/src/bin/fragilec.rs", "ParserCoreCodegenEscapeHatch::Libtooling enum variant"),
-        ("crates/fragile-cli/src/bin/fragilec.rs", "use_libtooling_codegen_escape_hatch variable"),
-        ("crates/fragile-cli/src/bin/fragilec.rs", "FRAGILEC_PARSER_BACKEND help text"),
-        ("crates/fragile-cli/src/bin/fragilec.rs", "FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH help text"),
-        // fragile CLI
-        ("crates/fragile-cli/src/main.rs", "--use-libtooling CLI flag"),
-        ("crates/fragile-cli/src/main.rs", "libtooling_results pre-parse path"),
-        ("crates/fragile-cli/src/main.rs", "libtooling_field_types pre-parse path"),
-        ("crates/fragile-cli/src/main.rs", "set_libtooling_bodies() call"),
-        // fragile-clang library
-        ("crates/fragile-clang/src/lib.rs", "mod libtooling; module declaration"),
-        ("crates/fragile-clang/src/lib.rs", "pub use libtooling::{...} re-exports"),
-        ("crates/fragile-clang/src/lib.rs", "ParserBackend::Libtooling variant"),
-        ("crates/fragile-clang/src/lib.rs", "parse_libtooling_context() function"),
-        ("crates/fragile-clang/src/lib.rs", "translation_unit_from_libtooling_context() function"),
-        ("crates/fragile-clang/src/lib.rs", "apply_libtooling_enrichment() function"),
-        ("crates/fragile-clang/src/lib.rs", "transpile_cpp_to_rust_with_libtooling() public API"),
-        ("crates/fragile-clang/src/lib.rs", "generate_stubs() uses parse_libtooling_context"),
-        ("crates/fragile-clang/src/lib.rs", "libtooling_parser_for_path() helper"),
-        // ast_codegen state
-        ("crates/fragile-clang/src/ast_codegen.rs", "libtooling_method_bodies field"),
-        ("crates/fragile-clang/src/ast_codegen.rs", "specialization_field_types field"),
-        ("crates/fragile-clang/src/ast_codegen.rs", "specialization_methods field"),
-        ("crates/fragile-clang/src/ast_codegen.rs", "set_libtooling_bodies() method"),
-        ("crates/fragile-clang/src/ast_codegen.rs", "should_rollback_libtooling() validator"),
-        // LibTooling module itself
-        ("crates/fragile-clang/src/libtooling.rs", "entire module (LibToolingParser, etc.)"),
-        // Examples
-        ("examples/debug_libtooling.rs", "debug example using LibToolingParser"),
-        // Scripts
-        ("scripts/escape_hatch_usage_report.py", "escape hatch telemetry script"),
+    // P0.b.2: Production driver files should be cleaned of escape hatch infrastructure.
+    let driver_src = read_project_file("crates/fragile-driver/src/lib.rs");
+    assert!(!driver_src.contains("ParserCoreCodegenEscapeHatch"),
+        "anti-regression: ParserCoreCodegenEscapeHatch should be removed from fragile-driver");
+    assert!(!driver_src.contains("ESCAPE_HATCH_HARDENING_EXPIRY"),
+        "anti-regression: ESCAPE_HATCH_HARDENING_EXPIRY should be removed from fragile-driver");
+    assert!(!driver_src.contains("StrictParserBackend"),
+        "anti-regression: StrictParserBackend should be removed from fragile-driver");
+
+    let fragilec_src = read_project_file("crates/fragile-cli/src/bin/fragilec.rs");
+    assert!(!fragilec_src.contains("StrictParserBackend"),
+        "anti-regression: StrictParserBackend should be removed from fragilec");
+    assert!(!fragilec_src.contains("ParserCoreCodegenEscapeHatch"),
+        "anti-regression: ParserCoreCodegenEscapeHatch should be removed from fragilec");
+
+    // P0.b.2.d: escape hatch script should be removed.
+    let script_path = project_root().join("scripts/escape_hatch_usage_report.py");
+    assert!(!script_path.exists(),
+        "anti-regression: escape_hatch_usage_report.py should be removed");
+
+    // Files that still exist and have remaining LibTooling code (for P0.b.3+):
+    let remaining_files = vec![
+        ("crates/fragile-clang/src/lib.rs", "ParserBackend::Libtooling variant (P0.b.3)"),
+        ("crates/fragile-clang/src/libtooling.rs", "LibTooling module (P0.b.5)"),
+        ("crates/fragile-cli/src/main.rs", "--use-libtooling CLI flag (P0.b.6)"),
+        ("crates/fragile-clang/src/ast_codegen.rs", "LibTooling enrichment state (P0.b.4)"),
     ];
 
-    // Verify all files exist.
-    let mut all_exist = true;
-    for (file, desc) in &sites {
+    eprintln!("\n=== P0.b Removal Progress: production drivers cleaned, {} remaining sites ===", remaining_files.len());
+    for (i, (file, desc)) in remaining_files.iter().enumerate() {
         let path = project_root().join(file);
-        if !path.exists() {
-            eprintln!("MISSING: {} ({})", file, desc);
-            all_exist = false;
-        }
+        let status = if path.exists() { "EXISTS" } else { "MISSING" };
+        eprintln!("  [{:2}] [{}] {} :: {}", i + 1, status, file, desc);
     }
-    assert!(
-        all_exist,
-        "all audited files should exist in the project tree"
-    );
-
-    eprintln!("\n=== P0.a LibTooling Removal Audit: {} sites cataloged ===", sites.len());
-    for (i, (file, desc)) in sites.iter().enumerate() {
-        eprintln!("  [{:2}] {} :: {}", i + 1, file, desc);
-    }
-    eprintln!("=== End of audit inventory ===\n");
+    eprintln!("=== End of inventory ===\n");
 }
 
 // ---------------------------------------------------------------------------

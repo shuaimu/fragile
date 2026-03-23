@@ -18,33 +18,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const FRAGILEC_BUILD_ID_ENV: &str = "FRAGILEC_BUILD_ID";
 pub const FRAGILEC_KEEP_RS_ENV: &str = "FRAGILEC_KEEP_RS";
-pub const FRAGILEC_PARSER_BACKEND_ENV: &str = "FRAGILEC_PARSER_BACKEND";
 pub const FRAGILEC_PARSER_CORE_MANIFEST_DIR_ENV: &str = "FRAGILEC_PARSER_CORE_MANIFEST_DIR";
-pub const FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH_ENV: &str =
-    "FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH";
 pub const FRAGILEC_TRANSPILE_STAGE_TIMING_PATH_ENV: &str = "FRAGILEC_TRANSPILE_STAGE_TIMING_PATH";
-pub const FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV: &str = "FRAGILEC_ESCAPE_HATCH_LOG_PATH";
-
-/// Hardening window expiry: escape hatches are deprecated immediately and will
-/// be rejected after this date (YYYY-MM-DD).  The window gives downstream users
-/// one release cycle to migrate away from `FRAGILEC_PARSER_BACKEND=libtooling`
-/// and `FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH=libtooling`.
-pub const ESCAPE_HATCH_HARDENING_EXPIRY: &str = "2026-04-18";
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum StrictParserBackend {
-    // P0.b.2.b.1.b.3: Libtooling variant removed 2026-03-22.
-    // Enum retained with ParserCore as sole variant until backend string/help
-    // removal in P0.b.2.c.
-    ParserCore { backend_id: String },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ParserCoreCodegenEscapeHatch {
-    // P0.b.2.b.1.b.1.2: Libtooling variant removed 2026-03-22.
-    // Enum retained as empty (uninhabited) until remaining escape-hatch
-    // infrastructure is removed in follow-up tasks (P0.b.2.d, P0.b.2.e).
-}
 
 #[derive(Debug, Clone)]
 struct ParsedInvocation {
@@ -531,387 +506,10 @@ fn source_language(source: &Path) -> ClangParserLanguage {
     }
 }
 
-fn normalize_language_standard(raw: &str, language: ClangParserLanguage) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let lower = trimmed.to_ascii_lowercase();
-    let is_cpp_standard = lower.contains("++");
-    let is_c_standard = !is_cpp_standard && (lower.starts_with('c') || lower.starts_with("gnu"));
-    match language {
-        ClangParserLanguage::Cpp => {
-            if is_cpp_standard {
-                Some(trimmed.to_string())
-            } else {
-                None
-            }
-        }
-        ClangParserLanguage::C => {
-            if is_c_standard {
-                Some(trimmed.to_string())
-            } else {
-                None
-            }
-        }
-    }
-}
-
-fn extract_language_standard(args: &[OsString], language: ClangParserLanguage) -> Option<String> {
-    let mut detected: Option<String> = None;
-    let mut i = 0usize;
-    while i < args.len() {
-        let arg = args[i].to_string_lossy();
-        let token = arg.as_ref();
-        if token == "-std" {
-            if i + 1 < args.len() {
-                let value = args[i + 1].to_string_lossy().to_string();
-                if let Some(normalized) = normalize_language_standard(value.as_str(), language) {
-                    detected = Some(normalized);
-                }
-                i += 2;
-                continue;
-            }
-        } else if let Some(value) = token.strip_prefix("-std=") {
-            if let Some(normalized) = normalize_language_standard(value, language) {
-                detected = Some(normalized);
-            }
-        }
-        i += 1;
-    }
-    detected
-}
-
 fn strict_parser_ignored_error_patterns(language: ClangParserLanguage) -> Vec<String> {
     let _ = language;
     Vec::new()
 }
-
-fn supported_parser_backend_values_message() -> String {
-    format!("libtooling, {}", FRAGILE_PARSER_CLANG_BACKEND_ID)
-}
-
-fn parse_parser_backend_value(backend: &str) -> Result<StrictParserBackend, String> {
-    let normalized = backend.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        // P0.b.2.b.1.b.3: Libtooling variant removed — "libtooling" is no longer
-        // a valid backend value.  The string parsing infrastructure is retained
-        // for P0.b.2.c removal.
-        "libtooling" => Err(format!(
-            "unsupported FRAGILEC_PARSER_BACKEND value `libtooling`; libtooling backend removed (P0.b.2.b.1.b.3). Supported: {}",
-            FRAGILE_PARSER_CLANG_BACKEND_ID,
-        )),
-        FRAGILE_PARSER_CLANG_BACKEND_ID => Ok(StrictParserBackend::ParserCore {
-            backend_id: FRAGILE_PARSER_CLANG_BACKEND_ID.to_string(),
-        }),
-        other => Err(format!(
-            "unsupported FRAGILEC_PARSER_BACKEND value `{}`; expected one of: {}",
-            other,
-            supported_parser_backend_values_message()
-        )),
-    }
-}
-
-fn strict_parser_backend_from_value(raw: Option<&str>) -> Result<StrictParserBackend, String> {
-    match raw.map(|v| v.trim()).filter(|v| !v.is_empty()) {
-        Some(backend) => parse_parser_backend_value(backend),
-        None => Ok(StrictParserBackend::ParserCore {
-            backend_id: FRAGILE_PARSER_CLANG_BACKEND_ID.to_string(),
-        }),
-    }
-}
-
-fn strict_parser_backend_from_env() -> Result<StrictParserBackend, String> {
-    let raw = std::env::var(FRAGILEC_PARSER_BACKEND_ENV).ok();
-    strict_parser_backend_from_value(raw.as_deref())
-}
-
-fn strict_parser_backend_label(backend: &StrictParserBackend) -> &str {
-    match backend {
-        // P0.b.2.b.1.b.3: Libtooling arm removed.
-        StrictParserBackend::ParserCore { backend_id } => backend_id.as_str(),
-    }
-}
-
-// Retained for P0.b.2.c (backend string/help removal).
-#[allow(dead_code)]
-fn supported_parser_core_codegen_escape_hatch_values_message() -> &'static str {
-    "libtooling"
-}
-
-fn parse_parser_core_codegen_escape_hatch_value(
-    raw: &str,
-) -> Result<ParserCoreCodegenEscapeHatch, String> {
-    // P0.b.2.b.1.b.1.2: Libtooling variant removed — no valid escape hatches remain.
-    let normalized = raw.trim().to_ascii_lowercase();
-    Err(format!(
-        "unsupported FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH value `{}`; no escape hatches are currently supported (libtooling removed in P0.b.2.b.1.b.1.2)",
-        normalized,
-    ))
-}
-
-fn parser_core_codegen_escape_hatch_from_value(
-    raw: Option<&str>,
-) -> Result<Option<ParserCoreCodegenEscapeHatch>, String> {
-    match raw.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(value) => parse_parser_core_codegen_escape_hatch_value(value).map(Some),
-        None => Ok(None),
-    }
-}
-
-fn parser_core_codegen_escape_hatch_from_env(
-) -> Result<Option<ParserCoreCodegenEscapeHatch>, String> {
-    let raw = std::env::var(FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH_ENV).ok();
-    parser_core_codegen_escape_hatch_from_value(raw.as_deref())
-}
-
-/// Returns true if today's date is past the hardening window expiry.
-pub fn escape_hatch_hardening_expired() -> bool {
-    escape_hatch_hardening_expired_as_of(today_date_string().as_str())
-}
-
-/// Testable variant: returns true if `today` (YYYY-MM-DD) is strictly after the
-/// hardening expiry date.
-pub fn escape_hatch_hardening_expired_as_of(today: &str) -> bool {
-    today > ESCAPE_HATCH_HARDENING_EXPIRY
-}
-
-fn today_date_string() -> String {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    // 86400 seconds per day; epoch is 1970-01-01 (Thursday).
-    let days = secs / 86400;
-    // Simple Gregorian calendar conversion.
-    let (year, month, day) = days_since_epoch_to_ymd(days);
-    format!("{:04}-{:02}-{:02}", year, month, day)
-}
-
-fn days_since_epoch_to_ymd(days: u64) -> (u64, u64, u64) {
-    // Algorithm from Howard Hinnant's civil_from_days.
-    let z = days + 719468;
-    let era = z / 146097;
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y, m, d)
-}
-
-/// Emit a deprecation warning to stderr for escape hatch usage.
-pub fn emit_escape_hatch_deprecation_warning(escape_kind: &str, source: &str) {
-    eprintln!(
-        "[fragilec] DEPRECATION WARNING: {} escape hatch is deprecated and will be \
-         removed after {}. Migrate to the default fragile-parser-clang backend. \
-         (source: {})",
-        escape_kind, ESCAPE_HATCH_HARDENING_EXPIRY, source
-    );
-}
-
-/// Log escape hatch usage to the file at `FRAGILEC_ESCAPE_HATCH_LOG_PATH` if set.
-pub fn log_escape_hatch_usage(escape_kind: &str, source: &str) {
-    let log_path = match std::env::var(FRAGILEC_ESCAPE_HATCH_LOG_PATH_ENV).ok() {
-        Some(p) if !p.trim().is_empty() => PathBuf::from(p.trim()),
-        _ => return,
-    };
-    if let Some(parent) = log_path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let entry = format!(
-        "timestamp={} escape_kind={} source={} pid={}\n",
-        timestamp,
-        escape_kind,
-        source,
-        std::process::id()
-    );
-    // Append; ignore errors (best-effort telemetry).
-    let _ = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .and_then(|mut f| {
-            use std::io::Write;
-            f.write_all(entry.as_bytes())
-        });
-}
-
-/// Enforce escape hatch policy: emit deprecation warning, log usage, and reject
-/// if the hardening window has expired.  Returns `Ok(())` if the escape hatch
-/// is still allowed (within the hardening window) or `Err` if expired.
-pub fn enforce_escape_hatch_policy(escape_kind: &str, source: &str) -> Result<(), String> {
-    emit_escape_hatch_deprecation_warning(escape_kind, source);
-    log_escape_hatch_usage(escape_kind, source);
-    if escape_hatch_hardening_expired() {
-        return Err(format!(
-            "escape hatch `{}` rejected: hardening window expired on {}. \
-             Remove the escape hatch environment variable and use the default \
-             fragile-parser-clang backend. (source: {})",
-            escape_kind, ESCAPE_HATCH_HARDENING_EXPIRY, source
-        ));
-    }
-    Ok(())
-}
-
-/// Testable variant with explicit date.
-pub fn enforce_escape_hatch_policy_as_of(
-    escape_kind: &str,
-    source: &str,
-    today: &str,
-) -> Result<(), String> {
-    emit_escape_hatch_deprecation_warning(escape_kind, source);
-    log_escape_hatch_usage(escape_kind, source);
-    if escape_hatch_hardening_expired_as_of(today) {
-        return Err(format!(
-            "escape hatch `{}` rejected: hardening window expired on {}. \
-             Remove the escape hatch environment variable and use the default \
-             fragile-parser-clang backend. (source: {})",
-            escape_kind, ESCAPE_HATCH_HARDENING_EXPIRY, source
-        ));
-    }
-    Ok(())
-}
-
-/// A parsed escape hatch log entry.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EscapeHatchLogEntry {
-    pub timestamp: u64,
-    pub escape_kind: String,
-    pub source: String,
-    pub pid: u64,
-}
-
-/// Parse a single escape hatch log line.
-/// Format: `timestamp={secs} escape_kind={kind} source={source} pid={pid}`
-pub fn parse_escape_hatch_log_line(line: &str) -> Option<EscapeHatchLogEntry> {
-    let line = line.trim();
-    if line.is_empty() {
-        return None;
-    }
-    let mut timestamp = None;
-    let mut escape_kind = None;
-    let mut source = None;
-    let mut pid = None;
-    for part in line.split_whitespace() {
-        if let Some(val) = part.strip_prefix("timestamp=") {
-            timestamp = val.parse::<u64>().ok();
-        } else if let Some(val) = part.strip_prefix("escape_kind=") {
-            escape_kind = Some(val.to_string());
-        } else if let Some(val) = part.strip_prefix("source=") {
-            source = Some(val.to_string());
-        } else if let Some(val) = part.strip_prefix("pid=") {
-            pid = val.parse::<u64>().ok();
-        }
-    }
-    Some(EscapeHatchLogEntry {
-        timestamp: timestamp?,
-        escape_kind: escape_kind?,
-        source: source?,
-        pid: pid?,
-    })
-}
-
-/// Parse all entries from an escape hatch log file.
-pub fn parse_escape_hatch_log(contents: &str) -> Vec<EscapeHatchLogEntry> {
-    contents
-        .lines()
-        .filter_map(parse_escape_hatch_log_line)
-        .collect()
-}
-
-/// Summary of escape hatch usage from a log file.
-#[derive(Debug, Clone)]
-pub struct EscapeHatchUsageReport {
-    /// Total number of escape hatch invocations.
-    pub total_count: usize,
-    /// Breakdown by escape_kind (e.g. "FRAGILEC_PARSER_BACKEND=libtooling" => count).
-    pub by_kind: BTreeMap<String, usize>,
-    /// Breakdown by source file.
-    pub by_source: BTreeMap<String, usize>,
-    /// Distinct PIDs that used escape hatches.
-    pub distinct_pids: usize,
-    /// Earliest timestamp in the log (0 if empty).
-    pub earliest_timestamp: u64,
-    /// Latest timestamp in the log (0 if empty).
-    pub latest_timestamp: u64,
-}
-
-/// Generate a usage report from parsed log entries.
-pub fn generate_escape_hatch_usage_report(entries: &[EscapeHatchLogEntry]) -> EscapeHatchUsageReport {
-    let mut by_kind: BTreeMap<String, usize> = BTreeMap::new();
-    let mut by_source: BTreeMap<String, usize> = BTreeMap::new();
-    let mut pids = std::collections::BTreeSet::new();
-    let mut earliest = u64::MAX;
-    let mut latest = 0u64;
-
-    for entry in entries {
-        *by_kind.entry(entry.escape_kind.clone()).or_insert(0) += 1;
-        *by_source.entry(entry.source.clone()).or_insert(0) += 1;
-        pids.insert(entry.pid);
-        if entry.timestamp < earliest {
-            earliest = entry.timestamp;
-        }
-        if entry.timestamp > latest {
-            latest = entry.timestamp;
-        }
-    }
-
-    EscapeHatchUsageReport {
-        total_count: entries.len(),
-        by_kind,
-        by_source,
-        distinct_pids: pids.len(),
-        earliest_timestamp: if entries.is_empty() { 0 } else { earliest },
-        latest_timestamp: if entries.is_empty() { 0 } else { latest },
-    }
-}
-
-/// Format the usage report as a human-readable string.
-pub fn format_escape_hatch_usage_report(report: &EscapeHatchUsageReport) -> String {
-    let mut out = String::new();
-    out.push_str(&format!("escape_hatch_total_count={}\n", report.total_count));
-    out.push_str(&format!("escape_hatch_distinct_pids={}\n", report.distinct_pids));
-    out.push_str(&format!(
-        "escape_hatch_earliest_timestamp={}\n",
-        report.earliest_timestamp
-    ));
-    out.push_str(&format!(
-        "escape_hatch_latest_timestamp={}\n",
-        report.latest_timestamp
-    ));
-    for (kind, count) in &report.by_kind {
-        out.push_str(&format!("escape_hatch_kind_{}={}\n", kind, count));
-    }
-    for (source, count) in &report.by_source {
-        out.push_str(&format!("escape_hatch_source_{}={}\n", source, count));
-    }
-    out
-}
-
-/// Check if escape hatch usage is trending to zero.
-/// Returns Ok(()) if `current_count` <= `previous_count` (non-increasing).
-/// Returns Err with details if usage has increased.
-pub fn assert_escape_hatch_trending_to_zero(
-    current_count: usize,
-    previous_count: usize,
-) -> Result<(), String> {
-    if current_count > previous_count {
-        return Err(format!(
-            "escape hatch usage increased: {} -> {} (expected non-increasing trend toward zero)",
-            previous_count, current_count
-        ));
-    }
-    Ok(())
-}
-
 
 fn parser_core_language(language: ClangParserLanguage) -> CoreParserLanguage {
     match language {
@@ -1165,14 +763,13 @@ fn crate_name_for_unit(source: &Path, out_obj: &Path) -> String {
     format!("{}_{suffix:08x}", base)
 }
 
-fn strict_compile_source_to_object_with_frontend_args_and_backend(
+fn strict_compile_source_to_object_with_frontend_args(
     source_arg: &Path,
     out_obj: &Path,
     includes: &[IncludeDirective],
     defines: &[String],
     frontend_args: &[String],
     args_for_meta: &[OsString],
-    parser_backend: &StrictParserBackend,
     cwd: &Path,
 ) -> Result<(), String> {
     let source = resolve_path(source_arg, cwd);
@@ -1191,18 +788,11 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
     }
 
     let language = source_language(&source);
-    // P0.b.2.b.1.b.3: language_standard was only consumed by the removed libtooling
-    // TranspileOptions path.  Retained as _unused until extract_language_standard
-    // itself is cleaned up.
-    let _language_standard = extract_language_standard(args_for_meta, language);
     let stage_timing_trace_path = std::env::var(FRAGILEC_TRANSPILE_STAGE_TIMING_PATH_ENV)
         .ok()
         .map(|raw| raw.trim().to_string())
         .filter(|raw| !raw.is_empty())
         .map(PathBuf::from);
-    // P0.b.2.b.1.b.1.2: escape hatch still parsed from env (to reject unsupported values)
-    // but the result is unused now that Libtooling variant is removed.
-    let _parser_core_codegen_escape_hatch = parser_core_codegen_escape_hatch_from_env()?;
     let keep_rs = std::env::var(FRAGILEC_KEEP_RS_ENV)
         .map(|v| v == "1")
         .unwrap_or(false);
@@ -1261,18 +851,13 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
         Ok(())
     };
 
-    // P0.b.2.b.1.b.3: Libtooling variant removed — ParserCore is the sole backend.
-    // The Libtooling variant match escape hatch
-    // enforcement and the libtooling transpile fallback path are now dead code and
-    // have been removed.  Escape-hatch infrastructure retained for P0.b.2.d/P0.b.2.e.
-    let StrictParserBackend::ParserCore { backend_id } = parser_backend;
     let parser_output = run_parser_core_backend_parse(
         &source,
         language,
         includes,
         defines,
         frontend_args,
-        backend_id.as_str(),
+        FRAGILE_PARSER_CLANG_BACKEND_ID,
         cwd,
     )?;
     let transpiled = with_current_dir(cwd, || {
@@ -1287,7 +872,7 @@ fn strict_compile_source_to_object_with_frontend_args_and_backend(
             format!(
                 "failed parser-output handoff transpile for {} with parser backend {}: {}",
                 source.display(),
-                strict_parser_backend_label(parser_backend),
+                FRAGILE_PARSER_CLANG_BACKEND_ID,
                 e
             )
         })
@@ -1442,7 +1027,6 @@ fn run_fragile_compile_in_dir(parsed: &ParsedInvocation, cwd: &Path) -> Result<(
 
     let resolved_includes = resolve_include_directives(&parsed.includes, cwd);
     let resolved_frontend_args = collect_resolved_frontend_args(&parsed.args, cwd);
-    let parser_backend = strict_parser_backend_from_env()?;
     for source_arg in &parsed.sources {
         let out_obj = if parsed.sources.len() == 1 {
             match &parsed.output {
@@ -1453,14 +1037,13 @@ fn run_fragile_compile_in_dir(parsed: &ParsedInvocation, cwd: &Path) -> Result<(
             default_object_output(source_arg, cwd)?
         };
 
-        strict_compile_source_to_object_with_frontend_args_and_backend(
+        strict_compile_source_to_object_with_frontend_args(
             source_arg,
             &out_obj,
             &resolved_includes,
             &parsed.defines,
             &resolved_frontend_args,
             &parsed.args,
-            &parser_backend,
             cwd,
         )?;
     }
@@ -1622,96 +1205,6 @@ mod tests {
     }
 
     #[test]
-    fn strict_parser_backend_validation_accepts_parser_core_backend() {
-        // NOTE: strict_parser_backend_from_legacy_backend removed in P0.b.2.b.1.b.2
-        // (adapter had no valid mapping target after Libtooling variant removal).
-        // P0.b.2.b.1.b.3: "libtooling" is now rejected (variant removed).
-        parse_parser_backend_value("libtooling")
-            .expect_err("libtooling should be rejected after variant removal");
-        assert_eq!(
-            parse_parser_backend_value("FRAGILE-PARSER-CLANG")
-                .expect("parser-core backend should parse"),
-            StrictParserBackend::ParserCore {
-                backend_id: FRAGILE_PARSER_CLANG_BACKEND_ID.to_string()
-            }
-        );
-        strict_parser_backend_from_value(Some(" libclang "))
-            .expect_err("legacy libclang alias should be rejected");
-        strict_parser_backend_from_value(Some(" hybrid "))
-            .expect_err("legacy hybrid alias should be rejected");
-    }
-
-    #[test]
-    fn strict_parser_backend_validation_error_lists_supported_values() {
-        let err = parse_parser_backend_value("unsupported")
-            .expect_err("unsupported backend value should be rejected");
-        assert!(
-            err.contains("unsupported FRAGILEC_PARSER_BACKEND value"),
-            "unexpected error: {}",
-            err
-        );
-        assert!(
-            err.contains("libtooling") && err.contains(FRAGILE_PARSER_CLANG_BACKEND_ID),
-            "error should list supported backend values: {}",
-            err
-        );
-    }
-
-    #[test]
-    fn parser_core_codegen_escape_hatch_validation() {
-        assert_eq!(
-            parser_core_codegen_escape_hatch_from_value(None).expect("missing value should disable"),
-            None
-        );
-        assert_eq!(
-            parser_core_codegen_escape_hatch_from_value(Some("  "))
-                .expect("empty value should disable"),
-            None
-        );
-        // P0.b.2.b.1.b.1.2: "libtooling" is no longer a valid escape hatch.
-        let err = parser_core_codegen_escape_hatch_from_value(Some("LIBTOOLING"))
-            .expect_err("libtooling escape hatch should be rejected after variant removal");
-        assert!(
-            err.contains("FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH"),
-            "unexpected escape hatch rejection error: {}",
-            err
-        );
-        let err = parser_core_codegen_escape_hatch_from_value(Some("unsupported"))
-            .expect_err("unsupported escape hatch should fail");
-        assert!(
-            err.contains("FRAGILEC_PARSER_CORE_CODEGEN_ESCAPE_HATCH"),
-            "unexpected escape hatch validation error: {}",
-            err
-        );
-    }
-
-    #[test]
-    fn parser_core_codegen_escape_hatch_libtooling_variant_removed() {
-        // P0.b.2.b.1.b.1.2: verify the Libtooling variant is no longer accepted.
-        // After variant removal, "libtooling" should be rejected by the parser.
-        let result = parse_parser_core_codegen_escape_hatch_value("libtooling");
-        assert!(
-            result.is_err(),
-            "libtooling should be rejected after variant removal"
-        );
-        let err = result.unwrap_err();
-        assert!(
-            err.contains("libtooling removed"),
-            "rejection message should mention libtooling removal: {}",
-            err
-        );
-        // None/empty values should still be accepted (no escape hatch active).
-        assert!(
-            parser_core_codegen_escape_hatch_from_value(None).is_ok(),
-            "None value should still be accepted"
-        );
-        assert!(
-            parser_core_codegen_escape_hatch_from_value(Some("")).is_ok(),
-            "empty value should still be accepted"
-        );
-    }
-
-    #[test]
     fn parser_core_backend_routes_through_parser_output_handoff() {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1723,16 +1216,13 @@ mod tests {
         let out_obj = temp_dir.join("program.o");
         fs::write(&source, "int main(void) { return 0; }\n").expect("failed to write source");
 
-        strict_compile_source_to_object_with_frontend_args_and_backend(
+        strict_compile_source_to_object_with_frontend_args(
             &source,
             &out_obj,
             &[],
             &[],
             &[],
             &[],
-            &StrictParserBackend::ParserCore {
-                backend_id: FRAGILE_PARSER_CLANG_BACKEND_ID.to_string(),
-            },
             &temp_dir,
         )
         .expect("parser-core backend should compile through parser-output handoff");
@@ -1796,49 +1286,6 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&temp_dir);
-    }
-
-    #[test]
-    fn escape_hatch_hardening_expiry_within_window() {
-        assert!(!escape_hatch_hardening_expired_as_of("2026-03-18"));
-        assert!(!escape_hatch_hardening_expired_as_of("2026-04-18"));
-    }
-
-    #[test]
-    fn escape_hatch_hardening_expiry_after_window() {
-        assert!(escape_hatch_hardening_expired_as_of("2026-04-19"));
-        assert!(escape_hatch_hardening_expired_as_of("2027-01-01"));
-    }
-
-    #[test]
-    fn enforce_escape_hatch_policy_as_of_ok_within_window() {
-        let result = enforce_escape_hatch_policy_as_of(
-            "FRAGILEC_PARSER_BACKEND=libtooling",
-            "test.cpp",
-            "2026-03-20",
-        );
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn enforce_escape_hatch_policy_as_of_err_after_window() {
-        let result = enforce_escape_hatch_policy_as_of(
-            "FRAGILEC_PARSER_BACKEND=libtooling",
-            "test.cpp",
-            "2026-04-19",
-        );
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.contains("rejected"));
-        assert!(err.contains(ESCAPE_HATCH_HARDENING_EXPIRY));
-    }
-
-    #[test]
-    fn today_date_string_is_valid_format() {
-        let today = today_date_string();
-        assert_eq!(today.len(), 10);
-        assert_eq!(&today[4..5], "-");
-        assert_eq!(&today[7..8], "-");
     }
 
     #[test]
