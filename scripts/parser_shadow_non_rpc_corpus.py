@@ -3,7 +3,7 @@
 
 This harness runs a representative non-RPC source corpus through strict `fragilec`
 compile twice under one run root:
-- baseline parser backend (default: libtooling)
+- baseline parser backend (default: fragile-parser-clang)
 - candidate parser backend (default: fragile-parser-clang)
 
 It emits deterministic per-fixture logs, summary parity metrics, and an explicit
@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 COMMAND_TIMEOUT_STATUS = 124
-DEFAULT_BASELINE_BACKEND = "libtooling"
+DEFAULT_BASELINE_BACKEND = "fragile-parser-clang"
 DEFAULT_CANDIDATE_BACKEND = "fragile-parser-clang"
 TASK_LEAF = "M7.2"
 FRAGILEC_TRANSPILE_STAGE_TIMING_PATH_ENV = "FRAGILEC_TRANSPILE_STAGE_TIMING_PATH"

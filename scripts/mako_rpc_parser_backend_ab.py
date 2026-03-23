@@ -172,7 +172,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--workspace-root", type=Path, default=workspace_root)
     parser.add_argument("--mako-root", type=Path, default=default_mako_root)
     parser.add_argument("--run-root", type=Path, default=default_run_root)
-    parser.add_argument("--baseline-backend", default="libtooling")
+    parser.add_argument("--baseline-backend", default="fragile-parser-clang")
     parser.add_argument("--candidate-backend", default="libclang")
     parser.add_argument("--lanes", default="fragilec")
     parser.add_argument("--jobs", type=int, default=4)

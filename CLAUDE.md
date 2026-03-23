@@ -19,8 +19,8 @@ C++ Source -> Clang AST -> Rust Source (unsafe) -> rustc -> Binary
 - `fragilec` is **strict-only** (`FRAGILEC_MODE=auto/pass` removed).
 - **Parser backend**: `fragile-parser-clang` is the sole parser backend. The LibTooling parser path has been **removed** from the active production flow (P0.a audit complete 2026-03-21, anti-regression gates in P0.c).
   - `FRAGILEC_PARSER_BACKEND` env var is no longer used; the parser backend is hardcoded.
-  - The `--use-libtooling` CLI flag is no longer available.
-  - Historical LibTooling code remains in the codebase for reference during the hardening window (expires 2026-04-18), after which it will be hard-removed (P0.b).
+  - The `--use-libtooling` CLI flag has been removed (P0.b.6, 2026-03-23).
+  - LibTooling production-path code has been hard-removed (P0.b, 2026-03-23). Residual historical code in `ast_convert.rs` and `libtooling_parser.rs` is retained for reference only.
 - RapidJSON with `RAPIDJSON_BUILD_TESTS=ON` is not yet supported in strict mode (configure fails during CXX feature detection / gtest `target_compile_features`).
 - Authoritative status and blocker ledger live in `TODO.md` (not `docs/transpiler-status.md`).
 
