@@ -681,6 +681,21 @@ fn p0b_2a_preflight_document_contains_driver_symbol_inventory() {
 }
 
 #[test]
+fn p0b_2b_task_marked_done_in_todo() {
+    let todo = read_project_file("TODO.md");
+    assert!(
+        todo.contains("- [x] P0.b.2.b (immediate)"),
+        "audit: TODO should mark P0.b.2.b as completed"
+    );
+    assert!(
+        todo.contains("P0.b.2.b.1")
+            && todo.contains("P0.b.2.b.2")
+            && todo.contains("docs/dev/p0b8_full_regression_gate_artifacts.md"),
+        "audit: P0.b.2.b completion record should reference supporting execution leaves and regression artifact evidence"
+    );
+}
+
+#[test]
 fn p0b_2b0_task_decomposed_in_todo() {
     let todo = read_project_file("TODO.md");
     assert!(

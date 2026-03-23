@@ -21717,3 +21717,19 @@ Execution notes:
 Closure:
 - Updated `docs/dev/p0b8_full_regression_gate_artifacts.md` with concrete command/result records.
 - Cleared `p0b8_regression_artifact_doc_exists_and_contains_required_gates` by removing pending placeholders and recording final evidence.
+
+## 2026-03-23: P0.b.2.b closure state correction
+
+Task sizing analysis:
+- Scope is a checklist-state correction plus audit coverage (<200 LOC).
+- Well below the <1000 LOC threshold; no decomposition needed.
+
+Plan before execution:
+- verify `P0.b.2.b.1` and `P0.b.2.b.2` completion evidence already exists;
+- mark stale `P0.b.2.b` checkbox done in `TODO.md` with explicit evidence;
+- add anti-regression audit to prevent reopening this stale state;
+- run full regressions.
+
+Wrong-approach check:
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No semantic stubs, rollback-pattern expansion, target-specific hacks, or bypasses were introduced.

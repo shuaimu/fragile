@@ -125,6 +125,8 @@ class ParserShadowNonRpcCorpusTests(unittest.TestCase):
         fragilec_bin: Path,
         fixtures: list[str],
         compile_timeout_seconds: int = 10,
+        baseline_backend: str = "libtooling",
+        candidate_backend: str = "fragile-parser-clang",
         extra_env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         cmd = [
@@ -136,6 +138,10 @@ class ParserShadowNonRpcCorpusTests(unittest.TestCase):
             str(run_root),
             "--fragilec-bin",
             str(fragilec_bin),
+            "--baseline-backend",
+            baseline_backend,
+            "--candidate-backend",
+            candidate_backend,
             "--compile-timeout-seconds",
             str(compile_timeout_seconds),
             "--skip-fragilec-build",
