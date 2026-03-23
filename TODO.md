@@ -53,7 +53,7 @@ Goal: replace LibTooling-centered parsing with a custom parser module that treat
             - [x] P0.b.2.b.1.b.3 (immediate) Resolve `fragile-driver` strict-path variant-match compile breaks after variant deletion while keeping backend string/help removals in `P0.b.2.c`. Done 2026-03-22.
           - [x] P0.b.2.b.1.c (immediate) Remove variant declarations and legacy-backend adapter mappings in `crates/fragile-cli/src/bin/fragilec.rs`. Done 2026-03-22.
           - [x] P0.b.2.b.1.d (immediate) Resolve strict-path variant-match compile breaks after variant deletion while keeping backend string/help contract removals under `P0.b.2.c`. Done 2026-03-22. Verified: `cargo check --workspace` clean, 0 production references to deleted variants.
-        - [ ] P0.b.2.b.2 (immediate) Update production-driver tests that currently construct/assert Libtooling enum variants to parser-core-only strict-path invariants.
+        - [WIP] P0.b.2.b.2 (immediate) Update production-driver tests that currently construct/assert Libtooling enum variants to parser-core-only strict-path invariants.
       - [ ] P0.b.2.c (immediate) Remove backend parsing/label/help support for `libtooling` (`parse_parser_backend_value`, backend label/value messages) in production drivers.
       - [ ] P0.b.2.d (immediate) Remove escape-hatch env constants and policy/logging/reporting functions from `fragile-driver`.
       - [ ] P0.b.2.e (immediate) Remove `use_libtooling_codegen_escape_hatch` routing and `ClangParserBackend::Libtooling` fallthrough branches from `fragile-driver` and `fragilec`.
