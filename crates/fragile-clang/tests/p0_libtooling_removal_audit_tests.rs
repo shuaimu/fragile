@@ -247,46 +247,45 @@ fn p0a_audit_cli_has_use_libtooling_flag() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn p0a_audit_libtooling_module_exists() {
+fn p0b5_anti_regression_libtooling_module_removed() {
     let lib_src = read_project_file("crates/fragile-clang/src/lib.rs");
-    // The libtooling module is imported and its exports are re-exported.
-    // P0.b removal: remove module declaration and all pub use items.
+    // P0.b.5: libtooling module deleted and re-exports removed 2026-03-23.
     assert!(
-        lib_src.contains("mod libtooling;"),
-        "audit: expected libtooling module declaration in fragile-clang/src/lib.rs"
+        !lib_src.contains("mod libtooling;"),
+        "anti-regression: mod libtooling should not be reintroduced in fragile-clang/src/lib.rs"
     );
     assert!(
-        lib_src.contains("pub use libtooling::{"),
-        "audit: expected libtooling re-exports in fragile-clang/src/lib.rs"
+        !lib_src.contains("pub use libtooling::{"),
+        "anti-regression: pub use libtooling re-exports should not be reintroduced"
     );
     assert!(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
+        !Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("src/libtooling.rs")
             .exists(),
-        "audit: expected libtooling.rs source file to exist"
+        "anti-regression: libtooling.rs should not be reintroduced"
     );
 }
 
 #[test]
-fn p0a_audit_libtooling_public_exports_inventory() {
+fn p0b5_anti_regression_libtooling_enrichment_exports_removed() {
     let lib_src = read_project_file("crates/fragile-clang/src/lib.rs");
-    // Enumerate all pub use libtooling exports for P0.b removal checklist.
-    let expected_exports = [
-        "convert_to_clang_node",
+    // P0.b.5: LibTooling enrichment types and extraction functions removed 2026-03-23.
+    // convert_to_clang_node and LibToolingParser are retained (moved to new modules).
+    let removed_exports = [
         "extract_method_bodies",
         "extract_method_bodies_with_params",
         "extract_specialization_field_types",
         "extract_specialization_method_signatures",
-        "LibToolingParser",
         "MethodInfo",
         "MethodSignature",
         "SpecializationFieldInfo",
         "TemplateMethodInstantiation",
     ];
-    for export in &expected_exports {
+    for export in &removed_exports {
         assert!(
-            lib_src.contains(export),
-            "audit: expected pub use libtooling export `{}`",
+            !lib_src.contains(&format!("pub use {}",  export))
+                && !lib_src.contains(&format!("pub use libtooling::{}", export)),
+            "anti-regression: pub export `{}` should not be reintroduced",
             export
         );
     }
@@ -428,23 +427,28 @@ fn p0a_audit_fragile_clang_lib_libtooling_reference_count() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn p0a_audit_cli_main_libtooling_preparse_path() {
+fn p0b5_anti_regression_cli_main_libtooling_preparse_removed() {
     let src = read_project_file("crates/fragile-cli/src/main.rs");
-    // The CLI's transpile command has a LibTooling pre-parse path that collects
-    // template method bodies and specialization field types.
-    // P0.b removal: remove this entire code path.
+    // P0.b.5: LibTooling pre-parse data collection removed 2026-03-23.
     assert!(
-        src.contains("libtooling_results"),
-        "audit: expected libtooling_results variable in CLI main.rs"
+        !src.contains("libtooling_results"),
+        "anti-regression: libtooling_results should not be reintroduced in CLI main.rs"
     );
     assert!(
-        src.contains("libtooling_field_types"),
-        "audit: expected libtooling_field_types variable in CLI main.rs"
+        !src.contains("libtooling_field_types"),
+        "anti-regression: libtooling_field_types should not be reintroduced in CLI main.rs"
     );
-    // P0.b.4: set_libtooling_bodies removed; CLI now discards merged bodies.
     assert!(
         !src.contains("set_libtooling_bodies"),
-        "anti-regression: set_libtooling_bodies should be removed from CLI main.rs"
+        "anti-regression: set_libtooling_bodies should not be reintroduced in CLI main.rs"
+    );
+    assert!(
+        !src.contains("extract_method_bodies_with_params"),
+        "anti-regression: extract_method_bodies_with_params should not be reintroduced in CLI main.rs"
+    );
+    assert!(
+        !src.contains("extract_specialization_field_types"),
+        "anti-regression: extract_specialization_field_types should not be reintroduced in CLI main.rs"
     );
 }
 

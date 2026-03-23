@@ -440,90 +440,10 @@ int main() {
     );
 }
 
-/// Test that the AST exporter flattens anonymous struct fields from compressed pairs.
-/// libc++'s __tree uses _LIBCPP_COMPRESSED_PAIR which expands to anonymous struct
-/// members containing fields like __size_, __end_node_, __value_comp_. These need
-/// to be flattened into the parent CTSD's field list.
-#[test]
-fn test_compressed_pair_fields_exported() {
-    if should_skip_libcxx_runtime_test("test_compressed_pair_fields_exported") {
-        return;
-    }
-
-    let temp_dir = std::path::PathBuf::from("/tmp/fragile_runtime_test_compressed_pair");
-    let _ = fs::create_dir_all(&temp_dir);
-
-    let cpp_code = r#"
-#include <map>
-
-int main() {
-    std::map<int, int> m;
-    m[1] = 10;
-    int s = m.size();
-    return s;
-}
-"#;
-    let cpp_path = temp_dir.join("test.cpp");
-    fs::write(&cpp_path, cpp_code).expect("Failed to write C++ source");
-
-    // Use LibTooling to get specialization data
-    let libtooling_parser = fragile_clang::LibToolingParser::new();
-    let libtooling_data = libtooling_parser
-        .parse_file(&cpp_path)
-        .expect("LibTooling parse should succeed");
-
-    let spec_fields = fragile_clang::extract_specialization_field_types(&libtooling_data);
-
-    // Find the __tree specialization
-    let tree_spec = spec_fields
-        .iter()
-        .find(|(key, _)| key.contains("__tree<"))
-        .map(|(_, info)| info);
-
-    assert!(
-        tree_spec.is_some(),
-        "Should have a __tree<...> specialization. Available: {:?}",
-        spec_fields
-            .keys()
-            .filter(|k| k.contains("tree"))
-            .collect::<Vec<_>>()
-    );
-
-    let tree_fields = &tree_spec.unwrap().field_types;
-
-    // __size_ field should be present (from _LIBCPP_COMPRESSED_PAIR)
-    assert!(
-        tree_fields.contains_key("__size_"),
-        "__tree specialization should have __size_ field (from compressed pair). Got fields: {:?}",
-        tree_fields.keys().collect::<Vec<_>>()
-    );
-
-    // __begin_node_ should be present (direct field, was already working)
-    assert!(
-        tree_fields.contains_key("__begin_node_"),
-        "__tree specialization should have __begin_node_ field. Got fields: {:?}",
-        tree_fields.keys().collect::<Vec<_>>()
-    );
-
-    // __end_node_ should be present (from _LIBCPP_COMPRESSED_PAIR)
-    assert!(
-        tree_fields.contains_key("__end_node_"),
-        "__tree specialization should have __end_node_ field (from compressed pair). Got fields: {:?}",
-        tree_fields.keys().collect::<Vec<_>>()
-    );
-
-    // Should have at least 4 real fields (begin_node, end_node, size, value_comp)
-    // plus padding fields from compressed pair
-    let real_fields: Vec<_> = tree_fields
-        .keys()
-        .filter(|k| !k.contains("padding"))
-        .collect();
-    assert!(
-        real_fields.len() >= 4,
-        "__tree should have at least 4 non-padding fields. Got: {:?}",
-        real_fields
-    );
-}
+/// P0.b.5: test_compressed_pair_fields_exported removed — it tested
+/// extract_specialization_field_types which was deleted with libtooling.rs.
+/// The underlying AST exporter behavior is still covered by the
+/// test_tree_struct_has_real_fields test below (transpile-level).
 
 /// Test that __tree stub struct uses real fields from specialization data instead of opaque bytes.
 /// When specialization field data is available, the __tree struct should have named fields

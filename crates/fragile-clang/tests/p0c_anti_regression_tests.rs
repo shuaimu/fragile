@@ -52,12 +52,12 @@ fn count_escape_hatch_refs(content: &str) -> usize {
 // ---------------------------------------------------------------------------
 
 /// fragile-driver/src/lib.rs LibTooling references must not increase.
-/// Current ceiling: 41 (set 2026-03-21). After P0.b removal: 0.
+/// Current ceiling: 0 (lowered from 41, P0.b.5 2026-03-23).
 #[test]
 fn p0c_guard_fragile_driver_libtooling_ceiling() {
     let src = read_project_file("crates/fragile-driver/src/lib.rs");
     let count = count_libtooling_refs(&src);
-    let ceiling = 41;
+    let ceiling = 0;
     assert!(
         count <= ceiling,
         "ANTI-REGRESSION: fragile-driver LibTooling references increased from {} ceiling to {}. \
@@ -72,12 +72,12 @@ fn p0c_guard_fragile_driver_libtooling_ceiling() {
 }
 
 /// fragilec.rs LibTooling references must not increase.
-/// Current ceiling: 64 (set 2026-03-21). After P0.b removal: 0.
+/// Current ceiling: 0 (lowered from 64, P0.b.5 2026-03-23).
 #[test]
 fn p0c_guard_fragilec_libtooling_ceiling() {
     let src = read_project_file("crates/fragile-cli/src/bin/fragilec.rs");
     let count = count_libtooling_refs(&src);
-    let ceiling = 64;
+    let ceiling = 0;
     assert!(
         count <= ceiling,
         "ANTI-REGRESSION: fragilec LibTooling references increased from {} ceiling to {}. \
@@ -95,12 +95,12 @@ fn p0c_guard_fragilec_libtooling_ceiling() {
 // ---------------------------------------------------------------------------
 
 /// fragile-driver/src/lib.rs escape-hatch references must not increase.
-/// Current ceiling: 73 (set 2026-03-21). After P0.b removal: 0.
+/// Current ceiling: 0 (lowered from 73, P0.b.5 2026-03-23).
 #[test]
 fn p0c_guard_fragile_driver_escape_hatch_ceiling() {
     let src = read_project_file("crates/fragile-driver/src/lib.rs");
     let count = count_escape_hatch_refs(&src);
-    let ceiling = 73;
+    let ceiling = 0;
     assert!(
         count <= ceiling,
         "ANTI-REGRESSION: fragile-driver escape-hatch references increased from {} ceiling to {}. \
@@ -114,12 +114,12 @@ fn p0c_guard_fragile_driver_escape_hatch_ceiling() {
 }
 
 /// fragilec.rs escape-hatch references must not increase.
-/// Current ceiling: 28 (set 2026-03-21). After P0.b removal: 0.
+/// Current ceiling: 0 (lowered from 28, P0.b.5 2026-03-23).
 #[test]
 fn p0c_guard_fragilec_escape_hatch_ceiling() {
     let src = read_project_file("crates/fragile-cli/src/bin/fragilec.rs");
     let count = count_escape_hatch_refs(&src);
-    let ceiling = 28;
+    let ceiling = 0;
     assert!(
         count <= ceiling,
         "ANTI-REGRESSION: fragilec escape-hatch references increased from {} ceiling to {}. \
@@ -183,12 +183,12 @@ fn p0c_guard_ast_codegen_libtooling_ceiling() {
 // ---------------------------------------------------------------------------
 
 /// main.rs (fragile CLI) LibTooling references must not increase.
-/// Current ceiling: 23 (set 2026-03-21). After P0.b removal: 0.
+/// Current ceiling: 7 (lowered from 23, P0.b.5 2026-03-23). After P0.b removal: 0.
 #[test]
 fn p0c_guard_fragile_cli_main_libtooling_ceiling() {
     let src = read_project_file("crates/fragile-cli/src/main.rs");
     let count = count_libtooling_refs(&src);
-    let ceiling = 23;
+    let ceiling = 7;
     assert!(
         count <= ceiling,
         "ANTI-REGRESSION: fragile CLI main.rs LibTooling references increased from {} ceiling to {}. \
@@ -210,13 +210,15 @@ fn p0c_guard_fragile_cli_main_libtooling_ceiling() {
 #[test]
 fn p0c_guard_no_new_libtooling_files_in_production_crates() {
     // Known files that currently contain LibTooling references (pre-P0.b removal).
+    // P0.b.5: libtooling.rs removed; ast_convert.rs and libtooling_parser.rs added.
     let allowed_files: Vec<&str> = vec![
         "crates/fragile-driver/src/lib.rs",
         "crates/fragile-cli/src/bin/fragilec.rs",
         "crates/fragile-cli/src/main.rs",
         "crates/fragile-clang/src/lib.rs",
         "crates/fragile-clang/src/ast_codegen.rs",
-        "crates/fragile-clang/src/libtooling.rs",
+        "crates/fragile-clang/src/ast_convert.rs",
+        "crates/fragile-clang/src/libtooling_parser.rs",
         "crates/fragile-clang/src/parse.rs",
     ];
 
@@ -288,7 +290,7 @@ fn scan_dir_for_libtooling(
 // ---------------------------------------------------------------------------
 
 /// Total LibTooling references across all tracked production files must not increase.
-/// Current aggregate ceiling: 262 (41+64+23+32+102, lowered from 275 in P0.b.3 2026-03-22).
+/// Current aggregate ceiling: 64 (0+0+7+32+25, lowered from 185 in P0.b.5 2026-03-23).
 /// After P0.b removal: 0.
 #[test]
 fn p0c_guard_aggregate_libtooling_ceiling() {
@@ -305,7 +307,7 @@ fn p0c_guard_aggregate_libtooling_ceiling() {
         .map(|f| count_libtooling_refs(&read_project_file(f)))
         .sum();
 
-    let ceiling = 185;
+    let ceiling = 64;
     assert!(
         total <= ceiling,
         "ANTI-REGRESSION: aggregate LibTooling references across production files \
@@ -319,7 +321,7 @@ fn p0c_guard_aggregate_libtooling_ceiling() {
 }
 
 /// Total escape-hatch references across production drivers must not increase.
-/// Current aggregate ceiling: 101 (73+28, set 2026-03-21). After P0.b removal: 0.
+/// Current aggregate ceiling: 0 (lowered from 101, P0.b.5 2026-03-23).
 #[test]
 fn p0c_guard_aggregate_escape_hatch_ceiling() {
     let files = [
@@ -332,7 +334,7 @@ fn p0c_guard_aggregate_escape_hatch_ceiling() {
         .map(|f| count_escape_hatch_refs(&read_project_file(f)))
         .sum();
 
-    let ceiling = 101;
+    let ceiling = 0;
     assert!(
         total <= ceiling,
         "ANTI-REGRESSION: aggregate escape-hatch references across production drivers \

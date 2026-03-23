@@ -13,7 +13,8 @@
 
 mod ast;
 mod ast_codegen;
-mod libtooling;
+mod ast_convert;
+mod libtooling_parser;
 mod parse;
 mod types;
 
@@ -22,11 +23,8 @@ pub use ast::{
     TemplateSpecializationKind, TypeTraitKind, UnaryOp,
 };
 pub use ast_codegen::AstCodeGen;
-pub use libtooling::{
-    convert_to_clang_node, extract_method_bodies, extract_method_bodies_with_params,
-    extract_specialization_field_types, extract_specialization_method_signatures, LibToolingParser,
-    MethodInfo, MethodSignature, SpecializationFieldInfo, TemplateMethodInstantiation,
-};
+pub use ast_convert::convert_to_clang_node;
+pub use libtooling_parser::LibToolingParser;
 pub use parse::{ClangParser, ParserLanguage};
 pub use types::{CppType, TypeProperties, TypeTraitEvaluator, TypeTraitResult};
 

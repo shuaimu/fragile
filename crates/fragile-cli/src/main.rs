@@ -91,42 +91,13 @@ fn main() -> Result<()> {
                 .map(|p| p.to_string_lossy().to_string())
                 .collect();
 
-            // If using LibTooling, pre-parse files to extract template method bodies
-            let mut libtooling_results: std::collections::HashMap<
-                std::path::PathBuf,
-                std::collections::HashMap<(String, String), Vec<fragile_clang::MethodInfo>>,
-            > = std::collections::HashMap::new();
-
-            // Also store specialization field types when using LibTooling
-            let mut libtooling_field_types: std::collections::HashMap<
-                PathBuf,
-                std::collections::HashMap<String, fragile_clang::SpecializationFieldInfo>,
-            > = std::collections::HashMap::new();
-
+            // P0.b.5: --use-libtooling enrichment data types removed; flag is
+            // retained (P0.b.6 scope) but has no effect.
             if use_libtooling {
-                eprintln!("Pre-parsing with LibTooling for template bodies...");
-                let libtooling_parser = fragile_clang::LibToolingParser::new();
-                for file in &files {
-                    eprintln!("  LibTooling parsing: {}", file.display());
-                    match libtooling_parser.parse_file(file) {
-                        Ok(libtooling_ctx) => {
-                            let method_bodies =
-                                fragile_clang::extract_method_bodies_with_params(&libtooling_ctx);
-                            let field_types =
-                                fragile_clang::extract_specialization_field_types(&libtooling_ctx);
-                            eprintln!(
-                                "    Found {} method body entries, {} specialization field types",
-                                method_bodies.len(),
-                                field_types.len()
-                            );
-                            libtooling_results.insert(file.clone(), method_bodies);
-                            libtooling_field_types.insert(file.clone(), field_types);
-                        }
-                        Err(e) => {
-                            eprintln!("    Warning: LibTooling parse failed: {}", e);
-                        }
-                    }
-                }
+                eprintln!(
+                    "Warning: --use-libtooling is deprecated and has no effect. \
+                     LibTooling enrichment was removed in P0.b.4/P0.b.5."
+                );
             }
 
             // Create parser with vendored libc++
@@ -152,37 +123,6 @@ fn main() -> Result<()> {
 
             let all_output = if stubs_only {
                 fragile_clang::AstCodeGen::new().generate_stubs(&combined_tu)
-            } else if use_libtooling {
-                let mut merged_method_bodies: std::collections::HashMap<
-                    (String, String),
-                    Vec<fragile_clang::MethodInfo>,
-                > = std::collections::HashMap::new();
-                let mut merged_field_types: std::collections::HashMap<
-                    String,
-                    fragile_clang::SpecializationFieldInfo,
-                > = std::collections::HashMap::new();
-
-                for file in &files {
-                    if let Some(methods) = libtooling_results.remove(file) {
-                        for (key, mut infos) in methods {
-                            merged_method_bodies
-                                .entry(key)
-                                .or_default()
-                                .append(&mut infos);
-                        }
-                    }
-                    if let Some(field_types) = libtooling_field_types.remove(file) {
-                        for (key, value) in field_types {
-                            merged_field_types.entry(key).or_insert(value);
-                        }
-                    }
-                }
-
-                // P0.b.4: enrichment state removed from AstCodeGen; merged data
-                // is collected but no longer applied.
-                let _ = merged_method_bodies;
-                let _ = merged_field_types;
-                fragile_clang::AstCodeGen::new().generate(&combined_tu)
             } else {
                 fragile_clang::AstCodeGen::new().generate(&combined_tu)
             };
