@@ -30282,8 +30282,10 @@ impl AstCodeGen {
             && !code.contains("std::mem::zeroed::<")
             && !code.contains("RefCell::<std::option::Option<std::boxed::Box<boost_coro_task_t>>>::new(Default::default())")
             && !has_exact_struct_def(code, "atomic_int")
+            && !has_exact_struct_def(code, "std_atomic_int")
             && !has_exact_struct_def(code, "atomic_long")
             && !has_exact_struct_def(code, "atomic_bool")
+            && !has_exact_struct_def(code, "std_atomic_bool")
         {
             return code.to_string();
         }
@@ -30530,8 +30532,9 @@ pub fn __fragile_call_mersenne_twister_engine<T>(state: &mut T) -> u64 {
 "#,
             );
         }
-        if has_exact_struct_def(&out, "atomic_int")
-            && !out.contains("trait FragileAtomicIntCompat")
+        let has_atomic_int = has_exact_struct_def(&out, "atomic_int");
+        let has_std_atomic_int = has_exact_struct_def(&out, "std_atomic_int");
+        if (has_atomic_int || has_std_atomic_int) && !out.contains("trait FragileAtomicIntCompat")
         {
             out.push_str(
                 r#"
@@ -30541,7 +30544,12 @@ pub trait FragileAtomicIntCompat {
     fn fetch_add<O>(&mut self, val: i32, _order: O) -> i32;
     fn fetch_sub<O>(&mut self, val: i32, _order: O) -> i32;
 }
-
+"#,
+            );
+        }
+        if has_atomic_int && !out.contains("impl FragileAtomicIntCompat for atomic_int") {
+            out.push_str(
+                r#"
 impl FragileAtomicIntCompat for atomic_int {
     #[inline]
     fn load<O>(&self, _order: O) -> i32 {
@@ -30569,6 +30577,45 @@ impl FragileAtomicIntCompat for atomic_int {
     fn fetch_sub<O>(&mut self, val: i32, _order: O) -> i32 {
         unsafe {
             let ptr = self as *mut atomic_int as *mut i32;
+            let old = std::ptr::read_unaligned(ptr);
+            std::ptr::write_unaligned(ptr, old.wrapping_sub(val));
+            old
+        }
+    }
+}
+"#,
+            );
+        }
+        if has_std_atomic_int && !out.contains("impl FragileAtomicIntCompat for std_atomic_int") {
+            out.push_str(
+                r#"
+impl FragileAtomicIntCompat for std_atomic_int {
+    #[inline]
+    fn load<O>(&self, _order: O) -> i32 {
+        unsafe { std::ptr::read_unaligned(self as *const std_atomic_int as *const i32) }
+    }
+
+    #[inline]
+    fn store<O>(&mut self, val: i32, _order: O) {
+        unsafe {
+            std::ptr::write_unaligned(self as *mut std_atomic_int as *mut i32, val);
+        }
+    }
+
+    #[inline]
+    fn fetch_add<O>(&mut self, val: i32, _order: O) -> i32 {
+        unsafe {
+            let ptr = self as *mut std_atomic_int as *mut i32;
+            let old = std::ptr::read_unaligned(ptr);
+            std::ptr::write_unaligned(ptr, old.wrapping_add(val));
+            old
+        }
+    }
+
+    #[inline]
+    fn fetch_sub<O>(&mut self, val: i32, _order: O) -> i32 {
+        unsafe {
+            let ptr = self as *mut std_atomic_int as *mut i32;
             let old = std::ptr::read_unaligned(ptr);
             std::ptr::write_unaligned(ptr, old.wrapping_sub(val));
             old
@@ -30626,7 +30673,9 @@ impl FragileAtomicLongCompat for atomic_long {
 "#,
             );
         }
-        if has_exact_struct_def(&out, "atomic_bool")
+        let has_atomic_bool = has_exact_struct_def(&out, "atomic_bool");
+        let has_std_atomic_bool = has_exact_struct_def(&out, "std_atomic_bool");
+        if (has_atomic_bool || has_std_atomic_bool)
             && !out.contains("trait FragileAtomicBoolCompat")
         {
             out.push_str(
@@ -30635,7 +30684,12 @@ pub trait FragileAtomicBoolCompat {
     fn load<O>(&self, _order: O) -> bool;
     fn store<O>(&mut self, val: bool, _order: O);
 }
-
+"#,
+            );
+        }
+        if has_atomic_bool && !out.contains("impl FragileAtomicBoolCompat for atomic_bool") {
+            out.push_str(
+                r#"
 impl FragileAtomicBoolCompat for atomic_bool {
     #[inline]
     fn load<O>(&self, _order: O) -> bool {
@@ -30647,7 +30701,28 @@ impl FragileAtomicBoolCompat for atomic_bool {
         unsafe {
             std::ptr::write_unaligned(self as *mut atomic_bool as *mut bool, val);
         }
-                }
+    }
+}
+"#,
+            );
+        }
+        if has_std_atomic_bool
+            && !out.contains("impl FragileAtomicBoolCompat for std_atomic_bool")
+        {
+            out.push_str(
+                r#"
+impl FragileAtomicBoolCompat for std_atomic_bool {
+    #[inline]
+    fn load<O>(&self, _order: O) -> bool {
+        unsafe { std::ptr::read_unaligned(self as *const std_atomic_bool as *const bool) }
+    }
+
+    #[inline]
+    fn store<O>(&mut self, val: bool, _order: O) {
+        unsafe {
+            std::ptr::write_unaligned(self as *mut std_atomic_bool as *mut bool, val);
+        }
+    }
 }
 "#,
             );
@@ -133402,6 +133477,74 @@ pub struct different_name {
         let input = "let x = Foo::new_1(42);\n";
         let output = AstCodeGen::normalize_atomic_degraded_new_params(input);
         assert_eq!(output, input, "Should not modify non-atomic new_1 calls");
+    }
+
+    #[test]
+    fn test_normalize_final_rpc_straggler_artifacts_adds_std_atomic_int_compat_impl() {
+        let input = r#"
+pub struct std_atomic_int {
+    _opaque: [u8; 64],
+}
+"#;
+        let output = AstCodeGen::normalize_final_rpc_straggler_artifacts(input);
+        assert!(
+            output.contains("pub trait FragileAtomicIntCompat"),
+            "expected atomic int compat trait to be emitted, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl FragileAtomicIntCompat for std_atomic_int"),
+            "expected std_atomic_int compat impl to be emitted, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_final_rpc_straggler_artifacts_adds_std_atomic_bool_compat_impl() {
+        let input = r#"
+pub struct std_atomic_bool {
+    _opaque: [u8; 64],
+}
+"#;
+        let output = AstCodeGen::normalize_final_rpc_straggler_artifacts(input);
+        assert!(
+            output.contains("pub trait FragileAtomicBoolCompat"),
+            "expected atomic bool compat trait to be emitted, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl FragileAtomicBoolCompat for std_atomic_bool"),
+            "expected std_atomic_bool compat impl to be emitted, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_final_rpc_straggler_artifacts_skips_duplicate_std_atomic_int_impl() {
+        let input = r#"
+pub struct std_atomic_int {
+    _opaque: [u8; 64],
+}
+pub trait FragileAtomicIntCompat {
+    fn load<O>(&self, _order: O) -> i32;
+    fn store<O>(&mut self, val: i32, _order: O);
+    fn fetch_add<O>(&mut self, val: i32, _order: O) -> i32;
+    fn fetch_sub<O>(&mut self, val: i32, _order: O) -> i32;
+}
+impl FragileAtomicIntCompat for std_atomic_int {
+    fn load<O>(&self, _order: O) -> i32 { 0 }
+    fn store<O>(&mut self, _val: i32, _order: O) {}
+    fn fetch_add<O>(&mut self, _val: i32, _order: O) -> i32 { 0 }
+    fn fetch_sub<O>(&mut self, _val: i32, _order: O) -> i32 { 0 }
+}
+"#;
+        let output = AstCodeGen::normalize_final_rpc_straggler_artifacts(input);
+        assert_eq!(
+            output.matches("impl FragileAtomicIntCompat for std_atomic_int").count(),
+            1,
+            "std_atomic_int compat impl should not be duplicated, got:\n{}",
+            output
+        );
     }
 
     // -----------------------------------------------------------------------
