@@ -36389,9 +36389,14 @@ impl FragileUnitParamCompat for () {
     /// are missing fields that their method bodies reference (_M_ctype,
     /// _M_num_get, _M_num_put, _M_gcount).  Add opaque fields and stub
     /// method bodies that reference unresolvable internal types.
-    /// Also fixes E0609: `__rdstate_` on ios_base → `_M_streambuf_state`.
+    /// Also fixes E0609: normalize ios_base stream-state field accesses to the
+    /// field that is actually emitted (`__rdstate_`).
     pub fn normalize_ios_istream_missing_fields(code: &str) -> String {
-        if !code.contains("std_basic_ios_") && !code.contains("std_basic_istream_") && !code.contains(".__rdstate_") {
+        if !code.contains("std_basic_ios_")
+            && !code.contains("std_basic_istream_")
+            && !code.contains(".__rdstate_")
+            && !code.contains("._M_streambuf_state")
+        {
             return code.to_string();
         }
         let mut out = String::with_capacity(code.len() + 512);
@@ -36435,9 +36440,10 @@ impl FragileUnitParamCompat for () {
                 }
                 continue;
             }
-            // Fix __rdstate_ → _M_streambuf_state on ios_base
-            if trimmed.contains(".__rdstate_") || trimmed.contains("self.__rdstate_") {
-                let rewritten = lines[i].replace(".__rdstate_", "._M_streambuf_state");
+            // Fix _M_streambuf_state -> __rdstate_ on ios_base.
+            if trimmed.contains("._M_streambuf_state") || trimmed.contains("self._M_streambuf_state")
+            {
+                let rewritten = lines[i].replace("._M_streambuf_state", ".__rdstate_");
                 out.push_str(&rewritten);
                 out.push('\n');
                 i += 1;
@@ -134460,17 +134466,17 @@ impl std_basic_ios_char_ {
     }
 
     #[test]
-    fn test_normalize_ios_fixes_rdstate_to_streambuf_state() {
-        let input = "                    self.__rdstate_ = __state;\n";
+    fn test_normalize_ios_fixes_streambuf_state_to_rdstate() {
+        let input = "                    self._M_streambuf_state = __state;\n";
         let output = AstCodeGen::normalize_ios_istream_missing_fields(input);
         assert!(
-            output.contains("._M_streambuf_state"),
-            "should rename __rdstate_ to _M_streambuf_state, got: {}",
+            output.contains(".__rdstate_"),
+            "should rename _M_streambuf_state to __rdstate_, got: {}",
             output
         );
         assert!(
-            !output.contains("__rdstate_"),
-            "should not contain __rdstate_ anymore, got: {}",
+            !output.contains("_M_streambuf_state"),
+            "should not contain _M_streambuf_state anymore, got: {}",
             output
         );
     }

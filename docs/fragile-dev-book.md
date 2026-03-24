@@ -21931,3 +21931,28 @@ Key findings/decisions:
   - `E0599 1 -> 0`;
   - `op_inc 1 -> 0`;
   - non-increase: `E0425 63 -> 63`, and `E0308` also reduced `117 -> 73`.
+
+## 2026-03-24: M9.2.c.iv.e.22 ios_base stream-state field normalization
+
+Task sizing analysis:
+- Active first open leaf was `M9.2.c.iv.e.22`.
+- Scope was bounded to one dominant `E0609` field-access cluster fix in `normalize_ios_istream_missing_fields` with focused tests (<1000 LOC).
+
+Plan before execution:
+- capture strict baseline inventory on `debugging/misc/basetypes/logging`;
+- isolate one dominant repeated `E0609` cluster;
+- apply one generic field-lane normalization fix in `ast_codegen`;
+- add focused unit coverage;
+- rebuild release `fragilec`, rerun strict inventory, and publish deterministic deltas.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific conditionals, no force-native bypasses, no semantic source stubs, and no rollback-pattern additions were introduced.
+
+Key findings/decisions:
+- Baseline `E0609` cluster was dominated by missing `ios_base` field `_M_streambuf_state` (36/40 entries), while emitted records still carry `__rdstate_`.
+- Existing normalization rewrote `.__rdstate_` to `._M_streambuf_state`, creating field-lane mismatch; the bounded fix inverts this and normalizes `._M_streambuf_state` back to `.__rdstate_`.
+- Strict replay deltas (baseline `/tmp/fragile_e22_before_jJNoYZ`, after `/tmp/fragile_e22_after_LyAa8r`):
+  - total `236 -> 200`;
+  - `E0609 40 -> 4`;
+  - non-increase: `E0308 73 -> 73`, `E0425 63 -> 63`, `E0599 0 -> 0`, `E0277 8 -> 8`.
