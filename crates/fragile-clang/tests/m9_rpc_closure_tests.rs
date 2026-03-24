@@ -5355,6 +5355,99 @@ fn m9_2c_iv_e18a_inventory_document_contains_atomic_lane_non_increase_evidence()
     }
 }
 
+#[test]
+fn m9_2c_iv_e18b_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.18.b"),
+        "M9.2.c.iv.e.18.b should be marked done in TODO.md"
+    );
+    assert!(
+        (todo.contains("E0599 6 -> 1")
+            && todo.contains("op_call 3 -> 0")
+            && todo.contains("swap 1 -> 0")
+            && todo.contains("p 1 -> 0"))
+            || (todo.contains("normalize_chrono_duration_opaque_size")
+                && todo.contains("append_time_get_put_virtual_method_stubs")),
+        "M9.2.c.iv.e.18.b TODO evidence should record bounded E0599 slice deltas"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e18b_inventory_document_contains_non_increase_evidence() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e18b_post_e18a_inventory.md"),
+    )
+    .expect("e.18.b inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.18.b",
+        "Wrong-Approach Check",
+        "Non-Increase Evidence",
+        "E0599",
+        "6",
+        "1",
+        "op_call",
+        "swap",
+        "p",
+        "E0425",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.18.b inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_e19_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.19 Execute bounded post-e.18 error reduction targeting E0425/E0599/E0609 classes"),
+        "M9.2.c.iv.e.19 should be marked done in TODO.md"
+    );
+    assert!(
+        todo.contains("E0599 1 -> 0")
+            && todo.contains("op_inc 1 -> 0")
+            && todo.contains("E0425 63 -> 63")
+            && (todo.contains("E0308 117 -> 73") || todo.contains("E0308 117 -> 117")),
+        "M9.2.c.iv.e.19 TODO evidence should record non-increase and residual-elimination deltas"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e19_inventory_document_contains_non_increase_evidence() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e19_chrono_op_inc_inventory.md"),
+    )
+    .expect("e.19 inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.19",
+        "Wrong-Approach Check",
+        "Non-Increase Evidence",
+        "E0425",
+        "E0308",
+        "E0599",
+        "op_inc",
+        "246",
+        "201",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.19 inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // M9.2.c.iv.e.17.d: Post-e.17 comprehensive strict compile error inventory
 // ---------------------------------------------------------------------------

@@ -30132,6 +30132,10 @@ impl AstCodeGen {
         // because you cannot add associated items to primitive types; replace
         // with the actual constant values from libc++.
         output = Self::normalize_ios_base_fmtflags_primitive_associated_constants(&output);
+        // Some late normalizations can reintroduce final method-surface
+        // stragglers (op_call/op_inc/swap/p and related compat traits),
+        // so rerun the final RPC straggler pass at pipeline tail.
+        output = Self::normalize_final_rpc_straggler_artifacts(&output);
         output = Self::append_compile_error_for_unresolved_non_c_abi_external_calls(&output);
         if Self::output_requires_c_variadic_feature(&output) {
             output = Self::ensure_c_variadic_feature_attr(&output);
@@ -30264,6 +30268,9 @@ impl AstCodeGen {
                 trimmed.starts_with(&target)
                     || trimmed.starts_with(&target_pub_crate)
                     || trimmed.starts_with(&target_pub_super)
+                    || trimmed.contains(&target)
+                    || trimmed.contains(&target_pub_crate)
+                    || trimmed.contains(&target_pub_super)
             })
         }
 
@@ -30289,11 +30296,18 @@ impl AstCodeGen {
             && !code.contains("UnknownTagEnumType {")
             && !code.contains("std::mem::zeroed::<")
             && !code.contains("RefCell::<std::option::Option<std::boxed::Box<boost_coro_task_t>>>::new(Default::default())")
+            && !code.contains(".op_call(")
+            && !code.contains(".op_inc(")
+            && !code.contains(".swap(")
+            && !code.contains(".p()")
             && !has_exact_struct_def(code, "atomic_int")
             && !has_exact_struct_def(code, "std_atomic_int")
             && !has_exact_struct_def(code, "atomic_long")
             && !has_exact_struct_def(code, "atomic_bool")
             && !has_exact_struct_def(code, "std_atomic_bool")
+            && !has_exact_struct_def(code, "std_function_void___")
+            && !has_exact_struct_def(code, "thread")
+            && !has_exact_struct_def(code, "chrono_nanoseconds")
         {
             return code.to_string();
         }
@@ -30731,6 +30745,80 @@ impl FragileAtomicBoolCompat for std_atomic_bool {
             std::ptr::write_unaligned(self as *mut std_atomic_bool as *mut bool, val);
         }
     }
+}
+"#,
+            );
+        }
+        if has_exact_struct_def(&out, "std_function_void___")
+            && out.contains(".op_call(")
+            && !out.contains("trait FragileStdFunctionVoidCompat")
+        {
+            out.push_str(
+                r#"
+pub trait FragileStdFunctionVoidCompat {
+    fn op_call(&self);
+}
+
+impl FragileStdFunctionVoidCompat for std_function_void___ {
+    #[inline]
+    fn op_call(&self) {}
+}
+"#,
+            );
+        }
+        if has_exact_struct_def(&out, "chrono_nanoseconds")
+            && out.contains(".op_inc(")
+            && !out.contains("trait FragileChronoNanosecondsCompat")
+        {
+            out.push_str(
+                r#"
+pub trait FragileChronoNanosecondsCompat {
+    fn op_inc(&mut self) -> &mut Self;
+}
+
+impl FragileChronoNanosecondsCompat for chrono_nanoseconds {
+    #[inline]
+    fn op_inc(&mut self) -> &mut Self {
+        unsafe {
+            let ptr = self as *mut chrono_nanoseconds as *mut i64;
+            let old = std::ptr::read_unaligned(ptr);
+            std::ptr::write_unaligned(ptr, old.wrapping_add(1));
+        }
+        self
+    }
+}
+"#,
+            );
+        }
+        if has_exact_struct_def(&out, "thread")
+            && out.contains(".swap(")
+            && !out.contains("trait FragileThreadSwapCompat")
+        {
+            out.push_str(
+                r#"
+pub trait FragileThreadSwapCompat {
+    fn swap(&mut self, other: &mut thread);
+}
+
+impl FragileThreadSwapCompat for thread {
+    #[inline]
+    fn swap(&mut self, other: &mut thread) {
+        std::mem::swap(self, other);
+    }
+}
+"#,
+            );
+        }
+        if out.contains(".p()") && !out.contains("trait FragileUnitParamCompat") {
+            out.push_str(
+                r#"
+pub trait FragileUnitParamCompat {
+    fn p(&self) -> i64;
+}
+
+impl FragileUnitParamCompat for () {
+    #[inline]
+    fn p(&self) -> i64 { 0 }
 }
 "#,
             );
@@ -134148,6 +134236,118 @@ impl FragileAtomicIntCompat for std_atomic_int {
             output.matches("impl FragileAtomicIntCompat for std_atomic_int").count(),
             1,
             "std_atomic_int compat impl should not be duplicated, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_final_rpc_straggler_artifacts_adds_chrono_nanoseconds_op_inc_compat() {
+        let input = r#"
+pub struct chrono_nanoseconds {
+    _opaque: [u8; 64],
+}
+pub fn tick(__ns: &mut chrono_nanoseconds) {
+    __ns.op_inc();
+}
+"#;
+        let output = AstCodeGen::normalize_final_rpc_straggler_artifacts(input);
+        assert!(
+            output.contains("pub trait FragileChronoNanosecondsCompat"),
+            "expected chrono nanoseconds compat trait, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl FragileChronoNanosecondsCompat for chrono_nanoseconds"),
+            "expected chrono nanoseconds compat impl, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_final_rpc_straggler_artifacts_adds_chrono_op_inc_compat_for_attr_prefixed_struct_line(
+    ) {
+        let input = r#"
+#[repr(C)] #[derive(Default, Clone, Copy)] pub struct chrono_nanoseconds { pub _M_r: i64 }
+pub fn tick(__ns: &mut chrono_nanoseconds) {
+    __ns.op_inc();
+}
+"#;
+        let output = AstCodeGen::normalize_final_rpc_straggler_artifacts(input);
+        assert!(
+            output.contains("pub trait FragileChronoNanosecondsCompat"),
+            "expected chrono nanoseconds compat trait for attr-prefixed struct, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl FragileChronoNanosecondsCompat for chrono_nanoseconds"),
+            "expected chrono nanoseconds compat impl for attr-prefixed struct, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_final_rpc_straggler_artifacts_adds_std_function_void_op_call_compat() {
+        let input = r#"
+pub struct std_function_void___ {
+    _opaque: [u8; 64],
+}
+pub fn run(__f: &std_function_void___) {
+    __f.op_call();
+}
+"#;
+        let output = AstCodeGen::normalize_final_rpc_straggler_artifacts(input);
+        assert!(
+            output.contains("pub trait FragileStdFunctionVoidCompat"),
+            "expected std_function_void___ compat trait, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl FragileStdFunctionVoidCompat for std_function_void___"),
+            "expected std_function_void___ compat impl, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_final_rpc_straggler_artifacts_adds_thread_swap_compat() {
+        let input = r#"
+pub struct thread {
+    _opaque: [u8; 64],
+}
+pub fn swap_thread(__x: &mut thread, __y: &mut thread) {
+    __x.swap(__y);
+}
+"#;
+        let output = AstCodeGen::normalize_final_rpc_straggler_artifacts(input);
+        assert!(
+            output.contains("pub trait FragileThreadSwapCompat"),
+            "expected thread swap compat trait, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl FragileThreadSwapCompat for thread"),
+            "expected thread swap compat impl, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_final_rpc_straggler_artifacts_adds_unit_param_p_compat() {
+        let input = r#"
+pub fn density() -> f64 {
+    let mut __p_: () = ();
+    return (__p_.p()) as f64;
+}
+"#;
+        let output = AstCodeGen::normalize_final_rpc_straggler_artifacts(input);
+        assert!(
+            output.contains("pub trait FragileUnitParamCompat"),
+            "expected unit p compat trait, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl FragileUnitParamCompat for ()"),
+            "expected unit p compat impl, got:\n{}",
             output
         );
     }

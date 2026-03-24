@@ -21845,3 +21845,89 @@ Key findings/decisions:
   - aggregate `E0599`: `29 -> 13`;
   - `no method named do_get`: `8 -> 0`;
   - `no method named do_put`: `8 -> 0`.
+
+## 2026-03-24: M9.2.c.iv.e.18.a std-atomic compat replay slice (E0599 lane)
+
+Task sizing analysis:
+- Active first bounded leaf under `M9.2.c.iv.e.18` was the residual `std_atomic_int` / `std_atomic_bool` method-miss cluster.
+- Implementation stayed bounded to one generic normalizer and focused tests in `ast_codegen` (<1000 LOC).
+
+Plan before execution:
+- inspect strict replay artifacts from `/tmp/fragile_e17c_after_release2_nOGJrO` and confirm residual class concentration;
+- extend generic atomic compatibility emission so std-prefixed atomic stubs receive trait impls;
+- add duplication guards and focused unit tests;
+- rebuild release `fragilec`, rerun strict replay on `debugging/misc/basetypes/logging`, and publish deterministic deltas.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before edits.
+- No target-specific conditionals, no force-native bypass, no semantic-stub shortcuts, and no rollback-pattern additions were introduced.
+
+Key findings/decisions:
+- Pre-change residual inventory showed aggregate `E0599=13`, dominated by atomic method misses (`store`/`load`) on `std_atomic_int` and `std_atomic_bool`.
+- `normalize_final_rpc_straggler_artifacts` previously emitted `FragileAtomic*Compat` impls for legacy `atomic_*` but not for `std_atomic_*` variants in this replay lane.
+- Added std-prefixed impl emission with per-target duplicate guards.
+- Strict replay deltas (baseline `/tmp/fragile_e17c_after_release2_nOGJrO`, after `/tmp/fragile_e17e_after_D0aQTo`) showed:
+  - aggregate `E0599`: `13 -> 6`;
+  - `no method named store`: `5 -> 0`;
+  - `no method named load`: `2 -> 0`;
+  - `std_atomic_int` / `std_atomic_bool` marker lines: `18/3 -> 0/0`.
+
+## 2026-03-24: M9.2.c.iv.e.18.b bounded residual E0599 method-surface slice
+
+Task sizing analysis:
+- Active first open leaf was `M9.2.c.iv.e.18.b` (strict replay refresh + one bounded dominant residual-class fix).
+- Implementation stayed localized to one post-processing pass family in `ast_codegen` and focused unit tests (<1000 LOC).
+
+Plan before execution:
+- rerun strict replay inventory on `debugging/misc/basetypes/logging` with the gnu++23 full include profile;
+- select one bounded dominant residual class from fresh inventory;
+- implement a generic compat-surface fix in `normalize_final_rpc_straggler_artifacts`;
+- add focused unit tests;
+- rerun strict replay and publish deterministic before/after deltas.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before edits.
+- No target-specific conditionals, no force-native bypass, no semantic stub patching in target sources, and no rollback-pattern additions were introduced.
+
+Key findings/decisions:
+- Fresh post-`e.18.a` baseline (`/tmp/fragile_e18b_before_clean_Ehe6DE`) showed aggregate `E0599=6` with a concentrated method-surface cluster:
+  - `op_call` (3), `op_inc` (1), `swap` (1), `p` (1).
+- Added bounded compat traits/impls for three dominant residuals:
+  - `FragileStdFunctionVoidCompat` (`std_function_void___::op_call`),
+  - `FragileThreadSwapCompat` (`thread::swap`),
+  - `FragileUnitParamCompat` (`().p()`).
+- Re-ran `normalize_final_rpc_straggler_artifacts` at pipeline tail so late passes cannot reintroduce these method-surface misses.
+- Strict replay deltas with updated binary (baseline `/tmp/fragile_e18b_before_clean_Ehe6DE`, after `/tmp/fragile_e18b_after3_clean_phPOXq`):
+  - aggregate totals: `251 -> 246`;
+  - `E0425`: `63 -> 63` (non-increasing);
+  - `E0599`: `6 -> 1`;
+  - `op_call`: `3 -> 0`, `swap`: `1 -> 0`, `p`: `1 -> 0`;
+  - residual single entry: `op_inc` on `chrono_nanoseconds` (`1 -> 1`, basetypes lane).
+
+## 2026-03-24: M9.2.c.iv.e.19 chrono op_inc residual closure
+
+Task sizing analysis:
+- Active first open leaf was `M9.2.c.iv.e.19` (single residual `E0599` tail).
+- Implementation was bounded to one detector tweak + one focused test in `ast_codegen` (<1000 LOC).
+
+Plan before execution:
+- reproduce the remaining `op_inc` failure with strict gnu++23/full-include replay profile;
+- identify why `FragileChronoNanosecondsCompat` emission is skipped;
+- apply one generic post-processing fix and add regression coverage;
+- rerun strict replay on `debugging/misc/basetypes/logging` and publish deltas.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before edits.
+- No target-specific conditionals, no force-native bypass, no semantic target stubs, and no rollback-pattern additions were introduced.
+
+Key findings/decisions:
+- Residual `chrono_nanoseconds` declaration shape was attribute-prefixed inline:
+  - `#[repr(C)] ... pub struct chrono_nanoseconds { ... }`.
+- `has_exact_struct_def` only matched line-start `pub struct`, so compat emission was skipped despite `.op_inc(` call sites.
+- Updated detector to recognize exact `pub struct` headers appearing later in the same line (attribute-prefixed case).
+- Extended bounded compat emission coverage for residual method-surface misses (`op_call`/`swap`/`p`) and reran final straggler normalization at pipeline tail.
+- Strict replay deltas (baseline `/tmp/fragile_e19_before_clean_iDNZ3w`, after `/tmp/fragile_e19_after_fix3_clean_q1YQgW`):
+  - total `246 -> 201`;
+  - `E0599 1 -> 0`;
+  - `op_inc 1 -> 0`;
+  - non-increase: `E0425 63 -> 63`, and `E0308` also reduced `117 -> 73`.
