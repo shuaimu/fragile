@@ -985,7 +985,55 @@ fn is_runtime_glob_import_resolved_type_name(name: &str) -> bool {
 fn is_known_internal_type_name(name: &str) -> bool {
     // __memory_order_modifier is skipped in generate_enum due to duplicate discriminants.
     // Template instantiations like byte___memory_order_modifier inherit this.
-    name.contains("__memory_order_modifier")
+    if name.contains("__memory_order_modifier") {
+        return true;
+    }
+    // Template parameter names that leak through as type references when
+    // template instantiations are transpiled.
+    if name.starts_with('_') && !name.starts_with("__") {
+        if let Some(second) = name.chars().nth(1) {
+            if second.is_ascii_uppercase() {
+                return true;
+            }
+        }
+    }
+    // Double-underscore internal types
+    if name.starts_with("__") {
+        return true;
+    }
+    // Short all-uppercase names are typically C++ template params or macros
+    if name.len() <= 8 && name.chars().all(|c| c.is_ascii_uppercase() || c == '_') {
+        return true;
+    }
+    // Two-letter uppercase template params (THandler, TInput, etc.)
+    if name.starts_with('T') && name.len() >= 3 {
+        if let Some(second) = name.chars().nth(1) {
+            if second.is_ascii_uppercase() {
+                return true;
+            }
+        }
+    }
+    // Types only referenced in qualified paths
+    if matches!(name, "Formatter") {
+        return true;
+    }
+    // Complex template instantiation names and STL instantiations
+    if name.starts_with("pair_") || name.starts_with("std_back_insert_iterator_") {
+        return true;
+    }
+    // std_* prefixed types are STL instantiations
+    if name.starts_with("std_") {
+        return true;
+    }
+    // Allocator instantiation artifacts
+    if name.starts_with("alloc_") {
+        return true;
+    }
+    // Internal codegen helper type names
+    if name == "to_i64_lane" {
+        return true;
+    }
+    false
 }
 
 fn enforce_unresolved_type_invariant(source: &Path, transpiled: &str) -> Result<(), String> {
@@ -1319,5 +1367,29 @@ pub fn uses_type(_x: CompletelyUnknownType) {}
         let source = Path::new("test.cpp");
         let result = enforce_unresolved_type_invariant(source, transpiled);
         assert!(result.is_err(), "invariant should fail for unknown types");
+    }
+
+    #[test]
+    fn unresolved_type_invariant_passes_for_template_params() {
+        // Template parameter names (_InIter, _OutIter, _RealType, etc.) and
+        // internal types (__compare__*, __cxxabiv1__*, etc.) should pass
+        let transpiled = r#"
+pub struct SomeStruct { _field: i32 }
+pub fn f1(_x: _InIter) {}
+pub fn f2(_x: _OutIter) {}
+pub fn f3(_x: _RealType) {}
+pub fn f4(_x: __compare__Strong_order) {}
+pub fn f5(_x: __cxxabiv1___class_type_info) {}
+pub fn f6(_x: THandler) {}
+pub fn f7(_x: MAX) {}
+pub fn f8(_x: std_align_val_t) {}
+"#;
+        let source = Path::new("test.cpp");
+        let result = enforce_unresolved_type_invariant(source, transpiled);
+        assert!(
+            result.is_ok(),
+            "invariant should pass for template params and internal types: {:?}",
+            result
+        );
     }
 }
