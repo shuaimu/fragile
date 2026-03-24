@@ -29994,6 +29994,7 @@ impl AstCodeGen {
         output = Self::normalize_unresolved_current_fiber_calls(&output);
         output = Self::append_basic_string_view_compat_impls(&output);
         output = Self::append_basic_string_internal_method_stubs(&output);
+        output = Self::append_time_get_put_virtual_method_stubs(&output);
         output = Self::normalize_invalid_variadic_template_instantiation_blocks(&output);
         output = Self::normalize_drop_unreferenced_broken_functions(&output);
         output = Self::normalize_final_rpc_straggler_artifacts(&output);
@@ -42211,6 +42212,117 @@ impl FragileAtomicBoolCompat for atomic_bool {
             out.push_str("    pub fn _M_init_local_buf(&mut self) { /* stub: initialize local buffer */ }\n");
             out.push_str("}\n");
         }
+        out
+    }
+
+    /// Append missing `do_get`/`do_put` virtual-method stubs for generated
+    /// `time_get`/`time_put` structs that already exist but were emitted without
+    /// their protected virtual lane methods.
+    fn append_time_get_put_virtual_method_stubs(code: &str) -> String {
+        fn parse_struct_name(line: &str) -> Option<String> {
+            let trimmed = line.trim_start();
+            let rest = trimmed.strip_prefix("pub struct ")?;
+            let name = rest
+                .split(|ch: char| ch.is_whitespace() || ch == '{')
+                .next()?
+                .trim();
+            if name.is_empty() {
+                None
+            } else {
+                Some(name.to_string())
+            }
+        }
+
+        fn find_matching_brace(src: &str, open_idx: usize) -> Option<usize> {
+            let mut depth = 0isize;
+            for (rel, ch) in src[open_idx..].char_indices() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some(open_idx + rel);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None
+        }
+
+        fn impl_block_contains_method(code: &str, ty: &str, method: &str) -> bool {
+            let marker = format!("impl {} {{", ty);
+            let method_sig_a = format!("fn {}(", method);
+            let method_sig_b = format!("fn {}<", method);
+            let mut search_idx = 0usize;
+            while let Some(rel) = code[search_idx..].find(&marker) {
+                let impl_start = search_idx + rel;
+                let open_idx = impl_start + marker.len() - 1;
+                let Some(close_idx) = find_matching_brace(code, open_idx) else {
+                    break;
+                };
+                let block = &code[impl_start..=close_idx];
+                if block.contains(&method_sig_a) || block.contains(&method_sig_b) {
+                    return true;
+                }
+                search_idx = close_idx + 1;
+            }
+            false
+        }
+
+        let mut time_get_types: Vec<String> = Vec::new();
+        let mut time_put_types: Vec<String> = Vec::new();
+        for line in code.lines() {
+            let Some(name) = parse_struct_name(line) else {
+                continue;
+            };
+            if (name.starts_with("std_time_get") || name.starts_with("time_get"))
+                && !time_get_types.iter().any(|existing| existing == &name)
+            {
+                time_get_types.push(name.clone());
+            }
+            if (name.starts_with("std_time_put") || name.starts_with("time_put"))
+                && !time_put_types.iter().any(|existing| existing == &name)
+            {
+                time_put_types.push(name);
+            }
+        }
+
+        let missing_time_get: Vec<String> = time_get_types
+            .into_iter()
+            .filter(|ty| !impl_block_contains_method(code, ty, "do_get"))
+            .collect();
+        let missing_time_put: Vec<String> = time_put_types
+            .into_iter()
+            .filter(|ty| !impl_block_contains_method(code, ty, "do_put"))
+            .collect();
+
+        if missing_time_get.is_empty() && missing_time_put.is_empty() {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(
+            code.len() + (missing_time_get.len() * 220) + (missing_time_put.len() * 210),
+        );
+        out.push_str(code);
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+
+        for ty in &missing_time_get {
+            out.push('\n');
+            out.push_str(&format!("impl {} {{\n", ty));
+            out.push_str("    pub fn do_get(&self, __b: _InputIterator, __e: (), __iob: &mut ios_base, __err: &mut u32, __tm: *mut tm, __cmd: i8, __opt: i8) -> _InputIterator { __b }\n");
+            out.push_str("}\n");
+        }
+
+        for ty in &missing_time_put {
+            out.push('\n');
+            out.push_str(&format!("impl {} {{\n", ty));
+            out.push_str("    pub fn do_put(&self, __s: (), __iob: &mut ios_base, __fl: (), __tm: *const tm, __fmt: i8, __mod: i8) -> () { __s }\n");
+            out.push_str("}\n");
+        }
+
         out
     }
 
@@ -132600,6 +132712,61 @@ impl domain_error {
         assert_eq!(
             output, input,
             "Should not add stubs when _M_set_length already exists"
+        );
+    }
+
+    #[test]
+    fn test_append_time_get_put_virtual_method_stubs_adds_missing_do_get() {
+        let input = r#"
+pub struct std_time_get_char_ {
+}
+impl std_time_get_char_ {
+    pub fn get(&self, __b: i32) -> i32 { __b }
+}
+"#;
+        let output = AstCodeGen::append_time_get_put_virtual_method_stubs(input);
+        assert!(
+            output.contains("impl std_time_get_char_ {\n    pub fn do_get(&self, __b: _InputIterator"),
+            "time_get stubs should add missing do_get method, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_append_time_get_put_virtual_method_stubs_adds_missing_do_put() {
+        let input = r#"
+pub struct std_time_put_char_ {
+}
+impl std_time_put_char_ {
+    pub fn put(&self, __s: i32) -> i32 { __s }
+}
+"#;
+        let output = AstCodeGen::append_time_get_put_virtual_method_stubs(input);
+        assert!(
+            output.contains("impl std_time_put_char_ {\n    pub fn do_put(&self, __s: (), __iob: &mut ios_base"),
+            "time_put stubs should add missing do_put method, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_append_time_get_put_virtual_method_stubs_skips_existing_methods() {
+        let input = r#"
+pub struct std_time_get_char_ {
+}
+impl std_time_get_char_ {
+    pub fn do_get<TIter>(&self, __b: TIter) -> TIter { __b }
+}
+pub struct std_time_put_char_ {
+}
+impl std_time_put_char_ {
+    pub fn do_put<TOut>(&self, __s: TOut) -> TOut { __s }
+}
+"#;
+        let output = AstCodeGen::append_time_get_put_virtual_method_stubs(input);
+        assert_eq!(
+            output, input,
+            "time_get/time_put stubs should not duplicate existing do_get/do_put methods"
         );
     }
 

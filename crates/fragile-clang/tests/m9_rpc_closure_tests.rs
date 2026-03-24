@@ -5264,3 +5264,46 @@ fn m9_2c_iv_e17b_inventory_document_contains_replay_delta_contract() {
         );
     }
 }
+
+#[test]
+fn m9_2c_iv_e17d_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.17.d Re-run strict inventory"),
+        "M9.2.c.iv.e.17.d should be marked done in TODO.md"
+    );
+    assert!(
+        todo.contains("E0599 29 -> 13")
+            && todo.contains("do_get 8 -> 0")
+            && todo.contains("do_put 8 -> 0"),
+        "M9.2.c.iv.e.17.d TODO evidence should record selected-lane replay deltas"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e17d_inventory_document_contains_non_increase_evidence() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e17d_strict_inventory_deltas.md"),
+    )
+    .expect("e.17.d inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.17.d",
+        "Wrong-Approach Check",
+        "E0599",
+        "29 -> 13",
+        "no method named do_get",
+        "8 -> 0",
+        "no method named do_put",
+        "Non-Increase Evidence",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.17.d inventory document should contain `{}`",
+            required
+        );
+    }
+}

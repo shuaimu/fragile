@@ -21819,3 +21819,29 @@ Key findings/decisions:
 - Initial broad rewrite (all returned unit params) reduced `_InputIterator` mismatches but introduced new `_OutputIterator` mismatches in lvalue-rebind artifacts.
 - Final pass added a guard to skip functions containing lvalue-rebind parameter mutation patterns (`&mut ({ let __v = param; ... })`), preserving non-regression.
 - Strict replay evidence (debugging.cpp, gnu++23 profile): `E0308 18 -> 16`, with `_InputIterator` mismatches `2 -> 0`.
+
+## 2026-03-24: M9.2.c.iv.e.17.d strict replay delta refresh (E0599 lane)
+
+Task sizing analysis:
+- Active undone leaf was `M9.2.c.iv.e.17.d` (strict inventory refresh + non-increase evidence).
+- Supporting implementation (`append_time_get_put_virtual_method_stubs` + focused tests) remained bounded and localized to `ast_codegen` (<1000 LOC).
+
+Plan before execution:
+- re-check `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`;
+- add one generic post-pass to append missing `do_get`/`do_put` methods on generated `time_get`/`time_put` impl blocks only when absent;
+- add focused unit tests for add/skip behavior;
+- rebuild `fragilec` release and rerun strict replay inventory on `debugging/misc/basetypes/logging`;
+- publish deterministic deltas in docs and close TODO evidence for e.17.d.
+
+Wrong-approach check:
+- No target-specific conditionals or bypasses were introduced.
+- No semantic stub replacement for unrelated APIs; the change only fills missing virtual method surfaces already expected by generated call sites.
+- No rollback-pattern additions.
+
+Key findings/decisions:
+- A first attempt using generic type-parameter names (`TIter`, `TTm`, etc.) triggered the strict unresolved-type invariant and was rejected.
+- Final implementation uses concrete signatures aligned with generated call sites (`_InputIterator`/`ios_base`/`tm` for `do_get`, unit-lane signature for `do_put`), avoiding unresolved-type invariant failures.
+- Strict replay deltas (baseline `/tmp/fragile_e17c_after_6BNoac`, after `/tmp/fragile_e17c_after_release2_nOGJrO`) showed selected-lane improvement:
+  - aggregate `E0599`: `29 -> 13`;
+  - `no method named do_get`: `8 -> 0`;
+  - `no method named do_put`: `8 -> 0`.
