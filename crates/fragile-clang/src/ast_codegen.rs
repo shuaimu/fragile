@@ -35800,23 +35800,31 @@ impl FragileAtomicBoolCompat for std_atomic_bool {
             return code.to_string();
         }
         let mut out = String::with_capacity(code.len());
-        let mut in_chrono_duration_struct = false;
+        let mut in_chrono_duration_block = false;
         for line in code.lines() {
             let trimmed = line.trim();
+            // Track entry into chrono_duration struct definitions
             if trimmed.starts_with("pub struct chrono_duration_")
                 && trimmed.contains("{")
             {
-                in_chrono_duration_struct = true;
+                in_chrono_duration_block = true;
             }
-            if in_chrono_duration_struct && trimmed.contains("[u8; 64]") {
+            // Also track the Default impl for chrono_duration types
+            if trimmed.starts_with("impl Default for chrono_duration_") {
+                in_chrono_duration_block = true;
+            }
+            if in_chrono_duration_block && trimmed.contains("[u8; 64]") {
                 let fixed = line.replace("[u8; 64]", "[u8; 8]");
                 out.push_str(&fixed);
-                in_chrono_duration_struct = false;
+            } else if in_chrono_duration_block && trimmed.contains("[0u8; 64]") {
+                let fixed = line.replace("[0u8; 64]", "[0u8; 8]");
+                out.push_str(&fixed);
             } else {
                 out.push_str(line);
-                if in_chrono_duration_struct && trimmed == "}" {
-                    in_chrono_duration_struct = false;
-                }
+            }
+            // Close the block tracking on `}`
+            if in_chrono_duration_block && trimmed == "}" {
+                in_chrono_duration_block = false;
             }
             out.push('\n');
         }
@@ -42387,7 +42395,7 @@ impl FragileAtomicBoolCompat for std_atomic_bool {
         for ty in &missing_time_get {
             out.push('\n');
             out.push_str(&format!("impl {} {{\n", ty));
-            out.push_str("    pub fn do_get(&self, __b: _InputIterator, __e: (), __iob: &mut ios_base, __err: &mut u32, __tm: *mut tm, __cmd: i8, __opt: i8) -> _InputIterator { __b }\n");
+            out.push_str("    pub fn do_get(&self, __b: _InputIterator, __e: (), __iob: &mut ios_base, __err: &mut u32, __tm: *mut tm, __cmd: i8, __opt: i8) -> () { drop(__b); }\n");
             out.push_str("}\n");
         }
 
@@ -67259,15 +67267,23 @@ impl FragileAtomicBoolCompat for std_atomic_bool {
                 }
 
                 // _M_grow_words - grows the word array for ios_base
-                self.writeln("");
-                self.writeln("/// Grows word array (libstdc++ internal)");
-                self.writeln(
-                    "pub fn _M_grow_words(&mut self, _ix: i32, _is_pword: bool) -> _Words {",
-                );
-                self.indent += 1;
-                self.writeln("Default::default()");
-                self.indent -= 1;
-                self.writeln("}");
+                let has_grow_words = self
+                    .current_struct_methods
+                    .get("_M_grow_words")
+                    .copied()
+                    .unwrap_or(0)
+                    > 0;
+                if !has_grow_words {
+                    self.writeln("");
+                    self.writeln("/// Grows word array (libstdc++ internal)");
+                    self.writeln(
+                        "pub fn _M_grow_words(&mut self, _ix: i32, _is_pword: bool) -> _Words {",
+                    );
+                    self.indent += 1;
+                    self.writeln("Default::default()");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
             }
 
             // Add codecvt virtual method stubs
@@ -67520,12 +67536,26 @@ impl FragileAtomicBoolCompat for std_atomic_bool {
             // Add collate virtual method stubs
             // Match both "collate" and "std::collate<...>" class names
             if name.starts_with("collate") || name.starts_with("std::collate") {
-                self.writeln("");
-                self.writeln("/// Stub for do_compare virtual method");
-                self.writeln("pub fn do_compare(&self, _lo1: *const i32, _hi1: *const i32, _lo2: *const i32, _hi2: *const i32) -> i32 { 0 }");
-                self.writeln("");
-                self.writeln("/// Stub for do_transform virtual method");
-                self.writeln("pub fn do_transform(&self, _lo: *const i32, _hi: *const i32) -> std::ffi::c_void { unsafe { std::mem::zeroed() } }");
+                let do_compare_count = self
+                    .current_struct_methods
+                    .get("do_compare")
+                    .copied()
+                    .unwrap_or(0);
+                let do_transform_count = self
+                    .current_struct_methods
+                    .get("do_transform")
+                    .copied()
+                    .unwrap_or(0);
+                if do_compare_count == 0 {
+                    self.writeln("");
+                    self.writeln("/// Stub for do_compare virtual method");
+                    self.writeln("pub fn do_compare(&self, _lo1: *const i32, _hi1: *const i32, _lo2: *const i32, _hi2: *const i32) -> i32 { 0 }");
+                }
+                if do_transform_count == 0 {
+                    self.writeln("");
+                    self.writeln("/// Stub for do_transform virtual method");
+                    self.writeln("pub fn do_transform(&self, _lo: *const i32, _hi: *const i32) -> std::ffi::c_void { unsafe { std::mem::zeroed() } }");
+                }
             }
 
             self.indent -= 1;
@@ -132805,6 +132835,13 @@ impl std_time_get_char_ {
             "time_get stubs should add missing do_get method, got:\n{}",
             output
         );
+        // do_get return type should be () (not _InputIterator) to avoid E0308
+        // when normalize_unresolved_iterator_return_types doesn't touch the body
+        assert!(
+            output.contains("-> () { drop(__b);"),
+            "do_get should return () with drop(__b) body, got:\n{}",
+            output
+        );
     }
 
     #[test]
@@ -133301,6 +133338,37 @@ pub struct some_other_type {
         assert!(
             output.contains("[u8; 64]"),
             "non-chrono opaque should be preserved, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_chrono_duration_opaque_fixes_default_impl() {
+        let input = "\
+pub struct chrono_duration_long_double__milli {
+    _opaque: [u8; 64], // placeholder - actual size may differ
+}
+
+impl Default for chrono_duration_long_double__milli {
+    fn default() -> Self {
+        Self { _opaque: [0u8; 64] }
+    }
+}
+";
+        let output = AstCodeGen::normalize_chrono_duration_opaque_size(input);
+        assert!(
+            output.contains("_opaque: [u8; 8]"),
+            "chrono struct field should be [u8; 8], got: {}",
+            output
+        );
+        assert!(
+            output.contains("[0u8; 8]"),
+            "chrono Default impl should use [0u8; 8], got: {}",
+            output
+        );
+        assert!(
+            !output.contains("[0u8; 64]"),
+            "Default impl [0u8; 64] should not remain, got: {}",
             output
         );
     }
