@@ -21956,3 +21956,29 @@ Key findings/decisions:
   - total `236 -> 200`;
   - `E0609 40 -> 4`;
   - non-increase: `E0308 73 -> 73`, `E0425 63 -> 63`, `E0599 0 -> 0`, `E0277 8 -> 8`.
+
+## 2026-03-24: M9.2.c.iv.e.23 namespace alias dedup scoping fix
+
+Task sizing analysis:
+- Active first open leaf was `M9.2.c.iv.e.23`.
+- Scope was bounded to one dominant `E0425` cluster fix in `normalize_duplicate_type_alias_struct_definitions` with focused tests (<1000 LOC).
+
+Plan before execution:
+- capture strict baseline inventory on `debugging/misc/basetypes/logging`;
+- isolate one dominant repeated `E0425` sub-cluster;
+- apply one generic dedup-scoping fix in `ast_codegen`;
+- add focused unit coverage;
+- rebuild release `fragilec`, rerun strict inventory, and publish deterministic deltas.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific conditionals, no force-native bypasses, no semantic source stubs, and no rollback-pattern additions were introduced.
+
+Key findings/decisions:
+- Baseline `E0425` was dominated by missing type aliases (`Job`, `OneTimeJob`, `NoCopy`, `SpinLock`) caused by alias-stripping.
+- `normalize_duplicate_type_alias_struct_definitions` treated indented module-local `pub struct` declarations as conflicts with top-level namespace export aliases (`pub type X = mod::X`), removing needed aliases.
+- Restricting struct-conflict collection to column-zero definitions preserved namespace export aliases and removed the dominant unresolved-type lane.
+- Strict replay deltas (baseline `/tmp/fragile_e23_before_DWjhRe`, after `/tmp/fragile_e23_after_nwHCvl`):
+  - total `200 -> 158`;
+  - `E0425 63 -> 21`;
+  - non-increase: `E0308 73 -> 73`, `E0599 0 -> 0`, `E0609 4 -> 4`, `E0277 8 -> 8`.

@@ -5495,6 +5495,52 @@ fn m9_2c_iv_e22_inventory_document_contains_non_increase_evidence() {
     }
 }
 
+#[test]
+fn m9_2c_iv_e23_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.23 Execute bounded post-e.22 error reduction"),
+        "M9.2.c.iv.e.23 should be marked done in TODO.md"
+    );
+    assert!(
+        todo.contains("E0425 63 -> 21")
+            && todo.contains("total 200 -> 158")
+            && todo.contains("E0308 73 -> 73"),
+        "M9.2.c.iv.e.23 TODO evidence should record bounded reduction and non-increase deltas"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e23_inventory_document_contains_non_increase_evidence() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e23_namespace_alias_dedup_inventory.md"),
+    )
+    .expect("e.23 inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.23",
+        "Wrong-Approach Check",
+        "Non-Increase Evidence",
+        "E0425",
+        "63",
+        "21",
+        "200",
+        "158",
+        "E0308",
+        "Job",
+        "OneTimeJob",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.23 inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // M9.2.c.iv.e.17.d: Post-e.17 comprehensive strict compile error inventory
 // ---------------------------------------------------------------------------

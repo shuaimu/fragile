@@ -35979,17 +35979,28 @@ impl FragileUnitParamCompat for () {
         out
     }
 
-    /// Fix E0428: when a `pub type X = c_void;` alias is followed later by
-    /// `pub struct X { ... }`, the type alias conflicts.  Remove the alias.
+    /// Fix E0428: when a top-level `pub type X = ...;` alias is followed by a
+    /// top-level `pub struct X { ... }`, the type alias conflicts. Remove the
+    /// alias, but preserve aliases that intentionally re-export namespaced
+    /// structs (for example `pub type Job = rrr::Job`).
     pub fn normalize_duplicate_type_alias_struct_definitions(code: &str) -> String {
         // Collect struct names
         let mut struct_names: std::collections::HashSet<String> = std::collections::HashSet::new();
         for line in code.lines() {
             let trimmed = line.trim();
-            if trimmed.starts_with("pub struct ") {
-                if let Some(name) = trimmed
-                    .strip_prefix("pub struct ")
-                    .and_then(|rest| rest.split(|c: char| c == ' ' || c == '{' || c == '(').next())
+            let is_column_zero = !line.starts_with(' ') && !line.starts_with('\t');
+            if !is_column_zero {
+                continue;
+            }
+            let struct_rest = if let Some(rest) = trimmed.strip_prefix("pub struct ") {
+                Some(rest)
+            } else {
+                trimmed.strip_prefix("#[repr(C)] pub struct ")
+            };
+            if let Some(rest) = struct_rest {
+                if let Some(name) = rest
+                    .split(|c: char| c == ' ' || c == '{' || c == '(')
+                    .next()
                 {
                     if !name.is_empty() {
                         struct_names.insert(name.to_string());
@@ -134132,6 +134143,29 @@ pub struct different_name {
         assert!(
             output.contains("pub type some_alias = i32;"),
             "non-conflicting alias should be preserved, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_duplicate_type_alias_struct_preserves_namespaced_export_alias() {
+        let input = "\
+pub mod rrr {
+    pub struct Job {
+        x: i32,
+    }
+}
+pub type Job = rrr::Job;
+";
+        let output = AstCodeGen::normalize_duplicate_type_alias_struct_definitions(input);
+        assert!(
+            output.contains("pub type Job = rrr::Job;"),
+            "namespaced export alias should be preserved, got: {}",
+            output
+        );
+        assert!(
+            !output.contains("// removed duplicate type alias: pub type Job = rrr::Job;"),
+            "namespaced export alias should not be removed as duplicate, got: {}",
             output
         );
     }
