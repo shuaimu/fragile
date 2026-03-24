@@ -5225,3 +5225,42 @@ fn m9_2c_iv_e17a_decomposition_document_contains_bounded_leaf_contract() {
         );
     }
 }
+
+#[test]
+fn m9_2c_iv_e17b_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.17.b Execute one bounded dominant E0308 sub-cluster fix"),
+        "M9.2.c.iv.e.17.b should be marked done in TODO.md"
+    );
+    assert!(
+        todo.contains("normalize_unit_passthrough_param_return_types")
+            && todo.contains("E0308` from `18 -> 16`"),
+        "M9.2.c.iv.e.17.b TODO evidence should record the implemented fix and strict replay delta"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e17b_inventory_document_contains_replay_delta_contract() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e17b_unit_passthrough_param_return_inventory.md"),
+    )
+    .expect("e.17.b inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.17.b",
+        "normalize_unit_passthrough_param_return_types",
+        "Wrong-Approach Check",
+        "E0308`: `18 -> 16`",
+        "_InputIterator` mismatches (`expected _InputIterator, found ()`): `2 -> 0`",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.17.b inventory document should contain `{}`",
+            required
+        );
+    }
+}

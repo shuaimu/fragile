@@ -29941,6 +29941,7 @@ impl AstCodeGen {
         output = Self::normalize_uninitarray_method_artifacts(&output);
         output = Self::normalize_pointer_augmented_assignments(&output);
         output = Self::normalize_unit_typed_increment_artifacts(&output);
+        output = Self::normalize_unit_passthrough_param_return_types(&output);
         output = Self::normalize_width_field_reference_aliases(&output);
         output = Self::normalize_primitive_scalar_field_access_artifacts(&output);
         output = Self::normalize_unit_negation_artifacts(&output);
@@ -34398,6 +34399,252 @@ impl FragileAtomicBoolCompat for atomic_bool {
             }
 
             // Emit closing brace
+            out.push_str(lines[j]);
+            if j + 1 < lines.len() || code.ends_with('\n') {
+                out.push('\n');
+            }
+            i = j + 1;
+        }
+
+        if !code.ends_with('\n') && !out.is_empty() {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix E0308 for unit-degraded passthrough params returned from non-unit fns.
+    ///
+    /// Degraded lowering can emit signatures like
+    /// `fn get(mut __b: (), ...) -> _InputIterator { return __b; }` where a
+    /// flow variable parameter should carry the function's concrete iterator
+    /// type. This pass rewrites only those `():` params that are directly
+    /// returned by identifier from the same function.
+    pub fn normalize_unit_passthrough_param_return_types(code: &str) -> String {
+        if !code.contains(": ()") || !code.contains("return ") || !code.contains("->") {
+            return code.to_string();
+        }
+
+        fn extract_return_type(sig_line: &str) -> Option<String> {
+            let open = sig_line.find('(')?;
+            let close = AstCodeGen::find_matching_close_paren(sig_line, open)?;
+            let after_params = sig_line[close + 1..].trim_start();
+            let ret_tail = after_params.strip_prefix("->")?;
+            let ret_src = ret_tail.trim_end_matches('{').trim();
+            if ret_src.is_empty() || ret_src == "()" {
+                None
+            } else {
+                Some(ret_src.to_string())
+            }
+        }
+
+        fn normalize_param_name(lhs: &str) -> Option<String> {
+            let mut name = lhs.trim();
+            if let Some(rest) = name.strip_prefix("mut ") {
+                name = rest.trim_start();
+            }
+            if matches!(name, "self" | "&self" | "&mut self") || name.is_empty() {
+                return None;
+            }
+            let name = name.trim_start_matches("r#").trim();
+            if name.is_empty() {
+                None
+            } else {
+                Some(name.to_string())
+            }
+        }
+
+        fn collect_unit_params(sig_line: &str) -> HashSet<String> {
+            let mut out = HashSet::new();
+            let Some(open) = sig_line.find('(') else {
+                return out;
+            };
+            let Some(close) = AstCodeGen::find_matching_close_paren(sig_line, open) else {
+                return out;
+            };
+            let params_src = &sig_line[open + 1..close];
+            for param in AstCodeGen::split_top_level_list(params_src, ',') {
+                if param.is_empty() {
+                    continue;
+                }
+                let Some((lhs, rhs)) = param.split_once(':') else {
+                    continue;
+                };
+                if rhs.trim() != "()" {
+                    continue;
+                }
+                if let Some(name) = normalize_param_name(lhs) {
+                    out.insert(name);
+                }
+            }
+            out
+        }
+
+        fn parse_return_identifier(line: &str) -> Option<String> {
+            let mut expr = line.trim().strip_prefix("return ")?.trim();
+            expr = expr.trim_end_matches(';').trim();
+            while expr.starts_with('(') && expr.ends_with(')') && expr.len() >= 2 {
+                expr = expr[1..expr.len() - 1].trim();
+            }
+            if !AstCodeGen::is_simple_identifier_expr(expr) {
+                return None;
+            }
+            let name = expr.trim_start_matches("r#").trim();
+            if name.is_empty() {
+                None
+            } else {
+                Some(name.to_string())
+            }
+        }
+
+        fn has_lvalue_rebind_artifact(body_lines: &[&str], param: &str) -> bool {
+            let patterns = [
+                format!("&mut ({{ let __v = {}; ", param),
+                format!("&mut (*{{ let __v = {}; ", param),
+                format!("&mut (*{{ let __v = r#{}; ", param),
+                format!("&mut ({{ let __v = r#{}; ", param),
+            ];
+            body_lines
+                .iter()
+                .any(|line| patterns.iter().any(|pat| line.contains(pat)))
+        }
+
+        fn rewrite_signature_unit_params(
+            sig_line: &str,
+            return_ty: &str,
+            to_rewrite: &HashSet<String>,
+        ) -> String {
+            let Some(open) = sig_line.find('(') else {
+                return sig_line.to_string();
+            };
+            let Some(close) = AstCodeGen::find_matching_close_paren(sig_line, open) else {
+                return sig_line.to_string();
+            };
+            let params_src = &sig_line[open + 1..close];
+            let mut rewritten_params = Vec::new();
+            for param in AstCodeGen::split_top_level_list(params_src, ',') {
+                if param.is_empty() {
+                    continue;
+                }
+                let fixed = if let Some((lhs, rhs)) = param.split_once(':') {
+                    let rewrite_this = rhs.trim() == "()"
+                        && normalize_param_name(lhs)
+                            .is_some_and(|name| to_rewrite.contains(&name));
+                    if rewrite_this {
+                        format!("{}: {}", lhs.trim(), return_ty)
+                    } else {
+                        param.trim().to_string()
+                    }
+                } else {
+                    param.trim().to_string()
+                };
+                rewritten_params.push(fixed);
+            }
+            let rebuilt_params = rewritten_params.join(", ");
+            format!(
+                "{}{}{}",
+                &sig_line[..open + 1],
+                rebuilt_params,
+                &sig_line[close..]
+            )
+        }
+
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        let mut i = 0usize;
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim_end();
+            let is_fn_start = (trimmed.contains(" fn ") || trimmed.starts_with("fn "))
+                && trimmed.ends_with('{')
+                && trimmed.contains("->");
+            if !is_fn_start {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let mut j = i;
+            let mut depth = 0isize;
+            while j < lines.len() {
+                let current = lines[j];
+                depth += current.chars().filter(|c| *c == '{').count() as isize;
+                depth -= current.chars().filter(|c| *c == '}').count() as isize;
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if j >= lines.len() || depth != 0 {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let Some(return_ty) = extract_return_type(trimmed) else {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            };
+            let unit_params = collect_unit_params(trimmed);
+            if unit_params.is_empty() {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+
+            let body_lines: &[&str] = if j > i + 1 { &lines[i + 1..j] } else { &[] };
+            let mut returned_params = HashSet::new();
+            for body_line in body_lines {
+                if let Some(name) = parse_return_identifier(body_line) {
+                    if unit_params.contains(&name)
+                        && !has_lvalue_rebind_artifact(body_lines, &name)
+                    {
+                        returned_params.insert(name);
+                    }
+                }
+            }
+
+            if returned_params.is_empty() {
+                for k in i..=j {
+                    out.push_str(lines[k]);
+                    if k + 1 < lines.len() || code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+
+            out.push_str(&rewrite_signature_unit_params(
+                lines[i],
+                &return_ty,
+                &returned_params,
+            ));
+            out.push('\n');
+            for body_line in body_lines {
+                out.push_str(body_line);
+                out.push('\n');
+            }
             out.push_str(lines[j]);
             if j + 1 < lines.len() || code.ends_with('\n') {
                 out.push('\n');
@@ -100375,6 +100622,77 @@ pub fn both(mut __b: (), __e: (), mut __s: ()) -> () {
         let input = "pub fn foo(x: i32) -> i32 {\n    x += 1;\n    x\n}\n";
         let out = AstCodeGen::normalize_unit_typed_increment_artifacts(input);
         assert_eq!(out, input, "should not modify code without unit params");
+    }
+
+    #[test]
+    fn test_normalize_unit_passthrough_param_return_types_rewrites_returned_unit_param_to_return_type(
+    ) {
+        let input = r#"
+pub fn get(&self, mut __b: (), __e: (), __iob: &mut ios_base) -> _InputIterator {
+    return __b;
+}
+"#;
+        let out = AstCodeGen::normalize_unit_passthrough_param_return_types(input);
+        assert!(
+            out.contains("pub fn get(&self, mut __b: _InputIterator, __e: (), __iob: &mut ios_base) -> _InputIterator {"),
+            "unit passthrough param normalization should retype returned unit params to the function return lane, got:\n{}",
+            out
+        );
+        assert!(
+            out.contains("return __b;"),
+            "unit passthrough param normalization should preserve return statements and only reconcile signature types, got:\n{}",
+            out
+        );
+    }
+
+    #[test]
+    fn test_normalize_unit_passthrough_param_return_types_rewrites_only_returned_params() {
+        let input = r#"
+pub fn put(&self, mut __s: (), __fl: (), __tm: *const tm, __pe: *const ()) -> _OutputIterator {
+    __s = Default::default();
+    return __s;
+}
+"#;
+        let out = AstCodeGen::normalize_unit_passthrough_param_return_types(input);
+        assert!(
+            out.contains("pub fn put(&self, mut __s: _OutputIterator, __fl: (), __tm: *const tm, __pe: *const ()) -> _OutputIterator {"),
+            "unit passthrough param normalization should rewrite only the returned flow parameter, got:\n{}",
+            out
+        );
+        assert!(
+            out.contains("__fl: ()"),
+            "unit passthrough param normalization should not rewrite unrelated unit params, got:\n{}",
+            out
+        );
+    }
+
+    #[test]
+    fn test_normalize_unit_passthrough_param_return_types_skips_lvalue_rebind_artifacts() {
+        let input = r#"
+pub fn put(&self, mut __s: (), mut __pb: *const ()) -> _OutputIterator {
+    unsafe { let __lhs: *mut _ = &mut ({ let __v = __s; __v }); *__lhs = *__pb; std::ptr::read(__lhs) };
+    return __s;
+}
+"#;
+        let out = AstCodeGen::normalize_unit_passthrough_param_return_types(input);
+        assert_eq!(
+            out, input,
+            "unit passthrough param normalization should skip signatures that include lvalue-rebind artifacts for returned params"
+        );
+    }
+
+    #[test]
+    fn test_normalize_unit_passthrough_param_return_types_skips_non_identifier_returns() {
+        let input = r#"
+pub fn get(&self, mut __b: (), __e: ()) -> _InputIterator {
+    return Default::default();
+}
+"#;
+        let out = AstCodeGen::normalize_unit_passthrough_param_return_types(input);
+        assert_eq!(
+            out, input,
+            "unit passthrough param normalization should skip functions that do not return a bare unit param identifier"
+        );
     }
 
     #[test]

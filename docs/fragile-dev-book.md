@@ -21799,3 +21799,23 @@ Plan before execution:
 Wrong-approach check:
 - Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
 - No target-specific hacks, semantic stubs, rollback-pattern additions, or force-native bypasses were introduced.
+
+## 2026-03-24: M9.2.c.iv.e.17.b bounded E0308 passthrough-param fix
+
+Task sizing analysis:
+- Selected one bounded E0308 sub-cluster from the e.17 decomposition: unit-degraded passthrough params returned from non-unit functions.
+- Implementation stayed localized to `ast_codegen` normalizers/tests (<1000 LOC).
+
+Plan before execution:
+- capture fresh strict baseline on `vendor/mako/src/rrr/base/debugging.cpp`;
+- implement one generic signature/body-consistent normalization pass for returned unit params;
+- add focused regression tests and re-run strict replay to confirm measurable E0308 reduction.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before changes.
+- Kept fix generic; no target-specific conditions, no native bypass, no semantic-stub injection, and no rollback-pattern expansion.
+
+Key findings/decisions:
+- Initial broad rewrite (all returned unit params) reduced `_InputIterator` mismatches but introduced new `_OutputIterator` mismatches in lvalue-rebind artifacts.
+- Final pass added a guard to skip functions containing lvalue-rebind parameter mutation patterns (`&mut ({ let __v = param; ... })`), preserving non-regression.
+- Strict replay evidence (debugging.cpp, gnu++23 profile): `E0308 18 -> 16`, with `_InputIterator` mismatches `2 -> 0`.
