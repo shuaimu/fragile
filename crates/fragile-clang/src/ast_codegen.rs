@@ -35938,20 +35938,19 @@ impl FragileAtomicBoolCompat for std_atomic_bool {
     /// struct generation), etc.
     pub fn normalize_duplicate_toplevel_definitions(code: &str) -> String {
         use std::collections::{HashMap, HashSet};
-        // First pass: collect names that are defined multiple times at brace
-        // depth 0 (true module-level items, not inside impl/mod blocks).
+        // First pass: collect names that are defined multiple times at the true
+        // top level.  We use no-leading-whitespace as the top-level indicator
+        // instead of brace depth, which can drift in large files due to
+        // comment lines or string literals containing braces.
         let mut def_counts: HashMap<String, usize> = HashMap::new();
-        let mut brace_depth: usize = 0;
         for line in code.lines() {
             let trimmed = line.trim();
-            // Track brace depth (skip strings/chars for accuracy)
-            let (open, close) = Self::count_braces_outside_strings(trimmed);
-            if brace_depth == 0 {
+            let is_column_zero = !line.starts_with(' ') && !line.starts_with('\t');
+            if is_column_zero {
                 if let Some(name) = Self::extract_toplevel_definition_name(trimmed) {
                     *def_counts.entry(name).or_insert(0) += 1;
                 }
             }
-            brace_depth = brace_depth.saturating_add(open).saturating_sub(close);
         }
         // Find names with duplicates
         let duplicated: HashSet<String> = def_counts
@@ -35962,34 +35961,39 @@ impl FragileAtomicBoolCompat for std_atomic_bool {
         if duplicated.is_empty() {
             return code.to_string();
         }
-        // Second pass: emit first definition at depth 0, comment out subsequent.
-        // For struct definitions, also skip trailing impl blocks at depth 0 that
+        // Second pass: emit first column-zero definition, comment out subsequent.
+        // For struct definitions, also skip trailing impl blocks at column 0 that
         // reference the duplicate struct name.
+        // We use indentation-based skip tracking instead of brace-depth tracking
+        // to avoid drift in large files.
         let mut seen: HashSet<String> = HashSet::new();
         let mut removed_structs: HashSet<String> = HashSet::new();
         let mut out = String::with_capacity(code.len());
-        let mut skip_depth: Option<usize> = None; // Some(d) = skipping block that started at this depth
-        brace_depth = 0;
+        let mut skip_block_for: Option<String> = None; // Some(name) = skipping a multi-line block
+        let mut brace_depth: usize = 0;
         for line in code.lines() {
             let trimmed = line.trim();
             let (open, close) = Self::count_braces_outside_strings(trimmed);
-            // Handle skip mode: we're inside a duplicate block
-            if let Some(start_depth) = skip_depth {
+            let is_column_zero = !line.starts_with(' ') && !line.starts_with('\t');
+            // Handle skip mode: we're inside a duplicate block that started
+            // at column 0 and spans multiple lines
+            if skip_block_for.is_some() {
                 let new_depth = brace_depth.saturating_add(open).saturating_sub(close);
                 out.push_str("// removed duplicate: ");
                 out.push_str(trimmed);
                 out.push('\n');
                 brace_depth = new_depth;
-                // End skip when we return to the starting depth and the line closes a block
-                if brace_depth <= start_depth && close > 0 {
-                    skip_depth = None;
+                // End skip when we return to depth 0
+                if brace_depth == 0 && close > 0 {
+                    skip_block_for = None;
                 }
                 continue;
             }
-            // At brace depth 0, check for duplicates
-            if brace_depth == 0 {
+            // At column 0, check for duplicates
+            if is_column_zero {
                 // Check if this is an `impl` block for a removed struct
                 if trimmed.starts_with("impl ") {
+                    let mut found_removed = false;
                     for removed in &removed_structs {
                         let impl_pattern = format!("impl {} ", removed);
                         let impl_for_pattern = format!("impl {} {{", removed);
@@ -36003,11 +36007,15 @@ impl FragileAtomicBoolCompat for std_atomic_bool {
                             out.push('\n');
                             let new_depth = brace_depth.saturating_add(open).saturating_sub(close);
                             if new_depth > brace_depth {
-                                skip_depth = Some(brace_depth);
+                                skip_block_for = Some(removed.clone());
                             }
                             brace_depth = new_depth;
-                            continue;
+                            found_removed = true;
+                            break;
                         }
+                    }
+                    if found_removed {
+                        continue;
                     }
                 }
                 if let Some(name) = Self::extract_toplevel_definition_name(trimmed) {
@@ -36019,7 +36027,7 @@ impl FragileAtomicBoolCompat for std_atomic_bool {
                             out.push('\n');
                             let new_depth = brace_depth.saturating_add(open).saturating_sub(close);
                             if new_depth > brace_depth {
-                                skip_depth = Some(brace_depth);
+                                skip_block_for = Some(name.clone());
                             }
                             // Track removed struct names for impl-block cleanup
                             if name.starts_with("struct:") {
@@ -133900,6 +133908,53 @@ impl Bar {
             output.matches("pub fn new_0()").count(),
             2,
             "inner-scope fns should not be deduplicated, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_duplicate_toplevel_definitions_ignores_indented_dups() {
+        // Indented definitions should NOT be treated as duplicates even if
+        // they share the same name — they are inside nested blocks.
+        let input = "\
+pub fn to_string_1(_val: u32) -> i32 { 0 }
+
+            pub fn to_string_1(__val: i32) -> i32 {
+                0
+            }
+";
+        let output = AstCodeGen::normalize_duplicate_toplevel_definitions(input);
+        // Both should remain — the indented one is not at column 0
+        assert_eq!(
+            output.matches("pub fn to_string_1(").count(),
+            2,
+            "indented duplicate should NOT be removed, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_duplicate_toplevel_defs_no_orphaned_struct() {
+        // Regression test: a struct defined only once at column 0 must
+        // NOT be removed.  (Brace-depth drift used to cause false positives.)
+        let input = "\
+// some comment with { braces }
+pub struct Formatter {
+    _opaque: [u8; 64],
+}
+impl Default for Formatter {
+    fn default() -> Self { Self { _opaque: [0u8; 64] } }
+}
+";
+        let output = AstCodeGen::normalize_duplicate_toplevel_definitions(input);
+        assert!(
+            output.contains("pub struct Formatter"),
+            "single definition should NOT be removed, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("// removed duplicate:"),
+            "no duplicates should be removed, got:\n{}",
             output
         );
     }

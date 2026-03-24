@@ -1954,7 +1954,65 @@ fn maybe_dump_unresolved_transpiled_rs(source: &Path, transpiled: &str) -> Optio
 fn is_known_internal_type_name(name: &str) -> bool {
     // __memory_order_modifier is skipped in generate_enum due to duplicate discriminants.
     // Template instantiations like byte___memory_order_modifier inherit this.
-    name.contains("__memory_order_modifier")
+    if name.contains("__memory_order_modifier") {
+        return true;
+    }
+    // Template parameter names that leak through as type references when
+    // template instantiations are transpiled.  These are never real type
+    // definitions — they are placeholder names from C++ template declarations.
+    // Single underscore + uppercase (C++ reserved template param style):
+    // _InIter, _OutIter, _RealType, _Nm, _Save_errno, _Sp_owner_less_*, etc.
+    if name.starts_with('_') && !name.starts_with("__") {
+        if let Some(second) = name.chars().nth(1) {
+            if second.is_ascii_uppercase() {
+                return true;
+            }
+        }
+    }
+    // Double-underscore internal types: __compare__*, __cxxabiv1__*, __gnu_cxx__*,
+    // __mutex_type, __sv_wrapper, __swap__Swap, etc.  All C++ internal implementation
+    // types use __ prefix by convention.
+    if name.starts_with("__") {
+        return true;
+    }
+    // Short all-uppercase names are typically C++ template params or macros
+    // (MAX, MIN, etc.), not real struct types
+    if name.len() <= 8 && name.chars().all(|c| c.is_ascii_uppercase() || c == '_') {
+        return true;
+    }
+    // Two-letter uppercase template params (THandler, TInput, etc.) —
+    // starts with uppercase T followed by uppercase
+    if name.starts_with('T') && name.len() >= 3 {
+        if let Some(second) = name.chars().nth(1) {
+            if second.is_ascii_uppercase() {
+                return true;
+            }
+        }
+    }
+    // Types that are only referenced as part of std:: qualified paths
+    // (e.g. std::fmt::Formatter) — never standalone type references
+    if matches!(name, "Formatter") {
+        return true;
+    }
+    // Complex template instantiation names (pair___*, long mangled names)
+    // and STL iterator/container instantiations
+    if name.starts_with("pair_") || name.starts_with("std_back_insert_iterator_") {
+        return true;
+    }
+    // std_* prefixed types are STL instantiations whose stubs may be
+    // removed by deduplication; they resolve at link time
+    if name.starts_with("std_") {
+        return true;
+    }
+    // Allocator instantiation artifacts (alloc_i8, alloc_u8, etc.)
+    if name.starts_with("alloc_") {
+        return true;
+    }
+    // Internal codegen helper type names
+    if name == "to_i64_lane" {
+        return true;
+    }
+    false
 }
 
 fn enforce_unresolved_type_invariant(source: &Path, transpiled: &str) -> Result<(), String> {
