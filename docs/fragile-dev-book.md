@@ -22011,3 +22011,33 @@ Key findings/decisions:
   - `E0308 33 -> 17`;
   - non-increase `E0599 4 -> 4`;
   - iterator mismatch pair markers both reduced to `0`.
+
+## 2026-03-25: M9.2.c.iv.e.28.a basic_string degraded alias lane
+
+Task sizing analysis:
+- Active first open leaf was `M9.2.c.iv.e.28.a`.
+- Scope was bounded to one dominant repeated `E0308/E0599` cluster in collate `do_compare` bodies (<1000 LOC).
+
+Plan before execution:
+- capture strict baseline inventory on `debugging/misc/basetypes/logging`;
+- isolate one repeated alias-lane mismatch cluster;
+- apply one generic post-processing normalization;
+- add focused unit coverage;
+- rerun strict replay and publish deterministic deltas.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific conditionals, no force-native bypasses, no semantic stubs, and no rollback-pattern additions were introduced.
+
+Key findings/decisions:
+- Dominant repeated pair was:
+  - `expected c_void, found *const ()`;
+  - paired `clone` on degraded c_void lane.
+- Rejected approach: rewriting the `basic_string_type_parameter_*` alias target itself to `*const ()`.
+  - This violated parser-output mapping completeness (`string` family canonical target expectations) and failed strict replay before rustc.
+- Shipped approach: keep alias declarations unchanged and normalize only local degraded bindings (`let mut __one/__two: basic_string_type_parameter_* = __lo1/__lo2`) to pointer lanes (`*const ()`).
+- Strict replay deltas (baseline `/tmp/fragile_e28_before_t14i_7pd`, after `/tmp/fragile_e28a_after2_lr35te_2`):
+  - total `551 -> 519`;
+  - `E0308 268 -> 252`;
+  - `E0599 85 -> 69`;
+  - non-increase: `E0609 16 -> 16`, `E0425 42 -> 42`, `E0530 12 -> 12`, `E0277 47 -> 47`, `E0428 26 -> 26`.

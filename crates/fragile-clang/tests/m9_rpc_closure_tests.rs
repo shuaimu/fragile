@@ -5541,6 +5541,53 @@ fn m9_2c_iv_e23_inventory_document_contains_non_increase_evidence() {
     }
 }
 
+#[test]
+fn m9_2c_iv_e28a_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.28.a Reduce dominant collate/basic_string degraded alias lane"),
+        "M9.2.c.iv.e.28.a should be marked done in TODO.md"
+    );
+    assert!(
+        todo.contains("total 551 -> 519")
+            && todo.contains("E0308 268 -> 252")
+            && todo.contains("E0599 85 -> 69")
+            && todo.contains("E0609 16 -> 16"),
+        "M9.2.c.iv.e.28.a TODO evidence should record bounded reduction and non-increase deltas"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e28a_inventory_document_contains_non_increase_evidence() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e28a_basic_string_alias_lane_inventory.md"),
+    )
+    .expect("e.28.a inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.28.a",
+        "Wrong-Approach Check",
+        "Non-Increase",
+        "551 -> 519",
+        "E0308",
+        "268 -> 252",
+        "E0599",
+        "85 -> 69",
+        "E0609",
+        "16 -> 16",
+        "expected c_void, found *const ()",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.28.a inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // M9.2.c.iv.e.17.d: Post-e.17 comprehensive strict compile error inventory
 // ---------------------------------------------------------------------------

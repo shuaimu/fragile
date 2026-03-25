@@ -30156,6 +30156,9 @@ impl AstCodeGen {
         output = Self::normalize_e27_residual_errors(&output);
         // Fix E0530/E0308/E0428/E0277/E0599: e.28 post-e.27 waterfall error fixes.
         output = Self::normalize_e28_residual_errors(&output);
+        // Fix E0308/E0599: e.28.a basic_string degraded c_void alias lane in
+        // collate `do_compare` bodies (expected c_void vs *const (), clone on c_void).
+        output = Self::normalize_e28_basic_string_c_void_alias_lane(&output);
         // Some late normalizations can reintroduce final method-surface
         // stragglers (op_call/op_inc/swap/p and related compat traits),
         // so rerun the final RPC straggler pass at pipeline tail.
@@ -39909,6 +39912,72 @@ impl FragileUnitParamCompat for () {
             out.push_str(line);
             out.push('\n');
         }
+        if out.ends_with('\n') && !code.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Post-e.27 bounded fix (M9.2.c.iv.e.28.a):
+    /// In collate `do_compare` bodies, degraded `basic_string_type_parameter_*`
+    /// locals can be declared with a c_void-backed alias and initialized from
+    /// `__lo1`/`__lo2` pointers, yielding:
+    /// - E0308 expected `c_void`, found `*const ()`
+    /// - E0599 no method `clone` on `c_void` (via `(__one).clone()`)
+    ///
+    /// Keep the alias declaration unchanged (required by mapping-completeness
+    /// contracts) and rewrite only the local binding lane to `*const ()`.
+    pub fn normalize_e28_basic_string_c_void_alias_lane(code: &str) -> String {
+        if !code.contains("basic_string_type_parameter_") {
+            return code.to_string();
+        }
+
+        fn parse_degraded_basic_string_local_binding(
+            trimmed: &str,
+        ) -> Option<(String, String, bool)> {
+            let (is_mut, rest) = if let Some(rest) = trimmed.strip_prefix("let mut ") {
+                (true, rest)
+            } else if let Some(rest) = trimmed.strip_prefix("let ") {
+                (false, rest)
+            } else {
+                return None;
+            };
+            let (lhs, rhs_with_semicolon) = rest.split_once(" = ")?;
+            let rhs = rhs_with_semicolon.trim_end_matches(';').trim();
+            if rhs != "__lo1" && rhs != "__lo2" {
+                return None;
+            }
+            let (name, ty) = lhs.split_once(':')?;
+            let ty = ty.trim();
+            if !ty.starts_with("basic_string_type_parameter_") {
+                return None;
+            }
+            Some((name.trim().to_string(), rhs.to_string(), is_mut))
+        }
+
+        let mut out = String::with_capacity(code.len());
+        for line in code.lines() {
+            let trimmed = line.trim();
+            if let Some((name, rhs, is_mut)) = parse_degraded_basic_string_local_binding(trimmed) {
+                let indent_len = line.len().saturating_sub(line.trim_start().len());
+                let indent = &line[..indent_len];
+                out.push_str(indent);
+                if is_mut {
+                    out.push_str("let mut ");
+                } else {
+                    out.push_str("let ");
+                }
+                out.push_str(&name);
+                out.push_str(": *const () = ");
+                out.push_str(&rhs);
+                out.push(';');
+                out.push('\n');
+                continue;
+            }
+            out.push_str(line);
+            out.push('\n');
+        }
+
         if out.ends_with('\n') && !code.ends_with('\n') {
             out.pop();
         }
@@ -134913,6 +134982,51 @@ impl std_time_put_char_ {
         let input = "    let x = (if (self._M_next_resize) != 0 { 0 } else { 11 }) / self._M_max_load_factor as f64 as f64;\n";
         let output = AstCodeGen::normalize_e28_residual_errors(input);
         assert!(output.contains("as f64 / self._M_max_load_factor"), "should cast lhs to f64, got: {}", output);
+    }
+
+    // -----------------------------------------------------------------------
+    // normalize_e28_basic_string_c_void_alias_lane tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_e28_rewrites_basic_string_local_bindings_from_lo_params() {
+        let input = "pub use std::ffi::c_void as basic_string_type_parameter_0_0__char_traits_type_parameter_0_0__allocator_type_parameter_0_0;\n\
+pub fn do_compare(__lo1: *const (), __lo2: *const ()) {\n\
+    let mut __one: basic_string_type_parameter_0_0__char_traits_type_parameter_0_0__allocator_type_parameter_0_0 = __lo1;\n\
+    let mut __two: basic_string_type_parameter_0_0__char_traits_type_parameter_0_0__allocator_type_parameter_0_0 = __lo2;\n\
+}\n";
+        let output = AstCodeGen::normalize_e28_basic_string_c_void_alias_lane(input);
+        assert!(
+            output.contains("let mut __one: *const () = __lo1;"),
+            "should rewrite __one binding to pointer lane, got: {}",
+            output
+        );
+        assert!(
+            output.contains("let mut __two: *const () = __lo2;"),
+            "should rewrite __two binding to pointer lane, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_e28_preserves_basic_string_alias_declaration() {
+        let input = "pub(crate) use std::ffi::c_void as basic_string_type_parameter_9_9;\n";
+        let output = AstCodeGen::normalize_e28_basic_string_c_void_alias_lane(input);
+        assert!(
+            output.contains("pub(crate) use std::ffi::c_void as basic_string_type_parameter_9_9;"),
+            "alias declaration must remain unchanged for mapping completeness, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_e28_preserves_non_lo_binding_shapes() {
+        let input = "let mut __one: basic_string_type_parameter_1_1 = __something_else;\n";
+        let output = AstCodeGen::normalize_e28_basic_string_c_void_alias_lane(input);
+        assert_eq!(
+            output, input,
+            "only __lo1/__lo2 degraded bindings should be rewritten"
+        );
     }
 
     // -----------------------------------------------------------------------

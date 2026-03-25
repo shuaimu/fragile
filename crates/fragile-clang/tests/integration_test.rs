@@ -496,6 +496,33 @@ fn runtime_rlib_is_compatible_with_current_rustc(
     output.is_ok_and(|out| out.status.success())
 }
 
+fn select_runtime_link_candidate_for_workspace(
+    workspace_root: &std::path::Path,
+) -> Option<FragileRuntimeLinkInfo> {
+    let mut fallback_candidate: Option<FragileRuntimeLinkInfo> = None;
+    for profile in ["debug", "release"] {
+        let profile_dir = workspace_root.join("target").join(profile);
+        for (_, deps_dir, rlib_path) in collect_runtime_rlib_candidates_for_profile(&profile_dir) {
+            let candidate = FragileRuntimeLinkInfo {
+                profile_dir: profile_dir.clone(),
+                deps_dir,
+                rlib_path,
+            };
+            if fallback_candidate.is_none() {
+                fallback_candidate = Some(candidate.clone());
+            }
+            if runtime_rlib_is_compatible_with_current_rustc(
+                &candidate.profile_dir,
+                &candidate.deps_dir,
+                &candidate.rlib_path,
+            ) {
+                return Some(candidate);
+            }
+        }
+    }
+    fallback_candidate
+}
+
 fn find_fragile_runtime_link_info_uncached() -> Option<FragileRuntimeLinkInfo> {
     // Try to find the workspace root by looking for Cargo.toml
     let mut current = std::env::current_dir().ok()?;
@@ -506,38 +533,24 @@ fn find_fragile_runtime_link_info_uncached() -> Option<FragileRuntimeLinkInfo> {
         if cargo_toml.exists() {
             let content = fs::read_to_string(&cargo_toml).ok()?;
             if content.contains("[workspace]") {
-                // Found workspace root, look for runtime library
-                // Prefer debug artifacts from the current test toolchain first, then release.
-                // Runtime e2e tests invoke rustc directly and can fail with E0514 when a stale
-                // release rlib from a different toolchain is selected.
-                let mut fallback_candidate: Option<FragileRuntimeLinkInfo> = None;
-                for profile in ["debug", "release"] {
-                    let profile_dir = current.join("target").join(profile);
-                    for (_, deps_dir, rlib_path) in
-                        collect_runtime_rlib_candidates_for_profile(&profile_dir)
-                    {
-                        let candidate = FragileRuntimeLinkInfo {
-                            profile_dir: profile_dir.clone(),
-                            deps_dir,
-                            rlib_path,
-                        };
-                        if fallback_candidate.is_none() {
-                            fallback_candidate = Some(candidate.clone());
-                        }
-                        if runtime_rlib_is_compatible_with_current_rustc(
-                            &candidate.profile_dir,
-                            &candidate.deps_dir,
-                            &candidate.rlib_path,
-                        ) {
-                            return Some(candidate);
-                        }
-                    }
-                }
-                // If compatibility probing failed (for example rustc invocation issue), keep prior
-                // behavior by returning the best candidate we discovered.
-                if let Some(candidate) = fallback_candidate {
+                // Found workspace root, look for runtime library artifacts first.
+                if let Some(candidate) = select_runtime_link_candidate_for_workspace(&current) {
                     return Some(candidate);
                 }
+
+                // Some workspace test graphs do not prebuild `fragile-runtime` as an rlib.
+                // Build it once and retry discovery.
+                let build_output = Command::new("cargo")
+                    .arg("build")
+                    .arg("-p")
+                    .arg("fragile-runtime")
+                    .current_dir(&current)
+                    .output()
+                    .ok()?;
+                if !build_output.status.success() {
+                    return None;
+                }
+                return select_runtime_link_candidate_for_workspace(&current);
             }
         }
         current = current.parent()?.to_path_buf();
