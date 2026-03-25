@@ -22042,3 +22042,30 @@ Key findings/decisions:
 - Strict replay deltas on the same bounded profile:
   - typed `error[E*]` blockers `4 -> 0`;
   - waterfall surfaced lint-deny blockers (`invalid_reference_casting` and `deref_nullptr`) for next-leaf handling.
+
+## 2026-03-25: M9.2.c.iv.e.32 full-flag post-e31 inventory refresh
+
+Task sizing analysis:
+- Active open parent remained `M9.2.c.iv.e`; the scoped first leaf selected was inventory refresh only (`e.32`).
+- Work stayed bounded (<1000 LOC): no codegen rewrite in this leaf, only inventory capture + TODO/doc updates + regression guards.
+
+Plan before execution:
+- run strict compile-only replay for `debugging/misc/basetypes/logging` with harness-equivalent include/define profile;
+- capture deterministic per-file typed-error counts;
+- close the `logging.cpp=TBD` inventory gap;
+- record dominant residual cluster and queue next bounded fix leaf.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific conditions, no force-native bypass, no rollback-pattern additions.
+
+Key findings/decisions:
+- Full-flag strict inventory run root: `/tmp/fragile_e32_inventory_full_NRzZrX`.
+- Per-file snapshot:
+  - `debugging.cpp`: `0` typed errors.
+  - `misc.cpp`: `0` typed errors.
+  - `basetypes.cpp`: `0` typed errors.
+  - `logging.cpp`: `1` typed error.
+- Residual blocker collapsed to a single lane:
+  - `E0308` in `logging` transpiled output (`data_: data`) with `expected *mut UnsafeCell<T>, found *mut UnsafeCell<()>`.
+- Next bounded leaf (`e.33`) should target that one pointer-lane mismatch.

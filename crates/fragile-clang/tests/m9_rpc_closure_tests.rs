@@ -5541,6 +5541,55 @@ fn m9_2c_iv_e23_inventory_document_contains_non_increase_evidence() {
     }
 }
 
+#[test]
+fn m9_2c_iv_e32_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.32 Refresh post-e.31 strict compile inventory"),
+        "M9.2.c.iv.e.32 should be marked done in TODO.md"
+    );
+    assert!(
+        todo.contains("debugging.cpp=0")
+            && todo.contains("misc.cpp=0")
+            && todo.contains("basetypes.cpp=0")
+            && todo.contains("logging.cpp=1"),
+        "M9.2.c.iv.e.32 TODO evidence should capture post-e.31 per-file counts"
+    );
+    assert!(
+        !todo.contains("logging.cpp=TBD"),
+        "Post-e.31 inventory should no longer leave logging.cpp as TBD"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e32_inventory_document_exists_and_reports_single_logging_blocker() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e32_post_e31_full_flag_inventory.md"),
+    )
+    .expect("e.32 inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.32",
+        "/tmp/fragile_e32_inventory_full_NRzZrX",
+        "debugging.cpp",
+        "misc.cpp",
+        "basetypes.cpp",
+        "logging.cpp",
+        "E0308",
+        "UnsafeCell<T>",
+        "UnsafeCell<()>",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.32 inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // M9.2.c.iv.e.17.d: Post-e.17 comprehensive strict compile error inventory
 // ---------------------------------------------------------------------------
