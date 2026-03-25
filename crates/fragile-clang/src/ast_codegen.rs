@@ -13422,6 +13422,132 @@ impl AstCodeGen {
         out
     }
 
+    /// Normalize `SpinMutexGuard_*::new_2` constructor data-parameter types so
+    /// they match the concrete `data_` field pointer lane declared on the
+    /// corresponding struct.
+    fn normalize_spinmutex_guard_constructor_data_param_types(code: &str) -> String {
+        if !code.contains("SpinMutexGuard_") || !code.contains("UnsafeCell") {
+            return code.to_string();
+        }
+
+        fn brace_delta(line: &str) -> i32 {
+            line.chars().filter(|&ch| ch == '{').count() as i32
+                - line.chars().filter(|&ch| ch == '}').count() as i32
+        }
+
+        let mut guard_data_types: BTreeMap<String, String> = BTreeMap::new();
+        let mut active_struct: Option<String> = None;
+        let mut struct_depth = 0i32;
+
+        for line in code.lines() {
+            let trimmed = line.trim_start();
+
+            if active_struct.is_none()
+                && trimmed.starts_with("pub struct SpinMutexGuard_")
+                && trimmed.ends_with('{')
+            {
+                if let Some(rest) = trimmed.strip_prefix("pub struct ") {
+                    let name = rest.trim_end_matches('{').trim();
+                    active_struct = Some(name.to_string());
+                    struct_depth = brace_delta(line);
+                    if struct_depth <= 0 {
+                        active_struct = None;
+                        struct_depth = 0;
+                    }
+                    continue;
+                }
+            } else if let Some(struct_name) = active_struct.as_ref() {
+                if trimmed.starts_with("data_:") && trimmed.ends_with(',') {
+                    let data_ty = trimmed
+                        .trim_start_matches("data_:")
+                        .trim_end_matches(',')
+                        .trim()
+                        .to_string();
+                    guard_data_types.insert(struct_name.clone(), data_ty);
+                }
+            }
+
+            if active_struct.is_some() {
+                struct_depth += brace_delta(line);
+                if struct_depth <= 0 {
+                    active_struct = None;
+                    struct_depth = 0;
+                }
+            }
+        }
+
+        if guard_data_types.is_empty() {
+            return code.to_string();
+        }
+
+        fn rewrite_data_param_type(line: &str, data_ty: &str) -> String {
+            let target = format!("data: {}", data_ty);
+            for candidate in [
+                "data: *mut std::cell::UnsafeCell<()>",
+                "data:*mut std::cell::UnsafeCell<()>",
+                "data: *mut UnsafeCell<()>",
+                "data:*mut UnsafeCell<()>",
+            ] {
+                if line.contains(candidate) {
+                    return line.replacen(candidate, &target, 1);
+                }
+            }
+            line.to_string()
+        }
+
+        let mut out = String::with_capacity(code.len());
+        let mut active_impl: Option<String> = None;
+        let mut impl_depth = 0i32;
+
+        for line in code.lines() {
+            let trimmed = line.trim_start();
+            let mut entered_impl_this_line = false;
+
+            if active_impl.is_none()
+                && trimmed.starts_with("impl SpinMutexGuard_")
+                && trimmed.ends_with('{')
+            {
+                if let Some(rest) = trimmed.strip_prefix("impl ") {
+                    let name = rest.trim_end_matches('{').trim();
+                    active_impl = Some(name.to_string());
+                    impl_depth = brace_delta(line);
+                    entered_impl_this_line = true;
+                    if impl_depth <= 0 {
+                        active_impl = None;
+                        impl_depth = 0;
+                    }
+                }
+            }
+
+            let mut rewritten = line.to_string();
+            if let Some(impl_name) = active_impl.as_ref() {
+                if trimmed.contains("pub fn new_2(") && trimmed.contains("UnsafeCell<()>") {
+                    if let Some(data_ty) = guard_data_types.get(impl_name) {
+                        if data_ty.contains("UnsafeCell<") && !data_ty.contains("UnsafeCell<()>") {
+                            rewritten = rewrite_data_param_type(line, data_ty);
+                        }
+                    }
+                }
+            }
+
+            out.push_str(&rewritten);
+            out.push('\n');
+
+            if active_impl.is_some() && !entered_impl_this_line {
+                impl_depth += brace_delta(line);
+                if impl_depth <= 0 {
+                    active_impl = None;
+                    impl_depth = 0;
+                }
+            }
+        }
+
+        if !code.ends_with('\n') && !out.is_empty() {
+            out.pop();
+        }
+        out
+    }
+
     /// Repair degraded `UninitArray` method artifacts that index into
     /// `Default::default()` and call unresolved `self.data()`.
     fn normalize_uninitarray_method_artifacts(code: &str) -> String {
@@ -30162,6 +30288,9 @@ impl AstCodeGen {
         output = Self::normalize_e30_residual_errors(&output);
         // Fix lint-deny: invalid_reference_casting + deref_nullptr.
         output = Self::normalize_e31_residual_errors(&output);
+        // Fix residual SpinMutexGuard constructor pointer-lane mismatch where
+        // `new_2` keeps `UnsafeCell<()>` while `data_` field uses `UnsafeCell<T>`.
+        output = Self::normalize_spinmutex_guard_constructor_data_param_types(&output);
         // Some late normalizations can reintroduce final method-surface
         // stragglers (op_call/op_inc/swap/p and related compat traits),
         // so rerun the final RPC straggler pass at pipeline tail.
@@ -135459,6 +135588,76 @@ impl std_time_put_char_ {
         let input = "struct x { data_: *mut UnsafeCell<T> }\nfn new() -> x {\n    x {\n        data_: data,\n    }\n}\n";
         let output = AstCodeGen::normalize_e27_residual_errors(input);
         assert!(output.contains("data_: unsafe { std::mem::transmute(data) },"), "should transmute data, got: {}", output);
+    }
+
+    #[test]
+    fn test_spinmutex_guard_constructor_param_rehydration_rewrites_data_type() {
+        let input = "\
+pub struct SpinMutexGuard_T {
+    lock_: *mut SpinLock,
+    data_: *mut std::cell::UnsafeCell<T>,
+}
+impl SpinMutexGuard_T {
+    pub fn new_2(lock: *mut SpinLock, data: *mut std::cell::UnsafeCell<()>) -> Self {
+        Self { lock_: lock, data_: data }
+    }
+}
+";
+        let output = AstCodeGen::normalize_spinmutex_guard_constructor_data_param_types(input);
+        assert!(
+            output.contains("data: *mut std::cell::UnsafeCell<T>"),
+            "constructor data param should match struct field type, got: {}",
+            output
+        );
+        assert!(
+            !output.contains("data: *mut std::cell::UnsafeCell<()>"),
+            "constructor should no longer keep degraded UnsafeCell<()>, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_spinmutex_guard_constructor_param_rehydration_skips_unit_field_lane() {
+        let input = "\
+pub struct SpinMutexGuard_T {
+    lock_: *mut SpinLock,
+    data_: *mut std::cell::UnsafeCell<()>,
+}
+impl SpinMutexGuard_T {
+    pub fn new_2(lock: *mut SpinLock, data: *mut std::cell::UnsafeCell<()>) -> Self {
+        Self { lock_: lock, data_: data }
+    }
+}
+";
+        let output = AstCodeGen::normalize_spinmutex_guard_constructor_data_param_types(input);
+        assert_eq!(
+            output, input,
+            "normalization should leave already-matching unit lane unchanged"
+        );
+    }
+
+    #[test]
+    fn test_spinmutex_guard_constructor_param_rehydration_preserves_struct_scope() {
+        let input = "\
+pub struct SpinMutexGuard_T {
+    lock_: *mut SpinLock,
+    data_: *mut std::cell::UnsafeCell<T>,
+}
+impl SpinMutexGuard_T {
+    pub fn new_2(lock: *mut SpinLock, data: *mut std::cell::UnsafeCell<()>) -> Self {
+        Self { lock_: lock, data_: data }
+    }
+}
+pub struct later_struct {
+    data_: *mut i8,
+}
+";
+        let output = AstCodeGen::normalize_spinmutex_guard_constructor_data_param_types(input);
+        assert!(
+            output.contains("data: *mut std::cell::UnsafeCell<T>"),
+            "SpinMutexGuard constructor should not be affected by later data_ fields, got: {}",
+            output
+        );
     }
 
     // -----------------------------------------------------------------------

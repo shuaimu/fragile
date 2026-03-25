@@ -22069,3 +22069,33 @@ Key findings/decisions:
 - Residual blocker collapsed to a single lane:
   - `E0308` in `logging` transpiled output (`data_: data`) with `expected *mut UnsafeCell<T>, found *mut UnsafeCell<()>`.
 - Next bounded leaf (`e.33`) should target that one pointer-lane mismatch.
+
+## 2026-03-25: M9.2.c.iv.e.33 residual SpinMutexGuard logging-lane closure
+
+Task sizing analysis:
+- Selected leaf: `M9.2.c.iv.e.33` (single residual typed blocker from e.32 inventory).
+- Scope stayed bounded (<1000 LOC): one generic normalization pass + focused tests + replay evidence refresh.
+
+Plan before execution:
+- reproduce residual `logging.cpp` `E0308` (`*mut UnsafeCell<()>` vs `*mut UnsafeCell<T>`);
+- implement one generic constructor-parameter lane rehydration pass for `SpinMutexGuard_*::new_2`;
+- add focused unit coverage including scope-isolation guard;
+- rerun strict compile inventory with harness-equivalent flags and full suites.
+
+Wrong-approach check:
+- Rechecked `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- Avoided file/path-specific conditionals, force-native bypasses, and ad hoc generated-output patching.
+- Kept rewrite shape-driven and generic at struct/impl correspondence level.
+
+Key findings/decisions:
+- Root cause: constructor signature lane degraded to `data: *mut UnsafeCell<()>` while matching struct field lane was `data_: *mut UnsafeCell<T>`, causing strict `E0308` at `data_: data` in `logging` transpiled output.
+- Fix: `normalize_spinmutex_guard_constructor_data_param_types`:
+  - records each `SpinMutexGuard_*` struct `data_` field lane;
+  - rewrites only matching `impl SpinMutexGuard_*::new_2` `data` param lane;
+  - skips already-unit lanes;
+  - uses brace-depth scope guards to prevent cross-struct pollution.
+- Strict replay post-fix (`/tmp/fragile_e33_inventory_full_final_ZZJQHn/summary.tsv`):
+  - `debugging=0`, `misc=0`, `basetypes=0`, `logging=0`.
+- Full regression gates passed:
+  - `cargo test --workspace --all-targets`
+  - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
