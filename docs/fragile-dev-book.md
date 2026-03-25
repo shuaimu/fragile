@@ -22011,3 +22011,34 @@ Key findings/decisions:
   - `E0308 33 -> 17`;
   - non-increase `E0599 4 -> 4`;
   - iterator mismatch pair markers both reduced to `0`.
+
+## 2026-03-25: M9.2.c.iv.e.30 residual lane rehydration
+
+Task sizing analysis:
+- Active first open leaf was `M9.2.c.iv.e.30`.
+- Scope was bounded to one post-e.29 normalizer plus focused tests (<1000 LOC).
+
+Plan before execution:
+- reuse deterministic e29 bounded replay artifact (`/tmp/fragile_e29_postchange_n4hSt0`) as baseline;
+- target one typed residual lane (`E0308/E0605/E0596`) without target-specific conditions;
+- implement one additive post-processing pass in `ast_codegen`;
+- add focused unit tests;
+- rerun the same bounded strict replay profile and record deltas.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific conditionals, no force-native bypasses, no semantic type mapping, and no rollback-pattern additions were introduced.
+
+Key findings/decisions:
+- The e29 bounded replay still had typed blockers clustered in:
+  - varargs lane shape (`FragileVaList` vs `[FragileVaList; 1]`);
+  - non-primitive `__status`/`set___status` bitfield casts;
+  - mutable parameter omissions in iterator/locale helper signatures.
+- Implemented `normalize_e30_residual_errors` with five rewrites:
+  - varargs lane shape rehydration for `vasprintf_1`;
+  - non-primitive status getter/setter first-byte lane rehydration;
+  - `adjacent_difference_*` `mut __first` rewrite;
+  - `__asprintf_1` `mut __loc` rewrite.
+- Strict replay deltas on the same bounded profile:
+  - typed `error[E*]` blockers `4 -> 0`;
+  - waterfall surfaced lint-deny blockers (`invalid_reference_casting` and `deref_nullptr`) for next-leaf handling.

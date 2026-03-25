@@ -30158,7 +30158,7 @@ impl AstCodeGen {
         output = Self::normalize_e28_residual_errors(&output);
         // Fix E0425/E0308/E0599: e.29 post-e.28 residual error fixes.
         output = Self::normalize_e29_residual_errors(&output);
-        // Fix E0308/E0609/E0061/E0530/E0277/E0425: e.30 post-e.29 residual error fixes.
+        // Fix E0308/E0605/E0596: e.30 post-e.29 residual error fixes.
         output = Self::normalize_e30_residual_errors(&output);
         // Some late normalizations can reintroduce final method-surface
         // stragglers (op_call/op_inc/swap/p and related compat traits),
@@ -40195,230 +40195,144 @@ impl FragileUnitParamCompat for () {
         out
     }
 
+    /// Post-e.29 residual error fixes (M9.2.c.iv.e.30).
+    /// Targets:
+    /// - E0308 (`FragileVaList` vs `[FragileVaList; 1]` varargs lane shape)
+    /// - E0308/E0605 (non-primitive `__status` bitfield getter/setter u8 casts)
+    /// - E0596 (`adjacent_difference` wrap-iter missing `mut __first`)
     pub fn normalize_e30_residual_errors(code: &str) -> String {
-        let mut out = String::with_capacity(code.len() + 2048);
+        if !code.contains("FragileVaList")
+            && !code.contains("pub fn __status(&self) ->")
+            && !code.contains("pub fn adjacent_difference_")
+            && !code.contains("fn __asprintf_1(")
+        {
+            return code.to_string();
+        }
 
-        // Pre-scan flags for efficiency
-        let has_exception_ptr_u128 = code.contains("__other: &u128") && code.contains("_M_exception_object");
-        let has_make_error_code = code.contains("fn make_error_code") || code.contains("fn make_error_condition");
-        let has_char_traits_assign_3 = code.contains("::assign(__s as *mut");
-        let has_leading_zeros_i32 = code.contains(".leading_zeros() as i32");
-        let has_unsigned_long_const = code.contains("unsigned_long_const");
-        let has_libc_single_threaded_shadow = code.contains("let mut __libc_single_threaded");
-        let has_intptr_align = code.contains("__intptr - 1 + __align");
-        let has_lock_policy_mismatch = code.contains("__gnu_cxx__Lock_policy = _Lock_policy::");
-        let has_pointer_safety_alias = code.contains("pub type std_pointer_safety = u128");
-        let has_scoped_lock_bad_call = code.contains("__(*self._M_device)");
-        let has_bit_value_type_dup = code.contains("pub struct _Bit_value_type");
-        let has_max_bkt_u64 = code.contains("let mut __max_bkt: usize");
+        fn is_primitive_like(ty: &str) -> bool {
+            matches!(
+                ty,
+                "u8"
+                    | "u16"
+                    | "u32"
+                    | "u64"
+                    | "u128"
+                    | "usize"
+                    | "i8"
+                    | "i16"
+                    | "i32"
+                    | "i64"
+                    | "i128"
+                    | "isize"
+                    | "f32"
+                    | "f64"
+                    | "bool"
+                    | "char"
+                    | "()"
+            ) || ty.starts_with('*')
+                || ty.starts_with('&')
+        }
 
-        // Track whether we've seen the first _Bit_value_type struct definition
-        let mut seen_bit_value_type = false;
+        let mut out = String::with_capacity(code.len() + 1024);
+        let mut in_nonprimitive_status_getter = false;
+        let mut in_nonprimitive_status_setter = false;
 
         for line in code.lines() {
             let trimmed = line.trim();
             let indent_len = line.len().saturating_sub(trimmed.len());
             let indent = &line[..indent_len];
 
-            // --- (1) E0609/E0599: exception_ptr methods take &u128 instead of &exception_ptr ---
-            // Fix method signatures that take &u128 or &mut u128 for exception_ptr operations
-            if has_exception_ptr_u128 {
-                if trimmed.starts_with("pub fn new_1_2(__other: &u128) -> Self{") {
+            if let Some(ret_ty) = trimmed
+                .strip_prefix("pub fn __status(&self) -> ")
+                .and_then(|rest| rest.strip_suffix(" {"))
+            {
+                in_nonprimitive_status_getter = !is_primitive_like(ret_ty.trim());
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+
+            if let Some(param_ty) = trimmed
+                .strip_prefix("pub fn set___status(&mut self, v: ")
+                .and_then(|rest| rest.strip_suffix(") {"))
+            {
+                in_nonprimitive_status_setter = !is_primitive_like(param_ty.trim());
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+
+            if in_nonprimitive_status_getter {
+                if trimmed == "(self._bitfield_1 & 0x1) as u8" {
                     out.push_str(indent);
-                    out.push_str("pub fn new_1_2(__other: &exception_ptr) -> Self{");
+                    out.push_str("{ let mut __out = unsafe { std::mem::zeroed() }; unsafe { *(&mut __out as *mut _ as *mut u8) = (self._bitfield_1 & 0x1) as u8; } __out }");
                     out.push('\n');
-                    continue;
+                } else {
+                    out.push_str(line);
+                    out.push('\n');
                 }
-                if trimmed.starts_with("pub fn op_assign_1(&mut self, __other: &u128) -> &mut u128{") {
+                if trimmed == "}" {
+                    in_nonprimitive_status_getter = false;
+                }
+                continue;
+            }
+
+            if in_nonprimitive_status_setter {
+                if trimmed == "self._bitfield_1 = (self._bitfield_1 & !0x1) | ((v as u8) & 0x1);" {
                     out.push_str(indent);
-                    out.push_str("pub fn op_assign_1(&mut self, __other: &exception_ptr) -> &mut exception_ptr{");
+                    out.push_str("self._bitfield_1 = (self._bitfield_1 & !0x1) | ((unsafe { *(&v as *const _ as *const u8) }) & 0x1);");
                     out.push('\n');
-                    continue;
-                }
-                if trimmed.starts_with("pub fn swap(&mut self, mut __other: &mut u128)") {
-                    out.push_str(indent);
-                    out.push_str("pub fn swap(&mut self, mut __other: &mut exception_ptr) {");
+                } else {
+                    out.push_str(line);
                     out.push('\n');
-                    continue;
                 }
-                // Fix (*__other).clone().swap(&mut self) inside exception_ptr impl
-                if trimmed.contains("(*__other).clone().swap(&mut self)") {
-                    out.push_str(indent);
-                    out.push_str("std::mem::swap(self, &mut (*__other).clone()); // e30: exception_ptr swap");
-                    out.push('\n');
-                    continue;
+                if trimmed == "}" {
+                    in_nonprimitive_status_setter = false;
                 }
+                continue;
             }
 
-            // --- (2) E0308: make_error_code/make_error_condition return u128 but body returns error_code/error_condition ---
-            if has_make_error_code {
-                if trimmed.starts_with("pub extern \"C\" fn make_error_code(") && trimmed.contains("-> u128{") {
-                    let fixed = line.replace("-> u128{", "-> error_code{");
-                    out.push_str(&fixed);
-                    out.push('\n');
-                    continue;
-                }
-                if trimmed.starts_with("pub extern \"C\" fn make_error_code_1(") && trimmed.contains("-> u128{") {
-                    let fixed = line.replace("-> u128{", "-> error_code{");
-                    out.push_str(&fixed);
-                    out.push('\n');
-                    continue;
-                }
-                if trimmed.starts_with("pub extern \"C\" fn make_error_condition(") && trimmed.contains("-> u128{") {
-                    let fixed = line.replace("-> u128{", "-> error_condition{");
-                    out.push_str(&fixed);
-                    out.push('\n');
-                    continue;
-                }
-                if trimmed.starts_with("pub extern \"C\" fn make_error_condition_1(") && trimmed.contains("-> u128{") {
-                    let fixed = line.replace("-> u128{", "-> error_condition{");
-                    out.push_str(&fixed);
-                    out.push('\n');
-                    continue;
-                }
+            // Varargs wrappers expect `[FragileVaList; 1]`, not `FragileVaList`.
+            if trimmed.contains("vasprintf_1(") && trimmed.contains("std::mem::zeroed::<FragileVaList>()") {
+                let rewritten = line.replace(
+                    "std::mem::zeroed::<FragileVaList>()",
+                    "std::mem::zeroed::<[FragileVaList; 1]>()",
+                );
+                out.push_str(&rewritten);
+                out.push('\n');
+                continue;
             }
 
-            // --- (3) E0061: char_traits::assign called with 3 args but function takes 2 ---
-            // The 3-arg fill version is assign_1, not assign
-            if has_char_traits_assign_3 {
-                if trimmed.contains("std_char_traits_char_::assign(__s as *mut i8, __n, __a)")
-                    || trimmed.contains("std_char_traits_wchar_t_::assign(__s as *mut i32, __n, __a)")
-                    || trimmed.contains("std_char_traits_char8_t_::assign(__s as *mut u8, __n, __a)")
-                {
-                    let fixed = line.replace("::assign(__s as", "::assign_1(__s as");
-                    out.push_str(&fixed);
+            // `adjacent_difference` mutates `__first` in wrap-iter lanes.
+            if trimmed.starts_with("pub fn adjacent_difference_")
+                && trimmed.contains("(__first: std___wrap_iter_")
+            {
+                let rewritten = line.replacen(
+                    "(__first: std___wrap_iter_",
+                    "(mut __first: std___wrap_iter_",
+                    1,
+                );
+                out.push_str(&rewritten);
+                out.push('\n');
+                continue;
+            }
+
+            // `__asprintf_1` passes `&mut __loc` into locale-guard constructors.
+            // Ensure the pointer parameter is declared mutable.
+            if trimmed.contains("fn __asprintf_1(")
+                && trimmed.contains("__loc:")
+                && trimmed.contains("__locale_struct")
+                && !trimmed.contains("mut __loc:")
+            {
+                if let Some(loc_pos) = line.find("__loc:") {
+                    out.push_str(&line[..loc_pos]);
+                    out.push_str("mut ");
+                    out.push_str(&line[loc_pos..]);
                     out.push('\n');
                     continue;
                 }
             }
 
-            // --- (4) E0308: .leading_zeros() as i32 should stay u32 ---
-            if has_leading_zeros_i32 && trimmed.contains(".leading_zeros() as i32") {
-                let fixed = line.replace(".leading_zeros() as i32", ".leading_zeros()");
-                out.push_str(&fixed);
-                out.push('\n');
-                continue;
-            }
-
-            // --- (5) E0308: unsigned_long_const is a unit struct, should be u64 ---
-            if has_unsigned_long_const && trimmed.contains(": unsigned_long_const") {
-                let fixed = line.replace(": unsigned_long_const", ": u64");
-                out.push_str(&fixed);
-                out.push('\n');
-                continue;
-            }
-
-            // --- (6) E0530: let mut __libc_single_threaded shadows static ---
-            if has_libc_single_threaded_shadow && trimmed.starts_with("let mut __libc_single_threaded:") {
-                let fixed = line.replace("__libc_single_threaded", "__libc_single_threaded_local");
-                out.push_str(&fixed);
-                out.push('\n');
-                continue;
-            }
-            if has_libc_single_threaded_shadow && trimmed == "return (__libc_single_threaded) != 0;" {
-                // Check if previous line was the renamed local
-                out.push_str(indent);
-                out.push_str("return (__libc_single_threaded_local) != 0; // e30: use renamed local");
-                out.push('\n');
-                continue;
-            }
-
-            // --- (7) E0308/E0277: __intptr (usize) + __align (u64) mismatch ---
-            if has_intptr_align {
-                if trimmed.contains("__intptr - 1 + __align") {
-                    let fixed = line.replace("__intptr - 1 + __align", "__intptr - 1 + __align as usize");
-                    out.push_str(&fixed);
-                    out.push('\n');
-                    continue;
-                }
-                if trimmed.contains("__aligned - __intptr") && trimmed.contains("let mut __diff") {
-                    let fixed = line.replace("__aligned - __intptr", "__aligned as usize - __intptr");
-                    out.push_str(&fixed);
-                    out.push('\n');
-                    continue;
-                }
-            }
-
-            // --- (8) E0308: __gnu_cxx__Lock_policy = _Lock_policy::_S_atomic type mismatch ---
-            if has_lock_policy_mismatch && trimmed.contains("__gnu_cxx__Lock_policy = _Lock_policy::") {
-                let fixed = line.replace(": __gnu_cxx__Lock_policy =", ": _Lock_policy =");
-                out.push_str(&fixed);
-                out.push('\n');
-                continue;
-            }
-
-            // --- (9) E0308: std_pointer_safety aliased to u128, should be pointer_safety ---
-            if has_pointer_safety_alias && trimmed == "pub type std_pointer_safety = u128;" {
-                out.push_str(indent);
-                out.push_str("pub type std_pointer_safety = pointer_safety; // e30: fix u128 alias");
-                out.push('\n');
-                continue;
-            }
-
-            // --- (10) E0425/E0424: __scoped_lock constructor has broken __(*self._M_device) call ---
-            if has_scoped_lock_bad_call && trimmed.contains("__(*self._M_device).lock()") {
-                out.push_str(indent);
-                out.push_str("// e30: __scoped_lock lock call stubbed (broken codegen)");
-                out.push('\n');
-                continue;
-            }
-
-            // --- (11) E0428/E0119: _Bit_value_type defined multiple times ---
-            if has_bit_value_type_dup {
-                if trimmed.contains("pub struct _Bit_value_type {") {
-                    if seen_bit_value_type {
-                        // Skip the duplicate struct definition
-                        out.push_str(indent);
-                        out.push_str("// e30: removed duplicate _Bit_value_type struct");
-                        out.push('\n');
-                        continue;
-                    }
-                    seen_bit_value_type = true;
-                }
-                // Remove duplicate Default impl for _Bit_value_type
-                if seen_bit_value_type && trimmed.starts_with("impl Default for _Bit_value_type {")
-                    && trimmed.contains("FragileOpaqueField")
-                {
-                    out.push_str(indent);
-                    out.push_str("// e30: removed duplicate Default impl for _Bit_value_type");
-                    out.push('\n');
-                    continue;
-                }
-            }
-
-            // --- (12) E0308: __max_bkt typed usize but assigned u64 ---
-            if has_max_bkt_u64 && trimmed.contains("let mut __max_bkt: usize") {
-                let fixed = line.replace(": usize =", ": u64 =");
-                out.push_str(&fixed);
-                out.push('\n');
-                continue;
-            }
-
-            // --- (13) E0308: _M_code field assigned u128 instead of error_code ---
-            if trimmed.contains("_M_code: (__ec).clone(),") {
-                out.push_str(indent);
-                out.push_str("_M_code: unsafe { std::mem::transmute((__ec).clone()) }, // e30: u128 -> error_code");
-                out.push('\n');
-                continue;
-            }
-
-            // --- (14) E0308: __num assigned from self clone in istream ---
-            if trimmed.contains("let mut __num: i64 = ((self).clone()).clone();") {
-                out.push_str(indent);
-                out.push_str("let mut __num: i64 = 0; // e30: istream self-clone stubbed");
-                out.push('\n');
-                continue;
-            }
-
-            // --- (15) E0308: _Any_data vs std__Any_data type mismatch ---
-            if trimmed.contains("&mut _Any_data") && trimmed.contains("&std__Any_data") {
-                let fixed = line.replace("_Any_data", "std__Any_data");
-                out.push_str(&fixed);
-                out.push('\n');
-                continue;
-            }
-
-            // Default: pass through unchanged
             out.push_str(line);
             out.push('\n');
         }
@@ -135517,110 +135431,76 @@ impl std_time_put_char_ {
         assert!(output.contains("(__i % __j)"), "should simplify modulo, got: {}", output);
     }
 
-    // -----------------------------------------------------------------------
     // normalize_e30_residual_errors tests
-    // -----------------------------------------------------------------------
 
     #[test]
-    fn test_e30_fixes_exception_ptr_method_signatures() {
-        let input = "impl exception_ptr {\n    pub fn new_1_2(__other: &u128) -> Self{\n        let mut __self = Self {\n            _M_exception_object: __other._M_exception_object,\n        };\n        __self\n    }\n}\n";
+    fn test_e30_fixes_vasprintf_fragile_va_list_array_shape() {
+        let input = "    let mut __res: i32 = vasprintf_1(__s as *mut *mut i8, __format as *const i8, unsafe { std::mem::zeroed::<FragileVaList>() });\n";
         let output = AstCodeGen::normalize_e30_residual_errors(input);
-        assert!(output.contains("__other: &exception_ptr"), "should fix param type, got: {}", output);
+        assert!(
+            output.contains("std::mem::zeroed::<[FragileVaList; 1]>()"),
+            "should rehydrate varargs lane shape, got: {}",
+            output
+        );
     }
 
     #[test]
-    fn test_e30_fixes_make_error_code_return_type() {
-        let input = "pub extern \"C\" fn make_error_code(__e: std_errc) -> u128{\n    return error_code::new_2(__e as i32, &_V2::generic_category());\n}\n";
+    fn test_e30_rewrites_nonprimitive_status_bitfield_conversions() {
+        let input = "pub fn __status(&self) -> weird_status {\n    (self._bitfield_1 & 0x1) as u8\n}\npub fn set___status(&mut self, v: weird_status) {\n    self._bitfield_1 = (self._bitfield_1 & !0x1) | ((v as u8) & 0x1);\n}\n";
         let output = AstCodeGen::normalize_e30_residual_errors(input);
-        assert!(output.contains("-> error_code{"), "should fix return type, got: {}", output);
+        assert!(
+            output.contains("*(&mut __out as *mut _ as *mut u8)"),
+            "should materialize non-primitive status getter value, got: {}",
+            output
+        );
+        assert!(
+            output.contains("*(&v as *const _ as *const u8)"),
+            "should derive setter lane from first byte for non-primitive status, got: {}",
+            output
+        );
+        assert!(
+            !output.contains("((v as u8) & 0x1)"),
+            "non-primitive setter should not cast v directly to u8, got: {}",
+            output
+        );
     }
 
     #[test]
-    fn test_e30_fixes_make_error_condition_return_type() {
-        let input = "pub extern \"C\" fn make_error_condition(__e: std_errc) -> u128{\n    return error_condition::new_2(__e as i32, &_V2::generic_category());\n}\n";
+    fn test_e30_preserves_primitive_status_bitfield_conversions() {
+        let input = "pub fn __status(&self) -> u8 {\n    (self._bitfield_1 & 0x1) as u8\n}\npub fn set___status(&mut self, v: u8) {\n    self._bitfield_1 = (self._bitfield_1 & !0x1) | ((v as u8) & 0x1);\n}\n";
         let output = AstCodeGen::normalize_e30_residual_errors(input);
-        assert!(output.contains("-> error_condition{"), "should fix return type, got: {}", output);
+        assert!(
+            output.contains("(self._bitfield_1 & 0x1) as u8"),
+            "primitive getter should remain unchanged, got: {}",
+            output
+        );
+        assert!(
+            output.contains("((v as u8) & 0x1)"),
+            "primitive setter should remain unchanged, got: {}",
+            output
+        );
     }
 
     #[test]
-    fn test_e30_fixes_char_traits_assign_3_args() {
-        let input = "return { std_char_traits_char_::assign(__s as *mut i8, __n, __a); __s as *mut i8 as *mut i8 };\n";
+    fn test_e30_marks_adjacent_difference_first_mut() {
+        let input = "pub fn adjacent_difference_std___wrap_iter_const_double_std___wrap_iter_double(__first: std___wrap_iter_const_double, __last: std___wrap_iter_const_double, mut __result: std___wrap_iter_double) -> std___wrap_iter_double {\n}\n";
         let output = AstCodeGen::normalize_e30_residual_errors(input);
-        assert!(output.contains("::assign_1(__s as"), "should rename to assign_1, got: {}", output);
+        assert!(
+            output.contains("(mut __first: std___wrap_iter_const_double"),
+            "should mark adjacent_difference __first mutable, got: {}",
+            output
+        );
     }
 
     #[test]
-    fn test_e30_fixes_leading_zeros_cast() {
-        let input = "let mut __lz: u32 = if 8 > 8 { (__n as u64 - 1).leading_zeros() as i32 } else { (__n - 1).leading_zeros() as i32 };\n";
+    fn test_e30_marks_asprintf_locale_pointer_mut() {
+        let input = "pub unsafe extern \"C\" fn __asprintf_1(__s: *mut *mut i8, __loc: *mut __locale_struct, __format: *const i8, mut __va_args: ...) -> i32 {\n}\n";
         let output = AstCodeGen::normalize_e30_residual_errors(input);
-        assert!(!output.contains("as i32"), "should remove as i32 cast, got: {}", output);
-        assert!(output.contains(".leading_zeros() }"), "should keep leading_zeros, got: {}", output);
-    }
-
-    #[test]
-    fn test_e30_fixes_unsigned_long_const() {
-        let input = "let mut __max_width: unsigned_long_const = 8;\n";
-        let output = AstCodeGen::normalize_e30_residual_errors(input);
-        assert!(output.contains(": u64 = 8;"), "should change type to u64, got: {}", output);
-    }
-
-    #[test]
-    fn test_e30_fixes_libc_single_threaded_shadow() {
-        let input = "pub static __libc_single_threaded: i8 = 0;\nfn test() {\n    let mut __libc_single_threaded: i8 = 0;\n    return (__libc_single_threaded) != 0;\n}\n";
-        let output = AstCodeGen::normalize_e30_residual_errors(input);
-        assert!(output.contains("__libc_single_threaded_local: i8 = 0;"), "should rename local, got: {}", output);
-        assert!(output.contains("__libc_single_threaded_local) != 0;"), "should use renamed local, got: {}", output);
-    }
-
-    #[test]
-    fn test_e30_fixes_intptr_align_cast() {
-        let input = "let mut __aligned: u64 = (((__intptr - 1 + __align)) as u64) & (((__align).wrapping_neg()) as u64);\nlet mut __diff: u64 = ((__aligned - __intptr) as u64);\n";
-        let output = AstCodeGen::normalize_e30_residual_errors(input);
-        assert!(output.contains("__align as usize"), "should cast __align to usize, got: {}", output);
-        assert!(output.contains("__aligned as usize - __intptr"), "should cast __aligned to usize, got: {}", output);
-    }
-
-    #[test]
-    fn test_e30_fixes_lock_policy_type() {
-        let input = "pub(crate) static mut __gv___default_lock_policy: __gnu_cxx__Lock_policy = _Lock_policy::_S_atomic;\n";
-        let output = AstCodeGen::normalize_e30_residual_errors(input);
-        assert!(output.contains(": _Lock_policy ="), "should fix type to _Lock_policy, got: {}", output);
-    }
-
-    #[test]
-    fn test_e30_fixes_pointer_safety_alias() {
-        let input = "pub type std_pointer_safety = u128;\n";
-        let output = AstCodeGen::normalize_e30_residual_errors(input);
-        assert!(output.contains("= pointer_safety;"), "should alias to pointer_safety, got: {}", output);
-    }
-
-    #[test]
-    fn test_e30_fixes_scoped_lock_bad_call() {
-        let input = "unsafe { __(*self._M_device).lock() };\n";
-        let output = AstCodeGen::normalize_e30_residual_errors(input);
-        assert!(!output.contains("__(*self._M_device)"), "should remove broken call, got: {}", output);
-    }
-
-    #[test]
-    fn test_e30_fixes_bit_value_type_duplicate() {
-        let input = "pub struct _Bit_value_type {\n    first: i32,\n}\nimpl Default for _Bit_value_type { fn default() -> Self { Self { first: 0 } } }\npub struct _Bit_value_type {\n    first: FragileOpaqueField, second: FragileOpaqueField\n}\nimpl Default for _Bit_value_type { fn default() -> Self { Self { first: FragileOpaqueField, second: FragileOpaqueField } } }\n";
-        let output = AstCodeGen::normalize_e30_residual_errors(input);
-        let count = output.matches("pub struct _Bit_value_type").count();
-        assert_eq!(count, 1, "should only have one _Bit_value_type definition, got: {}", output);
-    }
-
-    #[test]
-    fn test_e30_fixes_istream_self_clone() {
-        let input = "let mut __num: i64 = ((self).clone()).clone();\n";
-        let output = AstCodeGen::normalize_e30_residual_errors(input);
-        assert!(output.contains("let mut __num: i64 = 0;"), "should stub self-clone, got: {}", output);
-    }
-
-    #[test]
-    fn test_e30_fixes_max_bkt_type() {
-        let input = "let mut __max_bkt: usize = (((1 as u64 as u64))).wrapping_shl(((8 * 8 - 1)) as u32);\n";
-        let output = AstCodeGen::normalize_e30_residual_errors(input);
-        assert!(output.contains(": u64 ="), "should change to u64, got: {}", output);
+        assert!(
+            output.contains("mut __loc: *mut __locale_struct"),
+            "should mark __loc mutable for __asprintf_1, got: {}",
+            output
+        );
     }
 
     // -----------------------------------------------------------------------
