@@ -21982,3 +21982,32 @@ Key findings/decisions:
   - total `200 -> 158`;
   - `E0425 63 -> 21`;
   - non-increase: `E0308 73 -> 73`, `E0599 0 -> 0`, `E0609 4 -> 4`, `E0277 8 -> 8`.
+
+## 2026-03-24: M9.2.c.iv.e.27 iterator unit-return rehydration
+
+Task sizing analysis:
+- Active first open leaf was `M9.2.c.iv.e.27`.
+- Scope was bounded to one dominant `E0308` cluster fix plus focused tests (<1000 LOC).
+
+Plan before execution:
+- capture strict baseline replay on `debugging/misc/basetypes/logging`;
+- isolate one repeated `E0308` sub-cluster;
+- apply one generic post-processing fix in `ast_codegen`;
+- add focused unit coverage;
+- rerun strict replay and publish deterministic deltas.
+
+Wrong-approach check:
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific conditionals, no force-native bypasses, no semantic source stubs, and no rollback-pattern additions were introduced.
+
+Key findings/decisions:
+- Baseline dominant pair was:
+  - `expected _InputIterator, found ()` (`8`);
+  - `expected (), found _InputIterator` (`8`).
+- Root cause was degraded unit signatures (`-> ()`) in iterator-based methods whose bodies still returned iterator params (`return __b;` / `return __s;`).
+- Implemented `normalize_iterator_unit_return_types_from_body_returns` and wired it after `normalize_e26_residual_errors`.
+- Strict replay deltas (baseline `/tmp/fragile_e27_before_r_7r6ghn`, after `/tmp/fragile_e27_after_kf4i8f86`):
+  - total `49 -> 33`;
+  - `E0308 33 -> 17`;
+  - non-increase `E0599 4 -> 4`;
+  - iterator mismatch pair markers both reduced to `0`.
