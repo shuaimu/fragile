@@ -30113,6 +30113,8 @@ impl AstCodeGen {
         output = Self::normalize_char_traits_move_call_names(&output);
         // Fix E0609: empty std_basic_ios/istream structs missing fields.
         output = Self::normalize_ios_istream_missing_fields(&output);
+        // Fix residual E0425 placeholder artifacts in strict RPC replay.
+        output = Self::normalize_residual_e0425_placeholder_symbols(&output);
         // Fix E0308: sentry = self → sentry = zeroed().
         output = Self::normalize_sentry_construction(&output);
         // Fix E0599: __mutex_type missing unlock/lock methods.
@@ -30142,6 +30144,12 @@ impl AstCodeGen {
         // because you cannot add associated items to primitive types; replace
         // with the actual constant values from libc++.
         output = Self::normalize_ios_base_fmtflags_primitive_associated_constants(&output);
+        // Fix E0080: u64 overflow in static array initializers — use wrapping_mul.
+        output = Self::normalize_u64_overflow_static_arrays(&output);
+        // Fix E0560: constructors referencing non-existent struct fields.
+        output = Self::normalize_constructor_nonexistent_fields(&output);
+        // Fix E0277: mixed-width arithmetic (u32 op u64) — insert as-casts.
+        output = Self::normalize_mixed_width_arithmetic(&output);
         // Some late normalizations can reintroduce final method-surface
         // stragglers (op_call/op_inc/swap/p and related compat traits),
         // so rerun the final RPC straggler pass at pipeline tail.
@@ -30214,7 +30222,9 @@ impl AstCodeGen {
                 continue;
             };
             let name = name.trim();
-            if name.starts_with("__gv_") && !name.is_empty() {
+            // Accept all MaybeUninit statics (not just __gv_ prefixed) to also
+            // handle function-scoped statics like LOG_M_S (e.22 fix for E0606).
+            if !name.is_empty() {
                 maybeuninit_globals.insert(name.to_string());
             }
         }
@@ -36470,6 +36480,189 @@ impl FragileUnitParamCompat for () {
         out
     }
 
+    /// Fix residual E0425 placeholder artifacts in strict RPC replay:
+    /// - unresolved `__make_unsigned_type_parameter_*` in `__to_unsigned_like_*`
+    /// - unresolved `__c` loop variable in `__non_unique_impl::__hash`
+    /// - unresolved locale internal `__imp` pointer type
+    /// - wrong `this_thread::` qualifier on top-level sleep helper
+    pub fn normalize_residual_e0425_placeholder_symbols(code: &str) -> String {
+        if !code.contains("__make_unsigned_type_parameter_")
+            && !code.contains("while (__c) != 0 {")
+            && !code.contains("*mut __imp")
+            && !code.contains("*const __imp")
+            && !code.contains("this_thread::sleep_for_chrono_nanoseconds_chrono_nanoseconds(")
+        {
+            return code.to_string();
+        }
+
+        let mut out = code.to_string();
+
+        if out.contains("this_thread::sleep_for_chrono_nanoseconds_chrono_nanoseconds(")
+            && out.contains("pub fn sleep_for_chrono_nanoseconds_chrono_nanoseconds(")
+        {
+            out = out.replace(
+                "this_thread::sleep_for_chrono_nanoseconds_chrono_nanoseconds(",
+                "sleep_for_chrono_nanoseconds_chrono_nanoseconds(",
+            );
+        }
+
+        let has_exact_imp_definition = out.lines().any(|line| {
+            let trimmed = line.trim_start();
+            let has_exact_name_after = |prefix: &str| {
+                if !trimmed.starts_with(prefix) {
+                    return false;
+                }
+                let next = trimmed[prefix.len()..].chars().next();
+                !next.is_some_and(Self::is_identifier_char)
+            };
+            has_exact_name_after("pub struct __imp")
+                || has_exact_name_after("pub type __imp")
+                || trimmed.starts_with("type __imp =")
+        });
+
+        if (out.contains("*mut __imp") || out.contains("*const __imp")) && !has_exact_imp_definition {
+            out = out.replace("*mut __imp", "*mut std::ffi::c_void");
+            out = out.replace("*const __imp", "*const std::ffi::c_void");
+        }
+
+        if out.contains("__make_unsigned_type_parameter_") {
+            let mut rewritten = String::with_capacity(out.len());
+            let mut in_to_unsigned_fn = false;
+            let mut to_unsigned_fn_depth: i32 = 0;
+            let mut to_unsigned_param = String::new();
+            let mut to_unsigned_return_ty = String::new();
+
+            for line in out.lines() {
+                let trimmed = line.trim();
+                if !in_to_unsigned_fn
+                    && trimmed.starts_with("pub fn __to_unsigned_like_")
+                    && trimmed.contains('(')
+                    && trimmed.contains("-> ")
+                {
+                    in_to_unsigned_fn = true;
+                    to_unsigned_fn_depth = 0;
+                    to_unsigned_param.clear();
+                    to_unsigned_return_ty.clear();
+
+                    if let Some(open_idx) = trimmed.find('(') {
+                        if let Some(close_idx) = Self::find_matching_close_paren(trimmed, open_idx) {
+                            let params_src = &trimmed[open_idx + 1..close_idx];
+                            if let Some(first_param) = params_src.split(',').next() {
+                                if let Some((lhs, _rhs)) = first_param.split_once(':') {
+                                    let mut name = lhs.trim();
+                                    if let Some(stripped) = name.strip_prefix("mut ") {
+                                        name = stripped.trim();
+                                    }
+                                    if !name.is_empty() {
+                                        to_unsigned_param = name.to_string();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if let Some(arrow_idx) = trimmed.rfind("-> ") {
+                        let ret_src = &trimmed[arrow_idx + 3..];
+                        to_unsigned_return_ty = ret_src
+                            .split(|c: char| c == '{' || c.is_whitespace())
+                            .next()
+                            .unwrap_or("")
+                            .trim()
+                            .to_string();
+                    }
+                }
+
+                if in_to_unsigned_fn
+                    && !to_unsigned_param.is_empty()
+                    && !to_unsigned_return_ty.is_empty()
+                    && trimmed.contains("std::mem::zeroed::<__make_unsigned_type_parameter_")
+                {
+                    let indent = &line[..line.len() - line.trim_start().len()];
+                    rewritten.push_str(indent);
+                    rewritten.push_str(&format!(
+                        "return ({}) as {};",
+                        to_unsigned_param, to_unsigned_return_ty
+                    ));
+                    rewritten.push('\n');
+                } else {
+                    rewritten.push_str(line);
+                    rewritten.push('\n');
+                }
+
+                if in_to_unsigned_fn {
+                    let (opens, closes) = Self::count_braces_outside_strings(line);
+                    to_unsigned_fn_depth += opens as i32 - closes as i32;
+                    if to_unsigned_fn_depth <= 0 {
+                        in_to_unsigned_fn = false;
+                    }
+                }
+            }
+
+            if rewritten.ends_with('\n') && !out.ends_with('\n') {
+                rewritten.pop();
+            }
+            out = rewritten;
+        }
+
+        if out.contains("pub fn __hash(") && out.contains("while (__c) != 0 {") {
+            let mut rewritten = String::with_capacity(out.len() + 128);
+            let mut in_hash_fn = false;
+            let mut hash_fn_depth: i32 = 0;
+            let mut rewrote_hash_loop = false;
+
+            for line in out.lines() {
+                let trimmed = line.trim();
+                if !in_hash_fn
+                    && trimmed.starts_with("pub fn __hash(")
+                    && trimmed.contains("__ptr")
+                    && trimmed.contains("-> u64")
+                {
+                    in_hash_fn = true;
+                    hash_fn_depth = 0;
+                    rewrote_hash_loop = false;
+                }
+
+                if in_hash_fn && trimmed == "while (__c) != 0 {" {
+                    let indent = &line[..line.len() - line.trim_start().len()];
+                    rewritten.push_str(indent);
+                    rewritten.push_str("loop {\n");
+                    rewritten.push_str(indent);
+                    rewritten.push_str("    let __c = unsafe { *__ptr };\n");
+                    rewritten.push_str(indent);
+                    rewritten.push_str("    if (__c) == 0 { break; }\n");
+                    rewrote_hash_loop = true;
+                } else {
+                    rewritten.push_str(line);
+                    rewritten.push('\n');
+                    if in_hash_fn
+                        && rewrote_hash_loop
+                        && trimmed.starts_with("{ __hash =")
+                        && trimmed.contains("__c as u64")
+                    {
+                        let indent = &line[..line.len() - line.trim_start().len()];
+                        rewritten.push_str(indent);
+                        rewritten.push_str("{ __ptr = unsafe { __ptr.add(1) }; };\n");
+                    }
+                }
+
+                if in_hash_fn {
+                    let (opens, closes) = Self::count_braces_outside_strings(line);
+                    hash_fn_depth += opens as i32 - closes as i32;
+                    if hash_fn_depth <= 0 {
+                        in_hash_fn = false;
+                        rewrote_hash_loop = false;
+                    }
+                }
+            }
+
+            if rewritten.ends_with('\n') && !out.ends_with('\n') {
+                rewritten.pop();
+            }
+            out = rewritten;
+        }
+
+        out
+    }
+
     /// Fix E0308: `let mut __cerb: sentry = self;` — the C++ sentry
     /// constructor takes an istream ref but transpiler emits a plain
     /// assignment.  Replace with zeroed() since sentry is opaque.
@@ -38964,6 +39157,110 @@ impl FragileUnitParamCompat for () {
             }
         }
         result
+    }
+
+    /// Fix E0080: u64 overflow in static array initializers.
+    /// Pattern: `(-8446744073709551616i64 as u64) * 10` overflows at compile
+    /// time.  Replace `X * Y` with `X.wrapping_mul(Y)` for large u64 products
+    /// in static array initializers.
+    pub fn normalize_u64_overflow_static_arrays(code: &str) -> String {
+        if !code.contains("-8446744073709551616i64 as u64)") {
+            return code.to_string();
+        }
+        let mut out = String::with_capacity(code.len() + 256);
+        for line in code.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("pub(crate) static mut") && trimmed.contains("[u64;") && trimmed.contains("-8446744073709551616i64 as u64)") {
+                let mut rewritten = line.to_string();
+                let overflow_base = "(-8446744073709551616i64 as u64)";
+                while rewritten.contains(&format!("{} * ", overflow_base)) {
+                    if let Some(pos) = rewritten.find(&format!("{} * ", overflow_base)) {
+                        let after_star = pos + overflow_base.len() + 3;
+                        let rest = &rewritten[after_star..];
+                        let end = if rest.starts_with('(') {
+                            let mut depth = 0i32;
+                            let mut end_idx = 0;
+                            for (idx, ch) in rest.char_indices() {
+                                match ch {
+                                    '(' => depth += 1,
+                                    ')' => { depth -= 1; if depth == 0 { end_idx = idx + 1; break; } }
+                                    _ => {}
+                                }
+                            }
+                            end_idx
+                        } else {
+                            rest.find(|c: char| c == ',' || c == ']' || c == ')').unwrap_or(rest.len())
+                        };
+                        let multiplier = rest[..end].trim().to_string();
+                        let new_expr = format!("{}.wrapping_mul({})", overflow_base, multiplier);
+                        rewritten = format!("{}{}{}", &rewritten[..pos], new_expr, &rewritten[after_star + end..]);
+                    } else {
+                        break;
+                    }
+                }
+                out.push_str(&rewritten);
+            } else {
+                out.push_str(line);
+            }
+            out.push('\n');
+        }
+        if out.ends_with('\n') && !code.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix E0560: constructor bodies referencing fields that don't exist on
+    /// the struct. Two specific patterns:
+    /// 1. `bernoulli_distribution::new_0` references `__base` but struct only has `__p_`
+    /// 2. `std___bitset_0_0_::new_0_1` references `__first_` but struct is empty
+    pub fn normalize_constructor_nonexistent_fields(code: &str) -> String {
+        if !code.contains("__base: bernoulli_distribution::new_1") && !code.contains("__first_: 0") {
+            return code.to_string();
+        }
+        let mut out = String::with_capacity(code.len());
+        for line in code.lines() {
+            let trimmed = line.trim();
+            if trimmed == "__base: bernoulli_distribution::new_1(0.5)," {
+                out.push('\n');
+                continue;
+            }
+            if trimmed == "__first_: 0," || trimmed == "__first_: 0" {
+                let indent = &line[..line.len() - line.trim_start().len()];
+                out.push_str(indent);
+                out.push_str("// __first_ field removed (struct is zero-sized)\n");
+                continue;
+            }
+            out.push_str(line);
+            out.push('\n');
+        }
+        if out.ends_with('\n') && !code.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix E0277: mixed-width arithmetic where `u32` operator `u64` is invalid.
+    /// Pattern: `op_call() % (EXPR) as u64` where op_call returns u32.
+    /// Fix: wrap `op_call()` result in `as u64` cast.
+    pub fn normalize_mixed_width_arithmetic(code: &str) -> String {
+        if !code.contains(".op_call()") || !code.contains("as u64") {
+            return code.to_string();
+        }
+        let mut out = String::with_capacity(code.len() + 256);
+        for line in code.lines() {
+            if line.contains(".op_call() %") && line.contains("as u64") {
+                let rewritten = line.replace(".op_call() %", ".op_call() as u64 %");
+                out.push_str(&rewritten);
+            } else {
+                out.push_str(line);
+            }
+            out.push('\n');
+        }
+        if out.ends_with('\n') && !code.ends_with('\n') {
+            out.pop();
+        }
+        out
     }
 
     /// 2. `(self.FIELD) as u128` — struct field cast to u128 (from C++ reinterpret).
@@ -133609,6 +133906,63 @@ impl std_time_put_char_ {
     }
 
     // -----------------------------------------------------------------------
+    // normalize_u64_overflow_static_arrays tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_normalize_u64_overflow_replaces_mul_with_wrapping_mul() {
+        let input = "pub(crate) static mut __gv_x: [u64; 4] = [1, 2, (-8446744073709551616i64 as u64) * 10, (-8446744073709551616i64 as u64) * 100];";
+        let output = AstCodeGen::normalize_u64_overflow_static_arrays(input);
+        assert!(output.contains("wrapping_mul(10)"), "should use wrapping_mul, got: {}", output);
+        assert!(output.contains("wrapping_mul(100)"), "should use wrapping_mul for second, got: {}", output);
+        assert!(!output.contains(") * 10"), "should not have plain multiply, got: {}", output);
+    }
+
+    #[test]
+    fn test_normalize_u64_overflow_preserves_non_overflow_lines() {
+        let input = "pub(crate) static mut x: [u64; 2] = [1, 2];";
+        let output = AstCodeGen::normalize_u64_overflow_static_arrays(input);
+        assert_eq!(output, input);
+    }
+
+    // -----------------------------------------------------------------------
+    // normalize_constructor_nonexistent_fields tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_normalize_constructor_removes_bernoulli_base() {
+        let input = "        Self {\n            __base: bernoulli_distribution::new_1(0.5),\n            __p_: unsafe { std::mem::zeroed() },\n        }";
+        let output = AstCodeGen::normalize_constructor_nonexistent_fields(input);
+        assert!(!output.contains("__base:"), "should remove __base field, got: {}", output);
+        assert!(output.contains("__p_:"), "should keep __p_ field, got: {}", output);
+    }
+
+    #[test]
+    fn test_normalize_constructor_removes_bitset_first() {
+        let input = "        Self {\n            __first_: 0,\n        }";
+        let output = AstCodeGen::normalize_constructor_nonexistent_fields(input);
+        assert!(!output.contains("__first_: 0"), "should remove __first_ init, got: {}", output);
+    }
+
+    // -----------------------------------------------------------------------
+    // normalize_mixed_width_arithmetic tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_normalize_mixed_width_adds_u64_cast_to_op_call() {
+        let input = "return lower as u64 + self.rand_.op_call() % ((upper - lower)) as u64;";
+        let output = AstCodeGen::normalize_mixed_width_arithmetic(input);
+        assert!(output.contains("op_call() as u64 %"), "should cast op_call result to u64, got: {}", output);
+    }
+
+    #[test]
+    fn test_normalize_mixed_width_preserves_non_matching_lines() {
+        let input = "return self.rand_.op_call();";
+        let output = AstCodeGen::normalize_mixed_width_arithmetic(input);
+        assert_eq!(output, input);
+    }
+
+    // -----------------------------------------------------------------------
     // normalize_ordering_type_conversions tests
     // -----------------------------------------------------------------------
 
@@ -134511,6 +134865,114 @@ impl std_basic_ios_char_ {
         assert!(
             !output.contains("_M_streambuf_state"),
             "should not contain _M_streambuf_state anymore, got: {}",
+            output
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // normalize_residual_e0425_placeholder_symbols tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_normalize_residual_e0425_placeholder_symbols_rewrites_to_unsigned_zeroed_placeholder() {
+        let input = "\
+pub fn __to_unsigned_like_i64(__x: i64) -> u64 {
+    return unsafe { std::mem::zeroed::<__make_unsigned_type_parameter_0_0_>() };
+}
+";
+        let output = AstCodeGen::normalize_residual_e0425_placeholder_symbols(input);
+        assert!(
+            output.contains("return (__x) as u64;"),
+            "should rewrite unresolved make_unsigned placeholder to cast, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("__make_unsigned_type_parameter_0_0_"),
+            "output should not retain unresolved make_unsigned placeholder, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_residual_e0425_placeholder_symbols_rewrites_hash_loop_c_variable() {
+        let input = "\
+pub fn __hash(mut __ptr: *const i8) -> u64 {
+    let mut __hash: u64 = (5381) as u64;
+    while (__c) != 0 {
+        { __hash = (((((__hash * 33)) as u64) ^ ((__c as u64) as u64)) as u64) ;};
+    }
+    return (__hash) as u64;
+}
+";
+        let output = AstCodeGen::normalize_residual_e0425_placeholder_symbols(input);
+        assert!(
+            output.contains("let __c = unsafe { *__ptr };"),
+            "hash loop should declare __c from __ptr deref, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("__ptr.add(1)"),
+            "hash loop should advance __ptr each iteration, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("while (__c) != 0 {"),
+            "hash loop should no longer rely on unresolved while-condition symbol, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_residual_e0425_placeholder_symbols_rewrites_locale_imp_pointer_type() {
+        let input = "\
+pub struct locale {
+    __locale_: *mut __imp,
+}
+";
+        let output = AstCodeGen::normalize_residual_e0425_placeholder_symbols(input);
+        assert!(
+            output.contains("*mut std::ffi::c_void"),
+            "locale __imp pointer should be rewritten to c_void pointer, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_residual_e0425_placeholder_symbols_does_not_treat_impl_prefix_as_imp_definition() {
+        let input = "\
+pub struct __impl___type_name_t;
+pub struct locale {
+    __locale_: *mut __imp,
+}
+";
+        let output = AstCodeGen::normalize_residual_e0425_placeholder_symbols(input);
+        assert!(
+            output.contains("*mut std::ffi::c_void"),
+            "__impl-prefixed symbols should not block unresolved __imp pointer rewrite, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_residual_e0425_placeholder_symbols_rewrites_sleep_helper_module_path() {
+        let input = "\
+pub mod this_thread {
+}
+pub fn sleep_for_chrono_nanoseconds_chrono_nanoseconds(__d: *const chrono_nanoseconds) {
+}
+pub fn __sleep_for_(__ns: chrono_nanoseconds) {
+    this_thread::sleep_for_chrono_nanoseconds_chrono_nanoseconds(&__ns);
+}
+";
+        let output = AstCodeGen::normalize_residual_e0425_placeholder_symbols(input);
+        assert!(
+            output.contains("sleep_for_chrono_nanoseconds_chrono_nanoseconds(&__ns);"),
+            "sleep helper call should resolve to top-level function, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("this_thread::sleep_for_chrono_nanoseconds_chrono_nanoseconds("),
+            "sleep helper call should not keep unresolved this_thread prefix, got:\n{}",
             output
         );
     }
