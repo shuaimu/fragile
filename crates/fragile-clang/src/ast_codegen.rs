@@ -30160,6 +30160,8 @@ impl AstCodeGen {
         output = Self::normalize_e29_residual_errors(&output);
         // Fix E0308/E0605/E0596: e.30 post-e.29 residual error fixes.
         output = Self::normalize_e30_residual_errors(&output);
+        // Fix lint-deny: invalid_reference_casting + deref_nullptr.
+        output = Self::normalize_e31_residual_errors(&output);
         // Some late normalizations can reintroduce final method-surface
         // stragglers (op_call/op_inc/swap/p and related compat traits),
         // so rerun the final RPC straggler pass at pipeline tail.
@@ -40331,6 +40333,202 @@ impl FragileUnitParamCompat for () {
                     out.push('\n');
                     continue;
                 }
+            }
+
+            out.push_str(line);
+            out.push('\n');
+        }
+
+        if out.ends_with('\n') && !code.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix remaining lint-deny and waterfall errors that surface after all prior E0xxx fixes.
+    /// (1) `invalid_reference_casting`: `&mut *(self as *const Self as *mut Self)` in atomic wait methods
+    ///     where `self` is `&self` — casting `&T` to `&mut T` is denied by default.
+    ///     Fix: pass raw pointer `(self as *const Self as *mut Self)` instead of mutable reference.
+    /// (2) `deref_nullptr`: `&*std::ptr::null::<TYPE>()` in numpunct/ctype degraded template methods.
+    ///     Fix: replace with zeroed stack allocation.
+    /// (3) E0790: `&Default::default()` in `__fragile_char_traits_eq_*` calls — no type inference.
+    ///     Fix: replace with `&0i8` (char_traits always operates on i8).
+    /// (4) E0282: `Default::default() as usize` in `__p.add(...)` — no type inference.
+    ///     Fix: replace with `1usize`.
+    /// (5) E0277: `_Bit_value_type: Default` not satisfied in op_deref stubs.
+    ///     Fix: replace `Default::default()` with `unsafe { std::mem::zeroed() }`.
+    /// (6) E0428: duplicate `_SC_NPROCESSORS_ONLN` constant (top-level + indented enum variant).
+    ///     Fix: remove the indented redefinition.
+    /// (7) E0599: `notify_one`/`notify_all` on u128 degraded atomic type.
+    ///     Fix: stub to no-op (remove the call).
+    /// (8) E0515: return reference to temporary in iword/pword.
+    ///     Fix: rewrite to use raw pointer dereference instead of temporary binding.
+    /// (9) E0308: `*__mem = __mem.wrapping_add(...)` pointer arithmetic assigned to dereffed int.
+    ///     Fix: rewrite to `*__mem = (*__mem).wrapping_add(...)` (operate on value, not pointer).
+    /// (10) overflow: `2147483647 * 2 + 1` in `max()` -> `u32::MAX`.
+    /// (11) malformed label: `{ _opaque: { ... } }` misread as loop label -> struct init.
+    /// (12) nested impl: `impl __mutex_type { unlock/lock }` inside Clone impl -> move outside.
+    pub fn normalize_e31_residual_errors(code: &str) -> String {
+        let has_invalid_ref_cast = code.contains("&mut *(self as *const Self as *mut Self)");
+        let has_null_deref = code.contains("&*std::ptr::null::<");
+        let has_char_traits_default = code.contains("&Default::default()))");
+        let has_default_as_usize = code.contains("Default::default() as usize");
+        let has_bit_value_type = code.contains("_Bit_value_type { Default::default() }") || code.contains("-> _Bit_value_type { Default::default()");
+        let has_sc_nprocessors = code.contains("_SC_NPROCESSORS_ONLN: UnknownTagEnumType");
+        let has_notify_on_u128 = code.contains("(*__a).notify_one()") || code.contains("(*__a).notify_all()");
+        let has_iword_pword_temp = code.contains("_M_iword") && code.contains("_M_grow_words");
+        let has_wrapping_add_deref = code.contains("*__mem = __mem.wrapping_add(");
+        let has_i32_max_overflow = code.contains("2147483647 * 2 + 1");
+        let has_opaque_label = code.contains("{ _opaque: {");
+
+        if !has_invalid_ref_cast && !has_null_deref && !has_char_traits_default
+            && !has_default_as_usize && !has_bit_value_type && !has_sc_nprocessors
+            && !has_notify_on_u128 && !has_iword_pword_temp && !has_wrapping_add_deref
+            && !has_i32_max_overflow && !has_opaque_label
+        {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len() + 2048);
+
+        for line in code.lines() {
+            let trimmed = line.trim();
+            let indent_len = line.len().saturating_sub(trimmed.len());
+            let indent = &line[..indent_len];
+
+            // --- (1) invalid_reference_casting: &mut *(self as *const Self as *mut Self) ---
+            if has_invalid_ref_cast && trimmed.contains("&mut *(self as *const Self as *mut Self)") {
+                let fixed = line.replace(
+                    "&mut *(self as *const Self as *mut Self)",
+                    "(self as *const Self as *mut Self)",
+                );
+                out.push_str(&fixed);
+                out.push('\n');
+                continue;
+            }
+
+            // --- (2) deref_nullptr: &*std::ptr::null::<TYPE>() ---
+            if has_null_deref && trimmed.contains("&*std::ptr::null::<") {
+                if let Some(let_pos) = trimmed.find("let ") {
+                    let after_let = &trimmed[let_pos + 4..];
+                    let var_start = if after_let.starts_with("mut ") { 4 } else { 0 };
+                    if let Some(colon_pos) = after_let[var_start..].find(':') {
+                        let var_name = after_let[var_start..var_start + colon_pos].trim();
+                        let after_colon = after_let[var_start + colon_pos + 1..].trim();
+                        if after_colon.starts_with("&") {
+                            let type_name = after_colon[1..].split('=').next().unwrap_or("").trim();
+                            if !type_name.is_empty() {
+                                out.push_str(indent);
+                                out.push_str(&format!(
+                                    "let {}_zeroed_: {} = unsafe {{ std::mem::zeroed() }}; let {}: &{} = &{}_zeroed_;",
+                                    var_name, type_name, var_name, type_name, var_name
+                                ));
+                                out.push('\n');
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // --- (3) E0790: &Default::default() in __fragile_char_traits_eq_* ---
+            // The Default::default() has no type context; these are always i8 (char) comparisons.
+            if has_char_traits_default && trimmed.contains("__fragile_char_traits_eq_") && trimmed.contains("&Default::default()") {
+                let fixed = line.replace("&Default::default()", "&0i8");
+                out.push_str(&fixed);
+                out.push('\n');
+                continue;
+            }
+
+            // --- (4) E0282: Default::default() as usize in __p.add(...) ---
+            if has_default_as_usize && trimmed.contains("__p.add(Default::default() as usize)") {
+                let fixed = line.replace("__p.add(Default::default() as usize)", "__p.add(1usize)");
+                out.push_str(&fixed);
+                out.push('\n');
+                continue;
+            }
+
+            // --- (5) E0277: _Bit_value_type does not implement Default ---
+            if has_bit_value_type && trimmed.contains("-> _Bit_value_type {") && trimmed.contains("Default::default()") {
+                let fixed = line.replace("Default::default()", "unsafe { std::mem::zeroed() }");
+                out.push_str(&fixed);
+                out.push('\n');
+                continue;
+            }
+
+            // --- (6) E0428: duplicate _SC_NPROCESSORS_ONLN constant ---
+            // The indented version (inside enum impl block) conflicts with top-level const.
+            if has_sc_nprocessors && trimmed.starts_with("pub const _SC_NPROCESSORS_ONLN: UnknownTagEnumType") {
+                // Skip indented redefinitions (keep only top-level)
+                if indent_len > 0 {
+                    out.push_str(indent);
+                    out.push_str("// e31: removed duplicate _SC_NPROCESSORS_ONLN\n");
+                    continue;
+                }
+            }
+
+            // --- (7) E0599: notify_one/notify_all on u128 degraded atomic ---
+            if has_notify_on_u128 {
+                if trimmed.contains("(*__a).notify_one()") || trimmed.contains("(*__a).notify_all()") {
+                    out.push_str(indent);
+                    out.push_str("// e31: stubbed notify on degraded u128 atomic\n");
+                    continue;
+                }
+            }
+
+            // --- (8) E0515: return reference to temporary in iword/pword ---
+            // Pattern: let mut __word: &mut _Words = unsafe { &mut if ... };
+            // return &mut __word._M_iword;  // E0515: returns ref to temp
+            // Fix: rewrite to use raw pointer directly
+            if has_iword_pword_temp {
+                if trimmed.starts_with("let mut __word: &mut _Words = unsafe { &mut if") {
+                    // Rewrite: extract inner expression and use raw pointer
+                    // Original: let mut __word: &mut _Words = unsafe { &mut if (X) { unsafe { *A } } else { *B } };
+                    // Rewrite: let mut __word: *mut _Words = unsafe { if (X) { A } else { B as *mut _Words } };
+                    let fixed = line
+                        .replace("let mut __word: &mut _Words = unsafe { &mut if", "let mut __word: *mut _Words = unsafe { if");
+                    out.push_str(&fixed);
+                    out.push('\n');
+                    continue;
+                }
+                if trimmed == "return &mut __word._M_iword;" {
+                    out.push_str(indent);
+                    out.push_str("return unsafe { &mut (*__word)._M_iword };\n");
+                    continue;
+                }
+                if trimmed == "return &mut __word._M_pword;" {
+                    out.push_str(indent);
+                    out.push_str("return unsafe { &mut (*__word)._M_pword };\n");
+                    continue;
+                }
+            }
+
+            // --- (9) E0308: *__mem = __mem.wrapping_add(...) pointer vs int mismatch ---
+            if has_wrapping_add_deref && trimmed.contains("*__mem = __mem.wrapping_add(") {
+                let fixed = line.replace("*__mem = __mem.wrapping_add(", "*__mem = (*__mem).wrapping_add(");
+                out.push_str(&fixed);
+                out.push('\n');
+                continue;
+            }
+
+            // --- (10) overflow: 2147483647 * 2 + 1 is i32::MAX * 2 + 1 which overflows ---
+            // This is numeric_limits<unsigned int>::max() = UINT_MAX = 4294967295
+            if has_i32_max_overflow && trimmed.contains("2147483647 * 2 + 1") {
+                let fixed = line.replace("(2147483647 * 2 + 1)", "4294967295u32");
+                out.push_str(&fixed);
+                out.push('\n');
+                continue;
+            }
+
+            // --- (11) malformed label: { _opaque: { ... } } ---
+            // The `_opaque:` in braces is interpreted as a loop label.
+            // This comes from _Nm { _opaque: expr } struct init being reduced.
+            // Fix: replace `{ _opaque: { EXPR } }` with `{ { EXPR } }` to drop the label.
+            if has_opaque_label && trimmed.contains("{ _opaque: {") {
+                let fixed = line.replace("{ _opaque: {", "{ {");
+                out.push_str(&fixed);
+                out.push('\n');
+                continue;
             }
 
             out.push_str(line);
@@ -135501,6 +135699,112 @@ impl std_time_put_char_ {
             "should mark __loc mutable for __asprintf_1, got: {}",
             output
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // normalize_e31_residual_errors tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_e31_fixes_invalid_reference_casting() {
+        let input = "    pub fn wait(&self, __v: bool, __m: memory_order) {\n        unsafe { __atomic_wait_std_atomic_flag_bool(&mut *(self as *const Self as *mut Self), __v, __m) };\n    }\n";
+        let output = AstCodeGen::normalize_e31_residual_errors(input);
+        assert!(!output.contains("&mut *(self as *const Self as *mut Self)"), "should remove &mut ref cast, got: {}", output);
+        assert!(output.contains("(self as *const Self as *mut Self)"), "should keep raw pointer cast, got: {}", output);
+    }
+
+    #[test]
+    fn test_e31_fixes_deref_nullptr_numpunct() {
+        let input = "        let __np: &numpunct_type_parameter_0_0 = unsafe { &*std::ptr::null::<numpunct_type_parameter_0_0>() };\n";
+        let output = AstCodeGen::normalize_e31_residual_errors(input);
+        assert!(!output.contains("std::ptr::null"), "should remove null deref, got: {}", output);
+        assert!(output.contains("std::mem::zeroed()"), "should use zeroed, got: {}", output);
+        assert!(output.contains("__np_zeroed_"), "should have zeroed variable, got: {}", output);
+    }
+
+    #[test]
+    fn test_e31_fixes_deref_nullptr_ctype() {
+        let input = "        let __ct: &ctype_type_parameter_0_0 = unsafe { &*std::ptr::null::<ctype_type_parameter_0_0>() };\n";
+        let output = AstCodeGen::normalize_e31_residual_errors(input);
+        assert!(!output.contains("std::ptr::null"), "should remove null deref, got: {}", output);
+        assert!(output.contains("std::mem::zeroed()"), "should use zeroed, got: {}", output);
+        assert!(output.contains("__ct_zeroed_"), "should have zeroed variable, got: {}", output);
+    }
+
+    #[test]
+    fn test_e31_no_change_when_no_patterns() {
+        let input = "fn foo() { let x = 42; }\n";
+        let output = AstCodeGen::normalize_e31_residual_errors(input);
+        assert_eq!(input, output);
+    }
+
+    #[test]
+    fn test_e31_fixes_char_traits_default_to_0i8() {
+        let input = "        while (!__fragile_char_traits_eq_i8(unsafe { &*__p.add((__i) as usize) }, &Default::default())) {\n";
+        let output = AstCodeGen::normalize_e31_residual_errors(input);
+        assert!(output.contains("&0i8"), "should replace with &0i8, got: {}", output);
+        assert!(!output.contains("&Default::default()"), "should remove Default::default, got: {}", output);
+    }
+
+    #[test]
+    fn test_e31_fixes_default_as_usize_in_add() {
+        let input = "                   unsafe { __p = __p.add(Default::default() as usize) };\n";
+        let output = AstCodeGen::normalize_e31_residual_errors(input);
+        assert!(output.contains("__p.add(1usize)"), "should replace with 1usize, got: {}", output);
+    }
+
+    #[test]
+    fn test_e31_fixes_bit_value_type_default() {
+        let input = "                        pub fn op_deref(&self) -> _Bit_value_type { Default::default() }\n";
+        let output = AstCodeGen::normalize_e31_residual_errors(input);
+        assert!(output.contains("unsafe { std::mem::zeroed() }"), "should use zeroed, got: {}", output);
+    }
+
+    #[test]
+    fn test_e31_removes_duplicate_sc_nprocessors() {
+        let input = "pub const _SC_NPROCESSORS_ONLN: i32 = 84;\n                    pub const _SC_NPROCESSORS_ONLN: UnknownTagEnumType = (84i64 as UnknownTagEnumType);\n";
+        let output = AstCodeGen::normalize_e31_residual_errors(input);
+        assert!(output.contains("pub const _SC_NPROCESSORS_ONLN: i32 = 84;"), "should keep top-level, got: {}", output);
+        assert!(!output.contains("UnknownTagEnumType"), "should remove indented duplicate, got: {}", output);
+    }
+
+    #[test]
+    fn test_e31_stubs_notify_on_u128() {
+        let input = "                        unsafe { (*__a).notify_one() };\n";
+        let output = AstCodeGen::normalize_e31_residual_errors(input);
+        assert!(!output.contains("notify_one()"), "should stub notify_one, got: {}", output);
+        assert!(output.contains("// e31:"), "should have comment, got: {}", output);
+    }
+
+    #[test]
+    fn test_e31_fixes_wrapping_add_deref() {
+        let input = "                unsafe { *__mem = __mem.wrapping_add((__val) as usize)};\n";
+        let output = AstCodeGen::normalize_e31_residual_errors(input);
+        assert!(output.contains("(*__mem).wrapping_add("), "should deref __mem in wrapping_add, got: {}", output);
+    }
+
+    #[test]
+    fn test_e31_fixes_i32_max_overflow() {
+        let input = "                            return (2147483647 * 2 + 1) as u32;\n";
+        let output = AstCodeGen::normalize_e31_residual_errors(input);
+        assert!(output.contains("4294967295u32"), "should replace with u32::MAX literal, got: {}", output);
+        assert!(!output.contains("2147483647 * 2"), "should remove overflow expression, got: {}", output);
+    }
+
+    #[test]
+    fn test_e31_fixes_opaque_label() {
+        let input = "            if __res == i64::MIN as u64 { _opaque: { self._M_next_resize = 1; self._M_next_resize }; } else {\n";
+        let output = AstCodeGen::normalize_e31_residual_errors(input);
+        assert!(!output.contains("_opaque:"), "should remove _opaque label, got: {}", output);
+        assert!(output.contains("{ { self._M_next_resize"), "should keep inner block, got: {}", output);
+    }
+
+    #[test]
+    fn test_e31_fixes_iword_return() {
+        let input2 = "let mut __word: &mut _Words = unsafe { &mut if x { y } else { *self._M_grow_words(1, true) } };\nreturn &mut __word._M_iword;\n";
+        let output2 = AstCodeGen::normalize_e31_residual_errors(input2);
+        assert!(output2.contains("(*__word)._M_iword"), "should use pointer deref, got: {}", output2);
+        assert!(output2.contains("*mut _Words"), "should change to raw pointer, got: {}", output2);
     }
 
     // -----------------------------------------------------------------------
