@@ -22099,3 +22099,42 @@ Key findings/decisions:
 - Full regression gates passed:
   - `cargo test --workspace --all-targets`
   - `python3 -m unittest discover -s tests/python -p 'test_*.py'`
+
+## 2026-03-25: M9.2.c.iv.e.34.a strict replay blocker inventory and decomposition
+
+Task sizing analysis:
+- Selected leaf: `M9.2.c.iv.e.34` (end-to-end strict runtime replay contract).
+- Live replay after e.33 did not remain orchestration-only; it surfaced a multi-family compile/transpile blocker set (`93` total / `38` unique error keys).
+- Direct closure of e.34 in one pass is not a bounded (<1000 LOC) change, so decomposition was required.
+
+Plan before execution:
+- run strict runtime replay and capture deterministic run-root evidence;
+- validate lane contract fields;
+- if contract failed, capture blocker inventory and classify dominant families/files;
+- decompose e.34 into bounded follow-up leaves.
+
+Wrong-approach check:
+- Re-read `docs/dev/wrong.md`.
+- No rollback-pattern additions, no force-native bypass, no fake success markers.
+- Kept outcome reporting strictly manifest-driven.
+
+Key findings/decisions:
+- Replay run-root: `/tmp/fragile_m9_2_strict_runtime_replay_20260325T233520Z_p2595863`.
+- Lane contract result:
+  - `lane_fragilec_build_status=2`
+  - `lane_fragilec_test_rpc_status=-1`
+  - `lane_fragilec_failure_class=build_failed`
+  - `runtime_trial_passed_count=0/1`
+- Blocker inventory:
+  - `rustc_error_total_count=93`
+  - `rustc_error_unique_count=38`
+  - dominant keys: `E0425 chunk` (31), `E0308` (11), `E0599 std_string op_add_assign` (5), `E0599 std_shared_ptr op_arrow` (4), `E0425 void` (3).
+- First failing units:
+  - `strop.cpp`, `marshal.cpp`, `epoll_wrapper.cc` (typed rustc compile failures)
+  - `event.cc` (mapping-completeness canonical-target failure for covered `map` family aliases).
+- Decomposition applied under e.34:
+  - `e.34.b` event mapping-completeness fix,
+  - `e.34.c` marshal `chunk` type-lane fix,
+  - `e.34.d` strop typed/method-surface cluster,
+  - `e.34.e` epoll_wrapper + marshal residual compat/lifetime blockers,
+  - `e.34.f` final end-to-end replay verification.

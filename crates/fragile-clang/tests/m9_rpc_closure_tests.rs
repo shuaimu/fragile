@@ -5590,6 +5590,60 @@ fn m9_2c_iv_e32_inventory_document_exists_and_reports_single_logging_blocker() {
     }
 }
 
+#[test]
+fn m9_2c_iv_e34a_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.34.a Capture deterministic post-e.33 strict replay blocker inventory"),
+        "M9.2.c.iv.e.34.a should be marked done in TODO.md"
+    );
+    assert!(
+        todo.contains("lane_fragilec_build_status=2")
+            && todo.contains("lane_fragilec_test_rpc_status=-1")
+            && todo.contains("lane_fragilec_failure_class=build_failed"),
+        "M9.2.c.iv.e.34 TODO evidence should capture strict replay lane contract failure fields"
+    );
+    assert!(
+        todo.contains("strop.cpp")
+            && todo.contains("marshal.cpp")
+            && todo.contains("epoll_wrapper.cc")
+            && todo.contains("event.cc"),
+        "M9.2.c.iv.e.34 TODO evidence should capture the first failing source set"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e34a_inventory_document_exists_and_captures_blocker_mix() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34a_strict_replay_blocker_inventory.md"),
+    )
+    .expect("e.34.a inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.a",
+        "Wrong-Approach Check",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260325T233520Z_p2595863",
+        "lane_fragilec_build_status=2",
+        "lane_fragilec_test_rpc_status=-1",
+        "lane_fragilec_failure_class=build_failed",
+        "rustc_error_total_count=93",
+        "rustc_error_unique_count=38",
+        "E0425: cannot find type chunk in this scope",
+        "event.cc",
+        "map",
+        "std___map_iterator",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.a inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // M9.2.c.iv.e.17.d: Post-e.17 comprehensive strict compile error inventory
 // ---------------------------------------------------------------------------
