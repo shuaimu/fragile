@@ -5689,6 +5689,56 @@ fn m9_2c_iv_e34b_inventory_document_exists_and_records_gate_closure() {
     }
 }
 
+#[test]
+fn m9_2c_iv_e34c_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.34.c")
+            && todo.contains("rrr/misc/marshal.cpp")
+            && todo.contains("unresolved-type cluster")
+            && todo.contains("E0425")
+            && todo.contains("chunk"),
+        "M9.2.c.iv.e.34.c should be marked done in TODO.md"
+    );
+    assert!(
+        todo.contains("/tmp/fragile_e34c_marshal_compile_after_kgPOWa")
+            && todo.contains("cannot find type")
+            && todo.contains("chunk")
+            && todo.contains("31 -> 0")
+            && todo.contains("bookmark"),
+        "M9.2.c.iv.e.34.c TODO evidence should capture focused replay delta for `chunk`"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e34c_inventory_document_exists_and_records_chunk_delta() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34c_marshal_chunk_type_lane_rehydration.md"),
+    )
+    .expect("e.34.c inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.c",
+        "Wrong-Approach Check",
+        "looks_like_stub_candidate_type_name()",
+        "chunk",
+        "/tmp/fragile_e34c_marshal_compile_after_kgPOWa",
+        "cannot find type",
+        "31",
+        "0",
+        "bookmark",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.c inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // M9.2.c.iv.e.17.d: Post-e.17 comprehensive strict compile error inventory
 // ---------------------------------------------------------------------------

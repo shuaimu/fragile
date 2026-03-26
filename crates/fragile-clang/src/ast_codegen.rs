@@ -6661,6 +6661,7 @@ impl AstCodeGen {
                 "condition_variable",
                 "once_flag",
                 "thread",
+                "chunk",
                 "tm",
                 "timeval",
                 "vector",
@@ -108058,6 +108059,7 @@ pub mod rusty {
                 && AstCodeGen::looks_like_stub_candidate_type_name("error_category")
                 && AstCodeGen::looks_like_stub_candidate_type_name("std_thread")
                 && AstCodeGen::looks_like_stub_candidate_type_name("shared_ptr_node_data")
+                && AstCodeGen::looks_like_stub_candidate_type_name("chunk")
                 && AstCodeGen::looks_like_stub_candidate_type_name("tm")
                 && AstCodeGen::looks_like_stub_candidate_type_name("timeval")
                 && AstCodeGen::looks_like_stub_candidate_type_name("forward_iterator_tag")
@@ -114751,6 +114753,7 @@ pub type queue_tuple_int__int__int__int__const_char = std_queue<tuple_int>;
 pub struct Holder {
     pub lock: mutex,
     pub cond: condition_variable,
+    pub head: chunk,
     pub mapping: map_int,
     pub keys: set_int,
 }
@@ -114759,6 +114762,7 @@ pub struct Holder {
         assert!(
             unresolved.iter().any(|name| name == "mutex")
                 && unresolved.iter().any(|name| name == "condition_variable")
+                && unresolved.iter().any(|name| name == "chunk")
                 && unresolved.iter().any(|name| name == "map_int")
                 && unresolved.iter().any(|name| name == "set_int"),
             "lowercase synchronization/container placeholders must remain in unresolved collection for closure materialization, got: {:?}",

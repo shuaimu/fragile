@@ -22148,3 +22148,14 @@ Key findings/decisions:
 - Evidence:
   - unit tests: `parser_output_mapping_completeness_validation_accepts_std_triple_underscore_map_targets`, `parser_output_mapping_completeness_validation_still_rejects_nonfamily_std_triple_underscore_targets`.
   - focused strict replay compile (`/tmp/fragile_e34b_event_compile_after_WfIQoE`) reports `mapping_completeness_present=0` and progresses into downstream typed rustc blockers (`E0425`, `E0308`, `E0599`, `E0609`).
+
+## 2026-03-26: M9.2.c.iv.e.34.c marshal `chunk` unresolved-type closure
+
+- Context: post-e.34.a strict replay showed `marshal.cpp` dominated by `E0425 cannot find type \`chunk\`` (31 key hits).
+- Root cause: unresolved-type stub heuristics rejected bare lowercase `chunk` as value-like, so closure skipped type materialization.
+- Decision: add `chunk` to the existing lowercase type-like allowlist used by unresolved-type closure.
+- Why this approach: bounded, generic, and aligned with existing lowercase type-lane handling (`mutex`, `condition_variable`, etc.) without adding rollback logic.
+- Wrong-approach compliance: no rollback patterns, no native fallback, no target-specific bypass gates.
+- Evidence:
+  - unit tests: `test_stub_candidate_type_heuristics_reject_plain_lowercase_identifiers`, `test_collect_unresolved_type_like_names_treats_common_lowercase_names_as_type_like`.
+  - focused strict compile (`/tmp/fragile_e34c_marshal_compile_after_kgPOWa`) with harness-equivalent args: `cannot find type \`chunk\`` `31 -> 0`, first `E0425` moved to `bookmark`.
