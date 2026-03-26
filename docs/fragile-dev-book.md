@@ -22186,3 +22186,38 @@ Key findings/decisions:
 
 - `M9.2.c.iv.e.34.d` is closed with focused compile evidence and unit-test coverage.
 - Next pending leaf in sequence remains `M9.2.c.iv.e.34.e`.
+
+## 2026-03-26: Leaf `M9.2.c.iv.e.34.e`
+
+### Decision and rationale
+
+- Selected first pending high-priority leaf under active `M9.2.c.iv.e.34` chain: `e.34.e` (epoll residual blockers plus marshal lifetime lane artifacts).
+- Leaf is bounded (<1000 LOC): one late-normalizer extension + focused tests + focused strict compile probes.
+- Chosen approach: generic compatibility/lifetime normalization in codegen output, not target-file conditionals and not native fallback.
+
+### Wrong-approach check
+
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No rollback-pattern additions.
+- No target-specific `mako`/`rpcbench`/`test_rpc` branching.
+- No force-native bypass and no semantic stub injection in target sources.
+
+### Key findings
+
+- Baseline focused strict probes showed exactly the targeted lanes:
+  - `epoll_wrapper.cc`: `EPOLLET` unary-negation (`E0600`), missing `MaybeUninit<T>::op_inc`, missing `Arc<Pollable>::op_arrow`, and `epoll_data_t.ptr` field mismatch.
+  - `marshal.cpp`: two `lifetime may not live long enough` diagnostics and `E0596` on `Marshallable_vtable_to_marshal` (`*const` -> mutable borrow).
+- Implemented bounded rewrites in `normalize_final_rpc_straggler_artifacts`:
+  - `EPOLLET = -2147483648` -> `2147483648u32`.
+  - `pub data: epoll_data_t` -> `pub data: epoll_data`.
+  - `unsafe { NAME }.op_inc(0)` on `MaybeUninit<atomic_int|std_atomic_int>` -> pointer-based `fetch_add(1, ())`.
+  - Added generic `FragileArcArrowCompat` for `std::sync::Arc<T>` (`Arc::as_ptr`).
+  - Rehydrated marshal method/vtable lifetimes (`'a`) and normalized const-pointer vtable wrapper call to mutable raw cast.
+
+### Outcome
+
+- Focused tests: `cargo test -p fragile-clang normalize_final_rpc_straggler_artifacts -- --nocapture` -> 12 passed.
+- Focused strict probes with updated `./target/debug/fragilec`:
+  - `epoll_wrapper.cc` run-root `/tmp/fragile_e34e_epoll_after_dbg_nTJVWY`: `status=0`, `error_code_counts={}`, all targeted marker flags `0`.
+  - `marshal.cpp` run-root `/tmp/fragile_e34e_marshal_after_dbg_k1MNMj`: `status=0`, `error_code_counts={}`, lifetime/E0596 markers `0`.
+- Leaf `M9.2.c.iv.e.34.e` is closed.

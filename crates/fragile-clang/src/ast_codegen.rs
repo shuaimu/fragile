@@ -30447,6 +30447,12 @@ impl AstCodeGen {
             && !code.contains(".cpu_stat_;")
             && !code.contains(".net_stat_();")
             && !code.contains("return *m;")
+            && !code.contains("EPOLLET = -2147483648")
+            && !code.contains("pub data: epoll_data_t,")
+            && !code.contains("from_marshal(&mut self, m: &mut Marshal) -> &mut Marshal")
+            && !code.contains("to_marshal(&mut self, m: &mut Marshal) -> &mut Marshal")
+            && !code.contains("Marshallable_vtable_to_marshal(this: *const Marshallable, m: &mut Marshal) -> &mut Marshal")
+            && !code.contains("Marshallable_vtable_from_marshal(this: *mut Marshallable, m: &mut Marshal) -> &mut Marshal")
             && !code.contains("global_port_counter().fetch_add(")
             && !code.contains("__gv_from }(")
             && !code.contains("#type")
@@ -30466,6 +30472,7 @@ impl AstCodeGen {
             && !code.contains("RefCell::<std::option::Option<std::boxed::Box<boost_coro_task_t>>>::new(Default::default())")
             && !code.contains(".op_call(")
             && !code.contains(".op_inc(")
+            && !code.contains(".op_arrow()")
             && !code.contains(".swap(")
             && !code.contains(".p()")
             && !has_exact_struct_def(code, "atomic_int")
@@ -30478,6 +30485,28 @@ impl AstCodeGen {
             && !has_exact_struct_def(code, "chrono_nanoseconds")
         {
             return code.to_string();
+        }
+
+        let mut maybeuninit_atomic_int_globals: BTreeSet<String> = BTreeSet::new();
+        for line in code.lines() {
+            let trimmed = line.trim_start();
+            let rest = if let Some(rest) = trimmed.strip_prefix("pub(crate) static mut ") {
+                rest
+            } else if let Some(rest) = trimmed.strip_prefix("pub static mut ") {
+                rest
+            } else if let Some(rest) = trimmed.strip_prefix("static mut ") {
+                rest
+            } else {
+                continue;
+            };
+            let Some((name, ty_and_rest)) = rest.split_once(':') else {
+                continue;
+            };
+            if ty_and_rest.contains("std::mem::MaybeUninit<atomic_int>")
+                || ty_and_rest.contains("std::mem::MaybeUninit<std_atomic_int>")
+            {
+                maybeuninit_atomic_int_globals.insert(name.trim().to_string());
+            }
         }
 
         let mut out = String::with_capacity(code.len());
@@ -30560,6 +30589,40 @@ impl AstCodeGen {
                 "std::cell::RefCell::<std::option::Option<std::boxed::Box<boost_coro_task_t>>>::new(Default::default())",
                 "Default::default()",
             );
+            rewritten = rewritten.replace("EPOLLET = -2147483648,", "EPOLLET = 2147483648u32,");
+            rewritten = rewritten.replace("pub data: epoll_data_t,", "pub data: epoll_data,");
+            rewritten = rewritten.replace(
+                "pub fn from_marshal(&mut self, m: &mut Marshal) -> &mut Marshal {",
+                "pub fn from_marshal<'a>(&mut self, m: &'a mut Marshal) -> &'a mut Marshal {",
+            );
+            rewritten = rewritten.replace(
+                "pub fn to_marshal(&mut self, m: &mut Marshal) -> &mut Marshal {",
+                "pub fn to_marshal<'a>(&mut self, m: &'a mut Marshal) -> &'a mut Marshal {",
+            );
+            rewritten = rewritten.replace(
+                "unsafe fn Marshallable_vtable_to_marshal(this: *const Marshallable, m: &mut Marshal) -> &mut Marshal {",
+                "unsafe fn Marshallable_vtable_to_marshal<'a>(this: *const Marshallable, m: &'a mut Marshal) -> &'a mut Marshal {",
+            );
+            rewritten = rewritten.replace(
+                "unsafe fn Marshallable_vtable_from_marshal(this: *mut Marshallable, m: &mut Marshal) -> &mut Marshal {",
+                "unsafe fn Marshallable_vtable_from_marshal<'a>(this: *mut Marshallable, m: &'a mut Marshal) -> &'a mut Marshal {",
+            );
+            rewritten = rewritten.replace(
+                "(*this).to_marshal(m)",
+                "(*(this as *mut Marshallable)).to_marshal(m)",
+            );
+            if let Some(static_name) = rewritten
+                .trim_start()
+                .strip_prefix("unsafe { ")
+                .and_then(|rest| rest.strip_suffix(" }.op_inc(0);"))
+                .map(str::trim)
+            {
+                if maybeuninit_atomic_int_globals.contains(static_name) {
+                    rewritten = format!(
+                        "{indent}unsafe {{ let __fragile_atomic_ptr = {static_name}.as_mut_ptr(); (*__fragile_atomic_ptr).fetch_add(1, ()); }};"
+                    );
+                }
+            }
             if rewritten.contains(
                 "return (now.tv_sec - self.begin_.tv_sec + (now.tv_usec - self.begin_.tv_usec) / 0.0) as f64;",
             ) {
@@ -30987,6 +31050,25 @@ pub trait FragileUnitParamCompat {
 impl FragileUnitParamCompat for () {
     #[inline]
     fn p(&self) -> i64 { 0 }
+}
+"#,
+            );
+        }
+        if out.contains("std::sync::Arc<")
+            && out.contains(".op_arrow()")
+            && !out.contains("trait FragileArcArrowCompat")
+        {
+            out.push_str(
+                r#"
+pub trait FragileArcArrowCompat<T: ?Sized> {
+    fn op_arrow(&self) -> *const T;
+}
+
+impl<T: ?Sized> FragileArcArrowCompat<T> for std::sync::Arc<T> {
+    #[inline]
+    fn op_arrow(&self) -> *const T {
+        std::sync::Arc::as_ptr(self)
+    }
 }
 "#,
             );
@@ -137835,6 +137917,141 @@ pub fn density() -> f64 {
         assert!(
             output.contains("impl FragileUnitParamCompat for ()"),
             "expected unit p compat impl, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_final_rpc_straggler_artifacts_rewrites_epoll_enum_and_event_data_union() {
+        let input = r#"
+#[repr(u32)]
+pub enum EPOLL_EVENTS {
+    EPOLLET = -2147483648,
+}
+pub union epoll_data {
+    pub ptr: *mut (),
+}
+pub struct epoll_event {
+    pub data: epoll_data_t,
+}
+"#;
+        let output = AstCodeGen::normalize_final_rpc_straggler_artifacts(input);
+        assert!(
+            output.contains("EPOLLET = 2147483648u32,"),
+            "expected EPOLLET u32 literal normalization, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub data: epoll_data,"),
+            "expected epoll_event.data type normalization, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_final_rpc_straggler_artifacts_rewrites_maybeuninit_atomic_op_inc_calls() {
+        let input = r#"
+pub struct std_atomic_int {
+    _opaque: [u8; 64],
+}
+pub(crate) static mut EPOLL_REMOVE_COUNT_: std::mem::MaybeUninit<std_atomic_int> = std::mem::MaybeUninit::uninit();
+pub fn remove_tick() {
+    unsafe { EPOLL_REMOVE_COUNT_ }.op_inc(0);
+}
+"#;
+        let output = AstCodeGen::normalize_final_rpc_straggler_artifacts(input);
+        assert!(
+            output.contains("EPOLL_REMOVE_COUNT_.as_mut_ptr()"),
+            "expected MaybeUninit atomic increment rewrite to as_mut_ptr lane, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("fetch_add(1, ())"),
+            "expected atomic fetch_add rewrite for op_inc, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("unsafe { EPOLL_REMOVE_COUNT_ }.op_inc(0);"),
+            "op_inc call should be fully rewritten, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_final_rpc_straggler_artifacts_adds_arc_op_arrow_compat() {
+        let input = r#"
+pub struct Pollable {
+    _opaque: [u8; 8],
+}
+pub fn fd(poll: &std::sync::Arc<Pollable>) {
+    let _ = poll.op_arrow();
+}
+"#;
+        let output = AstCodeGen::normalize_final_rpc_straggler_artifacts(input);
+        assert!(
+            output.contains("pub trait FragileArcArrowCompat"),
+            "expected Arc op_arrow compat trait emission, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl<T: ?Sized> FragileArcArrowCompat<T> for std::sync::Arc<T>"),
+            "expected Arc op_arrow compat impl emission, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_final_rpc_straggler_artifacts_rewrites_marshal_lifetime_signatures() {
+        let input = r#"
+pub struct Marshal {
+    _opaque: [u8; 8],
+}
+pub struct Marshallable {
+    _opaque: [u8; 8],
+}
+impl Marshallable {
+    pub fn from_marshal(&mut self, m: &mut Marshal) -> &mut Marshal {
+        return &mut *m;
+    }
+    pub fn to_marshal(&mut self, m: &mut Marshal) -> &mut Marshal {
+        return &mut *m;
+    }
+}
+unsafe fn Marshallable_vtable_to_marshal(this: *const Marshallable, m: &mut Marshal) -> &mut Marshal {
+    (*this).to_marshal(m)
+}
+unsafe fn Marshallable_vtable_from_marshal(this: *mut Marshallable, m: &mut Marshal) -> &mut Marshal {
+    (*this).from_marshal(m)
+}
+"#;
+        let output = AstCodeGen::normalize_final_rpc_straggler_artifacts(input);
+        assert!(
+            output.contains("pub fn from_marshal<'a>(&mut self, m: &'a mut Marshal) -> &'a mut Marshal {"),
+            "expected from_marshal lifetime rehydration, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn to_marshal<'a>(&mut self, m: &'a mut Marshal) -> &'a mut Marshal {"),
+            "expected to_marshal lifetime rehydration, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains(
+                "unsafe fn Marshallable_vtable_to_marshal<'a>(this: *const Marshallable, m: &'a mut Marshal) -> &'a mut Marshal {"
+            ),
+            "expected vtable to_marshal signature lifetime rehydration, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("(*(this as *mut Marshallable)).to_marshal(m)"),
+            "expected vtable to_marshal mutable this cast normalization, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains(
+                "unsafe fn Marshallable_vtable_from_marshal<'a>(this: *mut Marshallable, m: &'a mut Marshal) -> &'a mut Marshal {"
+            ),
+            "expected vtable from_marshal signature lifetime rehydration, got:\n{}",
             output
         );
     }
