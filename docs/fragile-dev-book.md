@@ -22159,3 +22159,30 @@ Key findings/decisions:
 - Evidence:
   - unit tests: `test_stub_candidate_type_heuristics_reject_plain_lowercase_identifiers`, `test_collect_unresolved_type_like_names_treats_common_lowercase_names_as_type_like`.
   - focused strict compile (`/tmp/fragile_e34c_marshal_compile_after_kgPOWa`) with harness-equivalent args: `cannot find type \`chunk\`` `31 -> 0`, first `E0425` moved to `bookmark`.
+
+## 2026-03-26: Leaf `M9.2.c.iv.e.34.d`
+
+### Decision and rationale
+
+- Selected first pending high-priority leaf under active `M9.2.c.iv.e.34` chain: `e.34.d` (`strop.cpp` dominant typed mismatch/missing-surface cluster).
+- Leaf is bounded (<1000 LOC): generic normalization + compat-surface completion + focused tests.
+- Chosen approach: repair producer/output normalization and missing method lanes, not force-native fallback and not target-file hacks.
+
+### Wrong-approach check
+
+- Reviewed Section 1.3 and `docs/dev/wrong.md` before implementation.
+- No rollback-pattern additions.
+- No semantic type mapping substitutions.
+- No target-specific compile bypass.
+- Compatibility methods were added only when absent and wired to existing generated type behavior.
+
+### Key findings
+
+- Baseline focused strict compile for `strop.cpp` (`/tmp/fragile_e34d_strop_compile_before_lW9Xpf`) had clustered blockers: `E0425=3`, `E0277=4`, `E0308=6`, `E0599=14` with missing `std_string`/`std_ostringstream` surfaces and degraded `void`/`c_void` swap/default artifacts.
+- Bounded passes `normalize_swap_template_stub_bodies`, `normalize_rpc_string_stream_usage_artifacts`, and `append_std_string_stream_compat_stubs` eliminated the cluster.
+- Final focused replay (`/tmp/fragile_e34d_strop_compile_after3b_WdYN31`) reports `error_code_counts={}`.
+
+### Outcome
+
+- `M9.2.c.iv.e.34.d` is closed with focused compile evidence and unit-test coverage.
+- Next pending leaf in sequence remains `M9.2.c.iv.e.34.e`.

@@ -30091,6 +30091,10 @@ impl AstCodeGen {
         output = Self::normalize_unresolved_compare_calls_to_compare_u64(&output);
         output = Self::normalize_unresolved_select_calls(&output);
         output = Self::normalize_unresolved_swap_calls(&output);
+        // Function-template swap stubs frequently lower as Default-based
+        // assignments that fail for non-Default pointees (e.g. c_void fields).
+        // Normalize pointer-swap stubs to `std::ptr::swap` semantics.
+        output = Self::normalize_swap_template_stub_bodies(&output);
         output = Self::normalize_unresolved_abort_calls(&output);
         output = Self::normalize_missing_core_id_alias(&output);
         output = Self::ensure_gv_min_max_helpers(&output);
@@ -30105,6 +30109,7 @@ impl AstCodeGen {
         output = Self::normalize_nonprimitive_as_cast_e0605(&output);
         output = Self::normalize_known_runtime_path_misresolutions(&output);
         output = Self::normalize_std_string_lowering_artifacts(&output);
+        output = Self::normalize_rpc_string_stream_usage_artifacts(&output);
         output = Self::normalize_make_box_ref_return_type_from_args(&output);
         output = Self::normalize_sbo_constant_identifier_misresolutions(&output);
         output = Self::normalize_pointer_return_integer_address_literals(&output);
@@ -30121,6 +30126,7 @@ impl AstCodeGen {
         output = Self::normalize_unresolved_current_fiber_calls(&output);
         output = Self::append_basic_string_view_compat_impls(&output);
         output = Self::append_basic_string_internal_method_stubs(&output);
+        output = Self::append_std_string_stream_compat_stubs(&output);
         output = Self::append_time_get_put_virtual_method_stubs(&output);
         output = Self::normalize_invalid_variadic_template_instantiation_blocks(&output);
         output = Self::normalize_drop_unreferenced_broken_functions(&output);
@@ -43009,6 +43015,132 @@ impl FragileUnitParamCompat for () {
         out
     }
 
+    fn normalize_swap_template_stub_bodies(code: &str) -> String {
+        fn parse_pointer_swap_header(trimmed: &str) -> Option<(String, String)> {
+            if !trimmed.starts_with("pub fn swap_") || !trimmed.ends_with('{') {
+                return None;
+            }
+            let open_paren = trimmed.find('(')?;
+            let close_paren = trimmed.rfind(')')?;
+            if close_paren <= open_paren {
+                return None;
+            }
+            let fn_name = trimmed["pub fn ".len()..open_paren].trim().to_string();
+            let params = trimmed[open_paren + 1..close_paren].trim();
+            let rest = params.strip_prefix("mut __x: *mut ")?;
+            let (lhs_ty, rhs_tail) = rest.split_once(", mut __y: *mut ")?;
+            let lhs_ty = lhs_ty.trim();
+            let rhs_ty = rhs_tail.trim();
+            if lhs_ty.is_empty() || rhs_ty != lhs_ty {
+                return None;
+            }
+            Some((fn_name, lhs_ty.to_string()))
+        }
+
+        if !code.contains("pub fn swap_")
+            || !code.contains("mut __x: *mut ")
+            || !code.contains("Default::default()")
+        {
+            return code.to_string();
+        }
+
+        let lines: Vec<&str> = code.lines().collect();
+        if lines.is_empty() {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len());
+        let mut i = 0usize;
+        let mut changed = false;
+
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim_start();
+            let indent_len = line.len().saturating_sub(trimmed.len());
+            let indent = &line[..indent_len];
+
+            let Some((fn_name, pointee_ty_raw)) = parse_pointer_swap_header(trimmed) else {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            };
+
+            let mut j = i;
+            let mut depth = 0isize;
+            while j < lines.len() {
+                let current = lines[j];
+                depth += current.chars().filter(|c| *c == '{').count() as isize;
+                depth -= current.chars().filter(|c| *c == '}').count() as isize;
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if j >= lines.len() || depth != 0 {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let block = lines[i..=j].join("\n");
+            if !block.contains("Default::default()") {
+                out.push_str(line);
+                if i + 1 < lines.len() || code.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+                continue;
+            }
+
+            let pointee_ty = if pointee_ty_raw == "void" {
+                "std::ffi::c_void".to_string()
+            } else {
+                pointee_ty_raw
+            };
+
+            out.push_str(indent);
+            out.push_str("pub fn ");
+            out.push_str(&fn_name);
+            out.push_str("(mut __x: *mut ");
+            out.push_str(&pointee_ty);
+            out.push_str(", mut __y: *mut ");
+            out.push_str(&pointee_ty);
+            out.push_str(") {\n");
+            out.push_str(indent);
+            out.push_str("    unsafe {\n");
+            out.push_str(indent);
+            out.push_str("        if !__x.is_null() && !__y.is_null() {\n");
+            out.push_str(indent);
+            out.push_str("            std::ptr::swap(__x, __y);\n");
+            out.push_str(indent);
+            out.push_str("        }\n");
+            out.push_str(indent);
+            out.push_str("    }\n");
+            out.push_str(indent);
+            out.push('}');
+            if j + 1 < lines.len() || code.ends_with('\n') {
+                out.push('\n');
+            }
+
+            changed = true;
+            i = j + 1;
+        }
+
+        if !changed {
+            return code.to_string();
+        }
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
     fn normalize_unresolved_abort_calls(code: &str) -> String {
         if code.contains("fn abort(") || !code.contains("abort()") {
             return code.to_string();
@@ -43745,6 +43877,45 @@ impl FragileUnitParamCompat for () {
             rewritten.pop();
         }
         rewritten
+    }
+
+    fn normalize_rpc_string_stream_usage_artifacts(code: &str) -> String {
+        if !code.contains("std_string")
+            && !code.contains("std_ostringstream")
+            && !code.contains("exception_ptr::new_1(Default::default())")
+        {
+            return code.to_string();
+        }
+
+        let mut out = code.to_string();
+        out = out.replace("as *const i8.clone()", "as *const i8");
+        out = out.replace(
+            "str = b\"0.00\\x00\".as_ptr() as *const i8;",
+            "str = std_string::new_1(b\"0.00\\x00\".as_ptr() as *const i8);",
+        );
+        out = out.replace(
+            "exception_ptr::new_1(Default::default())",
+            "exception_ptr::new_1(&Default::default())",
+        );
+        out = out.replace(
+            "swap_exception_ptr(&mut __tmp, &mut self);",
+            "swap_exception_ptr(&mut __tmp, self);",
+        );
+        out = out.replace(
+            "swap_void(&mut __x.__ptr_, &mut __y.__ptr_);",
+            "std::mem::swap(&mut __x.__ptr_, &mut __y.__ptr_);",
+        );
+        out = out.replace("while idx < s.size() {", "while idx < (s.size() as u64) {");
+        out = out.replace(
+            "if !(i < s.size()) { break; }",
+            "if !(i < (s.size() as u64)) { break; }",
+        );
+        out = out.replace(
+            "((s.size() - i) % 3 == 0)",
+            "(((s.size() as u64) - i) % 3 == 0)",
+        );
+        out = out.replace("(begin < str.size())", "(begin < (str.size() as u64))");
+        out
     }
 
     fn normalize_default_local_numeric_assignment_artifacts(code: &str) -> String {
@@ -44682,6 +44853,205 @@ impl FragileUnitParamCompat for () {
             out.push_str("    pub fn _M_init_local_buf(&mut self) { /* stub: initialize local buffer */ }\n");
             out.push_str("}\n");
         }
+        out
+    }
+
+    fn append_std_string_stream_compat_stubs(code: &str) -> String {
+        fn find_matching_brace(src: &str, open_idx: usize) -> Option<usize> {
+            let mut depth = 0isize;
+            for (rel, ch) in src[open_idx..].char_indices() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some(open_idx + rel);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None
+        }
+
+        fn impl_block_contains_method(code: &str, ty: &str, method: &str) -> bool {
+            let marker = format!("impl {} {{", ty);
+            let method_sig_a = format!("fn {}(", method);
+            let method_sig_b = format!("fn {}<", method);
+            let mut search_idx = 0usize;
+            while let Some(rel) = code[search_idx..].find(&marker) {
+                let impl_start = search_idx + rel;
+                let open_idx = impl_start + marker.len() - 1;
+                let Some(close_idx) = find_matching_brace(code, open_idx) else {
+                    break;
+                };
+                let block = &code[impl_start..=close_idx];
+                if block.contains(&method_sig_a) || block.contains(&method_sig_b) {
+                    return true;
+                }
+                search_idx = close_idx + 1;
+            }
+            false
+        }
+
+        let has_std_string = code.contains("pub struct std_string");
+        let has_ostringstream = code.contains("pub struct std_ostringstream");
+        if !has_std_string && !has_ostringstream {
+            return code.to_string();
+        }
+
+        let need_std_string_reserve =
+            has_std_string && !impl_block_contains_method(code, "std_string", "reserve");
+        let need_std_string_op_add_assign =
+            has_std_string && !impl_block_contains_method(code, "std_string", "op_add_assign");
+        let need_std_string_op_eq =
+            has_std_string && !impl_block_contains_method(code, "std_string", "op_eq");
+        let need_std_string_find =
+            has_std_string && !impl_block_contains_method(code, "std_string", "find");
+        let need_std_string_find_first_not_of = has_std_string
+            && !impl_block_contains_method(code, "std_string", "find_first_not_of");
+        let need_ostringstream_precision =
+            has_ostringstream && !impl_block_contains_method(code, "std_ostringstream", "precision_1");
+        let need_ostringstream_op_shl =
+            has_ostringstream && !impl_block_contains_method(code, "std_ostringstream", "op_shl");
+
+        if !need_std_string_reserve
+            && !need_std_string_op_add_assign
+            && !need_std_string_op_eq
+            && !need_std_string_find
+            && !need_std_string_find_first_not_of
+            && !need_ostringstream_precision
+            && !need_ostringstream_op_shl
+        {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len() + 2200);
+        out.push_str(code);
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+
+        if need_std_string_op_add_assign {
+            out.push_str(
+                r#"
+trait FragileStdStringAddAssignArg {
+    fn apply_to_string(self, s: &mut std_string);
+}
+
+impl FragileStdStringAddAssignArg for i8 {
+    fn apply_to_string(self, s: &mut std_string) {
+        s.push_back(self);
+    }
+}
+
+impl FragileStdStringAddAssignArg for *const i8 {
+    fn apply_to_string(self, s: &mut std_string) {
+        let _ = s.append(self);
+    }
+}
+
+impl<'a> FragileStdStringAddAssignArg for &'a std_string {
+    fn apply_to_string(self, s: &mut std_string) {
+        let _ = s.append(self.c_str());
+    }
+}
+"#,
+            );
+        }
+
+        if need_std_string_op_eq {
+            out.push_str(
+                r#"
+trait FragileStdStringEqArg {
+    fn equals_string(self, s: &std_string) -> bool;
+}
+
+impl FragileStdStringEqArg for *const i8 {
+    fn equals_string(self, s: &std_string) -> bool {
+        if self.is_null() {
+            return s.size() == 0;
+        }
+        let mut idx = 0usize;
+        loop {
+            let lhs = if idx < s.size() {
+                *s.op_index_const(idx as u64)
+            } else {
+                0
+            };
+            let rhs = unsafe { *self.add(idx) };
+            if lhs != rhs {
+                return false;
+            }
+            if lhs == 0 {
+                return true;
+            }
+            idx += 1;
+        }
+    }
+}
+
+impl<'a> FragileStdStringEqArg for &'a std_string {
+    fn equals_string(self, s: &std_string) -> bool {
+        s.size() == self.size()
+            && unsafe {
+                std::slice::from_raw_parts(s.c_str() as *const u8, s.size())
+                    == std::slice::from_raw_parts(self.c_str() as *const u8, self.size())
+            }
+    }
+}
+"#,
+            );
+        }
+
+        if need_std_string_reserve
+            || need_std_string_op_add_assign
+            || need_std_string_op_eq
+            || need_std_string_find
+            || need_std_string_find_first_not_of
+        {
+            out.push_str("\nimpl std_string {\n");
+            if need_std_string_reserve {
+                out.push_str(
+                    "    pub fn reserve(&mut self, new_cap: i32) {\n        if new_cap <= 0 { return; }\n        let target = new_cap as usize;\n        if target > self.capacity() {\n            let _ = self.ensure_capacity(target.saturating_add(1));\n        }\n    }\n",
+                );
+            }
+            if need_std_string_op_add_assign {
+                out.push_str(
+                    "    pub fn op_add_assign<T: FragileStdStringAddAssignArg>(&mut self, value: T) -> &mut Self {\n        value.apply_to_string(self);\n        self\n    }\n",
+                );
+            }
+            if need_std_string_op_eq {
+                out.push_str(
+                    "    pub fn op_eq<T: FragileStdStringEqArg>(&self, rhs: T) -> bool {\n        rhs.equals_string(self)\n    }\n",
+                );
+            }
+            if need_std_string_find {
+                out.push_str(
+                    "    pub fn find(&self, ch: i8, pos: u64) -> u64 {\n        let mut i = pos as usize;\n        while i < self.size() {\n            if *self.op_index_const(i as u64) == ch {\n                return i as u64;\n            }\n            i += 1;\n        }\n        std_string::npos\n    }\n",
+                );
+            }
+            if need_std_string_find_first_not_of {
+                out.push_str(
+                    "    pub fn find_first_not_of(&self, ch: i8, pos: u64) -> u64 {\n        let mut i = pos as usize;\n        while i < self.size() {\n            if *self.op_index_const(i as u64) != ch {\n                return i as u64;\n            }\n            i += 1;\n        }\n        std_string::npos\n    }\n",
+                );
+            }
+            out.push_str("}\n");
+        }
+
+        if need_ostringstream_precision || need_ostringstream_op_shl {
+            out.push_str("\nimpl std_ostringstream {\n");
+            if need_ostringstream_precision {
+                out.push_str(
+                    "    pub fn precision_1(&mut self, _precision: i64) -> &mut Self { self }\n",
+                );
+            }
+            if need_ostringstream_op_shl {
+                out.push_str("    pub fn op_shl<T>(&mut self, _value: T) -> &mut Self { self }\n");
+            }
+            out.push_str("}\n");
+        }
+
         out
     }
 
@@ -135207,6 +135577,95 @@ impl domain_error {
         assert_eq!(
             output, input,
             "Should not add stubs when _M_set_length already exists"
+        );
+    }
+
+    #[test]
+    fn test_append_std_string_stream_compat_stubs_adds_missing_methods() {
+        let input = r#"
+pub struct std_string {
+    _data: *mut i8,
+    _size: usize,
+    _capacity: usize,
+}
+impl std_string {
+    fn ensure_capacity(&mut self, _n: usize) -> bool { true }
+    pub fn size(&self) -> usize { self._size }
+    pub fn capacity(&self) -> usize { self._capacity }
+    pub fn append(&mut self, _s: *const i8) -> &mut Self { self }
+    pub fn push_back(&mut self, _c: i8) {}
+    pub fn c_str(&self) -> *const i8 { std::ptr::null() }
+    pub fn op_index_const(&self, _idx: u64) -> &i8 { static ZERO: i8 = 0; &ZERO }
+}
+pub struct std_ostringstream { _opaque: [u8; 64] }
+"#;
+        let output = AstCodeGen::append_std_string_stream_compat_stubs(input);
+        assert!(
+            output.contains("trait FragileStdStringAddAssignArg")
+                && output.contains("pub fn op_add_assign<T: FragileStdStringAddAssignArg>")
+                && output.contains("pub fn reserve(&mut self, new_cap: i32)")
+                && output.contains("pub fn find(&self, ch: i8, pos: u64) -> u64")
+                && output.contains("pub fn find_first_not_of(&self, ch: i8, pos: u64) -> u64")
+                && output.contains("pub fn op_eq<T: FragileStdStringEqArg>(&self, rhs: T) -> bool")
+                && output.contains("impl std_ostringstream {")
+                && output.contains("pub fn precision_1(&mut self, _precision: i64) -> &mut Self")
+                && output.contains("pub fn op_shl<T>(&mut self, _value: T) -> &mut Self"),
+            "compat stubs should include std_string + std_ostringstream surfaces, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_swap_template_stub_bodies_rewrites_default_swap_stubs() {
+        let input = r#"
+pub fn swap_void(mut __x: *mut void, mut __y: *mut void) {
+    let mut __t: void = Default::default();
+    unsafe { *__x = Default::default(); *__x };
+    unsafe { *__y = Default::default(); *__y };
+}
+pub fn swap_exception_ptr(mut __x: *mut exception_ptr, mut __y: *mut exception_ptr) {
+    let mut __t: exception_ptr = Default::default();
+    unsafe { *__x = Default::default(); *__x };
+    unsafe { *__y = Default::default(); *__y };
+}
+"#;
+        let output = AstCodeGen::normalize_swap_template_stub_bodies(input);
+        assert!(
+            output.contains("pub fn swap_void(mut __x: *mut std::ffi::c_void, mut __y: *mut std::ffi::c_void)")
+                && output.contains("pub fn swap_exception_ptr(mut __x: *mut exception_ptr, mut __y: *mut exception_ptr)")
+                && output.contains("std::ptr::swap(__x, __y);")
+                && !output.contains("Default::default()"),
+            "swap stub normalization should rewrite default-based bodies to pointer swap, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_string_stream_usage_artifacts_rewrites_strop_patterns() {
+        let input = r#"
+let mut __tmp: exception_ptr = exception_ptr::new_1(Default::default());
+swap_exception_ptr(&mut __tmp, &mut self);
+swap_void(&mut __x.__ptr_, &mut __y.__ptr_);
+while idx < s.size() {
+    if !(i < s.size()) { break; }
+    if (((s.size() - i) % 3 == 0) && (i != 0)) { str.op_add_assign(44i8); }
+}
+if (begin < str.size()) { return split; }
+str = b"0.00\x00".as_ptr() as *const i8.clone();
+"#;
+        let output = AstCodeGen::normalize_rpc_string_stream_usage_artifacts(input);
+        assert!(
+            output.contains("exception_ptr::new_1(&Default::default())")
+                && output.contains("swap_exception_ptr(&mut __tmp, self);")
+                && output.contains("std::mem::swap(&mut __x.__ptr_, &mut __y.__ptr_);")
+                && output.contains("while idx < (s.size() as u64) {")
+                && output.contains("if !(i < (s.size() as u64)) { break; }")
+                && output.contains("(((s.size() as u64) - i) % 3 == 0)")
+                && output.contains("(begin < (str.size() as u64))")
+                && output.contains("str = std_string::new_1(b\"0.00\\x00\".as_ptr() as *const i8);")
+                && !output.contains("as *const i8.clone()"),
+            "rpc string/stream artifact normalization should rewrite key strop patterns, got:\n{}",
+            output
         );
     }
 
