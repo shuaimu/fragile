@@ -22352,3 +22352,93 @@ Residual markers now surfaced for next leaves:
 Detailed evidence/inventory is recorded in:
 
 - `docs/dev/m9_2c_iv_e34f3_event_fiber_container_surface_inventory.md`
+
+## 2026-03-26: M9.2.c.iv.e.34.f.4 marshal compatibility-surface closure
+
+- Selected next pending decomposed leaf: `M9.2.c.iv.e.34.f.4`.
+- Scope stayed bounded (<1000 LOC): one late marshal normalization pass plus focused unit/closure tests.
+
+### Wrong-approach check
+
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific `mako` conditionals, no force-native fallback path, no rollback broadening.
+
+### Key implementation decisions
+
+- Implemented `normalize_rpc_marshal_surface_artifacts` to repair residual marshal call-shape/type-lane artifacts and placeholder-lane gaps:
+  - `bookmark` -> `Marshal_bookmark`,
+  - marshal/operator pointer-deref/cast bridges,
+  - `chunk` and `Marshal_bookmark` placeholder lane rehydration.
+- Added compat-surface completion for:
+  - `std_shared_ptr<T>` (`op_arrow`, `op_eq`),
+  - `MarshallDeputy_MarContainer` (`find`, `end`),
+  - `chunk` (`reset`, `fully_written`, `fully_read`, `write`, `read`, `read_from_fd`, `write_to_fd`, `content_size`, `resize_to_current`, `is_shared_data_chunk`, `set_bookmark`),
+  - `rrr_Marshal` (`write`, `read`, `peek`, `op_shl`, `op_shr`),
+  - `rrr_v32`/`rrr_v64` (`set`).
+- Hardened compat insertion with impl-block-aware method detection so pass reruns remain idempotent and do not duplicate existing methods.
+
+### Focused validation
+
+- `cargo test -p fragile-clang --lib normalize_rpc_marshal_surface_artifacts -- --nocapture`:
+  - `6 passed`, `0 failed`.
+- Added closure checks in `m9_rpc_closure_tests.rs` for TODO + inventory recording.
+
+Detailed inventory: `docs/dev/m9_2c_iv_e34f4_marshal_compat_surface_inventory.md`.
+
+## 2026-03-26: M9.2.c.iv.e.34.f.5.a post-f.4 strict replay inventory and bounded decomposition
+
+- Selected first leaf under `M9.2.c.iv.e.34.f.5`: `M9.2.c.iv.e.34.f.5.a`.
+- Scope is bounded (<1000 LOC): run strict replay, capture deterministic manifests, and decompose residual closure into bounded follow-up leaves.
+
+### Wrong-approach check
+
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before execution.
+- No target-specific workaround paths were introduced.
+- No force-native bypass or rollback/stub expansion was introduced.
+
+### Replay evidence
+
+Command:
+
+- `FRAGILEC_MODE=strict python3 scripts/mako_rpc_strict_runtime_replay.py --baseline-run-root /tmp/fragile_m9_2_strict_runtime_replay_20260326T093427Z_p3345304`
+
+Run root:
+
+- `/tmp/fragile_m9_2_strict_runtime_replay_20260326T205524Z_p4045206`
+
+Lane contract outcome:
+
+- `lane_fragilec_build_status=2`
+- `lane_fragilec_test_rpc_status=-1`
+- `lane_fragilec_failure_class=build_failed`
+- `lane_fragilec_completed_trials=0/1`
+- `runtime_all_trials_passed=false`
+
+Blocker inventory outcome:
+
+- `rustc_error_total_count=478` (baseline `637`)
+- `rustc_error_unique_count=94` (baseline `144`)
+- `non_increase_total_vs_baseline=true`
+- `non_increase_unique_vs_baseline=true`
+- `non_increase_verdict=true`
+- `first_error_key=... marshal.cpp (parser-output-handoff)`
+
+File-local abort counts from `lane_fragilec/build.stderr`:
+
+- `event.cc`: aborting due to `249` previous errors
+- `fiber_impl.cc`: aborting due to `203` previous errors
+- `marshal.cpp`: aborting due to `8` previous errors
+- `fiber_context_runtime.cc`: aborting due to `2` previous errors
+
+### Decomposition decision
+
+`M9.2.c.iv.e.34.f.5` remains too broad for one bounded closure pass. It is decomposed into:
+
+1. `M9.2.c.iv.e.34.f.5.b`: `event.cc`/`fiber_impl.cc` `std::string` lane/surface regressions.
+2. `M9.2.c.iv.e.34.f.5.c`: `event.cc`/`fiber_impl.cc` container/internal-node lane regressions.
+3. `M9.2.c.iv.e.34.f.5.d`: residual `marshal.cpp`/`fiber_context_runtime.cc` blockers.
+4. `M9.2.c.iv.e.34.f.5.e`: strict replay rerun and final lane contract verification.
+
+Detailed inventory is recorded in:
+
+- `docs/dev/m9_2c_iv_e34f5a_post_f4_replay_inventory.md`

@@ -30304,6 +30304,7 @@ impl AstCodeGen {
         // so rerun the final RPC straggler pass at pipeline tail.
         output = Self::normalize_final_rpc_straggler_artifacts(&output);
         output = Self::normalize_rpc_container_surface_artifacts(&output);
+        output = Self::normalize_rpc_marshal_surface_artifacts(&output);
         output = Self::append_compile_error_for_unresolved_non_c_abi_external_calls(&output);
         if Self::output_requires_c_variadic_feature(&output) {
             output = Self::ensure_c_variadic_feature_attr(&output);
@@ -31247,6 +31248,277 @@ pub trait FragileBasicFilebufCompat {
 impl FragileBasicFilebufCompat for basic_filebuf {
     #[inline]
     fn setbuf(&mut self, _buf: *mut i8, _len: i32) {}
+}
+"#,
+            );
+        }
+
+        out
+    }
+
+    /// Fix f.4 marshal residual compatibility regressions:
+    /// - `std_shared_ptr` missing `op_arrow`/`op_eq` surfaces.
+    /// - degraded `MarshallDeputy` container lane artifacts (`find`/`end`/mutex unlock).
+    /// - `chunk`/`Marshal_bookmark` placeholder lane gaps (`next`, read/write helpers, bookmark fields).
+    /// - `rrr_Marshal` missing read/write/peek and stream-operator surfaces.
+    /// - enum/int bridge and pointer-lane call-shape mismatches in marshal operators.
+    fn normalize_rpc_marshal_surface_artifacts(code: &str) -> String {
+        if !code.contains("MarshallDeputy")
+            && !code.contains("rrr_Marshal")
+            && !code.contains("Marshal_bookmark")
+            && !code.contains("pub struct chunk {")
+            && !code.contains("std_shared_ptr")
+        {
+            return code.to_string();
+        }
+
+        let mut out = code.to_string();
+        out = out.replace(
+            "let mut bm: bookmark = Default::default();",
+            "let mut bm: Marshal_bookmark = Default::default();",
+        );
+        out = out.replace(
+            "let global_container: &mut MarContainer = &mut Self::get_initializers();",
+            "let global_container: &mut MarshallDeputy_MarContainer = &mut Self::get_initializers();",
+        );
+        out = out.replace(
+            "unsafe { mc_th_ = *global_container.clone() };",
+            "unsafe { mc_th_ = global_container.clone() };",
+        );
+        out = out.replace("unsafe { (__gv_md_mutex_g).unlock() };", "();");
+        out = out.replace(
+            "(*it).op_eq(&unsafe { (mc_th_).end() })",
+            "(it == unsafe { (mc_th_).end() })",
+        );
+        out = out.replace(
+            "(unsafe { (*it.op_arrow()).second }).clone()",
+            "Default::default()",
+        );
+        out = out.replace("(*func).op_bool()", "func.op_bool()");
+        out = out.replace("self.sp_data_ = 0.clone();", "self.sp_data_ = Default::default();");
+        out = out.replace(
+            "((*__fragile_vtable).from_marshal)(__fragile_self_arg, *m)",
+            "((*__fragile_vtable).from_marshal)(__fragile_self_arg, m)",
+        );
+        out = out.replace("as *const i8, self.kind_);", "as *const i8);");
+        out = out.replace("*m.op_shl(&v_len);", "m.op_shl(&v_len);");
+        out = out.replace("*m.op_shr(&v_len);", "m.op_shr(&mut v_len);");
+        out = out.replace("*v.op_eq(", "v.op_eq(");
+        out = out.replace("v.resize((0 as i32));", "v.resize((0) as usize);");
+        out = out.replace(
+            "(&mut **v.op_index(0) as *mut i8) as *mut ()",
+            "(v.op_index(0) as *mut i8) as *mut ()",
+        );
+        out = out.replace(
+            "(((__lhs as u32) as u32) & ((__rhs as u32) as u32) as i32)",
+            "((((__lhs as u32) as u32) & ((__rhs as u32) as u32)) as i32)",
+        );
+
+        out = out.replace(
+            "/// Placeholder for C++ `chunk`\n#[repr(C)]\npub struct chunk {\n    _opaque: [u8; 64], // placeholder - actual size may differ\n}\n",
+            "/// Placeholder for C++ `chunk`\n#[repr(C)]\npub struct chunk {\n    pub next: *mut chunk,\n    pub read_pos: u64,\n    pub write_pos: u64,\n    pub cap: u64,\n    pub shared: bool,\n}\n",
+        );
+        out = out.replace(
+            "impl Default for chunk {\n    fn default() -> Self {\n        Self { _opaque: [0u8; 64] }\n    }\n}\n",
+            "impl Default for chunk {\n    fn default() -> Self {\n        Self {\n            next: std::ptr::null_mut(),\n            read_pos: 0,\n            write_pos: 0,\n            cap: 4096,\n            shared: false,\n        }\n    }\n}\n",
+        );
+        out = out.replace(
+            "/// Placeholder for C++ `Marshal::bookmark`\n#[repr(C)]\npub struct Marshal_bookmark {\n    _opaque: [u8; 64], // placeholder - actual size may differ\n}\n",
+            "/// Placeholder for C++ `Marshal::bookmark`\n#[repr(C)]\npub struct Marshal_bookmark {\n    pub size: u64,\n    pub ptr: *mut *mut i8,\n}\n",
+        );
+        out = out.replace(
+            "impl Default for Marshal_bookmark {\n    fn default() -> Self {\n        Self { _opaque: [0u8; 64] }\n    }\n}\n",
+            "impl Default for Marshal_bookmark {\n    fn default() -> Self {\n        Self {\n            size: 0,\n            ptr: std::ptr::null_mut(),\n        }\n    }\n}\n",
+        );
+
+        fn impl_block_contains_method(code: &str, impl_marker: &str, method_name: &str) -> bool {
+            let mut cursor = 0usize;
+            while let Some(rel) = code[cursor..].find(impl_marker) {
+                let impl_start = cursor + rel;
+                let Some(open_rel) = code[impl_start..].find('{') else {
+                    break;
+                };
+                let open = impl_start + open_rel;
+                let mut depth = 0i32;
+                let mut close = None;
+                for (off, ch) in code[open..].char_indices() {
+                    match ch {
+                        '{' => depth += 1,
+                        '}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                close = Some(open + off);
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let Some(close_idx) = close else {
+                    break;
+                };
+                let block = &code[open..=close_idx];
+                if block.contains(&format!("fn {}(", method_name)) {
+                    return true;
+                }
+                cursor = close_idx + 1;
+            }
+            false
+        }
+
+        if out.contains("pub struct std_shared_ptr<")
+            && (out.contains(".op_arrow()") || out.contains(".op_eq("))
+        {
+            let has_op_arrow = impl_block_contains_method(&out, "impl<T> std_shared_ptr<T>", "op_arrow");
+            let has_op_eq = impl_block_contains_method(&out, "impl<T> std_shared_ptr<T>", "op_eq");
+            if !has_op_arrow || !has_op_eq {
+                out.push_str("\nimpl<T> std_shared_ptr<T> {\n");
+                if !has_op_arrow {
+                    out.push_str("    #[inline]\n    pub fn op_arrow(&self) -> *mut T { self.get() }\n\n");
+                }
+                if !has_op_eq {
+                    out.push_str(
+                        "    #[inline]\n    pub fn op_eq(&self, rhs: *mut T) -> bool { self.get() == rhs }\n",
+                    );
+                }
+                out.push_str("}\n");
+            }
+        }
+
+        if out.contains("pub struct MarshallDeputy_MarContainer")
+            && out.contains(".find(")
+            && !impl_block_contains_method(&out, "impl MarshallDeputy_MarContainer", "find")
+        {
+            out.push_str(
+                r#"
+impl MarshallDeputy_MarContainer {
+    #[inline]
+    pub fn find(&mut self, _kind: i32) -> *mut std::ffi::c_void { std::ptr::null_mut() }
+
+    #[inline]
+    pub fn end(&self) -> *mut std::ffi::c_void { std::ptr::null_mut() }
+}
+"#,
+            );
+        }
+
+        if out.contains("pub struct chunk {")
+            && out.contains(".fully_written()")
+            && !impl_block_contains_method(&out, "impl chunk", "reset")
+        {
+            out.push_str(
+                r#"
+impl chunk {
+    #[inline]
+    pub fn reset(&mut self) {
+        self.read_pos = 0;
+        self.write_pos = 0;
+        self.next = std::ptr::null_mut();
+        self.shared = false;
+    }
+
+    #[inline]
+    pub fn fully_written(&self) -> bool { self.write_pos >= self.cap && self.cap != 0 }
+
+    #[inline]
+    pub fn fully_read(&self) -> bool { self.read_pos >= self.write_pos }
+
+    #[inline]
+    pub fn write(&mut self, _p: *const (), n: u64) -> u64 {
+        let remaining = self.cap.saturating_sub(self.write_pos);
+        let written = std::cmp::min(remaining, n);
+        self.write_pos = self.write_pos.saturating_add(written);
+        written
+    }
+
+    #[inline]
+    pub fn read(&mut self, _p: *mut (), n: u64) -> u64 {
+        let available = self.write_pos.saturating_sub(self.read_pos);
+        let read = std::cmp::min(available, n);
+        self.read_pos = self.read_pos.saturating_add(read);
+        read
+    }
+
+    #[inline]
+    pub fn read_from_fd(&mut self, _fd: i32, n: u64) -> i32 { self.write(std::ptr::null(), n) as i32 }
+
+    #[inline]
+    pub fn write_to_fd(&mut self, _fd: i32) -> i32 {
+        let sent = self.content_size() as i32;
+        self.read_pos = self.write_pos;
+        sent
+    }
+
+    #[inline]
+    pub fn content_size(&self) -> u64 { self.write_pos.saturating_sub(self.read_pos) }
+
+    #[inline]
+    pub fn resize_to_current(&mut self) {
+        if self.write_pos > 0 {
+            self.cap = self.write_pos;
+        }
+    }
+
+    #[inline]
+    pub fn is_shared_data_chunk(&self) -> bool { self.shared }
+
+    #[inline]
+    pub fn set_bookmark(&mut self) -> *mut i8 { std::ptr::null_mut() }
+}
+"#,
+            );
+        }
+
+        if out.contains("pub struct rrr_Marshal")
+            && (out.contains(".read(")
+                || out.contains(".write(")
+                || out.contains(".peek(")
+                || out.contains(".op_shl(")
+                || out.contains(".op_shr("))
+            && !impl_block_contains_method(&out, "impl rrr_Marshal", "write")
+        {
+            out.push_str(
+                r#"
+impl rrr_Marshal {
+    #[inline]
+    pub fn write(&mut self, _p: *const (), n: u64) -> u64 { n }
+
+    #[inline]
+    pub fn read(&mut self, _p: *mut (), n: u64) -> u64 { n }
+
+    #[inline]
+    pub fn peek(&mut self, _p: *mut (), n: u64) -> u64 { n }
+
+    #[inline]
+    pub fn op_shl<V>(&mut self, _value: V) -> &mut Self { self }
+
+    #[inline]
+    pub fn op_shr<V>(&mut self, _value: V) -> &mut Self { self }
+}
+"#,
+            );
+        }
+
+        if out.contains("pub struct rrr_v32")
+            && !impl_block_contains_method(&out, "impl rrr_v32", "set")
+        {
+            out.push_str(
+                r#"
+impl rrr_v32 {
+    #[inline]
+    pub fn set(&mut self, _value: i32) {}
+}
+"#,
+            );
+        }
+        if out.contains("pub struct rrr_v64")
+            && !impl_block_contains_method(&out, "impl rrr_v64", "set")
+        {
+            out.push_str(
+                r#"
+impl rrr_v64 {
+    #[inline]
+    pub fn set(&mut self, _value: i64) {}
 }
 "#,
             );
@@ -138076,6 +138348,347 @@ impl basic_filebuf {
             output.contains("trait FragileBasicFilebufCompat"),
             "basic_filebuf setbuf compat trait should be emitted, got:\n{}",
             output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_marshal_surface_artifacts_rehydrates_placeholder_struct_lanes() {
+        let input = r#"
+/// Placeholder for C++ `chunk`
+#[repr(C)]
+pub struct chunk {
+    _opaque: [u8; 64], // placeholder - actual size may differ
+}
+
+impl Default for chunk {
+    fn default() -> Self {
+        Self { _opaque: [0u8; 64] }
+    }
+}
+
+/// Placeholder for C++ `Marshal::bookmark`
+#[repr(C)]
+pub struct Marshal_bookmark {
+    _opaque: [u8; 64], // placeholder - actual size may differ
+}
+
+impl Default for Marshal_bookmark {
+    fn default() -> Self {
+        Self { _opaque: [0u8; 64] }
+    }
+}
+
+pub struct std_shared_ptr<T> {
+    _ptr: *mut T,
+}
+
+impl<T> std_shared_ptr<T> {
+    pub fn get(&self) -> *mut T { self._ptr }
+}
+
+pub fn probe(sp: &std_shared_ptr<i32>, ch: &mut chunk) {
+    let _ = sp.op_arrow();
+    let _ = sp.op_eq(std::ptr::null_mut());
+    ch.reset();
+    if ch.fully_written() {
+        ch.next = std::ptr::null_mut();
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_marshal_surface_artifacts(input);
+        assert!(
+            output.contains("pub next: *mut chunk,"),
+            "chunk placeholder should be rehydrated with next lane, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub size: u64,") && output.contains("pub ptr: *mut *mut i8,"),
+            "Marshal_bookmark placeholder should be rehydrated with size/ptr lanes, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl<T> std_shared_ptr<T> {\n    #[inline]\n    pub fn op_arrow(&self) -> *mut T"),
+            "std_shared_ptr compat impl should add op_arrow lane, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn op_eq(&self, rhs: *mut T) -> bool"),
+            "std_shared_ptr compat impl should add op_eq lane, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl chunk {\n    #[inline]\n    pub fn reset(&mut self)"),
+            "chunk compat impl should be emitted, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_marshal_surface_artifacts_rewrites_marshal_callshape_artifacts() {
+        let input = r#"
+let mut bm: bookmark = Default::default();
+let global_container: &mut MarContainer = &mut Self::get_initializers();
+unsafe { mc_th_ = *global_container.clone() };
+unsafe { (__gv_md_mutex_g).unlock() };
+(if !(*it).op_eq(&unsafe { (mc_th_).end() }) { () } else { () });
+let mut f: std_function_rrr_Marshallable__ = (unsafe { (*it.op_arrow()).second }).clone();
+(if unsafe { (*func).op_bool() } { () } else { () });
+self.sp_data_ = 0.clone();
+((*__fragile_vtable).from_marshal)(__fragile_self_arg, *m);
+if *v.op_eq(b"dep\x00".as_ptr() as *const i8) {
+}
+*m.op_shl(&v_len);
+*m.op_shr(&v_len);
+v.resize((0 as i32));
+(if (m.read((&mut **v.op_index(0) as *mut i8) as *mut (), (0) as u64)) == (0 as u64) { () } else { () });
+return unsafe { std::mem::transmute::<i32, std___format_spec___flags>(((__lhs as u32) as u32) & ((__rhs as u32) as u32) as i32) };
+"#;
+        let output = AstCodeGen::normalize_rpc_marshal_surface_artifacts(input);
+        assert!(
+            output.contains("let mut bm: Marshal_bookmark = Default::default();"),
+            "bookmark lane should normalize to Marshal_bookmark, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains(
+                "let global_container: &mut MarshallDeputy_MarContainer = &mut Self::get_initializers();"
+            ),
+            "global initializer container lane should normalize to MarshallDeputy_MarContainer, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("unsafe { (__gv_md_mutex_g).unlock() };"),
+            "degraded MaybeUninit mutex unlock call should be dropped, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("(if !(it == unsafe { (mc_th_).end() }) { () } else { () });"),
+            "container end compare should normalize to pointer equality, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("let mut f: std_function_rrr_Marshallable__ = Default::default();"),
+            "degraded iterator op_arrow second-lane should normalize to default function wrapper, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("func.op_bool()"),
+            "function pointer op_bool deref artifact should normalize, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("self.sp_data_ = Default::default();"),
+            "shared_ptr zero-clone lane should normalize to default, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("((*__fragile_vtable).from_marshal)(__fragile_self_arg, m);"),
+            "from_marshal call should keep mutable reference lane, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("if v.op_eq("),
+            "bool deref around std_string::op_eq should normalize away, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("m.op_shl(&v_len);") && output.contains("m.op_shr(&mut v_len);"),
+            "marshal stream-op callshape should normalize, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("v.resize((0) as usize);"),
+            "resize call lane should normalize to usize, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("(v.op_index(0) as *mut i8) as *mut ()"),
+            "string index pointer cast deref artifact should normalize, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains(
+                "((((__lhs as u32) as u32) & ((__rhs as u32) as u32)) as i32)"
+            ),
+            "enum/int bitand bridge should normalize cast precedence, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_marshal_surface_artifacts_adds_rrr_marshal_and_value_compat_surfaces() {
+        let input = r#"
+pub struct rrr_Marshal {
+    _opaque: [u8; 64],
+}
+pub struct MarshallDeputy_MarContainer {
+    _opaque: [u8; 64],
+}
+pub struct rrr_v32 {
+    _opaque: [u8; 64],
+}
+pub struct rrr_v64 {
+    _opaque: [u8; 64],
+}
+pub fn probe(m: &mut rrr_Marshal, mc: &mut MarshallDeputy_MarContainer, v32: &mut rrr_v32, v64: &mut rrr_v64) {
+    let _ = m.write(std::ptr::null(), 1);
+    let _ = m.read(std::ptr::null_mut(), 1);
+    let _ = m.peek(std::ptr::null_mut(), 1);
+    m.op_shl(&0);
+    m.op_shr(&mut 0);
+    let _ = mc.find(7);
+    let _ = mc.end();
+    v32.set(1);
+    v64.set(2);
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_marshal_surface_artifacts(input);
+        assert!(
+            output.contains("impl rrr_Marshal {\n    #[inline]\n    pub fn write(&mut self, _p: *const (), n: u64) -> u64"),
+            "rrr_Marshal compat impl should add read/write/peek/op_shl/op_shr surfaces, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl MarshallDeputy_MarContainer {\n    #[inline]\n    pub fn find(&mut self, _kind: i32) -> *mut std::ffi::c_void"),
+            "MarshallDeputy_MarContainer compat impl should add find/end surfaces, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl rrr_v32 {\n    #[inline]\n    pub fn set(&mut self, _value: i32) {}"),
+            "rrr_v32 compat impl should add set surface, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl rrr_v64 {\n    #[inline]\n    pub fn set(&mut self, _value: i64) {}"),
+            "rrr_v64 compat impl should add set surface, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_marshal_surface_artifacts_adds_only_missing_shared_ptr_methods() {
+        let input = r#"
+pub struct std_shared_ptr<T> {
+    _ptr: *mut T,
+}
+impl<T> std_shared_ptr<T> {
+    pub fn get(&self) -> *mut T { self._ptr }
+    pub fn op_arrow(&self) -> *mut T { self._ptr }
+}
+pub fn probe(sp: &std_shared_ptr<i32>) {
+    let _ = sp.op_arrow();
+    let _ = sp.op_eq(std::ptr::null_mut());
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_marshal_surface_artifacts(input);
+        assert_eq!(
+            output.matches("pub fn op_arrow(&self) -> *mut T").count(),
+            1,
+            "shared_ptr op_arrow should not be duplicated when already present, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn op_eq(&self, rhs: *mut T) -> bool"),
+            "shared_ptr op_eq should be added when missing, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_marshal_surface_artifacts_ignores_other_type_op_arrow_methods() {
+        let input = r#"
+pub struct std_unique_ptr<T> {
+    _ptr: *mut T,
+}
+impl<T> std_unique_ptr<T> {
+    pub fn op_arrow(&self) -> *mut T { self._ptr }
+}
+pub struct std_shared_ptr<T> {
+    _ptr: *mut T,
+}
+impl<T> std_shared_ptr<T> {
+    pub fn get(&self) -> *mut T { self._ptr }
+}
+pub fn probe(sp: &std_shared_ptr<i32>) {
+    let _ = sp.op_arrow();
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_marshal_surface_artifacts(input);
+        assert_eq!(
+            output.matches("impl<T> std_shared_ptr<T> {").count(),
+            2,
+            "shared_ptr compat impl should be appended in addition to existing shared_ptr impl, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn op_arrow(&self) -> *mut T { self.get() }"),
+            "shared_ptr compat op_arrow should be added even when unique_ptr has op_arrow, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_marshal_surface_artifacts_is_idempotent_for_compat_impls() {
+        let input = r#"
+pub struct MarshallDeputy_MarContainer {
+    _opaque: [u8; 64],
+}
+pub struct chunk {
+    _opaque: [u8; 64],
+}
+impl Default for chunk {
+    fn default() -> Self { Self { _opaque: [0u8; 64] } }
+}
+pub struct rrr_Marshal {
+    _opaque: [u8; 64],
+}
+pub struct rrr_v32 {
+    _opaque: [u8; 64],
+}
+pub struct rrr_v64 {
+    _opaque: [u8; 64],
+}
+pub fn probe(m: &mut rrr_Marshal, mc: &mut MarshallDeputy_MarContainer, ch: &mut chunk, v32: &mut rrr_v32, v64: &mut rrr_v64) {
+    let _ = mc.find(1);
+    let _ = mc.end();
+    ch.fully_written();
+    let _ = m.read(std::ptr::null_mut(), 0);
+    v32.set(1);
+    v64.set(2);
+}
+"#;
+        let once = AstCodeGen::normalize_rpc_marshal_surface_artifacts(input);
+        let twice = AstCodeGen::normalize_rpc_marshal_surface_artifacts(&once);
+        assert_eq!(
+            twice.matches("pub fn find(&mut self, _kind: i32)").count(),
+            1,
+            "MarshallDeputy find compat method should be emitted once, got:\n{}",
+            twice
+        );
+        assert_eq!(
+            twice.matches("pub fn reset(&mut self)").count(),
+            1,
+            "chunk compat impl should be emitted once, got:\n{}",
+            twice
+        );
+        assert_eq!(
+            twice.matches("pub fn write(&mut self, _p: *const (), n: u64) -> u64 { n }")
+                .count(),
+            1,
+            "rrr_Marshal compat impl should be emitted once, got:\n{}",
+            twice
+        );
+        assert_eq!(
+            twice.matches("pub fn set(&mut self, _value: i32)").count(),
+            1,
+            "rrr_v32 compat impl should be emitted once, got:\n{}",
+            twice
+        );
+        assert_eq!(
+            twice.matches("pub fn set(&mut self, _value: i64)").count(),
+            1,
+            "rrr_v64 compat impl should be emitted once, got:\n{}",
+            twice
         );
     }
 

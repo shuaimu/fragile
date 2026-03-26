@@ -5808,7 +5808,8 @@ fn m9_2c_iv_e34f1_task_documented_in_todo() {
             && todo.contains("docs/dev/m9_2c_iv_e34f1_post_e34e_replay_regression_inventory.md")
             && todo.contains("M9.2.c.iv.e.34.f.2")
             && todo.contains("M9.2.c.iv.e.34.f.3")
-            && todo.contains("- [ ] M9.2.c.iv.e.34.f.4")
+            && (todo.contains("- [ ] M9.2.c.iv.e.34.f.4")
+                || todo.contains("- [x] M9.2.c.iv.e.34.f.4"))
             && todo.contains("- [ ] M9.2.c.iv.e.34.f.5"),
         "M9.2.c.iv.e.34.f should be decomposed into bounded follow-up leaves with f.1 marked done"
     );
@@ -5907,7 +5908,8 @@ fn m9_2c_iv_e34f3_task_documented_in_todo() {
             && todo.contains("/tmp/fragile_e34f3_event_after_")
             && todo.contains("/tmp/fragile_e34f3_fiber_after_")
             && todo.contains("docs/dev/m9_2c_iv_e34f3_event_fiber_container_surface_inventory.md")
-            && todo.contains("- [ ] M9.2.c.iv.e.34.f.4")
+            && (todo.contains("- [ ] M9.2.c.iv.e.34.f.4")
+                || todo.contains("- [x] M9.2.c.iv.e.34.f.4"))
             && todo.contains("- [ ] M9.2.c.iv.e.34.f.5"),
         "M9.2.c.iv.e.34.f.3 TODO entry should record closure evidence and keep downstream leaves pending"
     );
@@ -5940,6 +5942,112 @@ fn m9_2c_iv_e34f3_inventory_document_exists_and_records_container_surface_closur
         assert!(
             doc.contains(required),
             "e.34.f.3 inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_e34f4_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.34.f.4 Resolve `marshal.cpp` residual compatibility regressions")
+            && todo.contains("normalize_rpc_marshal_surface_artifacts")
+            && todo.contains("std_shared_ptr")
+            && todo.contains("chunk")
+            && todo.contains("Marshal_bookmark")
+            && todo.contains("docs/dev/m9_2c_iv_e34f4_marshal_compat_surface_inventory.md")
+            && todo.contains("- [ ] M9.2.c.iv.e.34.f.5"),
+        "M9.2.c.iv.e.34.f.4 TODO entry should record closure evidence and keep final replay leaf pending"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e34f4_inventory_document_exists_and_records_marshal_surface_closure() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34f4_marshal_compat_surface_inventory.md"),
+    )
+    .expect("e.34.f.4 inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.f.4",
+        "Wrong-approach check",
+        "normalize_rpc_marshal_surface_artifacts",
+        "std_shared_ptr",
+        "MarshallDeputy_MarContainer",
+        "rrr_Marshal",
+        "chunk",
+        "Marshal_bookmark",
+        "rrr_v32",
+        "rrr_v64",
+        "/tmp/fragile_e34f4_marshal_before_udF2hZ",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.f.4 inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_e34f5a_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [ ] M9.2.c.iv.e.34.f.5 Re-run strict runtime replay end-to-end")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260326T205524Z_p4045206")
+            && todo.contains("total=478")
+            && todo.contains("unique=94")
+            && todo.contains("non_increase_verdict=true")
+            && todo.contains("event.cc=249")
+            && todo.contains("fiber_impl.cc=203")
+            && todo.contains("marshal.cpp=8")
+            && todo.contains("fiber_context_runtime.cc=2"),
+        "M9.2.c.iv.e.34.f.5 TODO entry should record post-f.4 replay evidence and blocker counts"
+    );
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.34.f.5.a Capture deterministic post-f.4 strict replay blocker inventory")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5a_post_f4_replay_inventory.md")
+            && todo.contains("- [ ] M9.2.c.iv.e.34.f.5.b")
+            && todo.contains("- [ ] M9.2.c.iv.e.34.f.5.c")
+            && todo.contains("- [ ] M9.2.c.iv.e.34.f.5.d")
+            && todo.contains("- [ ] M9.2.c.iv.e.34.f.5.e"),
+        "M9.2.c.iv.e.34.f.5 should be decomposed into bounded follow-up leaves with f.5.a marked done"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e34f5a_inventory_document_exists_and_records_replay_decomposition() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34f5a_post_f4_replay_inventory.md"),
+    )
+    .expect("e.34.f.5.a inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.f.5.a",
+        "Wrong-approach check",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260326T205524Z_p4045206",
+        "lane_fragilec_build_status=2",
+        "lane_fragilec_test_rpc_status=-1",
+        "lane_fragilec_failure_class=build_failed",
+        "blocker_error_total_count=478",
+        "blocker_error_unique_count=94",
+        "event.cc",
+        "fiber_impl.cc",
+        "marshal.cpp",
+        "fiber_context_runtime.cc",
+        "M9.2.c.iv.e.34.f.5.b",
+        "M9.2.c.iv.e.34.f.5.e",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.f.5.a inventory document should contain `{}`",
             required
         );
     }
