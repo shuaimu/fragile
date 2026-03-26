@@ -22261,3 +22261,94 @@ Key findings/decisions:
   - `e.34.f.5`: end-to-end strict replay rerun and final contract verification.
 - Detailed inventory and decomposition rationale is recorded in:
   - `docs/dev/m9_2c_iv_e34f1_post_e34e_replay_regression_inventory.md`
+
+## 2026-03-26: M9.2.c.iv.e.34.f.2 event/fiber syntax + SIMD helper closure
+
+- Selected first pending decomposed leaf after `e.34.f.1`: `M9.2.c.iv.e.34.f.2`.
+- Scope is bounded (<1000 LOC): one `ast_codegen` syntax pass + shared file-header helper completion + focused tests/probes.
+
+### Wrong-approach check
+
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before implementation.
+- No rollback-pattern additions, no target-specific `mako` conditionals, no force-native bypass.
+
+### Key implementation decisions
+
+- Added `normalize_rpc_fiber_context_state_artifacts` in `ast_codegen` to rewrite:
+  - `FiberContext { , ..Default::default() }` -> `FiberContext { ..Default::default() }`
+  - `rrr::boost_coro_task_t::State { State::X }` -> `State::X`
+- Added shared SSE helper surfaces in `crates/fragile-stl/src/file_header.rs`:
+  - `_mm_set1_epi8`
+  - `_mm_cmpeq_epi8`
+  - `_mm_movemask_epi8`
+  - `_mm_and_si128`
+
+### Focused strict compile evidence
+
+- Before run roots:
+  - event: `/tmp/fragile_e34f2_event_before_G7itaN`
+  - fiber: `/tmp/fragile_e34f2_fiber_before_24R9G7`
+- After run roots:
+  - event: `/tmp/fragile_e34f2_event_after_dvuKne`
+  - fiber: `/tmp/fragile_e34f2_fiber_after_Bfhem5`
+
+Marker deltas:
+
+- `event.cc`
+  - typed errors `318 -> 311`
+  - malformed `FiberContext` markers `2 -> 0`
+  - missing `_mm_*` function markers `6 -> 0`
+  - `E0223` `1 -> 0`
+- `fiber_impl.cc`
+  - typed errors `278 -> 271`
+  - malformed `FiberContext` markers `2 -> 0`
+  - missing `_mm_*` function markers `6 -> 0`
+  - `E0223` `1 -> 0`
+
+Residual failures remain in container/surface and marshal lanes and are tracked under `e.34.f.3` and `e.34.f.4`.
+
+## 2026-03-26: M9.2.c.iv.e.34.f.3 event/fiber container + surface closure
+
+- Selected next pending decomposed leaf: `M9.2.c.iv.e.34.f.3`.
+- Scope is bounded (<1000 LOC): one late compatibility pass extension in `ast_codegen` plus focused tests/probes.
+
+### Wrong-approach check
+
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before implementation.
+- No target-specific conditionals, no force-native bypass, no rollback-pattern expansion.
+
+### Key implementation decisions
+
+- Added `normalize_rpc_container_surface_artifacts` in `ast_codegen` to:
+  - rewrite unordered-map impl field/member lanes `.__tree_`/`__tree_:` to `.__table_`/`__table_:`,
+  - rehydrate empty `basic_filebuf` definitions with canonical field lanes,
+  - normalize degraded `basic_filebuf` ctor/body lane fragments,
+  - append `FragileBasicFilebufCompat::setbuf` when `.setbuf(...)` appears.
+- Extended `normalize_final_rpc_straggler_artifacts` with generic pointer-surface compat traits:
+  - `FragileRcArrowCompat`,
+  - `FragileCellRefArrowCompat`,
+  - `FragileCellRefDerefCompat`,
+  - `FragileCellRefMutDerefCompat`.
+
+### Focused strict compile evidence
+
+- Baseline (post-f.2):
+  - event: `/tmp/fragile_e34f2_event_after_dvuKne`
+  - fiber: `/tmp/fragile_e34f2_fiber_after_Bfhem5`
+- After f.3:
+  - event: `/tmp/fragile_e34f3_event_after_WWZSOj`
+  - fiber: `/tmp/fragile_e34f3_fiber_after_qFvJjH`
+
+Marker deltas:
+
+- `event.cc`: typed `311 -> 263`, unordered-map `__tree_` markers `4 -> 0`, `basic_filebuf` E0560 cluster `15 -> 0`, `setbuf` marker `1 -> 0`, Rc/Ref pointer-surface markers cleared.
+- `fiber_impl.cc`: typed `271 -> 220`, unordered-map `__tree_` markers `4 -> 0`, `basic_filebuf` E0560 cluster `15 -> 0`, `setbuf` marker `1 -> 0`, Rc/Ref pointer-surface markers cleared.
+
+Residual markers now surfaced for next leaves:
+
+- `missing_hash_emplace_unique=4`
+- map-tree constructor mismatch markers `=4`
+
+Detailed evidence/inventory is recorded in:
+
+- `docs/dev/m9_2c_iv_e34f3_event_fiber_container_surface_inventory.md`

@@ -5806,7 +5806,9 @@ fn m9_2c_iv_e34f1_task_documented_in_todo() {
     assert!(
         todo.contains("- [x] M9.2.c.iv.e.34.f.1 Capture deterministic post-e.34.e strict replay regression inventory")
             && todo.contains("docs/dev/m9_2c_iv_e34f1_post_e34e_replay_regression_inventory.md")
-            && todo.contains("- [ ] M9.2.c.iv.e.34.f.2")
+            && todo.contains("M9.2.c.iv.e.34.f.2")
+            && todo.contains("M9.2.c.iv.e.34.f.3")
+            && todo.contains("- [ ] M9.2.c.iv.e.34.f.4")
             && todo.contains("- [ ] M9.2.c.iv.e.34.f.5"),
         "M9.2.c.iv.e.34.f should be decomposed into bounded follow-up leaves with f.1 marked done"
     );
@@ -5838,6 +5840,106 @@ fn m9_2c_iv_e34f1_inventory_document_exists_and_records_regression_taxonomy() {
         assert!(
             doc.contains(required),
             "e.34.f.1 inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_e34f2_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.34.f.2 Resolve shared `event.cc`/`fiber_impl.cc` parser-output syntax + SIMD intrinsic artifacts")
+            && todo.contains("normalize_rpc_fiber_context_state_artifacts")
+            && todo.contains("crates/fragile-stl/src/file_header.rs")
+            && todo.contains("/tmp/fragile_e34f2_event_before_G7itaN")
+            && todo.contains("/tmp/fragile_e34f2_event_after_")
+            && todo.contains("M9.2.c.iv.e.34.f.3")
+            && todo.contains("- [ ] M9.2.c.iv.e.34.f.5"),
+        "M9.2.c.iv.e.34.f.2 TODO entry should record closure evidence and keep follow-up leaves pending"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e34f2_inventory_document_exists_and_records_syntax_simd_closure() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34f2_event_fiber_syntax_simd_inventory.md"),
+    )
+    .expect("e.34.f.2 inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.f.2",
+        "Wrong-approach check",
+        "normalize_rpc_fiber_context_state_artifacts",
+        "_mm_set1_epi8",
+        "_mm_cmpeq_epi8",
+        "_mm_movemask_epi8",
+        "_mm_and_si128",
+        "FiberContext { , ..Default::default() }",
+        "State { State::NEW }",
+        "/tmp/fragile_e34f2_event_before_G7itaN",
+        "/tmp/fragile_e34f2_fiber_before_24R9G7",
+        "/tmp/fragile_e34f2_event_after_",
+        "/tmp/fragile_e34f2_fiber_after_",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.f.2 inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_e34f3_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.34.f.3 Resolve shared `event.cc`/`fiber_impl.cc` container/surface regressions")
+            && todo.contains("normalize_rpc_container_surface_artifacts")
+            && todo.contains("FragileBasicFilebufCompat")
+            && todo.contains("FragileRcArrowCompat")
+            && todo.contains("/tmp/fragile_e34f3_event_after_")
+            && todo.contains("/tmp/fragile_e34f3_fiber_after_")
+            && todo.contains("docs/dev/m9_2c_iv_e34f3_event_fiber_container_surface_inventory.md")
+            && todo.contains("- [ ] M9.2.c.iv.e.34.f.4")
+            && todo.contains("- [ ] M9.2.c.iv.e.34.f.5"),
+        "M9.2.c.iv.e.34.f.3 TODO entry should record closure evidence and keep downstream leaves pending"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e34f3_inventory_document_exists_and_records_container_surface_closure() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34f3_event_fiber_container_surface_inventory.md"),
+    )
+    .expect("e.34.f.3 inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.f.3",
+        "Wrong-approach check",
+        "normalize_rpc_container_surface_artifacts",
+        "FragileBasicFilebufCompat",
+        "FragileRcArrowCompat",
+        "FragileCellRefArrowCompat",
+        "FragileCellRefDerefCompat",
+        "FragileCellRefMutDerefCompat",
+        "__tree_",
+        "__table_",
+        "basic_filebuf",
+        "/tmp/fragile_e34f2_event_after_dvuKne",
+        "/tmp/fragile_e34f2_fiber_after_Bfhem5",
+        "/tmp/fragile_e34f3_event_after_",
+        "/tmp/fragile_e34f3_fiber_after_",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.f.3 inventory document should contain `{}`",
             required
         );
     }

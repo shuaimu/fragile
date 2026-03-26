@@ -125,6 +125,54 @@ pub fn _mm_set1_epi32(
     [lane, lane]
 }
 #[inline]
+pub fn _mm_set1_epi8(
+    i: i8,
+) -> __attribute______vector_size___2_sizeof_long_long_____long_long_const {
+    let byte = i as u8 as u64;
+    let lane = byte.wrapping_mul(0x0101_0101_0101_0101);
+    [lane, lane]
+}
+#[inline]
+pub fn _mm_and_si128(
+    a: __attribute______vector_size___2_sizeof_long_long_____long_long,
+    b: __attribute______vector_size___2_sizeof_long_long_____long_long,
+) -> __attribute______vector_size___2_sizeof_long_long_____long_long_const {
+    [a[0] & b[0], a[1] & b[1]]
+}
+#[inline]
+pub fn _mm_cmpeq_epi8(
+    a: __attribute______vector_size___2_sizeof_long_long_____long_long,
+    b: __attribute______vector_size___2_sizeof_long_long_____long_long,
+) -> __attribute______vector_size___2_sizeof_long_long_____long_long_const {
+    fn lane_eq_bytes(x: u64, y: u64) -> u64 {
+        let x_bytes = x.to_le_bytes();
+        let y_bytes = y.to_le_bytes();
+        let mut out = [0u8; 8];
+        for idx in 0..8 {
+            out[idx] = if x_bytes[idx] == y_bytes[idx] { 0xFF } else { 0x00 };
+        }
+        u64::from_le_bytes(out)
+    }
+
+    [lane_eq_bytes(a[0], b[0]), lane_eq_bytes(a[1], b[1])]
+}
+#[inline]
+pub fn _mm_movemask_epi8(a: __attribute______vector_size___2_sizeof_long_long_____long_long) -> i32 {
+    fn lane_mask(lane: u64, bit_base: u32) -> u32 {
+        let bytes = lane.to_le_bytes();
+        let mut mask = 0u32;
+        for idx in 0..8 {
+            if (bytes[idx] & 0x80) != 0 {
+                mask |= 1u32 << (bit_base + idx as u32);
+            }
+        }
+        mask
+    }
+
+    let mask = lane_mask(a[0], 0) | lane_mask(a[1], 8);
+    mask as i32
+}
+#[inline]
 pub fn _mm_srli_epi64(
     a: __attribute______vector_size___2_sizeof_long_long_____long_long,
     imm8: i32,

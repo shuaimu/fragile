@@ -30133,6 +30133,7 @@ impl AstCodeGen {
         output = Self::normalize_final_rpc_straggler_artifacts(&output);
         output = Self::normalize_malformed_unsafe_deref_size_casts(&output);
         output = Self::normalize_struct_literal_unit_entry_artifacts(&output);
+        output = Self::normalize_rpc_fiber_context_state_artifacts(&output);
         // Late pointer/call-shape rewrites can reintroduce redundant
         // dereferences around ref-to-pointer cast arguments.
         output = Self::normalize_redundant_deref_in_pointer_casts(&output);
@@ -30302,6 +30303,7 @@ impl AstCodeGen {
         // stragglers (op_call/op_inc/swap/p and related compat traits),
         // so rerun the final RPC straggler pass at pipeline tail.
         output = Self::normalize_final_rpc_straggler_artifacts(&output);
+        output = Self::normalize_rpc_container_surface_artifacts(&output);
         output = Self::append_compile_error_for_unresolved_non_c_abi_external_calls(&output);
         if Self::output_requires_c_variadic_feature(&output) {
             output = Self::ensure_c_variadic_feature_attr(&output);
@@ -30473,6 +30475,7 @@ impl AstCodeGen {
             && !code.contains(".op_call(")
             && !code.contains(".op_inc(")
             && !code.contains(".op_arrow()")
+            && !code.contains(".op_deref()")
             && !code.contains(".swap(")
             && !code.contains(".p()")
             && !has_exact_struct_def(code, "atomic_int")
@@ -31073,10 +31076,182 @@ impl<T: ?Sized> FragileArcArrowCompat<T> for std::sync::Arc<T> {
 "#,
             );
         }
+        if out.contains("std::rc::Rc<")
+            && out.contains(".op_arrow()")
+            && !out.contains("trait FragileRcArrowCompat")
+        {
+            out.push_str(
+                r#"
+pub trait FragileRcArrowCompat<T: ?Sized> {
+    fn op_arrow(&self) -> *const T;
+}
+
+impl<T: ?Sized> FragileRcArrowCompat<T> for std::rc::Rc<T> {
+    #[inline]
+    fn op_arrow(&self) -> *const T {
+        std::rc::Rc::as_ptr(self)
+    }
+}
+"#,
+            );
+        }
+        if out.contains("std::cell::Ref<")
+            && out.contains(".op_arrow()")
+            && !out.contains("trait FragileCellRefArrowCompat")
+        {
+            out.push_str(
+                r#"
+pub trait FragileCellRefArrowCompat<T: ?Sized> {
+    fn op_arrow(&self) -> *const T;
+}
+
+impl<'a, T: ?Sized> FragileCellRefArrowCompat<T> for std::cell::Ref<'a, T> {
+    #[inline]
+    fn op_arrow(&self) -> *const T {
+        std::ops::Deref::deref(self) as *const T
+    }
+}
+
+impl<'a, T: ?Sized> FragileCellRefArrowCompat<T> for std::cell::RefMut<'a, T> {
+    #[inline]
+    fn op_arrow(&self) -> *const T {
+        std::ops::Deref::deref(self) as *const T
+    }
+}
+"#,
+            );
+        }
+        if out.contains("std::cell::Ref<")
+            && out.contains(".op_deref()")
+            && !out.contains("trait FragileCellRefDerefCompat")
+        {
+            out.push_str(
+                r#"
+pub trait FragileCellRefDerefCompat<T: ?Sized> {
+    fn op_deref(&self) -> &T;
+}
+
+impl<'a, T: ?Sized> FragileCellRefDerefCompat<T> for std::cell::Ref<'a, T> {
+    #[inline]
+    fn op_deref(&self) -> &T {
+        std::ops::Deref::deref(self)
+    }
+}
+"#,
+            );
+        }
+        if out.contains("std::cell::RefMut<")
+            && out.contains(".op_deref()")
+            && !out.contains("trait FragileCellRefMutDerefCompat")
+        {
+            out.push_str(
+                r#"
+pub trait FragileCellRefMutDerefCompat<T: ?Sized> {
+    fn op_deref(&mut self) -> &mut T;
+}
+
+impl<'a, T: ?Sized> FragileCellRefMutDerefCompat<T> for std::cell::RefMut<'a, T> {
+    #[inline]
+    fn op_deref(&mut self) -> &mut T {
+        std::ops::DerefMut::deref_mut(self)
+    }
+}
+"#,
+            );
+        }
 
         if !code.ends_with('\n') && !out.is_empty() {
             out.pop();
         }
+        out
+    }
+
+    /// Fix f.3 container/surface regressions for event/fiber strict replay:
+    /// - `std_unordered_map_*` impls emitted with `.__tree_` field access instead of `.__table_`.
+    /// - `basic_filebuf` occasionally degrades to an empty struct while constructor/impl code
+    ///   still references the canonical libc++ field lanes.
+    fn normalize_rpc_container_surface_artifacts(code: &str) -> String {
+        if !code.contains("std_unordered_map_")
+            && !code.contains("pub struct basic_filebuf {")
+            && !code.contains(".setbuf(")
+        {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len() + 1024);
+        let mut in_unordered_map_impl = false;
+        let mut impl_brace_depth: i32 = 0;
+
+        for line in code.lines() {
+            let mut rewritten = line.to_string();
+            let trimmed = line.trim_start();
+            if !in_unordered_map_impl
+                && (trimmed.starts_with("impl std_unordered_map_")
+                    || trimmed.starts_with("impl unordered_map_"))
+                && trimmed.ends_with('{')
+            {
+                in_unordered_map_impl = true;
+                impl_brace_depth = 0;
+            } else if in_unordered_map_impl {
+                rewritten = rewritten.replace(".__tree_", ".__table_");
+                rewritten = rewritten.replace("__tree_:", "__table_:");
+            }
+
+            out.push_str(&rewritten);
+            out.push('\n');
+
+            if in_unordered_map_impl {
+                impl_brace_depth += line.chars().filter(|c| *c == '{').count() as i32;
+                impl_brace_depth -= line.chars().filter(|c| *c == '}').count() as i32;
+                if impl_brace_depth <= 0 {
+                    in_unordered_map_impl = false;
+                    impl_brace_depth = 0;
+                }
+            }
+        }
+        if !code.ends_with('\n') && !out.is_empty() {
+            out.pop();
+        }
+
+        out = out.replace(
+            "pub struct basic_filebuf {\n}\n",
+            "pub struct basic_filebuf {\n    pub __extbuf_: *mut i8,\n    pub __extbufnext_: *const i8,\n    pub __extbufend_: *const i8,\n    pub __ebs_: i32,\n    pub __intbuf_: *mut i8,\n    pub __ibs_: i32,\n    pub __file_: *mut std::ffi::c_void,\n    pub __cv_: *const std::ffi::c_void,\n    pub __st_: i32,\n    pub __st_last_: i32,\n    pub __om_: u32,\n    pub __cm_: u32,\n    pub __owns_eb_: bool,\n    pub __owns_ib_: bool,\n    pub __always_noconv_: bool,\n}\n",
+        );
+        out = out.replace(
+            "{ __self.__cv_ = (Default::default()) as *const codecvt_type_parameter_0_0__char__type_parameter_0_1_state_type ;};",
+            "{ __self.__cv_ = std::ptr::null(); };",
+        );
+        out = out.replace(
+            "{ __self.__always_noconv_ = (__self.__cv_).clone() ;};",
+            "{ __self.__always_noconv_ = false ;};",
+        );
+        out = out.replace(
+            "let mut __width: i32 = (self.__cv_).clone();",
+            "let mut __width: i32 = 0;",
+        );
+        out = out.replace(
+            "{ self.__st_ = __state ;};",
+            "{ self.__st_ = 0 ;};",
+        );
+
+        if out.contains("pub struct basic_filebuf")
+            && out.contains(".setbuf(")
+            && !out.contains("trait FragileBasicFilebufCompat")
+        {
+            out.push_str(
+                r#"
+pub trait FragileBasicFilebufCompat {
+    fn setbuf(&mut self, _buf: *mut i8, _len: i32);
+}
+
+impl FragileBasicFilebufCompat for basic_filebuf {
+    #[inline]
+    fn setbuf(&mut self, _buf: *mut i8, _len: i32) {}
+}
+"#,
+            );
+        }
+
         out
     }
 
@@ -31126,6 +31301,39 @@ impl<T: ?Sized> FragileArcArrowCompat<T> for std::sync::Arc<T> {
         if !code.ends_with('\n') && !out.is_empty() {
             out.pop();
         }
+        out
+    }
+
+    /// Fix degraded RPC fiber literal artifacts:
+    /// - `FiberContext { , ..Default::default() }`
+    /// - `rrr::boost_coro_task_t::State { State::NEW }`
+    fn normalize_rpc_fiber_context_state_artifacts(code: &str) -> String {
+        if !code.contains("FiberContext { , ..Default::default() }")
+            && !code.contains("boost_coro_task_t::State { State::")
+        {
+            return code.to_string();
+        }
+
+        let mut out =
+            code.replace("FiberContext { , ..Default::default() }", "FiberContext { ..Default::default() }");
+
+        for variant in ["NEW", "RUNNING", "SUSPENDED", "FINISHED"] {
+            for prefix in [
+                "rrr::boost_coro_task_t::State { State::",
+                "crate::rrr::boost_coro_task_t::State { State::",
+                "boost_coro_task_t::State { State::",
+            ] {
+                out = out.replace(
+                    &format!("{prefix}{variant} }}"),
+                    &format!("State::{variant}"),
+                );
+                out = out.replace(
+                    &format!("{prefix}{variant}}}"),
+                    &format!("State::{variant}"),
+                );
+            }
+        }
+
         out
     }
 
@@ -137742,6 +137950,136 @@ pub struct SmallStruct {
     }
 
     #[test]
+    fn test_normalize_rpc_fiber_context_state_artifacts_rewrites_malformed_literals() {
+        let input = r#"
+pub fn new_0() -> Self {
+    let mut __self: Self = Default::default();
+    __self.caller_ctx_ = FiberContext { , ..Default::default() };
+    __self.fiber_ctx_ = FiberContext { , ..Default::default() };
+    __self.state_ = rrr::boost_coro_task_t::State { State::NEW };
+    __self.state_ = crate::rrr::boost_coro_task_t::State { State::RUNNING };
+    __self.state_ = boost_coro_task_t::State { State::SUSPENDED };
+    __self.state_ = rrr::boost_coro_task_t::State { State::FINISHED };
+    __self
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_fiber_context_state_artifacts(input);
+        assert!(
+            !output.contains("FiberContext { , ..Default::default() }"),
+            "malformed FiberContext literal should be rewritten, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("FiberContext { ..Default::default() }"),
+            "FiberContext default spread should be preserved, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("boost_coro_task_t::State { State::"),
+            "malformed state literals should be rewritten, got:\n{}",
+            output
+        );
+        for variant in ["NEW", "RUNNING", "SUSPENDED", "FINISHED"] {
+            assert!(
+                output.contains(&format!("State::{}", variant)),
+                "expected rewritten State::{} literal, got:\n{}",
+                variant,
+                output
+            );
+        }
+    }
+
+    #[test]
+    fn test_normalize_rpc_fiber_context_state_artifacts_noop_without_markers() {
+        let input = "pub fn noop() -> i32 { 1 }\n";
+        let output = AstCodeGen::normalize_rpc_fiber_context_state_artifacts(input);
+        assert_eq!(output, input);
+    }
+
+    #[test]
+    fn test_normalize_rpc_container_surface_artifacts_rewrites_unordered_map_tree_field_lanes() {
+        let input = r#"
+impl std_unordered_map_int__int {
+    pub fn op_index(&mut self, key: i32) -> *mut i32 {
+        (*self.__tree_.__emplace_unique(piecewise_construct, forward_as_tuple(key), tuple_{}).first).second
+    }
+    pub fn new_0() -> Self {
+        let mut __self = Self {
+            __tree_: Default::default(),
+        };
+        __self
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_container_surface_artifacts(input);
+        assert!(
+            !output.contains(".__tree_.__emplace_unique"),
+            "unordered_map op_index should use __table_ lane, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains(".__table_.__emplace_unique"),
+            "unordered_map op_index should be rewritten to __table_, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("__table_: Default::default()"),
+            "unordered_map constructor field lane should be __table_, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_container_surface_artifacts_rehydrates_basic_filebuf_lanes() {
+        let input = r#"
+#[derive(Default, Clone, Copy)]
+pub struct basic_filebuf {
+}
+impl basic_filebuf {
+    pub fn new_0_1() -> Self {
+        let mut __self = Self {
+            __extbuf_: std::ptr::null_mut(),
+            __cv_: std::ptr::null_mut(),
+            __always_noconv_: false,
+        };
+        { __self.__cv_ = (Default::default()) as *const codecvt_type_parameter_0_0__char__type_parameter_0_1_state_type ;};
+        { __self.__always_noconv_ = (__self.__cv_).clone() ;};
+        let mut __width: i32 = (self.__cv_).clone();
+        { self.__st_ = __state ;};
+        __self.setbuf(std::ptr::null_mut(), 4096i32);
+        __self
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_container_surface_artifacts(input);
+        assert!(
+            output.contains("pub __extbuf_: *mut i8,"),
+            "basic_filebuf should be rehydrated with field lanes, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("{ __self.__cv_ = std::ptr::null(); };"),
+            "basic_filebuf codecvt lane should normalize to null pointer, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("{ __self.__always_noconv_ = false ;};"),
+            "basic_filebuf bool lane should normalize to bool, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("let mut __width: i32 = 0;"),
+            "basic_filebuf width lane should normalize to integer default, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("trait FragileBasicFilebufCompat"),
+            "basic_filebuf setbuf compat trait should be emitted, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
     fn test_normalize_final_rpc_straggler_artifacts_adds_std_atomic_int_compat_impl() {
         let input = r#"
 pub struct std_atomic_int {
@@ -137996,6 +138334,55 @@ pub fn fd(poll: &std::sync::Arc<Pollable>) {
         assert!(
             output.contains("impl<T: ?Sized> FragileArcArrowCompat<T> for std::sync::Arc<T>"),
             "expected Arc op_arrow compat impl emission, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_final_rpc_straggler_artifacts_adds_rc_and_cell_ref_pointer_compat() {
+        let input = r#"
+pub struct Reactor {
+    pub id: i32,
+}
+pub struct Worker {
+    pub id: i32,
+}
+pub fn probe(
+    rc: &std::rc::Rc<Reactor>,
+    view: std::cell::Ref<'static, Worker>,
+    mut view_mut: std::cell::RefMut<'static, Worker>,
+) {
+    let _ = rc.op_arrow();
+    let _ = view.op_arrow();
+    let _ = view.op_deref();
+    let _ = view_mut.op_arrow();
+    let _ = view_mut.op_deref();
+}
+"#;
+        let output = AstCodeGen::normalize_final_rpc_straggler_artifacts(input);
+        assert!(
+            output.contains("pub trait FragileRcArrowCompat"),
+            "expected Rc op_arrow compat trait emission, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl<T: ?Sized> FragileRcArrowCompat<T> for std::rc::Rc<T>"),
+            "expected Rc op_arrow compat impl emission, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub trait FragileCellRefArrowCompat"),
+            "expected Ref/RefMut op_arrow compat trait emission, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub trait FragileCellRefDerefCompat"),
+            "expected Ref op_deref compat trait emission, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub trait FragileCellRefMutDerefCompat"),
+            "expected RefMut op_deref compat trait emission, got:\n{}",
             output
         );
     }

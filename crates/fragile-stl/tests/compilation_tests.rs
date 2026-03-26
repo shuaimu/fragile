@@ -27,6 +27,21 @@ fn sse_intrinsics_compile() {
     let _srl = _mm_srli_epi64(a, 1);
     let _sll = _mm_slli_epi64(a, 1);
     let _set = _mm_set_epi64x(1, 2);
+
+    let all_bits = _mm_set1_epi8(-1);
+    assert_eq!(all_bits, [u64::MAX, u64::MAX]);
+
+    let sign_mask = _mm_movemask_epi8(all_bits);
+    assert_eq!(sign_mask, 0xFFFF);
+
+    let no_sign = _mm_set1_epi8(0x7f);
+    assert_eq!(_mm_movemask_epi8(no_sign), 0);
+
+    let eq = _mm_cmpeq_epi8(no_sign, no_sign);
+    assert_eq!(eq, [u64::MAX, u64::MAX]);
+
+    let anded = _mm_and_si128(all_bits, no_sign);
+    assert_eq!(anded, no_sign);
 }
 
 #[test]
