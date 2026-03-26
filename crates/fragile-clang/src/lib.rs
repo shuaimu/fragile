@@ -39,6 +39,7 @@ use fragile_parser_core::{
 };
 use fragile_stl::layout_contract::pre_generated_stl_family_contract_entry_v1;
 use miette::Result;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io::Write;
@@ -891,14 +892,16 @@ fn parser_output_mapping_completeness_violations_for_covered_families(
             else {
                 continue;
             };
+            let normalized_target =
+                parser_output_normalize_covered_family_target_spelling(target);
             // Accept the alias if the target starts with the canonical prefix OR if
             // the target itself matches any detection prefix for the same family
             // (e.g., `basic_string_char16_t` matches `basic_string_` for the string
             // family). Also accept internal STL helper targets (starting with `__`)
             // that are associated with the family.
-            let target_accepted = target.starts_with(canonical_prefix)
-                || parser_output_alias_target_matches_family(target, family)
-                || target.starts_with("__");
+            let target_accepted = normalized_target.starts_with(canonical_prefix)
+                || parser_output_alias_target_matches_family(&normalized_target, family)
+                || normalized_target.starts_with("__");
             if !target_accepted {
                 violations.insert(format!(
                     "covered family `{}` alias `{}` resolved non-canonical target `{}` (expected prefix `{}`)",
@@ -916,10 +919,12 @@ fn parser_output_mapping_completeness_violations_for_covered_families(
         else {
             continue;
         };
+        let normalized_struct_name =
+            parser_output_normalize_covered_family_target_spelling(struct_name);
         // Accept structs with canonical prefix OR that match the family detection
         // prefixes (legitimate template specializations).
-        if struct_name.starts_with(canonical_prefix)
-            || parser_output_alias_target_matches_family(struct_name, family)
+        if normalized_struct_name.starts_with(canonical_prefix)
+            || parser_output_alias_target_matches_family(&normalized_struct_name, family)
         {
             continue;
         }
@@ -931,6 +936,20 @@ fn parser_output_mapping_completeness_violations_for_covered_families(
     }
 
     violations.into_iter().collect()
+}
+
+/// Canonicalize legacy parser-output family target spellings before mapped-family
+/// completeness validation.
+///
+/// Some parser-output aliases in strict replay artifacts still surface leading
+/// `std___...` spellings for covered map-family targets (for example
+/// `std___map_iterator_*`). For mapping-completeness checks, these are equivalent
+/// to canonical `std_...` family prefixes and should not fail the gate.
+fn parser_output_normalize_covered_family_target_spelling(target: &str) -> Cow<'_, str> {
+    if let Some(rest) = target.strip_prefix("std___") {
+        return Cow::Owned(format!("std_{rest}"));
+    }
+    Cow::Borrowed(target)
 }
 
 /// Returns true if `target` matches any detection prefix for the given `family`.
@@ -2432,6 +2451,49 @@ pub type unique_ptr_int = std_unique_ptr<i32>;
             &mappings,
         )
         .expect("covered families with canonical mapped alias targets should pass mapping completeness validation");
+    }
+
+    #[test]
+    fn parser_output_mapping_completeness_validation_accepts_std_triple_underscore_map_targets() {
+        // M9.2.c.iv.e.34.b: strict replay surfaced map-family aliases resolving
+        // through `std___map_iterator...` spellings in event.cc. These are
+        // canonicalized to `std_map...` before completeness checks.
+        let transpiled = r#"
+pub type std_map_iterator = std___map_iterator_std___tree_iterator_std___value_type_unsigned_int__bool__std___tree_node_std___value_type_unsigned_int__bool__void__long;
+"#;
+        let mappings =
+            BTreeMap::from([(STL_MAP_PLACEHOLDER_KIND.to_string(), "std_map".to_string())]);
+        validate_parser_output_handoff_mapping_completeness_for_covered_families(
+            transpiled,
+            &mappings,
+        )
+        .expect(
+            "covered map-family aliases with leading std___ spellings should pass after canonical-target normalization",
+        );
+    }
+
+    #[test]
+    fn parser_output_mapping_completeness_validation_still_rejects_nonfamily_std_triple_underscore_targets(
+    ) {
+        // Guard: normalization should not accept unrelated `std___` targets that
+        // still do not match covered-family canonical/detection prefixes.
+        let transpiled = r#"
+pub type map_int__int = std___legacy_map_impl<i32, i32>;
+"#;
+        let mappings =
+            BTreeMap::from([(STL_MAP_PLACEHOLDER_KIND.to_string(), "std_map".to_string())]);
+        let err = validate_parser_output_handoff_mapping_completeness_for_covered_families(
+            transpiled,
+            &mappings,
+        )
+        .expect_err("non-family std___ targets should still fail mapping completeness");
+        let err_text = err.to_string();
+        assert!(
+            err_text.contains("covered family `map`")
+                && err_text.contains("std___legacy_map_impl")
+                && err_text.contains("std_map"),
+            "unexpected mapping completeness error after std___ normalization: {err_text}"
+        );
     }
 
     #[test]

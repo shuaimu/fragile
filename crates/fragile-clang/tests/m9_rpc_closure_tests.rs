@@ -5644,6 +5644,51 @@ fn m9_2c_iv_e34a_inventory_document_exists_and_captures_blocker_mix() {
     }
 }
 
+#[test]
+fn m9_2c_iv_e34b_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.34.b Resolve parser-output mapping-completeness gate in `rrr/reactor/event.cc`"),
+        "M9.2.c.iv.e.34.b should be marked done in TODO.md"
+    );
+    assert!(
+        todo.contains("std___*` -> `std_*")
+            && todo.contains("mapping_completeness_present=0")
+            && todo.contains("/tmp/fragile_e34b_event_compile_after_WfIQoE"),
+        "M9.2.c.iv.e.34.b TODO evidence should capture canonical-target normalization and focused replay proof"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e34b_inventory_document_exists_and_records_gate_closure() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34b_event_mapping_canonical_target_normalization.md"),
+    )
+    .expect("e.34.b inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.b",
+        "Wrong-Approach Check",
+        "std___",
+        "std_",
+        "mapping_completeness_present=0",
+        "/tmp/fragile_e34b_event_compile_after_WfIQoE",
+        "E0425",
+        "E0308",
+        "E0599",
+        "E0609",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.b inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // M9.2.c.iv.e.17.d: Post-e.17 comprehensive strict compile error inventory
 // ---------------------------------------------------------------------------

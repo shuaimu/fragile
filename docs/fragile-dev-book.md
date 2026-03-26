@@ -22138,3 +22138,13 @@ Key findings/decisions:
   - `e.34.d` strop typed/method-surface cluster,
   - `e.34.e` epoll_wrapper + marshal residual compat/lifetime blockers,
   - `e.34.f` final end-to-end replay verification.
+
+## 2026-03-26: M9.2.c.iv.e.34.b map-family canonical-target normalization
+
+- Context: post-e.33 strict replay (`e.34.a`) showed `event.cc` failing parser-output mapping-completeness checks because covered map-family aliases (`std_map_iterator...`) resolved to `std___map_iterator...` target spellings.
+- Decision: keep the gate strict, but canonicalize leading `std___` to `std_` during covered-family completeness checks before canonical-prefix/family-prefix matching.
+- Why this approach: bounded and generic; it removes parser-output spelling drift without relaxing fallback rejection semantics.
+- Wrong-approach compliance: no rollback patterns, no target-specific bypasses, no force-native fallback.
+- Evidence:
+  - unit tests: `parser_output_mapping_completeness_validation_accepts_std_triple_underscore_map_targets`, `parser_output_mapping_completeness_validation_still_rejects_nonfamily_std_triple_underscore_targets`.
+  - focused strict replay compile (`/tmp/fragile_e34b_event_compile_after_WfIQoE`) reports `mapping_completeness_present=0` and progresses into downstream typed rustc blockers (`E0425`, `E0308`, `E0599`, `E0609`).
