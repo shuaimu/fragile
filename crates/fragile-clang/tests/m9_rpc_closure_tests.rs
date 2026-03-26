@@ -5786,6 +5786,63 @@ fn m9_2c_iv_e34d_inventory_document_exists_and_records_surface_closure() {
     }
 }
 
+#[test]
+fn m9_2c_iv_e34f1_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [ ] M9.2.c.iv.e.34.f Re-run strict runtime replay end-to-end")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260326T093427Z_p3345304")
+            && todo.contains("total=637")
+            && todo.contains("unique=144")
+            && todo.contains("event.cc")
+            && todo.contains("fiber_impl.cc")
+            && todo.contains("marshal.cpp")
+            && todo.contains("fiber_context_runtime.cc"),
+        "M9.2.c.iv.e.34.f TODO evidence should capture post-e.34.e regression replay inventory"
+    );
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.34.f.1 Capture deterministic post-e.34.e strict replay regression inventory")
+            && todo.contains("docs/dev/m9_2c_iv_e34f1_post_e34e_replay_regression_inventory.md")
+            && todo.contains("- [ ] M9.2.c.iv.e.34.f.2")
+            && todo.contains("- [ ] M9.2.c.iv.e.34.f.5"),
+        "M9.2.c.iv.e.34.f should be decomposed into bounded follow-up leaves with f.1 marked done"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e34f1_inventory_document_exists_and_records_regression_taxonomy() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34f1_post_e34e_replay_regression_inventory.md"),
+    )
+    .expect("e.34.f.1 inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.f.1",
+        "Wrong-approach check",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260326T093427Z_p3345304",
+        "lane_fragilec_build_status=2",
+        "lane_fragilec_test_rpc_status=-1",
+        "lane_fragilec_failure_class=build_failed",
+        "rustc_error_total_count=637",
+        "rustc_error_unique_count=144",
+        "event.cc",
+        "fiber_impl.cc",
+        "marshal.cpp",
+        "fiber_context_runtime.cc",
+        "M9.2.c.iv.e.34.f.2",
+        "M9.2.c.iv.e.34.f.5",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.f.1 inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // M9.2.c.iv.e.17.d: Post-e.17 comprehensive strict compile error inventory
 // ---------------------------------------------------------------------------

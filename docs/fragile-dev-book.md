@@ -22221,3 +22221,43 @@ Key findings/decisions:
   - `epoll_wrapper.cc` run-root `/tmp/fragile_e34e_epoll_after_dbg_nTJVWY`: `status=0`, `error_code_counts={}`, all targeted marker flags `0`.
   - `marshal.cpp` run-root `/tmp/fragile_e34e_marshal_after_dbg_k1MNMj`: `status=0`, `error_code_counts={}`, lifetime/E0596 markers `0`.
 - Leaf `M9.2.c.iv.e.34.e` is closed.
+
+## 2026-03-26: M9.2.c.iv.e.34.f.1 strict replay regression inventory and bounded decomposition
+
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before replay and decomposition.
+- No target-specific `mako`/`rpcbench`/`test_rpc` branching, no native-source bypass, and no fake behavior stubs were added in this leaf.
+
+### Deterministic replay evidence
+
+- Command:
+  - `python3 scripts/mako_rpc_strict_runtime_replay.py --baseline-run-root /tmp/fragile_m9_2_strict_runtime_replay_20260325T233520Z_p2595863`
+- Run root:
+  - `/tmp/fragile_m9_2_strict_runtime_replay_20260326T093427Z_p3345304`
+- Manifest summary:
+  - `lane_fragilec_build_status=2`
+  - `lane_fragilec_test_rpc_status=-1`
+  - `lane_fragilec_failure_class=build_failed`
+  - `lane_fragilec_completed_trials=0`
+  - `runtime_all_trials_passed=false`
+- Blocker inventory summary:
+  - `rustc_error_total_count=637`
+  - `rustc_error_unique_count=144`
+  - baseline comparison vs `/tmp/fragile_m9_2_strict_runtime_replay_20260325T233520Z_p2595863`: `non_increase_verdict=false`
+
+### Dominant failing files from full replay build stderr
+
+- `vendor/mako/src/rrr/reactor/event.cc`: `306` typed rustc errors (`E0609=112`, `E0599=77`, `E0308=67`).
+- `vendor/mako/src/rrr/reactor/fiber_impl.cc`: `259` typed rustc errors (`E0609=112`, `E0308=55`, `E0599=49`).
+- `vendor/mako/src/rrr/misc/marshal.cpp`: `43` typed rustc errors (`E0599=19`, `E0609=17`, `E0308=5`).
+- `vendor/mako/src/rrr/reactor/fiber_context_runtime.cc`: `3` typed rustc errors.
+
+### Design decision and next leaves
+
+- `M9.2.c.iv.e.34.f` is no longer a single bounded closure under the current source state; it now spans a multi-file regression set.
+- Decomposed follow-up leaves in TODO:
+  - `e.34.f.2`: shared `event.cc`/`fiber_impl.cc` syntax + SIMD intrinsic artifacts,
+  - `e.34.f.3`: shared `event.cc`/`fiber_impl.cc` container/smart-pointer/filebuf compatibility lanes,
+  - `e.34.f.4`: `marshal.cpp` compatibility-surface regressions,
+  - `e.34.f.5`: end-to-end strict replay rerun and final contract verification.
+- Detailed inventory and decomposition rationale is recorded in:
+  - `docs/dev/m9_2c_iv_e34f1_post_e34e_replay_regression_inventory.md`
