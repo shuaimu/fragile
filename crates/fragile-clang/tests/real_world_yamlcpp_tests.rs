@@ -19,6 +19,10 @@ fn ensure_fragilec_binary() -> Result<PathBuf, String> {
 
     let workspace_root = workspace_root_dir();
     let fragilec = workspace_root.join("target/debug/fragilec");
+    if fragilec.exists() {
+        let _ = BIN.set(fragilec.clone());
+        return Ok(fragilec);
+    }
     let output = Command::new("cargo")
         .arg("build")
         .arg("-p")

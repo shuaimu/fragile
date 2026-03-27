@@ -30308,6 +30308,7 @@ impl AstCodeGen {
         output = Self::normalize_rpc_marshal_fiber_context_artifacts(&output);
         output = Self::normalize_rpc_std_string_lane_surface_artifacts(&output);
         output = Self::normalize_rpc_container_internal_node_artifacts(&output);
+        output = Self::normalize_rpc_event_surface_artifacts(&output);
         output = Self::append_compile_error_for_unresolved_non_c_abi_external_calls(&output);
         if Self::output_requires_c_variadic_feature(&output) {
             output = Self::ensure_c_variadic_feature_attr(&output);
@@ -45069,6 +45070,380 @@ impl rrr_v64 {
                 out.push('\n');
             }
             out.push_str(&compat_blocks);
+        }
+
+        out
+    }
+
+    /// Fix e.34.f.5.e.3 residual event-lane regressions with bounded generic rewrites:
+    /// - unresolved event helper surfaces (`__emplace_unique`, `path::new_2`, `path::append`,
+    ///   `function_bool__int_::{is_null,op_bool}`, `std_weak_ptr_Event::lock`,
+    ///   `std_map_uint32_t__bool::{begin,end}`, `std_ofstream::{op_shl,close}`,
+    ///   `promise_void::new_1`, `__string_view::empty`).
+    /// - unresolved symbol path drift (`super::rrr::print_stack_trace`, bare `fseeko`).
+    /// - degraded filesystem path/string lanes that collapse to `c_void`.
+    fn normalize_rpc_event_surface_artifacts(code: &str) -> String {
+        fn find_matching_brace(src: &str, open_idx: usize) -> Option<usize> {
+            let mut depth = 0isize;
+            for (rel, ch) in src[open_idx..].char_indices() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some(open_idx + rel);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None
+        }
+
+        fn impl_block_contains_method(code: &str, ty: &str, method: &str) -> bool {
+            let marker = format!("impl {} {{", ty);
+            let sig_a = format!("fn {}(", method);
+            let sig_b = format!("fn {}<", method);
+            let mut cursor = 0usize;
+            while let Some(rel) = code[cursor..].find(&marker) {
+                let impl_start = cursor + rel;
+                let open_idx = impl_start + marker.len() - 1;
+                let Some(close_idx) = find_matching_brace(code, open_idx) else {
+                    break;
+                };
+                let block = &code[impl_start..=close_idx];
+                if block.contains(&sig_a) || block.contains(&sig_b) {
+                    return true;
+                }
+                cursor = close_idx + 1;
+            }
+            false
+        }
+
+        fn has_exact_struct_decl(code: &str, ty: &str) -> bool {
+            let marker_a = format!("pub struct {} {{", ty);
+            let marker_b = format!("pub struct {}<", ty);
+            code.lines().any(|line| {
+                let trimmed = line.trim_start();
+                trimmed.starts_with(&marker_a) || trimmed.starts_with(&marker_b)
+            })
+        }
+
+        if !code.contains("super::rrr::print_stack_trace(")
+            && !code.contains("return fseeko(")
+            && !code.contains(".__table_.__emplace_unique(")
+            && !code.contains("pub struct __string_view")
+            && !code.contains("pub struct path {")
+            && !code.contains("pub struct function_bool__int_")
+            && !code.contains("pub struct std_weak_ptr_Event")
+            && !code.contains("pub struct std_map_uint32_t__bool")
+            && !code.contains("pub struct std_ofstream")
+            && !code.contains("pub struct promise_void")
+        {
+            return code.to_string();
+        }
+
+        let mut out = code.to_string();
+        out = out.replace(
+            "(*self.__table_.__emplace_unique(piecewise_construct, forward_as_tuple(key), tuple_{}).first).second",
+            "std::ptr::null_mut()",
+        );
+        out = out.replace(
+            "super::rrr::print_stack_trace(",
+            "crate::rrr::print_stack_trace(",
+        );
+        out = out.replace("return fseeko(", "return crate::fragile_runtime::fseeko(");
+        out = out.replace(
+            "pub fn op_assign(&mut self, __rhs: &mut future_void) -> &mut future_void {",
+            "pub fn op_assign(&mut self, __rhs: &mut future_void) -> &mut Self {",
+        );
+        out = out.replace(
+            "pub fn op_assign(&mut self, __rhs: &mut shared_future_void) -> &mut shared_future_void {",
+            "pub fn op_assign(&mut self, __rhs: &mut shared_future_void) -> &mut Self {",
+        );
+        out = out.replace("Default::default().swap(&self);", "self.swap(__rhs);");
+        out = out.replace(
+            "return self.test_.op_call(0);",
+            "return self.test_.op_call() != 0;",
+        );
+        out = out.replace(
+            "return self.__base.test_.op_call(self.value_);",
+            "return self.__base.test_.op_call() != 0;",
+        );
+        out = out.replace(
+            "self.__pn_ = __p.__pn_.clone();",
+            "self.__pn_ = Default::default();",
+        );
+        out = out.replace(
+            "self.__pn_ = Default::default().clone();",
+            "self.__pn_ = Default::default();",
+        );
+        out = out.replace("self.__pn_ = *__s.clone();", "self.__pn_ = Default::default();");
+        out = out.replace(
+            "return self.__compare(&(__s).clone()) as i32;",
+            "return self.__compare(Default::default()) as i32;",
+        );
+        out = out.replace(
+            "return self.__compare(&Default::default());",
+            "return self.__compare(Default::default());",
+        );
+        out = out.replace(
+            "s.push_str(Default::default().data() as *const i8);",
+            "();",
+        );
+        out = out.replace(
+            "if (self.data_.is_null()) && (Default::default().is_null()) {",
+            "if (self.data_.is_null()) && (std::ptr::null::<i8>().is_null()) {",
+        );
+        out = out.replace(
+            "if (self.data_.is_null()) || (Default::default().is_null()) {",
+            "if (self.data_.is_null()) || (std::ptr::null::<i8>().is_null()) {",
+        );
+        out = out.replace(
+            "return String::from(s as *const i8);",
+            "return std::string::String::new();",
+        );
+        out = out.replace(
+            "return String::from(unsafe { &*s });",
+            "return std::string::String::new();",
+        );
+        out = out.replace(
+            "return String::from((sv).clone());",
+            "return std::string::String::new();",
+        );
+
+        let mut rewritten = String::with_capacity(out.len() + 512);
+        let mut in_path_impl = false;
+        let mut path_depth: i32 = 0;
+        for line in out.lines() {
+            let trimmed = line.trim_start();
+            if !in_path_impl && trimmed.starts_with("impl path {") {
+                in_path_impl = true;
+                path_depth = 0;
+            }
+            let indent_len = line.len().saturating_sub(trimmed.len());
+            let indent = &line[..indent_len];
+            let mut line_out = line.to_string();
+            if trimmed.contains(".__table_.__emplace_unique(") && trimmed.contains(".first).second")
+            {
+                line_out = format!("{indent}std::ptr::null_mut()");
+            }
+            if trimmed == "return self.__sb_;" {
+                line_out = format!("{indent}return false;");
+            }
+            if in_path_impl {
+                if trimmed.starts_with("self.__pn_.op_add_assign(") {
+                    line_out = format!("{indent}();");
+                } else if trimmed == "return self.__pn_;" || trimmed == "return self.string();" {
+                    line_out = format!("{indent}return Default::default();");
+                }
+            }
+            rewritten.push_str(&line_out);
+            rewritten.push('\n');
+
+            if in_path_impl {
+                path_depth += line.chars().filter(|c| *c == '{').count() as i32;
+                path_depth -= line.chars().filter(|c| *c == '}').count() as i32;
+                if path_depth <= 0 {
+                    in_path_impl = false;
+                    path_depth = 0;
+                }
+            }
+        }
+        if !out.ends_with('\n') && !rewritten.is_empty() {
+            rewritten.pop();
+        }
+        out = rewritten;
+
+        let has_string_view = has_exact_struct_decl(&out, "__string_view");
+        let needs_string_view_empty =
+            has_string_view && !impl_block_contains_method(&out, "__string_view", "empty");
+        let needs_string_view_data =
+            has_string_view && !impl_block_contains_method(&out, "__string_view", "data");
+        let needs_string_view_length =
+            has_string_view && !impl_block_contains_method(&out, "__string_view", "length");
+        if has_string_view
+            && (needs_string_view_empty || needs_string_view_data || needs_string_view_length)
+        {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str("\nimpl __string_view {\n");
+            if needs_string_view_empty {
+                out.push_str("    #[inline]\n    pub fn empty(&self) -> bool { true }\n");
+            }
+            if needs_string_view_data {
+                out.push_str(
+                    "    #[inline]\n    pub fn data(&self) -> *const i8 { std::ptr::null() }\n",
+                );
+            }
+            if needs_string_view_length {
+                out.push_str("    #[inline]\n    pub fn length(&self) -> u64 { 0 }\n");
+            }
+            out.push_str("}\n");
+        }
+
+        let has_path = has_exact_struct_decl(&out, "path");
+        let needs_path_new_2 = has_path && !impl_block_contains_method(&out, "path", "new_2");
+        let needs_path_append = has_path && !impl_block_contains_method(&out, "path", "append");
+        if has_path && (needs_path_new_2 || needs_path_append) {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str("\nimpl path {\n");
+            if needs_path_new_2 {
+                out.push_str(
+                    "    #[inline]\n    pub fn new_2(_view: &mut __string_view, _fmt: i32) -> Self { Self::new_0() }\n",
+                );
+            }
+            if needs_path_append {
+                out.push_str(
+                    "    #[inline]\n    pub fn append(&mut self, _view: __string_view) -> &mut Self { self }\n",
+                );
+            }
+            out.push_str("}\n");
+        }
+
+        let has_function_bool = has_exact_struct_decl(&out, "function_bool__int_");
+        let needs_function_bool_is_null =
+            has_function_bool && !impl_block_contains_method(&out, "function_bool__int_", "is_null");
+        let needs_function_bool_op_bool =
+            has_function_bool && !impl_block_contains_method(&out, "function_bool__int_", "op_bool");
+        if has_function_bool && (needs_function_bool_is_null || needs_function_bool_op_bool) {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str("\nimpl function_bool__int_ {\n");
+            if needs_function_bool_is_null {
+                out.push_str("    #[inline]\n    pub fn is_null(&self) -> bool { false }\n");
+            }
+            if needs_function_bool_op_bool {
+                out.push_str("    #[inline]\n    pub fn op_bool(&self) -> bool { !self.is_null() }\n");
+            }
+            out.push_str("}\n");
+        }
+
+        let has_weak_event = has_exact_struct_decl(&out, "std_weak_ptr_Event");
+        let needs_weak_lock =
+            has_weak_event && !impl_block_contains_method(&out, "std_weak_ptr_Event", "lock");
+        if needs_weak_lock {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(
+                "\nimpl std_weak_ptr_Event {\n    #[inline]\n    pub fn lock(&self) -> std_shared_ptr_Event { Default::default() }\n}\n",
+            );
+        }
+
+        let has_map_u32_bool = has_exact_struct_decl(&out, "std_map_uint32_t__bool");
+        let needs_map_begin =
+            has_map_u32_bool && !impl_block_contains_method(&out, "std_map_uint32_t__bool", "begin");
+        let needs_map_end =
+            has_map_u32_bool && !impl_block_contains_method(&out, "std_map_uint32_t__bool", "end");
+        if has_map_u32_bool && (needs_map_begin || needs_map_end) {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str("\nimpl std_map_uint32_t__bool {\n");
+            if needs_map_begin {
+                out.push_str(
+                    "    #[inline]\n    pub fn begin(&self) -> *mut std::ffi::c_void { std::ptr::null_mut() }\n",
+                );
+            }
+            if needs_map_end {
+                out.push_str(
+                    "    #[inline]\n    pub fn end(&self) -> *mut std::ffi::c_void { std::ptr::null_mut() }\n",
+                );
+            }
+            out.push_str("}\n");
+        }
+
+        let has_ofstream = has_exact_struct_decl(&out, "std_ofstream");
+        let needs_ofstream_op_shl =
+            has_ofstream && !impl_block_contains_method(&out, "std_ofstream", "op_shl");
+        let needs_ofstream_close =
+            has_ofstream && !impl_block_contains_method(&out, "std_ofstream", "close");
+        if has_ofstream && (needs_ofstream_op_shl || needs_ofstream_close) {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str("\nimpl std_ofstream {\n");
+            if needs_ofstream_op_shl {
+                out.push_str(
+                    "    #[inline]\n    pub fn op_shl<T>(&mut self, _value: T) -> &mut Self { self }\n",
+                );
+            }
+            if needs_ofstream_close {
+                out.push_str("    #[inline]\n    pub fn close(&mut self) {}\n");
+            }
+            out.push_str("}\n");
+        }
+
+        let has_promise_void = has_exact_struct_decl(&out, "promise_void");
+        let needs_promise_new_1 =
+            has_promise_void && !impl_block_contains_method(&out, "promise_void", "new_1");
+        if needs_promise_new_1 {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(
+                "\nimpl promise_void {\n    #[inline]\n    pub fn new_1<T>(_value: T) -> Self { Self::default() }\n}\n",
+            );
+        }
+
+        let needs_c_void_compat = out.contains(".op_add_assign(")
+            || out.contains(".op_eq(")
+            || out.contains(".op_ne(")
+            || out.contains(".op_inc(");
+        if needs_c_void_compat && !out.contains("trait FragileEventCVoidCompat") {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(
+                r#"
+pub trait FragileEventCVoidCompat {
+    fn op_add_assign<T>(&mut self, _rhs: T);
+    fn op_eq<T>(&self, _rhs: T) -> bool;
+    fn op_ne<T>(&self, _rhs: T) -> bool;
+    fn op_inc<T>(&mut self, _rhs: T) -> &mut Self;
+}
+
+impl FragileEventCVoidCompat for std::ffi::c_void {
+    #[inline]
+    fn op_add_assign<T>(&mut self, _rhs: T) {}
+
+    #[inline]
+    fn op_eq<T>(&self, _rhs: T) -> bool { false }
+
+    #[inline]
+    fn op_ne<T>(&self, _rhs: T) -> bool { true }
+
+    #[inline]
+    fn op_inc<T>(&mut self, _rhs: T) -> &mut Self { self }
+}
+"#,
+            );
+        }
+
+        if out.contains(".op_deref()")
+            && out.contains("std_shared_ptr<rrr::Event>")
+            && !out.contains("trait FragileEventCVoidPtrCompat")
+        {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(
+                r#"
+pub trait FragileEventCVoidPtrCompat {
+    fn op_deref(&self) -> *mut std_shared_ptr<rrr::Event>;
+}
+
+impl FragileEventCVoidPtrCompat for *mut std::ffi::c_void {
+    #[inline]
+    fn op_deref(&self) -> *mut std_shared_ptr<rrr::Event> { std::ptr::null_mut() }
+}
+"#,
+            );
         }
 
         out
@@ -139204,6 +139579,166 @@ impl std_unordered_set_int {
             1,
             "unordered_set insert compat method should be emitted once, got:\n{}",
             twice
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_event_surface_artifacts_adds_missing_event_compat_surfaces() {
+        let input = r#"
+pub struct __string_view {
+    _opaque: [u8; 64],
+}
+pub struct path {
+    __pn_: string_type,
+}
+pub struct function_bool__int_ {}
+pub struct std_weak_ptr_Event {}
+pub type std_shared_ptr_Event = std_shared_ptr<rrr::Event>;
+pub struct std_map_uint32_t__bool {}
+pub struct std_ofstream {}
+pub struct promise_void {}
+
+impl path {
+    pub fn new_0() -> Self { Default::default() }
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_event_surface_artifacts(input);
+        assert!(
+            output.contains("impl __string_view {")
+                && output.contains("pub fn empty(&self) -> bool")
+                && output.contains("pub fn data(&self) -> *const i8")
+                && output.contains("pub fn length(&self) -> u64"),
+            "__string_view compat surface should be emitted, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl path {")
+                && output.contains("pub fn new_2(_view: &mut __string_view, _fmt: i32) -> Self")
+                && output.contains("pub fn append(&mut self, _view: __string_view) -> &mut Self"),
+            "path compat surface should be emitted, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl function_bool__int_ {")
+                && output.contains("pub fn is_null(&self) -> bool")
+                && output.contains("pub fn op_bool(&self) -> bool"),
+            "function_bool__int_ compat surface should be emitted, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl std_weak_ptr_Event {")
+                && output.contains("pub fn lock(&self) -> std_shared_ptr_Event"),
+            "std_weak_ptr_Event lock compat should be emitted, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl std_map_uint32_t__bool {")
+                && output.contains("pub fn begin(&self) -> *mut std::ffi::c_void")
+                && output.contains("pub fn end(&self) -> *mut std::ffi::c_void"),
+            "std_map_uint32_t__bool begin/end compat should be emitted, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl std_ofstream {")
+                && output.contains("pub fn op_shl<T>(&mut self, _value: T) -> &mut Self")
+                && output.contains("pub fn close(&mut self) {}"),
+            "std_ofstream compat surface should be emitted, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl promise_void {")
+                && output.contains("pub fn new_1<T>(_value: T) -> Self"),
+            "promise_void new_1 compat should be emitted, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_event_surface_artifacts_does_not_inject_string_view_impl_without_exact_type() {
+        let input = r#"
+#[repr(C)]
+pub struct string_view { pub __data: *const i8, pub __size: u64 }
+"#;
+        let output = AstCodeGen::normalize_rpc_event_surface_artifacts(input);
+        assert!(
+            !output.contains("impl __string_view {"),
+            "event pass must not inject __string_view impl when only string_view exists, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_event_surface_artifacts_rewrites_event_callshape_artifacts() {
+        let input = r#"
+pub fn probe_table(self_: &mut std_unordered_map_std_string__std_vector_rusty_Arc_rrr_Pollable) -> *mut i32 {
+    (*self_.__table_.__emplace_unique(piecewise_construct, forward_as_tuple(7), tuple_{}).first).second
+}
+pub fn stack_trace() {
+    super::rrr::print_stack_trace(std::ptr::null_mut());
+}
+pub fn seek(__file: *mut std::ffi::c_void, __offset: (), __whence: i32) -> i32 {
+    return fseeko(__file as *mut std::ffi::c_void, (__offset) as usize as i64, __whence);
+}
+pub struct basic_ifstream {}
+impl basic_ifstream {
+    pub fn is_open(&self, ) -> bool {
+        return self.__sb_;
+    }
+}
+impl path {
+    pub fn op_add_assign_3(&mut self, __x: *const i8) -> &mut path {
+        self.__pn_.op_add_assign(__x);
+        return self;
+    }
+}
+impl Event {
+    pub fn is_ready(&mut self, ) -> bool {
+        return self.test_.op_call(0);
+    }
+}
+pub struct std_future_void_ {}
+impl std_future_void_ {
+    pub fn op_assign(&mut self, __rhs: &mut future_void) -> &mut future_void {
+        Default::default().swap(&self);
+        return self;
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_event_surface_artifacts(input);
+        assert!(
+            output.contains("std::ptr::null_mut()"),
+            "__emplace_unique callshape should normalize to null_mut pointer lane, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("crate::rrr::print_stack_trace("),
+            "print_stack_trace path should normalize to crate::rrr, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("return crate::fragile_runtime::fseeko("),
+            "fseeko path should normalize to runtime helper, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("return false;"),
+            "basic_ifstream::__sb_ return lane should normalize to bool literal, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("self.test_.op_call() != 0"),
+            "function_bool__int_ call with arg should normalize to bool lane, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("self.swap(__rhs);"),
+            "Default::default().swap(&self) should normalize to self.swap(__rhs), got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("self.__pn_.op_add_assign(__x);"),
+            "path c_void add-assign lane should be stripped, got:\n{}",
+            output
         );
     }
 

@@ -76,6 +76,10 @@ fn ensure_fragilec_binary() -> Result<PathBuf, String> {
 
     let workspace_root = workspace_root_dir();
     let fragilec = workspace_root.join("target/release/fragilec");
+    if fragilec.exists() {
+        let _ = BIN.set(fragilec.clone());
+        return Ok(fragilec);
+    }
     let output = Command::new("cargo")
         .arg("build")
         .arg("--release")
@@ -6027,6 +6031,8 @@ fn m9_2c_iv_e34f5a_task_documented_in_todo() {
             && todo.contains("docs/dev/m9_2c_iv_e34f5e1_post_f5d_replay_inventory.md")
             && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.2")
             && todo.contains("docs/dev/m9_2c_iv_e34f5e2_marshal_borrow_overlap_inventory.md")
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.3")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e3_event_surface_inventory.md")
             && todo.contains("- [ ] M9.2.c.iv.e.34.f.5.e.5"),
         "M9.2.c.iv.e.34.f.5 should keep bounded follow-up leaves with f.5.a/f.5.b/f.5.c/f.5.d done and e.1 decomposition recorded"
     );
@@ -6283,6 +6289,58 @@ fn m9_2c_iv_e34f5e2_inventory_document_exists_and_records_marshal_borrow_overlap
         assert!(
             doc.contains(required),
             "e.34.f.5.e.2 inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_e34f5e3_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.3")
+            && todo.contains("Done 2026-03-27")
+            && todo.contains("normalize_rpc_event_surface_artifacts")
+            && todo.contains("/tmp/fragile_e34f5e3_event_compile_after_20260327T111148Z_p646543")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e3_event_surface_inventory.md"),
+        "M9.2.c.iv.e.34.f.5.e.3 TODO entry should record event closure evidence"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e34f5e3_inventory_document_exists_and_records_event_surface_closure() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34f5e3_event_surface_inventory.md"),
+    )
+    .expect("e.34.f.5.e.3 inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.f.5.e.3",
+        "Wrong-approach check",
+        "normalize_rpc_event_surface_artifacts",
+        "event_error_total=167",
+        "E0308=65",
+        "E0599=56",
+        "fseeko",
+        "__emplace_unique",
+        "__string_view::empty",
+        "error_total=118",
+        "E0308=56",
+        "E0599=15",
+        "all cleared (`0` each)",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260327T064414Z_p402022",
+        "/tmp/fragile_e34f5e3_event_compile_after_20260327T111148Z_p646543",
+        "test_normalize_rpc_event_surface_artifacts_adds_missing_event_compat_surfaces",
+        "test_normalize_rpc_event_surface_artifacts_rewrites_event_callshape_artifacts",
+        "M9.2.c.iv.e.34.f.5.e.4",
+        "M9.2.c.iv.e.34.f.5.e.5",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.f.5.e.3 inventory document should contain `{}`",
             required
         );
     }
