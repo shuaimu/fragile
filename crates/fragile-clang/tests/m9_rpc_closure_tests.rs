@@ -6395,6 +6395,62 @@ fn m9_2c_iv_e34f5e4_inventory_document_exists_and_records_fiber_surface_closure(
     }
 }
 
+#[test]
+fn m9_2c_iv_e34f5e5a_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.5.a")
+            && todo.contains("Done 2026-03-27")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260327T172446Z_p981802")
+            && todo.contains("total=154")
+            && todo.contains("unique=77")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e5a_post_e5e4_replay_inventory.md"),
+        "M9.2.c.iv.e.34.f.5.e.5.a TODO entry should record replay inventory evidence"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e34f5e5a_inventory_document_exists_and_records_replay_decomposition() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34f5e5a_post_e5e4_replay_inventory.md"),
+    )
+    .expect("e.34.f.5.e.5.a inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.f.5.e.5.a",
+        "Wrong-approach check",
+        "--skip-fragilec-build",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260327T172446Z_p981802",
+        "lane_fragilec_build_status=2",
+        "lane_fragilec_test_rpc_status=-1",
+        "lane_fragilec_failure_class=build_failed",
+        "rustc_error_total_count=154",
+        "rustc_error_unique_count=77",
+        "non_increase_verdict=false",
+        "E0599=56",
+        "E0308=25",
+        "E0277=18",
+        "E0425=17",
+        "event.cc",
+        "fiber_impl.cc",
+        "quorum_event.cc",
+        "reactor.cc",
+        "e.5.e.5.b",
+        "e.5.e.5.c",
+        "e.5.e.5.d",
+        "e.5.e.5.e",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.f.5.e.5.a inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // M9.2.c.iv.e.17.d: Post-e.17 comprehensive strict compile error inventory
 // ---------------------------------------------------------------------------
