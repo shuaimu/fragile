@@ -6346,6 +6346,55 @@ fn m9_2c_iv_e34f5e3_inventory_document_exists_and_records_event_surface_closure(
     }
 }
 
+#[test]
+fn m9_2c_iv_e34f5e4_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.4")
+            && todo.contains("Done 2026-03-27")
+            && todo.contains("normalize_rpc_fiber_surface_artifacts")
+            && todo.contains("/tmp/fragile_e34f5e4_fiber_compile_after_20260327T145640Z_p866752")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e4_fiber_surface_inventory.md"),
+        "M9.2.c.iv.e.34.f.5.e.4 TODO entry should record fiber closure evidence"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e34f5e4_inventory_document_exists_and_records_fiber_surface_closure() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34f5e4_fiber_surface_inventory.md"),
+    )
+    .expect("e.34.f.5.e.4 inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.f.5.e.4",
+        "Wrong-approach check",
+        "normalize_rpc_fiber_surface_artifacts",
+        "/tmp/fragile_e34f5e4_fiber_compile_after_20260327T133340Z_p814365",
+        "error_total=102",
+        "E0308=48",
+        "E0599=18",
+        "E0609=15",
+        "/tmp/fragile_e34f5e4_fiber_compile_after_20260327T145640Z_p866752",
+        "typed errors remaining: `4` total",
+        "E0308=1",
+        "E0599=1",
+        "E0609=0",
+        "test_normalize_rpc_fiber_surface_artifacts_rewrites_fiber_callshape_and_lane_artifacts",
+        "test_normalize_rpc_fiber_surface_artifacts_is_idempotent_for_compat_injection",
+        "M9.2.c.iv.e.34.f.5.e.5",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.f.5.e.4 inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // M9.2.c.iv.e.17.d: Post-e.17 comprehensive strict compile error inventory
 // ---------------------------------------------------------------------------
