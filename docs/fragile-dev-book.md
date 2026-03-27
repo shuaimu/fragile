@@ -22492,3 +22492,44 @@ Detailed inventory is recorded in:
 Detailed inventory:
 
 - `docs/dev/m9_2c_iv_e34f5c_container_internal_node_inventory.md`
+
+## 2026-03-27: M9.2.c.iv.e.34.f.5.d marshal/fiber-context residual closure
+
+- Selected next pending decomposed leaf: `M9.2.c.iv.e.34.f.5.d`.
+- Scope stayed bounded (<1000 LOC): one late normalization pass + focused unit tests.
+
+### Pre-execution plan
+
+1. Use post-f.4 replay stderr signatures for `marshal.cpp`/`fiber_context_runtime.cc`.
+2. Add one bounded normalization pass targeting those residual lanes only.
+3. Add focused unit tests for each corrected lane family.
+4. Run focused tests, then full regression suites.
+
+### Wrong-approach check
+
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific `mako`/`rpcbench` conditionals.
+- No force-native bypass, no rollback/stub expansion.
+
+### Key implementation decisions
+
+- Added `normalize_rpc_marshal_fiber_context_artifacts` to:
+  - rehydrate placeholder `rrr_Marshallable` with marshal lanes
+    (`__vtable`, `kind_`, `bypass_to_socket_`, `written_to_socket`),
+  - fix marshal lifetime/type artifacts:
+    - `create_actual_object_from` explicit `'a` return lane,
+    - `track_write_2` `super::write(...)` return cast to `u64`,
+  - normalize residual degraded stdlib artifacts surfaced in marshal TU:
+    - `__in_pattern_i8` tuple returns -> `__in_pattern_result`,
+    - `__gv___from_chars_log2f_lut` literal lanes -> `f32`,
+  - repair fiber-context constructor callshape drift:
+    - `boost_coro_yield_t::new_1(&mut &mut __self as *mut Self)` -> `new_1(&mut __self)`.
+
+### Focused validation
+
+- `cargo test -p fragile-clang --lib normalize_rpc_marshal_fiber_context_artifacts -- --nocapture`
+  - pass (3 tests).
+
+Detailed inventory:
+
+- `docs/dev/m9_2c_iv_e34f5d_marshal_fiber_context_inventory.md`

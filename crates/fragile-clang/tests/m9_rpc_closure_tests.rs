@@ -6019,9 +6019,11 @@ fn m9_2c_iv_e34f5a_task_documented_in_todo() {
             && todo.contains("- [x] M9.2.c.iv.e.34.f.5.c")
             && todo.contains("normalize_rpc_container_internal_node_artifacts")
             && todo.contains("docs/dev/m9_2c_iv_e34f5c_container_internal_node_inventory.md")
-            && todo.contains("- [ ] M9.2.c.iv.e.34.f.5.d")
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5.d")
+            && todo.contains("normalize_rpc_marshal_fiber_context_artifacts")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5d_marshal_fiber_context_inventory.md")
             && todo.contains("- [ ] M9.2.c.iv.e.34.f.5.e"),
-        "M9.2.c.iv.e.34.f.5 should keep bounded follow-up leaves with f.5.a/f.5.b/f.5.c marked done"
+        "M9.2.c.iv.e.34.f.5 should keep bounded follow-up leaves with f.5.a/f.5.b/f.5.c/f.5.d marked done"
     );
 }
 
@@ -6134,6 +6136,56 @@ fn m9_2c_iv_e34f5c_inventory_document_exists_and_records_container_internal_node
         assert!(
             doc.contains(required),
             "e.34.f.5.c inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_e34f5d_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.34.f.5.d Resolve residual `marshal.cpp`/`fiber_context_runtime.cc` blockers")
+            && todo.contains("Done 2026-03-27")
+            && todo.contains("normalize_rpc_marshal_fiber_context_artifacts")
+            && todo.contains("rrr_Marshallable")
+            && todo.contains("create_actual_object_from")
+            && todo.contains("boost_coro_yield_t::new_1")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5d_marshal_fiber_context_inventory.md"),
+        "M9.2.c.iv.e.34.f.5.d TODO entry should record marshal/fiber-context closure evidence"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e34f5d_inventory_document_exists_and_records_marshal_fiber_context_closure() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34f5d_marshal_fiber_context_inventory.md"),
+    )
+    .expect("e.34.f.5.d inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.f.5.d",
+        "Wrong-approach check",
+        "normalize_rpc_marshal_fiber_context_artifacts",
+        "rrr_Marshallable",
+        "kind_",
+        "bypass_to_socket_",
+        "__vtable",
+        "create_actual_object_from",
+        "boost_coro_yield_t::new_1(&mut &mut __self as *mut Self)",
+        "marshal.cpp_c4e047655077a443_marshal.rs",
+        "fiber_context_runtime.cc_3cff9cf06085a213_fiber_context_runtime.rs",
+        "test_normalize_rpc_marshal_fiber_context_artifacts_rehydrates_rrr_marshallable_lanes_and_marshal_lifetimes",
+        "test_normalize_rpc_marshal_fiber_context_artifacts_fixes_in_pattern_and_from_chars_lut_lanes",
+        "test_normalize_rpc_marshal_fiber_context_artifacts_fixes_boost_coro_yield_constructor_callshape",
+        "M9.2.c.iv.e.34.f.5.e",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.f.5.d inventory document should contain `{}`",
             required
         );
     }

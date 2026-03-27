@@ -30305,6 +30305,7 @@ impl AstCodeGen {
         output = Self::normalize_final_rpc_straggler_artifacts(&output);
         output = Self::normalize_rpc_container_surface_artifacts(&output);
         output = Self::normalize_rpc_marshal_surface_artifacts(&output);
+        output = Self::normalize_rpc_marshal_fiber_context_artifacts(&output);
         output = Self::normalize_rpc_std_string_lane_surface_artifacts(&output);
         output = Self::normalize_rpc_container_internal_node_artifacts(&output);
         output = Self::append_compile_error_for_unresolved_non_c_abi_external_calls(&output);
@@ -31527,6 +31528,127 @@ impl rrr_v64 {
         }
 
         out
+    }
+
+    /// Fix f.5.d residual marshal/fiber-context blockers:
+    /// - rehydrate degraded `rrr_Marshallable` placeholder lanes
+    ///   (`kind_`, `bypass_to_socket_`, `__vtable`).
+    /// - fix marshal lifetime/type mismatches in `MarshallDeputy`.
+    /// - fix degraded `boost_coro_yield_t::new_1` call shape in fiber context.
+    fn normalize_rpc_marshal_fiber_context_artifacts(code: &str) -> String {
+        if !code.contains("rrr_Marshallable")
+            && !code.contains("create_actual_object_from(&mut self, m: &mut Marshal) -> &mut Marshal")
+            && !code.contains("boost_coro_yield_t::new_1(&mut &mut __self as *mut Self)")
+            && !code.contains("pub fn __in_pattern_i8(")
+            && !code.contains("__gv___from_chars_log2f_lut")
+        {
+            return code.to_string();
+        }
+
+        let mut out = code.to_string();
+
+        if out.contains("pub struct Marshallable_vtable")
+            && out.contains("/// Placeholder for C++ `rrr::Marshallable`")
+        {
+            out = out.replace(
+                "/// Placeholder for C++ `rrr::Marshallable`\n#[repr(C)]\npub struct rrr_Marshallable {\n    _opaque: [u8; 64], // placeholder - actual size may differ\n}\n",
+                "/// Placeholder for C++ `rrr::Marshallable`\n#[repr(C)]\npub struct rrr_Marshallable {\n    pub __vtable: *const Marshallable_vtable,\n    pub kind_: i32,\n    pub bypass_to_socket_: bool,\n    pub written_to_socket: u64,\n}\n",
+            );
+            out = out.replace(
+                "impl Default for rrr_Marshallable {\n    fn default() -> Self {\n        Self { _opaque: [0u8; 64] }\n    }\n}\n",
+                "impl Default for rrr_Marshallable {\n    fn default() -> Self {\n        Self {\n            __vtable: std::ptr::null(),\n            kind_: 0,\n            bypass_to_socket_: false,\n            written_to_socket: 0,\n        }\n    }\n}\n",
+            );
+        }
+
+        out = out.replace(
+            "pub fn create_actual_object_from(&mut self, m: &mut Marshal) -> &mut Marshal {",
+            "pub fn create_actual_object_from<'a>(&mut self, m: &'a mut Marshal) -> &'a mut Marshal {",
+        );
+        out = out.replace(
+            "let mut sz: u64 = super::write(fd, (unsafe { x.add(offset as usize) }) as *const (), (len - offset) as u64);",
+            "let mut sz: u64 = super::write(fd, (unsafe { x.add(offset as usize) }) as *const (), (len - offset) as u64) as u64;",
+        );
+        out = out.replace(
+            "boost_coro_yield_t::new_1(&mut &mut __self as *mut Self)",
+            "boost_coro_yield_t::new_1(&mut __self)",
+        );
+
+        let mut rewritten = String::with_capacity(out.len() + 64);
+        let mut in_in_pattern_i8 = false;
+        let mut in_pattern_depth: i32 = 0;
+        for line in out.lines() {
+            let trimmed = line.trim_start();
+            if !in_in_pattern_i8 && trimmed.starts_with("pub fn __in_pattern_i8(") && trimmed.ends_with('{') {
+                in_in_pattern_i8 = true;
+                in_pattern_depth = 0;
+            }
+
+            let mut line_out = line.to_string();
+            if in_in_pattern_i8 {
+                if line.contains("return (Default::default() && Default::default(), Default::default());") {
+                    line_out = line.replace(
+                        "return (Default::default() && Default::default(), Default::default());",
+                        "return __in_pattern_result { __ok: Default::default() && Default::default(), __val: Default::default() };",
+                    );
+                } else if line.contains("return (true, Default::default());") {
+                    line_out = line.replace(
+                        "return (true, Default::default());",
+                        "return __in_pattern_result { __ok: true, __val: Default::default() };",
+                    );
+                }
+            }
+
+            if line_out.contains("static mut __gv___from_chars_log2f_lut: [f32; 35] = [")
+                && line_out.contains("];")
+            {
+                if let Some(values_start) = line_out.find("= [") {
+                    let values_offset = values_start + 3;
+                    if let Some(values_end_rel) = line_out[values_offset..].find("];") {
+                        let values_end = values_offset + values_end_rel;
+                        let values = &line_out[values_offset..values_end];
+                        let mut converted = Vec::new();
+                        for value in values.split(',') {
+                            let token = value.trim();
+                            if token.is_empty() {
+                                continue;
+                            }
+                            let normalized = if let Some(base) = token.strip_suffix("f64") {
+                                format!("{}f32", base)
+                            } else if let Some(base) = token.strip_suffix("i32") {
+                                format!("{}f32", base)
+                            } else if let Some(base) = token.strip_suffix("i64") {
+                                format!("{}f32", base)
+                            } else {
+                                token.to_string()
+                            };
+                            converted.push(normalized);
+                        }
+                        let mut rebuilt = String::new();
+                        rebuilt.push_str(&line_out[..values_offset]);
+                        rebuilt.push_str(&converted.join(", "));
+                        rebuilt.push_str("];");
+                        line_out = rebuilt;
+                    }
+                }
+            }
+
+            rewritten.push_str(&line_out);
+            rewritten.push('\n');
+
+            if in_in_pattern_i8 {
+                in_pattern_depth += line.chars().filter(|c| *c == '{').count() as i32;
+                in_pattern_depth -= line.chars().filter(|c| *c == '}').count() as i32;
+                if in_pattern_depth <= 0 {
+                    in_in_pattern_i8 = false;
+                    in_pattern_depth = 0;
+                }
+            }
+        }
+        if !out.ends_with('\n') && !rewritten.is_empty() {
+            rewritten.pop();
+        }
+
+        rewritten
     }
 
     /// Drop degraded `();` artifact lines that are emitted as pseudo-fields
@@ -139346,6 +139468,107 @@ pub fn probe(m: &mut rrr_Marshal, mc: &mut MarshallDeputy_MarContainer, ch: &mut
             1,
             "rrr_v64 compat impl should be emitted once, got:\n{}",
             twice
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_marshal_fiber_context_artifacts_rehydrates_rrr_marshallable_lanes_and_marshal_lifetimes(
+    ) {
+        let input = r#"
+pub struct Marshallable_vtable {
+    pub entity_size: unsafe fn(*const Marshallable) -> u64,
+}
+/// Placeholder for C++ `rrr::Marshallable`
+#[repr(C)]
+pub struct rrr_Marshallable {
+    _opaque: [u8; 64], // placeholder - actual size may differ
+}
+impl Default for rrr_Marshallable {
+    fn default() -> Self {
+        Self { _opaque: [0u8; 64] }
+    }
+}
+pub struct MarshallDeputy;
+impl MarshallDeputy {
+    pub fn track_write_2(&mut self, fd: i32, p: *const (), len: u64, offset: u64) -> u64 {
+        let mut x: *const i8 = (p as *const i8) as *const i8;
+        let mut sz: u64 = super::write(fd, (unsafe { x.add(offset as usize) }) as *const (), (len - offset) as u64);
+        sz
+    }
+    pub fn create_actual_object_from(&mut self, m: &mut Marshal) -> &mut Marshal {
+        &mut *m
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_marshal_fiber_context_artifacts(input);
+        assert!(
+            output.contains("pub struct rrr_Marshallable {\n    pub __vtable: *const Marshallable_vtable,\n    pub kind_: i32,\n    pub bypass_to_socket_: bool,\n    pub written_to_socket: u64,\n}"),
+            "rrr_Marshallable placeholder should be rehydrated with marshal lanes, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn create_actual_object_from<'a>(&mut self, m: &'a mut Marshal) -> &'a mut Marshal {"),
+            "create_actual_object_from should carry explicit marshal lifetime lane, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("let mut sz: u64 = super::write(fd, (unsafe { x.add(offset as usize) }) as *const (), (len - offset) as u64) as u64;"),
+            "track_write_2 should cast write() return lane to u64, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_marshal_fiber_context_artifacts_fixes_in_pattern_and_from_chars_lut_lanes() {
+        let input = r#"
+pub struct __in_pattern_result {
+    pub __ok: bool,
+    pub __val: i32,
+}
+pub fn __in_pattern_i8(__c: i8, __base: i32) -> __in_pattern_result {
+    if __base <= 10 {
+        return (Default::default() && Default::default(), Default::default());
+    } else {
+        return (true, Default::default());
+    }
+}
+pub(crate) static mut __gv___from_chars_log2f_lut: [f32; 35] = [1i32, 1.5849625f64, 2i32];
+"#;
+        let output = AstCodeGen::normalize_rpc_marshal_fiber_context_artifacts(input);
+        assert!(
+            output.contains("return __in_pattern_result { __ok: Default::default() && Default::default(), __val: Default::default() };")
+                && output.contains("return __in_pattern_result { __ok: true, __val: Default::default() };"),
+            "__in_pattern_i8 should return __in_pattern_result instead of tuple lanes, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub(crate) static mut __gv___from_chars_log2f_lut: [f32; 35] = [1f32, 1.5849625f32, 2f32];"),
+            "from_chars lut should normalize numeric literal lanes to f32, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_marshal_fiber_context_artifacts_fixes_boost_coro_yield_constructor_callshape() {
+        let input = r#"
+pub struct boost_coro_task_t;
+pub struct boost_coro_yield_t;
+impl boost_coro_yield_t {
+    pub fn new_1(task: &mut boost_coro_task_t) -> Self { Default::default() }
+}
+impl boost_coro_task_t {
+    pub fn new_1() -> Self {
+        let mut __self: Self = Default::default();
+        __self.yield_ = boost_coro_yield_t::new_1(&mut &mut __self as *mut Self);
+        __self
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_marshal_fiber_context_artifacts(input);
+        assert!(
+            output.contains("__self.yield_ = boost_coro_yield_t::new_1(&mut __self);"),
+            "boost_coro_yield_t constructor call should drop invalid pointer-cast argument lane, got:\n{}",
+            output
         );
     }
 
