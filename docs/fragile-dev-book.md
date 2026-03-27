@@ -22533,3 +22533,51 @@ Detailed inventory:
 Detailed inventory:
 
 - `docs/dev/m9_2c_iv_e34f5d_marshal_fiber_context_inventory.md`
+
+## 2026-03-27: M9.2.c.iv.e.34.f.5.e.1 post-f.5.d replay inventory and bounded decomposition
+
+- Selected first leaf under `M9.2.c.iv.e.34.f.5.e`: `M9.2.c.iv.e.34.f.5.e.1`.
+- Scope is bounded (<1000 LOC): execute one strict replay run, capture deterministic blocker taxonomy, and publish bounded follow-up leaves.
+
+### Pre-execution plan
+
+1. Run strict replay with baseline comparison from the post-f.4 closure root.
+2. Capture lane contract + blocker manifest fields deterministically.
+3. Decide if full `e` closure is still too broad; if yes, decompose into bounded leaves and execute the first leaf.
+
+### Wrong-approach check
+
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific conditionals, no force-native fallback, no fake-success stubs.
+
+### Replay evidence
+
+Command:
+
+- `FRAGILEC_MODE=strict python3 scripts/mako_rpc_strict_runtime_replay.py --baseline-run-root /tmp/fragile_m9_2_strict_runtime_replay_20260326T205524Z_p4045206`
+
+Run-root:
+
+- `/tmp/fragile_m9_2_strict_runtime_replay_20260327T064414Z_p402022`
+
+Outcome:
+
+- `lane_fragilec_build_status=2`
+- `lane_fragilec_test_rpc_status=-1`
+- `lane_fragilec_failure_class=build_failed`
+- `lane_fragilec_completed_trials=0/1`
+- blocker inventory `total=303`, `unique=72`, non-increase vs baseline = `true`
+
+Dominant residual families:
+
+- `E0308=118`, `E0599=85`, `E0609=34`, `E0282=13`
+- failing files: `marshal.cpp`, `event.cc`, `fiber_impl.cc`
+
+### Decomposition decision
+
+`M9.2.c.iv.e.34.f.5.e` remains too broad for one bounded implementation pass.
+It is decomposed into `e.34.f.5.e.2`..`e.34.f.5.e.5`, with `e.1` closed as inventory/decomposition evidence.
+
+Detailed inventory:
+
+- `docs/dev/m9_2c_iv_e34f5e1_post_f5d_replay_inventory.md`

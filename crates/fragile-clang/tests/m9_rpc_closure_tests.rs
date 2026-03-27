@@ -6022,8 +6022,12 @@ fn m9_2c_iv_e34f5a_task_documented_in_todo() {
             && todo.contains("- [x] M9.2.c.iv.e.34.f.5.d")
             && todo.contains("normalize_rpc_marshal_fiber_context_artifacts")
             && todo.contains("docs/dev/m9_2c_iv_e34f5d_marshal_fiber_context_inventory.md")
-            && todo.contains("- [ ] M9.2.c.iv.e.34.f.5.e"),
-        "M9.2.c.iv.e.34.f.5 should keep bounded follow-up leaves with f.5.a/f.5.b/f.5.c/f.5.d marked done"
+            && todo.contains("- [ ] M9.2.c.iv.e.34.f.5.e")
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.1")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e1_post_f5d_replay_inventory.md")
+            && todo.contains("- [ ] M9.2.c.iv.e.34.f.5.e.2")
+            && todo.contains("- [ ] M9.2.c.iv.e.34.f.5.e.5"),
+        "M9.2.c.iv.e.34.f.5 should keep bounded follow-up leaves with f.5.a/f.5.b/f.5.c/f.5.d done and e.1 decomposition recorded"
     );
 }
 
@@ -6186,6 +6190,57 @@ fn m9_2c_iv_e34f5d_inventory_document_exists_and_records_marshal_fiber_context_c
         assert!(
             doc.contains(required),
             "e.34.f.5.d inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_e34f5e1_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [ ] M9.2.c.iv.e.34.f.5.e Re-run strict runtime replay end-to-end")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260327T064414Z_p402022")
+            && todo.contains("total=303")
+            && todo.contains("unique=72")
+            && todo.contains("E0308=118")
+            && todo.contains("E0599=85")
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.1")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e1_post_f5d_replay_inventory.md"),
+        "M9.2.c.iv.e.34.f.5.e TODO entry should record post-f.5.d replay evidence and e.1 decomposition closure"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e34f5e1_inventory_document_exists_and_records_replay_decomposition() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34f5e1_post_f5d_replay_inventory.md"),
+    )
+    .expect("e.34.f.5.e.1 inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.f.5.e.1",
+        "Wrong-approach check",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260327T064414Z_p402022",
+        "lane_fragilec_build_status=2",
+        "lane_fragilec_test_rpc_status=-1",
+        "lane_fragilec_failure_class=build_failed",
+        "rustc_error_total_count=303",
+        "rustc_error_unique_count=72",
+        "E0308=118",
+        "E0599=85",
+        "marshal.cpp",
+        "event.cc",
+        "fiber_impl.cc",
+        "M9.2.c.iv.e.34.f.5.e.2",
+        "M9.2.c.iv.e.34.f.5.e.5",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.f.5.e.1 inventory document should contain `{}`",
             required
         );
     }
