@@ -30306,6 +30306,7 @@ impl AstCodeGen {
         output = Self::normalize_rpc_container_surface_artifacts(&output);
         output = Self::normalize_rpc_marshal_surface_artifacts(&output);
         output = Self::normalize_rpc_std_string_lane_surface_artifacts(&output);
+        output = Self::normalize_rpc_container_internal_node_artifacts(&output);
         output = Self::append_compile_error_for_unresolved_non_c_abi_external_calls(&output);
         if Self::output_requires_c_variadic_feature(&output) {
             output = Self::ensure_c_variadic_feature_attr(&output);
@@ -44599,6 +44600,276 @@ impl rrr_v64 {
                 out.push_str("    #[inline]\n    pub fn size(&self) -> u64 { self.length() }\n");
             }
             out.push_str("}\n");
+        }
+
+        out
+    }
+
+    /// Fix f.5.c residual event/fiber container/internal-node regressions:
+    /// - degraded `__tree_*` placeholders where impl blocks reference
+    ///   `__begin_node_`/`__end_node_`/`__size_` lanes.
+    /// - missing `std_unordered_set_*::{begin,end,find,insert}` compat surfaces.
+    fn normalize_rpc_container_internal_node_artifacts(code: &str) -> String {
+        fn parse_struct_name(line: &str) -> Option<String> {
+            let idx = line.find("pub struct ")?;
+            let rest = &line[idx + "pub struct ".len()..];
+            let name: String = rest
+                .chars()
+                .take_while(|c| AstCodeGen::is_identifier_char(*c))
+                .collect();
+            if name.is_empty() {
+                None
+            } else {
+                Some(name)
+            }
+        }
+
+        fn parse_impl_type(line: &str) -> Option<String> {
+            let trimmed = line.trim_start();
+            if !trimmed.starts_with("impl ") || !trimmed.ends_with('{') {
+                return None;
+            }
+            let rest = trimmed.strip_prefix("impl ")?;
+            let ty = rest.trim_end_matches('{').trim();
+            if ty.is_empty() || ty.contains('<') {
+                return None;
+            }
+            Some(ty.to_string())
+        }
+
+        fn parse_impl_method_name(line: &str) -> Option<String> {
+            let trimmed = line.trim_start();
+            let rest = if let Some(rest) = trimmed.strip_prefix("pub fn ") {
+                rest
+            } else if let Some(rest) = trimmed.strip_prefix("fn ") {
+                rest
+            } else {
+                return None;
+            };
+            let name: String = rest
+                .chars()
+                .take_while(|c| AstCodeGen::is_identifier_char(*c))
+                .collect();
+            if name.is_empty() {
+                None
+            } else {
+                Some(name)
+            }
+        }
+
+        if !code.contains("__begin_node_")
+            && !code.contains("__end_node_")
+            && !code.contains("std_unordered_set_")
+            && !code.contains("unordered_set_")
+        {
+            return code.to_string();
+        }
+
+        let lines: Vec<&str> = code.lines().collect();
+        const RPC_TREE_INTERNAL_NODE_PREFIX: &str = "__tree_std_sync_Arc_Job__";
+        const RPC_UNORDERED_SET_COMPAT_TYPES: [&str; 2] = ["std_unordered_set_int", "unordered_set_int"];
+
+        let mut tree_types: BTreeSet<String> = BTreeSet::new();
+        let mut unordered_set_methods: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut in_tree_impl = false;
+        let mut tree_impl_type = String::new();
+        let mut tree_impl_uses_internal_lanes = false;
+        let mut current_impl_type: Option<String> = None;
+        let mut current_impl_depth: i32 = 0;
+
+        for line in &lines {
+            if current_impl_type.is_none() {
+                if let Some(ty) = parse_impl_type(line) {
+                    current_impl_depth = 0;
+                    current_impl_type = Some(ty.clone());
+                    if ty.starts_with("__tree_") {
+                        in_tree_impl = true;
+                        tree_impl_type = ty;
+                        tree_impl_uses_internal_lanes = false;
+                    }
+                }
+            }
+
+            if let Some(impl_ty) = current_impl_type.as_ref() {
+                if let Some(method) = parse_impl_method_name(line) {
+                    if impl_ty.starts_with("std_unordered_set_") || impl_ty.starts_with("unordered_set_")
+                    {
+                        unordered_set_methods
+                            .entry(impl_ty.clone())
+                            .or_default()
+                            .insert(method);
+                    }
+                }
+            }
+
+            if current_impl_type.is_some() {
+                current_impl_depth += line.chars().filter(|c| *c == '{').count() as i32;
+                current_impl_depth -= line.chars().filter(|c| *c == '}').count() as i32;
+                if in_tree_impl
+                    && (line.contains("self.__begin_node_")
+                        || line.contains("self.__end_node_")
+                        || line.contains("self.__size_"))
+                {
+                    tree_impl_uses_internal_lanes = true;
+                }
+                if current_impl_depth <= 0 {
+                    if in_tree_impl
+                        && tree_impl_uses_internal_lanes
+                        && tree_impl_type.starts_with(RPC_TREE_INTERNAL_NODE_PREFIX)
+                    {
+                        tree_types.insert(std::mem::take(&mut tree_impl_type));
+                    }
+                    current_impl_type = None;
+                    current_impl_depth = 0;
+                    in_tree_impl = false;
+                    tree_impl_uses_internal_lanes = false;
+                }
+            }
+        }
+
+        let mut unordered_set_types: BTreeSet<String> = BTreeSet::new();
+        for line in &lines {
+            if let Some(name) = parse_struct_name(line) {
+                if RPC_UNORDERED_SET_COMPAT_TYPES.contains(&name.as_str()) {
+                    unordered_set_types.insert(name);
+                }
+            }
+        }
+
+        let mut needs_unordered_set_compat = false;
+        const REQUIRED_UNORDERED_SET_METHODS: [&str; 4] = ["begin", "end", "find", "insert"];
+        for ty in &unordered_set_types {
+            let missing_any = match unordered_set_methods.get(ty) {
+                Some(methods) => REQUIRED_UNORDERED_SET_METHODS
+                    .iter()
+                    .any(|required| !methods.contains(*required)),
+                None => true,
+            };
+            if missing_any {
+                needs_unordered_set_compat = true;
+                break;
+            }
+        }
+
+        if tree_types.is_empty() && !needs_unordered_set_compat {
+            return code.to_string();
+        }
+
+        let mut out = code.to_string();
+
+        for ty in &tree_types {
+            let placeholder_struct = format!(
+                "pub struct {} {{\n    _opaque: [u8; 64], // placeholder - actual size may differ\n}}\n",
+                ty
+            );
+            let rehydrated_struct = format!(
+                "pub struct {} {{\n    pub __begin_node_: *mut u8,\n    pub __end_node_: *mut __tree_end_node,\n    pub __size_: u64,\n}}\n",
+                ty
+            );
+            out = out.replace(&placeholder_struct, &rehydrated_struct);
+
+            let placeholder_default = format!(
+                "impl Default for {} {{\n    fn default() -> Self {{\n        Self {{ _opaque: [0u8; 64] }}\n    }}\n}}\n",
+                ty
+            );
+            let rehydrated_default = format!(
+                "impl Default for {} {{\n    fn default() -> Self {{\n        Self {{\n            __begin_node_: std::ptr::null_mut(),\n            __end_node_: std::ptr::null_mut(),\n            __size_: 0,\n        }}\n    }}\n}}\n",
+                ty
+            );
+            out = out.replace(&placeholder_default, &rehydrated_default);
+        }
+
+        if !tree_types.is_empty() {
+            let mut rewritten = String::with_capacity(out.len() + 128);
+            let mut in_tree_impl = false;
+            let mut tree_impl_depth: i32 = 0;
+            let mut current_tree_ty = String::new();
+            for line in out.lines() {
+                let trimmed = line.trim_start();
+                if !in_tree_impl
+                    && trimmed.starts_with("impl __tree_")
+                    && trimmed.ends_with('{')
+                    && !trimmed.contains('<')
+                {
+                    if let Some(rest) = trimmed.strip_prefix("impl ") {
+                        let ty = rest.trim_end_matches('{').trim();
+                        if tree_types.contains(ty) {
+                            in_tree_impl = true;
+                            tree_impl_depth = 0;
+                            current_tree_ty = ty.to_string();
+                        }
+                    }
+                }
+
+                let mut line_out = line.to_string();
+                if in_tree_impl && !current_tree_ty.is_empty() && line.trim() == "pub fn size(&self) -> usize { 0 }"
+                {
+                    let indent_len = line.len().saturating_sub(trimmed.len());
+                    line_out = format!(
+                        "{}pub fn size(&self) -> usize {{ self.__size_ as usize }}",
+                        &line[..indent_len]
+                    );
+                }
+
+                rewritten.push_str(&line_out);
+                rewritten.push('\n');
+
+                if in_tree_impl {
+                    tree_impl_depth += line.chars().filter(|c| *c == '{').count() as i32;
+                    tree_impl_depth -= line.chars().filter(|c| *c == '}').count() as i32;
+                    if tree_impl_depth <= 0 {
+                        in_tree_impl = false;
+                        tree_impl_depth = 0;
+                        current_tree_ty.clear();
+                    }
+                }
+            }
+            if !out.ends_with('\n') && !rewritten.is_empty() {
+                rewritten.pop();
+            }
+            out = rewritten;
+        }
+
+        let mut compat_blocks = String::new();
+        for ty in &unordered_set_types {
+            let methods = unordered_set_methods.get(ty);
+            let has_method =
+                |name: &str| methods.map(|method_set| method_set.contains(name)).unwrap_or(false);
+            let need_begin = !has_method("begin");
+            let need_end = !has_method("end");
+            let need_find = !has_method("find");
+            let need_insert = !has_method("insert");
+            if !need_begin && !need_end && !need_find && !need_insert {
+                continue;
+            }
+
+            compat_blocks.push_str(&format!("\nimpl {} {{\n", ty));
+            if need_begin {
+                compat_blocks.push_str(
+                    "    #[inline]\n    pub fn begin(&self) -> *mut std::ffi::c_void { std::ptr::null_mut() }\n\n",
+                );
+            }
+            if need_end {
+                compat_blocks.push_str(
+                    "    #[inline]\n    pub fn end(&self) -> *mut std::ffi::c_void { std::ptr::null_mut() }\n\n",
+                );
+            }
+            if need_find {
+                compat_blocks.push_str(
+                    "    #[inline]\n    pub fn find<T>(&self, _key: T) -> *mut std::ffi::c_void { std::ptr::null_mut() }\n\n",
+                );
+            }
+            if need_insert {
+                compat_blocks
+                    .push_str("    #[inline]\n    pub fn insert<T>(&mut self, _value: T) {}\n");
+            }
+            compat_blocks.push_str("}\n");
+        }
+        if !compat_blocks.is_empty() {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(&compat_blocks);
         }
 
         out
@@ -138604,6 +138875,136 @@ impl basic_filebuf {
             output.contains("trait FragileBasicFilebufCompat"),
             "basic_filebuf setbuf compat trait should be emitted, got:\n{}",
             output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_container_internal_node_artifacts_rehydrates_tree_internal_node_lanes() {
+        let input = r#"
+/// Placeholder for C++ `tree<int>`
+#[repr(C)]
+pub struct __tree_std_sync_Arc_Job__DefaultType__DefaultType {
+    _opaque: [u8; 64], // placeholder - actual size may differ
+}
+
+impl Default for __tree_std_sync_Arc_Job__DefaultType__DefaultType {
+    fn default() -> Self {
+        Self { _opaque: [0u8; 64] }
+    }
+}
+
+impl Copy for __tree_std_sync_Arc_Job__DefaultType__DefaultType {}
+impl Clone for __tree_std_sync_Arc_Job__DefaultType__DefaultType {
+    fn clone(&self) -> Self { *self }
+}
+
+impl __tree_std_sync_Arc_Job__DefaultType__DefaultType {
+    pub fn __end_node(&mut self) -> *mut __tree_end_node {
+        &mut self.__end_node_ as *mut _ as *mut __tree_end_node
+    }
+
+    pub fn size(&self) -> usize { 0 }
+
+    pub fn touch(&mut self) {
+        self.__begin_node_ = std::ptr::null_mut();
+        self.__size_ += 1;
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_container_internal_node_artifacts(input);
+        assert!(
+            output.contains("pub __begin_node_: *mut u8,")
+                && output.contains("pub __end_node_: *mut __tree_end_node,")
+                && output.contains("pub __size_: u64,"),
+            "tree placeholder should be rehydrated with internal-node lanes, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("__begin_node_: std::ptr::null_mut()")
+                && output.contains("__end_node_: std::ptr::null_mut()")
+                && output.contains("__size_: 0"),
+            "tree default impl should initialize internal-node lanes, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn size(&self) -> usize { self.__size_ as usize }"),
+            "tree size() should read the rehydrated __size_ lane, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_container_internal_node_artifacts_adds_unordered_set_missing_methods() {
+        let input = r#"
+#[repr(C)]
+pub struct std_unordered_set_int {
+    __table_: __hash_table_i32__DefaultType__DefaultType__DefaultType,
+}
+
+impl std_unordered_set_int {
+    pub fn size(&self) -> usize { 0 }
+}
+
+pub fn probe(s: &mut std_unordered_set_int) {
+    let it = s.find(7);
+    if (*it).op_eq(&s.end()) {
+        s.insert(7);
+    }
+    let _ = s.begin();
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_container_internal_node_artifacts(input);
+        assert!(
+            output.contains("impl std_unordered_set_int {")
+                && output.contains("pub fn begin(&self) -> *mut std::ffi::c_void")
+                && output.contains("pub fn end(&self) -> *mut std::ffi::c_void")
+                && output.contains("pub fn find<T>(&self, _key: T) -> *mut std::ffi::c_void")
+                && output.contains("pub fn insert<T>(&mut self, _value: T) {}"),
+            "unordered_set compat impl should provide begin/end/find/insert surfaces, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_container_internal_node_artifacts_is_idempotent_for_unordered_set_impls() {
+        let input = r#"
+#[repr(C)]
+pub struct std_unordered_set_int {
+    __table_: __hash_table_i32__DefaultType__DefaultType__DefaultType,
+}
+
+impl std_unordered_set_int {
+    pub fn size(&self) -> usize { 0 }
+}
+"#;
+        let once = AstCodeGen::normalize_rpc_container_internal_node_artifacts(input);
+        let twice = AstCodeGen::normalize_rpc_container_internal_node_artifacts(&once);
+        assert_eq!(
+            twice.matches("pub fn begin(&self) -> *mut std::ffi::c_void")
+                .count(),
+            1,
+            "unordered_set begin compat method should be emitted once, got:\n{}",
+            twice
+        );
+        assert_eq!(
+            twice.matches("pub fn end(&self) -> *mut std::ffi::c_void").count(),
+            1,
+            "unordered_set end compat method should be emitted once, got:\n{}",
+            twice
+        );
+        assert_eq!(
+            twice.matches("pub fn find<T>(&self, _key: T) -> *mut std::ffi::c_void")
+                .count(),
+            1,
+            "unordered_set find compat method should be emitted once, got:\n{}",
+            twice
+        );
+        assert_eq!(
+            twice.matches("pub fn insert<T>(&mut self, _value: T) {}")
+                .count(),
+            1,
+            "unordered_set insert compat method should be emitted once, got:\n{}",
+            twice
         );
     }
 

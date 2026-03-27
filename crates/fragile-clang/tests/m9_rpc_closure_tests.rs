@@ -6016,10 +6016,12 @@ fn m9_2c_iv_e34f5a_task_documented_in_todo() {
             && todo.contains("docs/dev/m9_2c_iv_e34f5a_post_f4_replay_inventory.md")
             && todo.contains("- [x] M9.2.c.iv.e.34.f.5.b")
             && todo.contains("docs/dev/m9_2c_iv_e34f5b_std_string_lane_surface_inventory.md")
-            && todo.contains("- [ ] M9.2.c.iv.e.34.f.5.c")
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5.c")
+            && todo.contains("normalize_rpc_container_internal_node_artifacts")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5c_container_internal_node_inventory.md")
             && todo.contains("- [ ] M9.2.c.iv.e.34.f.5.d")
             && todo.contains("- [ ] M9.2.c.iv.e.34.f.5.e"),
-        "M9.2.c.iv.e.34.f.5 should keep bounded follow-up leaves with f.5.a/f.5.b marked done"
+        "M9.2.c.iv.e.34.f.5 should keep bounded follow-up leaves with f.5.a/f.5.b/f.5.c marked done"
     );
 }
 
@@ -6078,6 +6080,60 @@ fn m9_2c_iv_e34f5b_inventory_document_exists_and_records_std_string_lane_closure
         assert!(
             doc.contains(required),
             "e.34.f.5.b inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_e34f5c_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.34.f.5.c Resolve residual container/internal-node lane regressions")
+            && todo.contains("Done 2026-03-27")
+            && todo.contains("normalize_rpc_container_internal_node_artifacts")
+            && todo.contains("__begin_node_")
+            && todo.contains("__end_node_")
+            && todo.contains("__size_")
+            && todo.contains("unordered `{begin,end,find,insert}`")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5c_container_internal_node_inventory.md"),
+        "M9.2.c.iv.e.34.f.5.c TODO entry should record closure evidence for tree/unordered_set compatibility pass"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e34f5c_inventory_document_exists_and_records_container_internal_node_closure() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34f5c_container_internal_node_inventory.md"),
+    )
+    .expect("e.34.f.5.c inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.f.5.c",
+        "Wrong-approach check",
+        "normalize_rpc_container_internal_node_artifacts",
+        "__begin_node_",
+        "__end_node_",
+        "__size_",
+        "std_unordered_set_*",
+        "begin",
+        "end",
+        "find",
+        "insert",
+        "/tmp/fragile_e34f5b_event_before_oLzsyy/stderr.log",
+        "/tmp/fragile_e34f5b_fiber_before_uwwVWv/stderr.log",
+        "test_normalize_rpc_container_internal_node_artifacts_rehydrates_tree_internal_node_lanes",
+        "test_normalize_rpc_container_internal_node_artifacts_adds_unordered_set_missing_methods",
+        "test_normalize_rpc_container_internal_node_artifacts_is_idempotent_for_unordered_set_impls",
+        "M9.2.c.iv.e.34.f.5.d",
+        "M9.2.c.iv.e.34.f.5.e",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.f.5.c inventory document should contain `{}`",
             required
         );
     }

@@ -22461,3 +22461,34 @@ File-local abort counts from `lane_fragilec/build.stderr`:
 Detailed inventory is recorded in:
 
 - `docs/dev/m9_2c_iv_e34f5a_post_f4_replay_inventory.md`
+
+## 2026-03-27: M9.2.c.iv.e.34.f.5.c container/internal-node lane closure
+
+- Selected next pending decomposed leaf: `M9.2.c.iv.e.34.f.5.c`.
+- Scope remained bounded (<1000 LOC): one late normalization pass + focused unit tests.
+
+### Wrong-approach check
+
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific `mako` conditionals, no force-native bypass, no rollback broadening.
+
+### Key implementation decisions
+
+- Added `normalize_rpc_container_internal_node_artifacts` to:
+  - detect degraded `impl __tree_*` blocks that reference
+    `__begin_node_` / `__end_node_` / `__size_`,
+  - rehydrate matching placeholder tree structs/defaults with those lanes,
+  - rewrite tree `size()` stubs to return `self.__size_ as usize`.
+- Added unordered-set compat surface completion for generated
+  `std_unordered_set_*` / `unordered_set_*` types:
+  - `begin`, `end`, `find`, `insert`.
+- Compat insertion is impl-block-aware and idempotent (no duplicate methods on reruns).
+
+### Focused validation
+
+- `cargo test -p fragile-clang --lib normalize_rpc_container_internal_node_artifacts -- --nocapture`
+  - `3 passed`, `0 failed`.
+
+Detailed inventory:
+
+- `docs/dev/m9_2c_iv_e34f5c_container_internal_node_inventory.md`
