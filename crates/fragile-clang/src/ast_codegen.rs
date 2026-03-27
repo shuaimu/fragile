@@ -31541,6 +31541,7 @@ impl rrr_v64 {
             && !code.contains("boost_coro_yield_t::new_1(&mut &mut __self as *mut Self)")
             && !code.contains("pub fn __in_pattern_i8(")
             && !code.contains("__gv___from_chars_log2f_lut")
+            && !code.contains("self.track_write_2(")
         {
             return code.to_string();
         }
@@ -31572,6 +31573,80 @@ impl rrr_v64 {
             "boost_coro_yield_t::new_1(&mut &mut __self as *mut Self)",
             "boost_coro_yield_t::new_1(&mut __self)",
         );
+
+        fn normalize_track_write_field_pointer_borrow_overlap(line: &str) -> String {
+            if !line.contains("self.track_write_2(") || !line.contains("((&mut self.") {
+                return line.to_string();
+            }
+
+            let call_marker = "self.track_write_2(";
+            let borrow_marker = "((&mut self.";
+            let borrow_tail = " as *const _ as *const ())";
+            let mut out = line.to_string();
+            let mut search_from = 0usize;
+
+            while let Some(call_rel) = out[search_from..].find(call_marker) {
+                let call_start = search_from + call_rel;
+                let open_paren_idx = call_start + "self.track_write_2".len();
+                if open_paren_idx >= out.len() {
+                    break;
+                }
+
+                let mut depth = 0i32;
+                let mut call_end = None;
+                for (off, ch) in out[open_paren_idx..].char_indices() {
+                    if ch == '(' {
+                        depth += 1;
+                    } else if ch == ')' {
+                        depth -= 1;
+                        if depth == 0 {
+                            call_end = Some(open_paren_idx + off);
+                            break;
+                        }
+                    }
+                }
+                let Some(call_end_idx) = call_end else {
+                    break;
+                };
+
+                let call_expr = out[call_start..=call_end_idx].to_string();
+                let Some(borrow_rel) = call_expr.find(borrow_marker) else {
+                    search_from = call_end_idx + 1;
+                    continue;
+                };
+                let borrow_start = call_start + borrow_rel;
+                let field_start = borrow_start + borrow_marker.len();
+                let Some(field_tail_rel) = out[field_start..].find(" as *mut ") else {
+                    search_from = call_end_idx + 1;
+                    continue;
+                };
+                let field_end = field_start + field_tail_rel;
+                let field_name = out[field_start..field_end].trim().to_string();
+                if field_name.is_empty() {
+                    search_from = call_end_idx + 1;
+                    continue;
+                }
+                let Some(borrow_tail_rel) = out[field_end..=call_end_idx].find(borrow_tail) else {
+                    search_from = call_end_idx + 1;
+                    continue;
+                };
+                let borrow_end = field_end + borrow_tail_rel + borrow_tail.len();
+                if borrow_end > call_end_idx + 1 {
+                    search_from = call_end_idx + 1;
+                    continue;
+                }
+                let borrow_expr = out[borrow_start..borrow_end].to_string();
+                let normalized_call = call_expr.replacen(&borrow_expr, "__fragile_track_write_ptr", 1);
+                let replacement = format!(
+                    "{{ let __fragile_track_write_ptr: *const () = std::ptr::addr_of_mut!((*self).{}) as *const (); {} }}",
+                    field_name, normalized_call
+                );
+                out.replace_range(call_start..=call_end_idx, &replacement);
+                search_from = call_start + replacement.len();
+            }
+
+            out
+        }
 
         let mut rewritten = String::with_capacity(out.len() + 64);
         let mut in_in_pattern_i8 = false;
@@ -31631,6 +31706,8 @@ impl rrr_v64 {
                     }
                 }
             }
+
+            line_out = normalize_track_write_field_pointer_borrow_overlap(&line_out);
 
             rewritten.push_str(&line_out);
             rewritten.push('\n');
@@ -139514,6 +139591,43 @@ impl MarshallDeputy {
         assert!(
             output.contains("let mut sz: u64 = super::write(fd, (unsafe { x.add(offset as usize) }) as *const (), (len - offset) as u64) as u64;"),
             "track_write_2 should cast write() return lane to u64, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_marshal_fiber_context_artifacts_hoists_track_write_field_pointer_before_call() {
+        let input = r#"
+pub struct MarshallDeputy {
+    pub kind_: i32,
+}
+impl MarshallDeputy {
+    pub fn track_write_2(&mut self, fd: i32, p: *const (), len: u64, offset: u64) -> u64 {
+        0
+    }
+    pub fn write_to_fd(&mut self, fd: i32, mut written_to_socket: i32) -> u64 {
+        let mut sz: u64 = 0;
+        { sz = ((self.track_write_2(fd, ((&mut self.kind_ as *mut i32) as *const _ as *const ()), 4u64, written_to_socket as u64)) as u64) ;};
+        sz
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_marshal_fiber_context_artifacts(input);
+        assert!(
+            output.contains(
+                "let __fragile_track_write_ptr: *const () = std::ptr::addr_of_mut!((*self).kind_) as *const ();"
+            ),
+            "track_write_2 field pointer should be hoisted to a temporary raw pointer, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("self.track_write_2(fd, __fragile_track_write_ptr, 4u64, written_to_socket as u64)"),
+            "track_write_2 call should use hoisted pointer temporary, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("((&mut self.kind_ as *mut i32) as *const _ as *const ())"),
+            "original overlapping mutable-borrow pointer lane should be rewritten, got:\n{}",
             output
         );
     }

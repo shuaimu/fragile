@@ -6025,7 +6025,8 @@ fn m9_2c_iv_e34f5a_task_documented_in_todo() {
             && todo.contains("- [ ] M9.2.c.iv.e.34.f.5.e")
             && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.1")
             && todo.contains("docs/dev/m9_2c_iv_e34f5e1_post_f5d_replay_inventory.md")
-            && todo.contains("- [ ] M9.2.c.iv.e.34.f.5.e.2")
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.2")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e2_marshal_borrow_overlap_inventory.md")
             && todo.contains("- [ ] M9.2.c.iv.e.34.f.5.e.5"),
         "M9.2.c.iv.e.34.f.5 should keep bounded follow-up leaves with f.5.a/f.5.b/f.5.c/f.5.d done and e.1 decomposition recorded"
     );
@@ -6241,6 +6242,47 @@ fn m9_2c_iv_e34f5e1_inventory_document_exists_and_records_replay_decomposition()
         assert!(
             doc.contains(required),
             "e.34.f.5.e.1 inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_e34f5e2_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.2")
+            && todo.contains("E0499")
+            && todo.contains("/tmp/fragile_e34f5e2_marshal_compile_after_20260327T082121Z_p490835")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e2_marshal_borrow_overlap_inventory.md"),
+        "M9.2.c.iv.e.34.f.5.e.2 TODO entry should record marshal borrow-overlap closure evidence"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e34f5e2_inventory_document_exists_and_records_marshal_borrow_overlap_closure() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34f5e2_marshal_borrow_overlap_inventory.md"),
+    )
+    .expect("e.34.f.5.e.2 inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.f.5.e.2",
+        "Wrong-approach check",
+        "error[E0499]",
+        "self.track_write_2",
+        "let __fragile_track_write_ptr",
+        "/tmp/fragile_e34f5e2_marshal_compile_after_20260327T082121Z_p490835",
+        "E0499` count: `0",
+        "M9.2.c.iv.e.34.f.5.e.3",
+        "M9.2.c.iv.e.34.f.5.e.5",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.f.5.e.2 inventory document should contain `{}`",
             required
         );
     }

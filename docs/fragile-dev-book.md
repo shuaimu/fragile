@@ -22581,3 +22581,53 @@ It is decomposed into `e.34.f.5.e.2`..`e.34.f.5.e.5`, with `e.1` closed as inven
 Detailed inventory:
 
 - `docs/dev/m9_2c_iv_e34f5e1_post_f5d_replay_inventory.md`
+
+## 2026-03-27: M9.2.c.iv.e.34.f.5.e.2 marshal `track_write_2` mutable-borrow overlap closure
+
+- Selected leaf: `M9.2.c.iv.e.34.f.5.e.2`.
+- Scope kept bounded (<1000 LOC): one late-pass normalization update + one focused unit test + inventory/TODO updates.
+
+### Pre-execution plan
+
+1. Re-check wrong-approach constraints.
+2. Implement a generic rewrite for the `track_write_2` field-pointer borrow overlap shape.
+3. Add focused regression coverage for the rewritten callshape.
+4. Validate via focused tests and a harness-equivalent strict `marshal.cpp` probe.
+
+### Wrong-approach check
+
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md`.
+- No target-specific conditionals, no force-native bypass, no rollback/fake stubs.
+
+### Key implementation decision
+
+The `E0499` root cause was method-call borrow ordering on this shape:
+
+- `self.track_write_2(..., ((&mut self.kind_ as *mut i32) as *const _ as *const ()), ...)`
+
+Fix applied in `normalize_rpc_marshal_fiber_context_artifacts`:
+
+- detect `track_write_2` calls using `((&mut self.FIELD as *mut T) as *const _ as *const ())`,
+- rewrite to hoist the field pointer into a temporary raw pointer before the call:
+  - `let __fragile_track_write_ptr = std::ptr::addr_of_mut!((*self).FIELD) as *const ();`
+  - call uses `__fragile_track_write_ptr`.
+
+This preserves call semantics while removing the overlapping mutable borrows.
+
+### Focused validation
+
+- `cargo test -p fragile-clang --lib normalize_rpc_marshal_fiber_context_artifacts -- --nocapture`
+  - pass (4 tests), including
+    - `test_normalize_rpc_marshal_fiber_context_artifacts_hoists_track_write_field_pointer_before_call`.
+
+Harness-equivalent strict marshal probe:
+
+- run-root: `/tmp/fragile_e34f5e2_marshal_compile_after_20260327T082121Z_p490835`
+- result: `status=1` (expected; downstream non-e.2 blockers remain), but
+  - `E0499=0`
+  - `cannot borrow self.kind_=0`
+  - residual typed errors are from other families (`E0282`, `E0308`, `E0599`).
+
+Detailed inventory:
+
+- `docs/dev/m9_2c_iv_e34f5e2_marshal_borrow_overlap_inventory.md`
