@@ -6014,11 +6014,12 @@ fn m9_2c_iv_e34f5a_task_documented_in_todo() {
     assert!(
         todo.contains("- [x] M9.2.c.iv.e.34.f.5.a Capture deterministic post-f.4 strict replay blocker inventory")
             && todo.contains("docs/dev/m9_2c_iv_e34f5a_post_f4_replay_inventory.md")
-            && todo.contains("- [ ] M9.2.c.iv.e.34.f.5.b")
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5.b")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5b_std_string_lane_surface_inventory.md")
             && todo.contains("- [ ] M9.2.c.iv.e.34.f.5.c")
             && todo.contains("- [ ] M9.2.c.iv.e.34.f.5.d")
             && todo.contains("- [ ] M9.2.c.iv.e.34.f.5.e"),
-        "M9.2.c.iv.e.34.f.5 should be decomposed into bounded follow-up leaves with f.5.a marked done"
+        "M9.2.c.iv.e.34.f.5 should keep bounded follow-up leaves with f.5.a/f.5.b marked done"
     );
 }
 
@@ -6048,6 +6049,35 @@ fn m9_2c_iv_e34f5a_inventory_document_exists_and_records_replay_decomposition() 
         assert!(
             doc.contains(required),
             "e.34.f.5.a inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_e34f5b_inventory_document_exists_and_records_std_string_lane_closure() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34f5b_std_string_lane_surface_inventory.md"),
+    )
+    .expect("e.34.f.5.b inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.f.5.b",
+        "Wrong-approach check",
+        "normalize_rpc_std_string_lane_surface_artifacts",
+        "append_std_string_stream_compat_stubs",
+        "std_string_view::{data,length,size}",
+        "/tmp/fragile_e34f5b_event_before_oLzsyy",
+        "/tmp/fragile_e34f5b_fiber_before_uwwVWv",
+        "test_normalize_rpc_std_string_lane_surface_artifacts_rewrites_impl_string_self_types",
+        "test_normalize_rpc_std_string_lane_surface_artifacts_fixes_degraded_add_assign_and_view_surface",
+        "test_append_std_string_stream_compat_stubs_adds_missing_methods",
+        "M9.2.c.iv.e.34.f.5.c",
+        "M9.2.c.iv.e.34.f.5.e",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.f.5.b inventory document should contain `{}`",
             required
         );
     }

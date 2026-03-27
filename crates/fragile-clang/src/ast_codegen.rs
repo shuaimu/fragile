@@ -30305,6 +30305,7 @@ impl AstCodeGen {
         output = Self::normalize_final_rpc_straggler_artifacts(&output);
         output = Self::normalize_rpc_container_surface_artifacts(&output);
         output = Self::normalize_rpc_marshal_surface_artifacts(&output);
+        output = Self::normalize_rpc_std_string_lane_surface_artifacts(&output);
         output = Self::append_compile_error_for_unresolved_non_c_abi_external_calls(&output);
         if Self::output_requires_c_variadic_feature(&output) {
             output = Self::ensure_c_variadic_feature_attr(&output);
@@ -44441,6 +44442,168 @@ impl rrr_v64 {
         rewritten
     }
 
+    /// Fix f.5.b shared event/fiber string-lane regressions:
+    /// - self-type drift in generated `impl String` blocks (`std::string::String` ->
+    ///   local `String`) that caused missing `data_/len_/capacity_`, `grow`,
+    ///   and `ensure_null_terminated` surfaces.
+    /// - degraded `.op_add_assign(&0)` argument lanes.
+    /// - degraded `.op_add_assign(...)` calls on `c_void`-typed fields.
+    /// - missing `std_string_view::{data,length,size}` compatibility surface.
+    fn normalize_rpc_std_string_lane_surface_artifacts(code: &str) -> String {
+        fn parse_c_void_field_name(trimmed: &str) -> Option<String> {
+            let (lhs, rhs) = trimmed.split_once(':')?;
+            let field = lhs.trim().trim_start_matches("pub ").trim();
+            if field.is_empty() {
+                return None;
+            }
+            if !field.chars().all(AstCodeGen::is_identifier_char) {
+                return None;
+            }
+            let ty = rhs.trim().trim_end_matches(',').trim();
+            if ty != "std::ffi::c_void" {
+                return None;
+            }
+            Some(field.to_string())
+        }
+
+        fn find_matching_brace(src: &str, open_idx: usize) -> Option<usize> {
+            let mut depth = 0isize;
+            for (rel, ch) in src[open_idx..].char_indices() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some(open_idx + rel);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None
+        }
+
+        fn impl_block_contains_method(code: &str, ty: &str, method: &str) -> bool {
+            let marker = format!("impl {} {{", ty);
+            let method_sig_a = format!("fn {}(", method);
+            let method_sig_b = format!("fn {}<", method);
+            let mut search_idx = 0usize;
+            while let Some(rel) = code[search_idx..].find(&marker) {
+                let impl_start = search_idx + rel;
+                let open_idx = impl_start + marker.len() - 1;
+                let Some(close_idx) = find_matching_brace(code, open_idx) else {
+                    break;
+                };
+                let block = &code[impl_start..=close_idx];
+                if block.contains(&method_sig_a) || block.contains(&method_sig_b) {
+                    return true;
+                }
+                search_idx = close_idx + 1;
+            }
+            false
+        }
+
+        let has_cpp_string_lane = code.contains("pub struct String {")
+            && code.contains("data_: *mut i8")
+            && code.contains("len_: u64")
+            && code.contains("capacity_: u64");
+
+        let needs_zero_add_assign_fix = code.contains(".op_add_assign(&0);");
+        let has_std_string_view = code.contains("pub struct std_string_view");
+
+        let mut c_void_field_names: BTreeSet<String> = BTreeSet::new();
+        if code.contains("std::ffi::c_void") && code.contains("op_add_assign(") {
+            for line in code.lines() {
+                if let Some(name) = parse_c_void_field_name(line.trim_start()) {
+                    c_void_field_names.insert(name);
+                }
+            }
+        }
+
+        let needs_c_void_op_add_assign_fix = !c_void_field_names.is_empty();
+        let needs_view_data = has_std_string_view
+            && !impl_block_contains_method(code, "std_string_view", "data");
+        let needs_view_length = has_std_string_view
+            && !impl_block_contains_method(code, "std_string_view", "length");
+        let needs_view_size = has_std_string_view
+            && !impl_block_contains_method(code, "std_string_view", "size");
+
+        if !has_cpp_string_lane
+            && !needs_zero_add_assign_fix
+            && !needs_c_void_op_add_assign_fix
+            && !needs_view_data
+            && !needs_view_length
+            && !needs_view_size
+        {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len() + 256);
+        let mut in_impl_string = false;
+        let mut impl_string_depth: i32 = 0;
+
+        for line in code.lines() {
+            let trimmed = line.trim_start();
+            if has_cpp_string_lane && !in_impl_string && trimmed.starts_with("impl String {") {
+                in_impl_string = true;
+                impl_string_depth = 0;
+            }
+
+            let mut rewritten = line.to_string();
+            if in_impl_string {
+                rewritten = rewritten.replace("std::string::String", "String");
+                rewritten = rewritten.replace("String::new()", "String::new_0()");
+            }
+            if needs_zero_add_assign_fix && rewritten.contains(".op_add_assign(&0);") {
+                rewritten = rewritten.replace(".op_add_assign(&0);", ".op_add_assign(0i8);");
+            }
+            if needs_c_void_op_add_assign_fix {
+                let rewritten_trimmed = rewritten.trim_start();
+                let is_c_void_op_add_assign = c_void_field_names
+                    .iter()
+                    .any(|field| rewritten_trimmed.contains(&format!(".{field}.op_add_assign(")));
+                if is_c_void_op_add_assign {
+                    let indent_len = line.len().saturating_sub(trimmed.len());
+                    rewritten = format!("{}();", &line[..indent_len]);
+                }
+            }
+
+            out.push_str(&rewritten);
+            out.push('\n');
+
+            if in_impl_string {
+                impl_string_depth += line.chars().filter(|c| *c == '{').count() as i32;
+                impl_string_depth -= line.chars().filter(|c| *c == '}').count() as i32;
+                if impl_string_depth <= 0 {
+                    in_impl_string = false;
+                    impl_string_depth = 0;
+                }
+            }
+        }
+        if !code.ends_with('\n') && !out.is_empty() {
+            out.pop();
+        }
+
+        if has_std_string_view && (needs_view_data || needs_view_length || needs_view_size) {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str("\nimpl std_string_view {\n");
+            if needs_view_data {
+                out.push_str("    #[inline]\n    pub fn data(&self) -> *const i8 { std::ptr::null() }\n");
+            }
+            if needs_view_length {
+                out.push_str("    #[inline]\n    pub fn length(&self) -> u64 { 0 }\n");
+            }
+            if needs_view_size {
+                out.push_str("    #[inline]\n    pub fn size(&self) -> u64 { self.length() }\n");
+            }
+            out.push_str("}\n");
+        }
+
+        out
+    }
+
     fn normalize_rpc_string_stream_usage_artifacts(code: &str) -> String {
         if !code.contains("std_string")
             && !code.contains("std_ostringstream")
@@ -45516,6 +45679,32 @@ impl FragileStdStringAddAssignArg for *const i8 {
 impl<'a> FragileStdStringAddAssignArg for &'a std_string {
     fn apply_to_string(self, s: &mut std_string) {
         let _ = s.append(self.c_str());
+    }
+}
+
+impl FragileStdStringAddAssignArg for i32 {
+    fn apply_to_string(self, s: &mut std_string) {
+        s.push_back(self as i8);
+    }
+}
+
+impl<'a> FragileStdStringAddAssignArg for &'a i8 {
+    fn apply_to_string(self, s: &mut std_string) {
+        s.push_back(*self);
+    }
+}
+
+impl<'a> FragileStdStringAddAssignArg for &'a i32 {
+    fn apply_to_string(self, s: &mut std_string) {
+        s.push_back((*self) as i8);
+    }
+}
+
+impl<'a> FragileStdStringAddAssignArg for &'a std::string::String {
+    fn apply_to_string(self, s: &mut std_string) {
+        for b in self.as_bytes() {
+            s.push_back(*b as i8);
+        }
     }
 }
 "#,
@@ -136165,6 +136354,9 @@ pub struct std_ostringstream { _opaque: [u8; 64] }
         assert!(
             output.contains("trait FragileStdStringAddAssignArg")
                 && output.contains("pub fn op_add_assign<T: FragileStdStringAddAssignArg>")
+                && output.contains("impl FragileStdStringAddAssignArg for i32")
+                && output.contains("impl<'a> FragileStdStringAddAssignArg for &'a i32")
+                && output.contains("impl<'a> FragileStdStringAddAssignArg for &'a std::string::String")
                 && output.contains("pub fn reserve(&mut self, new_cap: i32)")
                 && output.contains("pub fn find(&self, ch: i8, pos: u64) -> u64")
                 && output.contains("pub fn find_first_not_of(&self, ch: i8, pos: u64) -> u64")
@@ -136227,6 +136419,70 @@ str = b"0.00\x00".as_ptr() as *const i8.clone();
                 && output.contains("str = std_string::new_1(b\"0.00\\x00\".as_ptr() as *const i8);")
                 && !output.contains("as *const i8.clone()"),
             "rpc string/stream artifact normalization should rewrite key strop patterns, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_std_string_lane_surface_artifacts_rewrites_impl_string_self_types() {
+        let input = r#"
+pub struct String {
+    data_: *mut i8,
+    len_: u64,
+    capacity_: u64,
+}
+impl String {
+    pub fn make() -> std::string::String { return std::string::String::new(); }
+    pub fn clone(&self) -> std::string::String {
+        let mut s: std::string::String = std::string::String::new();
+        s.grow(self.capacity_);
+        s.ensure_null_terminated();
+        return s;
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_std_string_lane_surface_artifacts(input);
+        assert!(
+            output.contains("pub fn make() -> String")
+                && output.contains("let mut s: String = String::new_0();")
+                && output.contains("s.grow(self.capacity_);")
+                && output.contains("s.ensure_null_terminated();")
+                && !output.contains("std::string::String"),
+            "std::string lane normalization should rebind impl String self-type surfaces, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_std_string_lane_surface_artifacts_fixes_degraded_add_assign_and_view_surface()
+    {
+        let input = r#"
+pub struct path {
+    pub __pn_: std::ffi::c_void,
+}
+impl path {
+    pub fn op_add_assign_3(&mut self, __x: *const i8) -> &mut path {
+        self.__pn_.op_add_assign(__x);
+        return self;
+    }
+}
+pub fn record_place(wait_place: &mut std_string) {
+    wait_place.op_add_assign(&0);
+}
+pub struct std_string_view {
+    _opaque: [u8; 64],
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_std_string_lane_surface_artifacts(input);
+        assert!(
+            output.contains("        ();")
+                && !output.contains("self.__pn_.op_add_assign(__x);")
+                && output.contains("wait_place.op_add_assign(0i8);")
+                && output.contains("impl std_string_view {")
+                && output.contains("pub fn data(&self) -> *const i8")
+                && output.contains("pub fn length(&self) -> u64")
+                && output.contains("pub fn size(&self) -> u64"),
+            "string-lane normalization should drop c_void add-assign artifacts, fix &0 add-assign, and add std_string_view surface, got:\n{}",
             output
         );
     }

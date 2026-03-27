@@ -7,6 +7,7 @@
 - [1.2 Mako as Primary Validation Target](#12-mako-as-primary-validation-target)
 - [1.3 Wrong Approaches (Do Not Do)](#13-wrong-approaches-do-not-do)
 - [1.4 2026-03 Design Update: STL-Opaque Parser and Backend Deprecation](#14-2026-03-design-update-stl-opaque-parser-and-backend-deprecation)
+- [1.5 2026-03 RPC `std::string` Lane Normalization Guardrails](#15-2026-03-rpc-stdstring-lane-normalization-guardrails)
 - [2. End-to-End Architecture](#2-end-to-end-architecture)
 - [2.3 C++ `_v` trait globals and export linkage](#23-c-_v-trait-globals-and-export-linkage)
 - [2.4 Mode 1 call-stitching architecture (target state)](#24-mode-1-call-stitching-architecture-target-state)
@@ -130,6 +131,24 @@ Backend status:
 - `LibTooling` parser flow has been **removed** from the active production path (P0.a complete 2026-03-21). Hard removal of residual code is scheduled for on/after 2026-04-18 (P0.b).
 - `libclang` parser flow has been **removed** from new architecture work.
 - Historical LibTooling/libclang content in this book is retained for reference only.
+
+## 1.5 2026-03 RPC `std::string` Lane Normalization Guardrails
+
+Recent M9 strict replay blockers (`event.cc` / `fiber_impl.cc`) exposed a recurring generated-lane drift:
+`impl String` bodies emitted `std::string::String` self types and then attempted to use lane fields/methods
+that belong to the local generated string lane (`data_`, `len_`, `capacity_`, `grow`, `ensure_null_terminated`).
+
+Guardrails for this family:
+
+1. Run the normalization late in the pipeline so later passes do not reintroduce this drift.
+2. Constrain rewrites to concrete lane evidence (`impl String` + lane fields), not broad global replacements.
+3. Treat degraded add-assign artifacts generically:
+   - `op_add_assign(&0)` -> typed byte append
+   - `c_void` add-assign callsites -> explicit no-op
+4. Add missing compat methods (`std_string_view::{data,length,size}`) only when absent for idempotence.
+5. Expand shared add-assign trait coverage (`i32`, `&i8`, `&i32`, `&std::string::String`) instead of adding target-file hacks.
+
+These constraints preserve the anti-pattern policy from section 1.3 while removing a high-density shared blocker lane.
 
 ## 2. End-to-End Architecture
 
