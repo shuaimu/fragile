@@ -45196,6 +45196,7 @@ impl rrr_v64 {
         if !code.contains("super::rrr::print_stack_trace(")
             && !code.contains("crate::rrr::print_stack_trace(")
             && !code.contains("super::printf_1(")
+            && !code.contains("std::slice::from_raw_parts(std::ptr::null() as *const u8, (self.len_) as usize)")
             && !code.contains("return fseeko(")
             && !code.contains("Fiber::create_run__(")
             && !code.contains("pub fn op_weak_ordering(&self")
@@ -45301,6 +45302,10 @@ impl rrr_v64 {
         out = out.replace(
             "if (self.data_.is_null()) || (Default::default().is_null()) {",
             "if (self.data_.is_null()) || (std::ptr::null::<i8>().is_null()) {",
+        );
+        out = out.replace(
+            "std::slice::from_raw_parts(std::ptr::null() as *const u8, (self.len_) as usize)",
+            "&[]",
         );
         out = out.replace(
             "return String::from(s as *const i8);",
@@ -140903,6 +140908,30 @@ impl path {
             output.contains("return unsafe { std::mem::zeroed() };")
                 && !output.contains("return Default::default();"),
             "post-fiber path guard should rewrite op_basic_string default return lane, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_event_surface_artifacts_rewrites_null_slice_compare_lane_to_empty_slice() {
+        let input = r#"
+impl std::string::String {
+    pub fn op_eq(&self, other: &str) -> bool {
+        return (unsafe { { let s1 = std::slice::from_raw_parts(self.data_ as *const () as *const u8, (self.len_) as usize); let s2 = std::slice::from_raw_parts(std::ptr::null() as *const u8, (self.len_) as usize); s1.cmp(s2) as i32 } }) == 0;
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_event_surface_artifacts(input);
+        assert!(
+            output.contains("let s2 = &[];"),
+            "null from_raw_parts compare lane should normalize to an empty slice, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains(
+                "std::slice::from_raw_parts(std::ptr::null() as *const u8, (self.len_) as usize)"
+            ),
+            "null from_raw_parts compare call should be removed, got:\n{}",
             output
         );
     }

@@ -6778,6 +6778,56 @@ fn m9_2c_iv_e34f5e5e4a_inventory_document_exists_and_records_replay_decompositio
     }
 }
 
+#[test]
+fn m9_2c_iv_e34f5e5e4b_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.5.e.4.b")
+            && todo.contains("Done 2026-03-28")
+            && todo.contains("invalid-null-arguments aborts")
+            && todo.contains(
+                "test_normalize_rpc_event_surface_artifacts_rewrites_null_slice_compare_lane_to_empty_slice",
+            )
+            && todo.contains("/tmp/fragile_e34f5e5e4b_focus_after_20260328T112432Z_p2017254")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e5e4b_invalid_null_slice_compare_inventory.md")
+            && todo.contains("M9.2.c.iv.e.34.f.5.e.5.e.4.c"),
+        "M9.2.c.iv.e.34.f.5.e.5.e.4.b TODO entry should capture bounded null-slice closure evidence"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e34f5e5e4b_inventory_document_exists_and_records_null_slice_closure() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34f5e5e4b_invalid_null_slice_compare_inventory.md"),
+    )
+    .expect("e.34.f.5.e.5.e.4.b inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.f.5.e.5.e.4.b",
+        "Wrong-approach check",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260328T092947Z_p1922380",
+        "invalid_null_arguments",
+        "std::slice::from_raw_parts(std::ptr::null() as *const u8, (self.len_) as usize)",
+        "normalize_rpc_event_surface_artifacts",
+        "test_normalize_rpc_event_surface_artifacts_rewrites_null_slice_compare_lane_to_empty_slice",
+        "/tmp/fragile_e34f5e5e4b_focus_after_20260328T112432Z_p2017254",
+        "event_status=0",
+        "fiber_status=0",
+        "event_invalid_null_arguments_count=0",
+        "fiber_invalid_null_arguments_count=0",
+        "M9.2.c.iv.e.34.f.5.e.5.e.4.c",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.f.5.e.5.e.4.b inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // M9.2.c.iv.e.17.d: Post-e.17 comprehensive strict compile error inventory
 // ---------------------------------------------------------------------------

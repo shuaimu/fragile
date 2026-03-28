@@ -22919,3 +22919,38 @@ Decomposition decision:
 Detailed inventory:
 
 - `docs/dev/m9_2c_iv_e34f5e5e4a_post_e5e5e3_replay_inventory.md`
+
+## 2026-03-28: M9.2.c.iv.e.34.f.5.e.5.e.4.b null-slice compare lane closure
+
+- Selected leaf: `M9.2.c.iv.e.34.f.5.e.5.e.4.b`.
+- Scope remained bounded (<1000 LOC): one targeted event-surface normalization update plus focused tests/probes.
+
+Wrong-approach check completed before implementation:
+
+- `docs/fragile-dev-book.md` section `1.3 Wrong Approaches (Do Not Do)`
+- `docs/dev/wrong.md`
+
+Residual target:
+
+- shared strict rustc abort in `event.cc`/`fiber_impl.cc`:
+  - `error: calling this function with a null pointer is undefined behavior`
+  - marker lane: `std::slice::from_raw_parts(std::ptr::null() as *const u8, (self.len_) as usize)`
+
+Implementation decision:
+
+1. Extend `normalize_rpc_event_surface_artifacts` trigger guard to run on the null-slice marker.
+2. Rewrite the degraded null-byte-slice compare callshape to an empty-slice lane (`&[]`).
+
+Validation:
+
+- focused unit test:
+  - `cargo test -p fragile-clang test_normalize_rpc_event_surface_artifacts_rewrites_null_slice_compare_lane_to_empty_slice -- --nocapture`
+- focused strict probes after rebuilding release `fragilec`:
+  - run-root: `/tmp/fragile_e34f5e5e4b_focus_after_20260328T112432Z_p2017254`
+  - `event_status=0`, `fiber_status=0`
+  - `event_invalid_null_arguments_count=0`, `fiber_invalid_null_arguments_count=0`
+  - `event_null_from_raw_parts_marker_count=0`, `fiber_null_from_raw_parts_marker_count=0`
+
+Detailed inventory:
+
+- `docs/dev/m9_2c_iv_e34f5e5e4b_invalid_null_slice_compare_inventory.md`
