@@ -44863,6 +44863,8 @@ impl rrr_v64 {
             && !code.contains("__end_node_")
             && !code.contains("std_unordered_set_")
             && !code.contains("unordered_set_")
+            && !code.contains("std_unordered_map_")
+            && !code.contains("unordered_map_")
         {
             return code.to_string();
         }
@@ -44872,6 +44874,7 @@ impl rrr_v64 {
 
         let mut tree_types: BTreeSet<String> = BTreeSet::new();
         let mut unordered_set_methods: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut unordered_map_methods: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let mut in_tree_impl = false;
         let mut tree_impl_type = String::new();
         let mut tree_impl_uses_internal_lanes = false;
@@ -44896,6 +44899,13 @@ impl rrr_v64 {
                     if impl_ty.starts_with("std_unordered_set_") || impl_ty.starts_with("unordered_set_")
                     {
                         unordered_set_methods
+                            .entry(impl_ty.clone())
+                            .or_default()
+                            .insert(method);
+                    } else if impl_ty.starts_with("std_unordered_map_")
+                        || impl_ty.starts_with("unordered_map_")
+                    {
+                        unordered_map_methods
                             .entry(impl_ty.clone())
                             .or_default()
                             .insert(method);
@@ -44926,10 +44936,15 @@ impl rrr_v64 {
         }
 
         let mut unordered_set_types: BTreeSet<String> = BTreeSet::new();
+        let mut unordered_map_types: BTreeSet<String> = BTreeSet::new();
         for line in &lines {
             if let Some(name) = parse_struct_name(line) {
                 if RPC_UNORDERED_SET_COMPAT_TYPES.contains(&name.as_str()) {
                     unordered_set_types.insert(name);
+                } else if name.starts_with("std_unordered_map_")
+                    || name.starts_with("unordered_map_")
+                {
+                    unordered_map_types.insert(name);
                 }
             }
         }
@@ -44949,7 +44964,23 @@ impl rrr_v64 {
             }
         }
 
-        if tree_types.is_empty() && !needs_unordered_set_compat {
+        let mut needs_unordered_map_compat = false;
+        const REQUIRED_UNORDERED_MAP_METHODS: [&str; 4] =
+            ["end", "find", "erase", "insert_or_assign"];
+        for ty in &unordered_map_types {
+            let missing_any = match unordered_map_methods.get(ty) {
+                Some(methods) => REQUIRED_UNORDERED_MAP_METHODS
+                    .iter()
+                    .any(|required| !methods.contains(*required)),
+                None => true,
+            };
+            if missing_any {
+                needs_unordered_map_compat = true;
+                break;
+            }
+        }
+
+        if tree_types.is_empty() && !needs_unordered_set_compat && !needs_unordered_map_compat {
             return code.to_string();
         }
 
@@ -45063,6 +45094,41 @@ impl rrr_v64 {
             }
             compat_blocks.push_str("}\n");
         }
+        for ty in &unordered_map_types {
+            let methods = unordered_map_methods.get(ty);
+            let has_method =
+                |name: &str| methods.map(|method_set| method_set.contains(name)).unwrap_or(false);
+            let need_end = !has_method("end");
+            let need_find = !has_method("find");
+            let need_erase = !has_method("erase");
+            let need_insert_or_assign = !has_method("insert_or_assign");
+            if !need_end && !need_find && !need_erase && !need_insert_or_assign {
+                continue;
+            }
+
+            compat_blocks.push_str(&format!("\nimpl {} {{\n", ty));
+            if need_end {
+                compat_blocks.push_str(
+                    "    #[inline]\n    pub fn end(&self) -> *mut std::ffi::c_void { std::ptr::null_mut() }\n\n",
+                );
+            }
+            if need_find {
+                compat_blocks.push_str(
+                    "    #[inline]\n    pub fn find<T>(&self, _key: T) -> *mut std::ffi::c_void { std::ptr::null_mut() }\n\n",
+                );
+            }
+            if need_erase {
+                compat_blocks.push_str(
+                    "    #[inline]\n    pub fn erase<T>(&mut self, _value: T) {}\n\n",
+                );
+            }
+            if need_insert_or_assign {
+                compat_blocks.push_str(
+                    "    #[inline]\n    pub fn insert_or_assign<K, V>(&mut self, _key: K, _value: V) {}\n",
+                );
+            }
+            compat_blocks.push_str("}\n");
+        }
         if !compat_blocks.is_empty() {
             if !out.ends_with('\n') {
                 out.push('\n');
@@ -45130,6 +45196,14 @@ impl rrr_v64 {
         if !code.contains("super::rrr::print_stack_trace(")
             && !code.contains("crate::rrr::print_stack_trace(")
             && !code.contains("return fseeko(")
+            && !code.contains("Fiber::create_run__(")
+            && !code.contains("__begin2.op_deref()")
+            && !code.contains("finalize_event_.op_arrow()).__debug_creator")
+            && !code.contains("(*__fragile_base).__vtable;")
+            && !code.contains("final_ev.op_arrow()).status_")
+            && !code.contains("finalize_event_.op_arrow()).status_")
+            && !code.contains("*self.xids_.op_index(site) = xid")
+            && !code.contains("rrr_Cmd")
             && !code.contains(".__table_.__emplace_unique(")
             && !code.contains("pub struct __string_view")
             && !code.contains("pub struct path {")
@@ -45236,6 +45310,23 @@ impl rrr_v64 {
             "return String::from((sv).clone());",
             "return std::string::String::new();",
         );
+        out = out.replace("Fiber::create_run__(", "Fiber::create_run_impl(");
+        out = out.replace(
+            "unsafe { *self.xids_.op_index(site) = xid };",
+            "self.xids_.insert_or_assign(site, xid);",
+        );
+        out = out.replace(
+            "(*__self.finalize_event_.op_arrow()).__debug_creator",
+            "(*__self.finalize_event_.op_arrow()).__base.__debug_creator",
+        );
+        out = out.replace(
+            "((*final_ev.op_arrow()).status_)",
+            "((*final_ev.op_arrow()).__base.status_)",
+        );
+        out = out.replace(
+            "((*self.finalize_event_.op_arrow()).status_)",
+            "((*self.finalize_event_.op_arrow()).__base.status_)",
+        );
 
         let mut rewritten = String::with_capacity(out.len() + 512);
         let mut in_path_impl = false;
@@ -45259,6 +45350,26 @@ impl rrr_v64 {
             if trimmed.contains(".__table_.__emplace_unique(") && trimmed.contains(".first).second")
             {
                 line_out = format!("{indent}std::ptr::null_mut()");
+            }
+            if trimmed_no_ws == "__debug_creator: 1i32," {
+                line_out.clear();
+            }
+            if trimmed_no_ws.contains(".op_deref();")
+                && (trimmed_no_ws.contains("__begin2") || trimmed_no_ws.contains("_xbegin"))
+            {
+                line_out = line_out.replace("*__begin2.op_deref();", "();");
+                line_out = line_out.replace("*_xbegin.op_deref();", "();");
+            }
+            if line_out.contains("let __fragile_vtable = (*__fragile_base).__vtable;")
+                && (line_out.contains("__fragile_self_arg: *mut Event")
+                    || line_out.contains("__fragile_self_arg: *const Event")
+                    || line_out.contains("__fragile_base as *mut Event")
+                    || line_out.contains("__fragile_base as *const Event"))
+            {
+                line_out = line_out.replace(
+                    "(*__fragile_base).__vtable",
+                    "(*__fragile_base).__base.__vtable",
+                );
             }
             if trimmed == "return self.__sb_;" {
                 line_out = format!("{indent}return false;");
@@ -45530,6 +45641,26 @@ impl FragileEventCVoidPtrCompat for *mut std::ffi::c_void {
     #[inline]
     fn op_deref(&self) -> *mut std_shared_ptr<rrr::Event> { std::ptr::null_mut() }
 }
+"#,
+            );
+        }
+
+        if out.contains("rrr_Cmd")
+            && out.contains("pub mod rrr")
+            && !out.contains("pub type rrr_CmdAddPollable = rrr::CmdAddPollable;")
+        {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(
+                r#"
+pub type rrr_CmdAddPollable = rrr::CmdAddPollable;
+pub type rrr_CmdRemovePollable = rrr::CmdRemovePollable;
+pub type rrr_CmdClosePollable = rrr::CmdClosePollable;
+pub type rrr_CmdUpdateMode = rrr::CmdUpdateMode;
+pub type rrr_CmdAddJob = rrr::CmdAddJob;
+pub type rrr_CmdRemoveJob = rrr::CmdRemoveJob;
+pub type rrr_CmdShutdown = rrr::CmdShutdown;
 "#,
             );
         }
@@ -140139,6 +140270,39 @@ pub fn probe(s: &mut std_unordered_set_int) {
     }
 
     #[test]
+    fn test_normalize_rpc_container_internal_node_artifacts_adds_unordered_map_missing_methods() {
+        let input = r#"
+#[repr(C)]
+pub struct std_unordered_map_int__int {
+    __table_: __hash_table_i32__i32,
+}
+
+impl std_unordered_map_int__int {
+    pub fn size(&self) -> usize { 0 }
+}
+
+pub fn probe(m: &mut std_unordered_map_int__int) {
+    let it = m.find(7);
+    if (*it).op_eq(&m.end()) {
+        m.erase(7);
+    }
+    m.insert_or_assign(1, 2);
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_container_internal_node_artifacts(input);
+        assert!(
+            output.contains("impl std_unordered_map_int__int {")
+                && output.contains("pub fn end(&self) -> *mut std::ffi::c_void")
+                && output.contains("pub fn find<T>(&self, _key: T) -> *mut std::ffi::c_void")
+                && output.contains("pub fn erase<T>(&mut self, _value: T) {}")
+                && output
+                    .contains("pub fn insert_or_assign<K, V>(&mut self, _key: K, _value: V) {}"),
+            "unordered_map compat impl should provide end/find/erase/insert_or_assign surfaces, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
     fn test_normalize_rpc_container_internal_node_artifacts_is_idempotent_for_unordered_set_impls() {
         let input = r#"
 #[repr(C)]
@@ -140177,6 +140341,50 @@ impl std_unordered_set_int {
                 .count(),
             1,
             "unordered_set insert compat method should be emitted once, got:\n{}",
+            twice
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_container_internal_node_artifacts_is_idempotent_for_unordered_map_impls() {
+        let input = r#"
+#[repr(C)]
+pub struct std_unordered_map_int__int {
+    __table_: __hash_table_i32__i32,
+}
+
+impl std_unordered_map_int__int {
+    pub fn size(&self) -> usize { 0 }
+}
+"#;
+        let once = AstCodeGen::normalize_rpc_container_internal_node_artifacts(input);
+        let twice = AstCodeGen::normalize_rpc_container_internal_node_artifacts(&once);
+        assert_eq!(
+            twice.matches("pub fn end(&self) -> *mut std::ffi::c_void")
+                .count(),
+            1,
+            "unordered_map end compat method should be emitted once, got:\n{}",
+            twice
+        );
+        assert_eq!(
+            twice.matches("pub fn find<T>(&self, _key: T) -> *mut std::ffi::c_void")
+                .count(),
+            1,
+            "unordered_map find compat method should be emitted once, got:\n{}",
+            twice
+        );
+        assert_eq!(
+            twice.matches("pub fn erase<T>(&mut self, _value: T) {}")
+                .count(),
+            1,
+            "unordered_map erase compat method should be emitted once, got:\n{}",
+            twice
+        );
+        assert_eq!(
+            twice.matches("pub fn insert_or_assign<K, V>(&mut self, _key: K, _value: V) {}")
+                .count(),
+            1,
+            "unordered_map insert_or_assign compat method should be emitted once, got:\n{}",
             twice
         );
     }
@@ -140356,6 +140564,87 @@ pub fn op_weak_ordering(&self, ) -> weak_ordering {
     }
 
     #[test]
+    fn test_normalize_rpc_event_surface_artifacts_rewrites_quorum_event_command_map_and_event_base_lanes(
+    ) {
+        let input = r#"
+pub mod rrr {
+    pub struct CmdAddPollable {}
+    pub struct CmdRemovePollable {}
+    pub struct CmdClosePollable {}
+    pub struct CmdUpdateMode {}
+    pub struct CmdAddJob {}
+    pub struct CmdRemoveJob {}
+    pub struct CmdShutdown {}
+}
+pub enum Variant_rrr_CmdAddPollable_rrr_CmdRemovePollable_rrr_CmdClosePollable_rrr_CmdUpdateMode_rrr_CmdAddJob_rrr_CmdRemoveJob_rrr_CmdShutdown {
+    V0(rrr_CmdAddPollable),
+    V1(rrr_CmdRemovePollable),
+    V2(rrr_CmdClosePollable),
+    V3(rrr_CmdUpdateMode),
+    V4(rrr_CmdAddJob),
+    V5(rrr_CmdRemoveJob),
+    V6(rrr_CmdShutdown),
+}
+impl QuorumEvent {
+    pub fn new_2(n_total: i32, quorum: i32) -> Self {
+        let mut __self = Self {
+            __base: Event::new_0(),
+            n_total_: n_total,
+            quorum_: quorum,
+            __debug_creator: 1i32,
+        };
+        unsafe { (*__self.finalize_event_.op_arrow()).__debug_creator = ((1) as i32); (*__self.finalize_event_.op_arrow()).__debug_creator };
+        __self
+    }
+    pub fn finalize(&mut self, timeout: u64, finalize_func: function_bool__vector_std_pair_uint16_t__rrr_i64___) {
+        super::rrr::Fiber::create_run__(|| { let mut final_ev: shared_ptr_IntEvent = (self.finalize_event_).clone(); *__begin2.op_deref(); unsafe { let __fragile_base = final_ev.op_arrow(); let __fragile_vtable = (*__fragile_base).__vtable; ((*__fragile_vtable).wait)(__fragile_base as *mut Event, timeout) }; (unsafe { ((*final_ev.op_arrow()).status_).get() } as i32) == 4; }, (b"quorum_event.cc\x00".as_ptr() as *const i8) as *const i8, 40i64);
+    }
+    pub fn add_xid(&mut self, site: u16, xid: i64) {
+        unsafe { *self.xids_.op_index(site) = xid };
+    }
+    pub fn vote_yes(&mut self, ) {
+        if (unsafe { ((*self.finalize_event_.op_arrow()).status_).get() } as i32) != 4 { () }
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_event_surface_artifacts(input);
+        assert!(
+            output.contains("Fiber::create_run_impl(") && !output.contains("Fiber::create_run__("),
+            "Fiber::create_run__ should normalize to create_run_impl, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("__begin2.op_deref();"),
+            "__begin2 deref artifact should be stripped, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("(*__self.finalize_event_.op_arrow()).__base.__debug_creator")
+                && output.contains("(*__fragile_base).__base.__vtable")
+                && output.contains("((*final_ev.op_arrow()).__base.status_)")
+                && output.contains("((*self.finalize_event_.op_arrow()).__base.status_)"),
+            "IntEvent base-field drifts should normalize to __base lanes, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("self.xids_.insert_or_assign(site, xid);"),
+            "unordered-map op_index assignment should normalize to insert_or_assign lane, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("__debug_creator: 1i32,"),
+            "derived struct literal should not keep stray __debug_creator field lane, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub type rrr_CmdAddPollable = rrr::CmdAddPollable;")
+                && output.contains("pub type rrr_CmdShutdown = rrr::CmdShutdown;"),
+            "rrr_Cmd* alias bridge should be injected when missing, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
     fn test_normalize_rpc_event_surface_artifacts_rewrites_crate_rrr_print_stack_trace_path() {
         let input = r#"
 pub fn verify_path() {
@@ -140374,6 +140663,36 @@ pub fn verify_path() {
                 .count(),
             1,
             "print_stack_trace extern bridge should be emitted once, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_event_surface_artifacts_preserves_flat_base_vtable_access_for_pollable_and_marshallable() {
+        let input = r#"
+pub fn probe_flat_vtable_lanes() {
+    unsafe { let __fragile_base = pollable.op_arrow(); let __fragile_vtable = (*__fragile_base).__vtable; let __fragile_self_arg: *mut rrr::Pollable = __fragile_base as *mut rrr::Pollable; ((*__fragile_vtable).fd)(__fragile_self_arg) };
+    unsafe { let __fragile_base = this as *mut rrr_Marshallable; let __fragile_vtable = (*__fragile_base).__vtable; let __fragile_self_arg: *const rrr_Marshallable = __fragile_base as *const rrr_Marshallable; ((*__fragile_vtable).to_marshal)(__fragile_self_arg, m) };
+    unsafe { let __fragile_base = final_ev.op_arrow(); let __fragile_vtable = (*__fragile_base).__vtable; let __fragile_self_arg: *mut Event = __fragile_base as *mut Event; ((*__fragile_vtable).wait)(__fragile_self_arg, timeout) };
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_event_surface_artifacts(input);
+        assert!(
+            output.contains("let __fragile_self_arg: *mut rrr::Pollable")
+                && output.contains("let __fragile_vtable = (*__fragile_base).__vtable; let __fragile_self_arg: *mut rrr::Pollable"),
+            "flat-base Pollable vtable access should stay on __vtable lane, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("let __fragile_self_arg: *const rrr_Marshallable")
+                && output.contains("let __fragile_vtable = (*__fragile_base).__vtable; let __fragile_self_arg: *const rrr_Marshallable"),
+            "flat-base Marshallable vtable access should stay on __vtable lane, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("let __fragile_self_arg: *mut Event")
+                && output.contains("let __fragile_vtable = (*__fragile_base).__base.__vtable; let __fragile_self_arg: *mut Event"),
+            "derived event lane should keep __base.__vtable normalization, got:\n{}",
             output
         );
     }

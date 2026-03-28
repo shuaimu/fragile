@@ -22726,3 +22726,84 @@ Validation:
 Design/rationale + replay details are recorded in:
 
 - `docs/dev/m9_2c_iv_e34f5e5c_event_path_string_view_inventory.md`
+
+## 2026-03-28: M9.2.c.iv.e.34.f.5.e.5.d reactor/quorum command-map + event-base closure
+
+- Selected leaf: `M9.2.c.iv.e.34.f.5.e.5.d`.
+- Scope stayed bounded (<1000 LOC): additive normalization updates in `ast_codegen` + focused tests + inventory/TODO updates.
+
+Wrong-approach check completed before edits:
+
+- `docs/fragile-dev-book.md` section `1.3 Wrong Approaches (Do Not Do)`
+- `docs/dev/wrong.md`
+
+Key decisions:
+
+1. Extend `normalize_rpc_container_internal_node_artifacts` to cover unordered-map compat gaps (not only unordered-set):
+   - inject missing `end/find/erase/insert_or_assign` with method-aware idempotence guards.
+2. Extend `normalize_rpc_event_surface_artifacts` for quorum/reactor stragglers:
+   - `Fiber::create_run__` -> `create_run_impl`
+   - strip degraded `__begin2/_xbegin` deref fragments while preserving enclosing callshape
+   - normalize `IntEvent` direct-field drift to `__base` lanes (`__debug_creator`, `__vtable`, `status_`)
+   - normalize `xids_.op_index` assignment drift to `insert_or_assign`
+   - append guarded `rrr_Cmd*` alias bridge when unresolved command symbols are present.
+
+Focused validation:
+
+- `cargo test -p fragile-clang test_normalize_rpc_container_internal_node_artifacts_adds_unordered_map_missing_methods -- --nocapture`
+- `cargo test -p fragile-clang test_normalize_rpc_container_internal_node_artifacts_is_idempotent_for_unordered_map_impls -- --nocapture`
+- `cargo test -p fragile-clang test_normalize_rpc_event_surface_artifacts_rewrites_quorum_event_command_map_and_event_base_lanes -- --nocapture`
+
+All focused tests passed.
+
+## 2026-03-28: M9.2.c.iv.e.34.f.5.e.5.e.1 flat-base vtable lane closure
+
+- Selected leaf: `M9.2.c.iv.e.34.f.5.e.5.e.1` (first decomposed leaf under `...e.5.e.5.e`).
+- Scope remained bounded (<1000 LOC): one normalization refinement + focused unit tests.
+
+Wrong-approach check completed before edits:
+
+- `docs/fragile-dev-book.md` section `1.3 Wrong Approaches (Do Not Do)`
+- `docs/dev/wrong.md`
+
+Replay baseline for decomposition:
+
+- run-root: `/tmp/fragile_m9_2_strict_runtime_replay_20260328T000000Z_p1395452`
+- lane contract: `build=2`, `test_rpc=-1`, `failure_class=build_failed`, `completed_trials=0/1`
+- blocker inventory: `total=22`, `unique=18`, non-increase vs baseline = `true`
+- targeted residual family: `E0609` flat-base vtable lanes (`rrr::Pollable`, `rrr_Marshallable`).
+
+Implementation decision:
+
+- `normalize_rpc_event_surface_artifacts` already rewrote
+  `(*__fragile_base).__vtable` -> `(*__fragile_base).__base.__vtable`.
+- This is correct for derived `Event` lanes, but incorrect for flat-base shims.
+- Added a bounded corrective rewrite for single-line shim callshapes where
+  `__fragile_self_arg` is typed as `rrr::Pollable`/`rrr_Marshallable`/`rrr::Marshallable`:
+  restore `(*__fragile_base).__vtable` while leaving derived `Event` lanes unchanged.
+
+Focused validation:
+
+- `cargo test -p fragile-clang test_normalize_rpc_event_surface_artifacts_preserves_flat_base_vtable_access_for_pollable_and_marshallable -- --nocapture`
+- `cargo test -p fragile-clang test_normalize_rpc_event_surface_artifacts_rewrites_quorum_event_command_map_and_event_base_lanes -- --nocapture`
+
+Both tests passed.
+
+Design/rationale and decomposition evidence are recorded in:
+
+- `docs/dev/m9_2c_iv_e34f5e5e1_flat_base_vtable_inventory.md`
+
+Follow-up correction (same leaf closure):
+
+- The first bounded fix still let a global `(*__fragile_base).__vtable -> (*__fragile_base).__base.__vtable`
+  rewrite leak into non-event virtual dispatch paths (for example XMLNode pointer-return chains),
+  tripping `test_vtable_dispatch_base_expr_normalizes_redundant_deref_from_pointer_return_chain`.
+- Final shape: event-base rewrite is now applied only on lines that are clearly `Event` callshapes
+  (`__fragile_self_arg: *mut/*const Event` or `__fragile_base as *mut/*const Event`), leaving
+  non-event lanes unchanged.
+
+Regression validation:
+
+- `cargo test -p fragile-clang test_vtable_dispatch_base_expr_normalizes_redundant_deref_from_pointer_return_chain -- --nocapture`
+- `cargo test -p fragile-clang test_normalize_rpc_event_surface_artifacts_rewrites_quorum_event_command_map_and_event_base_lanes -- --nocapture`
+- `cargo test -p fragile-clang test_normalize_rpc_event_surface_artifacts_preserves_flat_base_vtable_access_for_pollable_and_marshallable -- --nocapture`
