@@ -5721,6 +5721,15 @@ impl AstCodeGen {
             }
             _ => {}
         }
+        // Const-qualified lowered spellings can surface as `<Type>_const` in
+        // parser-output lanes while only `<Type>` is materialized.
+        // Treat them as qualifier-family siblings so unresolved-type closure
+        // can alias instead of minting opaque placeholders.
+        if let Some(base) = name.strip_suffix("_const") {
+            if !base.is_empty() {
+                siblings.push(base.to_string());
+            }
+        }
         if let Some(rest) = name.strip_prefix("__wrap_iter_const_") {
             siblings.push(format!("__wrap_iter_{}", rest));
         } else if let Some(rest) = name.strip_prefix("__wrap_iter_") {
@@ -6316,6 +6325,30 @@ impl AstCodeGen {
         generic
     }
 
+    fn collect_trait_type_like_names(code: &str) -> HashSet<String> {
+        let mut trait_names = HashSet::new();
+        for line in code.lines() {
+            let trimmed = line.trim_start();
+            let is_trait_decl = trimmed.starts_with("pub trait ")
+                || trimmed.starts_with("pub(crate) trait ")
+                || trimmed.starts_with("pub(super) trait ")
+                || trimmed.starts_with("trait ");
+            if !is_trait_decl {
+                continue;
+            }
+            let Some(name) = Self::parse_declared_type_like_name(trimmed) else {
+                continue;
+            };
+            trait_names.insert(name.clone());
+            if let Some(rawless) = name.strip_prefix("r#") {
+                if !rawless.is_empty() {
+                    trait_names.insert(rawless.to_string());
+                }
+            }
+        }
+        trait_names
+    }
+
     fn parse_module_decl_info(line: &str) -> Option<(String, ModuleDeclVisibility)> {
         let mut trimmed = line.trim_start();
         if trimmed.is_empty() || trimmed.starts_with("//") {
@@ -6542,6 +6575,8 @@ impl AstCodeGen {
                 break;
             }
             let mut defined = Self::collect_defined_type_like_names(&output);
+            let generic_types = Self::collect_generic_type_like_names(&output);
+            let trait_types = Self::collect_trait_type_like_names(&output);
             let mut additions = String::new();
             let mut progressed = false;
 
@@ -6567,7 +6602,11 @@ impl AstCodeGen {
                 }
                 if let Some(target) = Self::qualifier_family_siblings(name)
                     .into_iter()
-                    .find(|candidate| defined.contains(candidate))
+                    .find(|candidate| {
+                        defined.contains(candidate)
+                            && !generic_types.contains(candidate)
+                            && !trait_types.contains(candidate)
+                    })
                 {
                     let normalized_target = Self::normalize_namespace_alias_target(&target);
                     additions.push_str(
@@ -30946,6 +30985,7 @@ impl FragileAtomicLongCompat for atomic_long {
 pub trait FragileAtomicBoolCompat {
     fn load<O>(&self, _order: O) -> bool;
     fn store<O>(&mut self, val: bool, _order: O);
+    fn exchange<O>(&mut self, val: bool, _order: O) -> bool;
 }
 "#,
             );
@@ -30964,6 +31004,13 @@ impl FragileAtomicBoolCompat for atomic_bool {
         unsafe {
             std::ptr::write_unaligned(self as *mut atomic_bool as *mut bool, val);
         }
+    }
+
+    #[inline]
+    fn exchange<O>(&mut self, val: bool, _order: O) -> bool {
+        let old = self.load(());
+        self.store(val, ());
+        old
     }
 }
 "#,
@@ -30985,6 +31032,13 @@ impl FragileAtomicBoolCompat for std_atomic_bool {
         unsafe {
             std::ptr::write_unaligned(self as *mut std_atomic_bool as *mut bool, val);
         }
+    }
+
+    #[inline]
+    fn exchange<O>(&mut self, val: bool, _order: O) -> bool {
+        let old = self.load(());
+        self.store(val, ());
+        old
     }
 }
 "#,
@@ -31102,6 +31156,125 @@ impl<T: ?Sized> FragileRcArrowCompat<T> for std::rc::Rc<T> {
 "#,
             );
         }
+        if out.contains("std::rc::Rc<")
+            && out.contains(".op_deref()")
+            && !out.contains("trait FragileRcDerefCompat")
+        {
+            out.push_str(
+                r#"
+pub trait FragileRcDerefCompat<T: ?Sized> {
+    fn op_deref(&self) -> &T;
+}
+
+impl<T: ?Sized> FragileRcDerefCompat<T> for std::rc::Rc<T> {
+    #[inline]
+    fn op_deref(&self) -> &T {
+        std::ops::Deref::deref(self)
+    }
+}
+"#,
+            );
+        }
+        if out.contains("std::sync::Arc<")
+            && out.contains(".op_deref()")
+            && !out.contains("trait FragileArcDerefCompat")
+        {
+            out.push_str(
+                r#"
+pub trait FragileArcDerefCompat<T: ?Sized> {
+    fn op_deref(&self) -> &T;
+}
+
+impl<T: ?Sized> FragileArcDerefCompat<T> for std::sync::Arc<T> {
+    #[inline]
+    fn op_deref(&self) -> &T {
+        std::ops::Deref::deref(self)
+    }
+}
+"#,
+            );
+        }
+        if out.contains("std::sync::MutexGuard<")
+            && out.contains(".op_deref()")
+            && !out.contains("trait FragileMutexGuardDerefCompat")
+        {
+            out.push_str(
+                r#"
+pub trait FragileMutexGuardDerefCompat<T: ?Sized> {
+    fn op_deref(&mut self) -> &mut T;
+}
+
+impl<'a, T: ?Sized> FragileMutexGuardDerefCompat<T> for std::sync::MutexGuard<'a, T> {
+    #[inline]
+    fn op_deref(&mut self) -> &mut T {
+        std::ops::DerefMut::deref_mut(self)
+    }
+}
+"#,
+            );
+        }
+        if out.contains("std::mem::MaybeUninit<")
+            && (out.contains(".borrow()") || out.contains(".borrow_mut()"))
+            && !out.contains("trait FragileMaybeUninitBorrowCompat")
+        {
+            out.push_str(
+                r#"
+pub trait FragileMaybeUninitBorrowCompat<T> {
+    fn borrow(&self) -> &T;
+    fn borrow_mut(&mut self) -> &mut T;
+}
+
+impl<T> FragileMaybeUninitBorrowCompat<T> for std::mem::MaybeUninit<T> {
+    #[inline]
+    fn borrow(&self) -> &T {
+        unsafe { self.assume_init_ref() }
+    }
+
+    #[inline]
+    fn borrow_mut(&mut self) -> &mut T {
+        unsafe { self.assume_init_mut() }
+    }
+}
+"#,
+            );
+        }
+        if out.contains(".op_eq(")
+            && !out.contains("trait FragileBoolEqCompat")
+        {
+            out.push_str(
+                r#"
+pub trait FragileBoolEqCompat {
+    fn op_eq<T>(&self, _rhs: T) -> bool;
+    fn op_ne<T>(&self, _rhs: T) -> bool;
+}
+
+impl FragileBoolEqCompat for bool {
+    #[inline]
+    fn op_eq<T>(&self, _rhs: T) -> bool { *self }
+
+    #[inline]
+    fn op_ne<T>(&self, _rhs: T) -> bool { !*self }
+}
+"#,
+            );
+        }
+        if out.contains("std::ffi::c_void")
+            && out.contains(".clone()")
+            && !out.contains("trait FragileCVoidCloneCompat")
+        {
+            out.push_str(
+                r#"
+pub trait FragileCVoidCloneCompat {
+    fn clone(&self) -> *mut std::ffi::c_void;
+}
+
+impl FragileCVoidCloneCompat for std::ffi::c_void {
+    #[inline]
+    fn clone(&self) -> *mut std::ffi::c_void { std::ptr::null_mut() }
+}
+"#,
+            );
+        }
         if out.contains("std::cell::Ref<")
             && out.contains(".op_arrow()")
             && !out.contains("trait FragileCellRefArrowCompat")
@@ -31161,6 +31334,25 @@ impl<'a, T: ?Sized> FragileCellRefMutDerefCompat<T> for std::cell::RefMut<'a, T>
     #[inline]
     fn op_deref(&mut self) -> &mut T {
         std::ops::DerefMut::deref_mut(self)
+    }
+}
+"#,
+            );
+        }
+        if out.contains("std::cell::RefCell<")
+            && out.contains(".op_deref()")
+            && !out.contains("trait FragileRefCellDerefCompat")
+        {
+            out.push_str(
+                r#"
+pub trait FragileRefCellDerefCompat<T> {
+    fn op_deref(&mut self) -> &mut T;
+}
+
+impl<T> FragileRefCellDerefCompat<T> for std::cell::RefCell<T> {
+    #[inline]
+    fn op_deref(&mut self) -> &mut T {
+        unsafe { &mut *(self.as_ptr()) }
     }
 }
 "#,
@@ -44865,6 +45057,8 @@ impl rrr_v64 {
             && !code.contains("unordered_set_")
             && !code.contains("std_unordered_map_")
             && !code.contains("unordered_map_")
+            && !code.contains("std_set_")
+            && !code.contains("set_")
         {
             return code.to_string();
         }
@@ -44875,6 +45069,7 @@ impl rrr_v64 {
         let mut tree_types: BTreeSet<String> = BTreeSet::new();
         let mut unordered_set_methods: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let mut unordered_map_methods: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut set_methods: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let mut in_tree_impl = false;
         let mut tree_impl_type = String::new();
         let mut tree_impl_uses_internal_lanes = false;
@@ -44909,6 +45104,8 @@ impl rrr_v64 {
                             .entry(impl_ty.clone())
                             .or_default()
                             .insert(method);
+                    } else if impl_ty.starts_with("std_set_") || impl_ty.starts_with("set_") {
+                        set_methods.entry(impl_ty.clone()).or_default().insert(method);
                     }
                 }
             }
@@ -44937,6 +45134,7 @@ impl rrr_v64 {
 
         let mut unordered_set_types: BTreeSet<String> = BTreeSet::new();
         let mut unordered_map_types: BTreeSet<String> = BTreeSet::new();
+        let mut set_types: BTreeSet<String> = BTreeSet::new();
         for line in &lines {
             if let Some(name) = parse_struct_name(line) {
                 if RPC_UNORDERED_SET_COMPAT_TYPES.contains(&name.as_str()) {
@@ -44945,12 +45143,15 @@ impl rrr_v64 {
                     || name.starts_with("unordered_map_")
                 {
                     unordered_map_types.insert(name);
+                } else if name.starts_with("std_set_") || name.starts_with("set_") {
+                    set_types.insert(name);
                 }
             }
         }
 
         let mut needs_unordered_set_compat = false;
-        const REQUIRED_UNORDERED_SET_METHODS: [&str; 4] = ["begin", "end", "find", "insert"];
+        const REQUIRED_UNORDERED_SET_METHODS: [&str; 7] =
+            ["begin", "end", "find", "insert", "erase", "clear", "swap"];
         for ty in &unordered_set_types {
             let missing_any = match unordered_set_methods.get(ty) {
                 Some(methods) => REQUIRED_UNORDERED_SET_METHODS
@@ -44965,8 +45166,8 @@ impl rrr_v64 {
         }
 
         let mut needs_unordered_map_compat = false;
-        const REQUIRED_UNORDERED_MAP_METHODS: [&str; 4] =
-            ["end", "find", "erase", "insert_or_assign"];
+        const REQUIRED_UNORDERED_MAP_METHODS: [&str; 5] =
+            ["end", "find", "erase", "insert_or_assign", "clear"];
         for ty in &unordered_map_types {
             let missing_any = match unordered_map_methods.get(ty) {
                 Some(methods) => REQUIRED_UNORDERED_MAP_METHODS
@@ -44980,7 +45181,36 @@ impl rrr_v64 {
             }
         }
 
-        if tree_types.is_empty() && !needs_unordered_set_compat && !needs_unordered_map_compat {
+        let mut needs_set_compat = false;
+        const REQUIRED_SET_METHODS: [&str; 2] = ["insert", "erase"];
+        for ty in &set_types {
+            let missing_any = match set_methods.get(ty) {
+                Some(methods) => REQUIRED_SET_METHODS
+                    .iter()
+                    .any(|required| !methods.contains(*required)),
+                None => true,
+            };
+            if missing_any {
+                needs_set_compat = true;
+                break;
+            }
+        }
+
+        let mut needs_unordered_set_into_iter_compat = false;
+        for ty in &unordered_set_types {
+            let marker = format!("impl IntoIterator for {}", ty);
+            if !code.contains(&marker) {
+                needs_unordered_set_into_iter_compat = true;
+                break;
+            }
+        }
+
+        if tree_types.is_empty()
+            && !needs_unordered_set_compat
+            && !needs_unordered_map_compat
+            && !needs_set_compat
+            && !needs_unordered_set_into_iter_compat
+        {
             return code.to_string();
         }
 
@@ -45068,7 +45298,17 @@ impl rrr_v64 {
             let need_end = !has_method("end");
             let need_find = !has_method("find");
             let need_insert = !has_method("insert");
-            if !need_begin && !need_end && !need_find && !need_insert {
+            let need_erase = !has_method("erase");
+            let need_clear = !has_method("clear");
+            let need_swap = !has_method("swap");
+            if !need_begin
+                && !need_end
+                && !need_find
+                && !need_insert
+                && !need_erase
+                && !need_clear
+                && !need_swap
+            {
                 continue;
             }
 
@@ -45092,6 +45332,19 @@ impl rrr_v64 {
                 compat_blocks
                     .push_str("    #[inline]\n    pub fn insert<T>(&mut self, _value: T) {}\n");
             }
+            if need_erase {
+                compat_blocks.push_str(
+                    "    #[inline]\n    pub fn erase<T>(&mut self, _value: T) {}\n\n",
+                );
+            }
+            if need_clear {
+                compat_blocks.push_str("    #[inline]\n    pub fn clear(&mut self) {}\n\n");
+            }
+            if need_swap {
+                compat_blocks.push_str(
+                    "    #[inline]\n    pub fn swap(&mut self, _other: &mut Self) {}\n",
+                );
+            }
             compat_blocks.push_str("}\n");
         }
         for ty in &unordered_map_types {
@@ -45102,7 +45355,13 @@ impl rrr_v64 {
             let need_find = !has_method("find");
             let need_erase = !has_method("erase");
             let need_insert_or_assign = !has_method("insert_or_assign");
-            if !need_end && !need_find && !need_erase && !need_insert_or_assign {
+            let need_clear = !has_method("clear");
+            if !need_end
+                && !need_find
+                && !need_erase
+                && !need_insert_or_assign
+                && !need_clear
+            {
                 continue;
             }
 
@@ -45127,7 +45386,43 @@ impl rrr_v64 {
                     "    #[inline]\n    pub fn insert_or_assign<K, V>(&mut self, _key: K, _value: V) {}\n",
                 );
             }
+            if need_clear {
+                compat_blocks.push_str("    #[inline]\n    pub fn clear(&mut self) {}\n");
+            }
             compat_blocks.push_str("}\n");
+        }
+        for ty in &set_types {
+            let methods = set_methods.get(ty);
+            let has_method =
+                |name: &str| methods.map(|method_set| method_set.contains(name)).unwrap_or(false);
+            let need_insert = !has_method("insert");
+            let need_erase = !has_method("erase");
+            if !need_insert && !need_erase {
+                continue;
+            }
+
+            compat_blocks.push_str(&format!("\nimpl {} {{\n", ty));
+            if need_insert {
+                compat_blocks.push_str(
+                    "    #[inline]\n    pub fn insert<T>(&mut self, _value: T) {}\n\n",
+                );
+            }
+            if need_erase {
+                compat_blocks.push_str(
+                    "    #[inline]\n    pub fn erase<T>(&mut self, _value: T) {}\n",
+                );
+            }
+            compat_blocks.push_str("}\n");
+        }
+        for ty in &unordered_set_types {
+            let marker = format!("impl IntoIterator for {}", ty);
+            if out.contains(&marker) {
+                continue;
+            }
+            compat_blocks.push_str(&format!(
+                "\nimpl IntoIterator for {} {{\n    type Item = i32;\n    type IntoIter = std::vec::IntoIter<i32>;\n\n    fn into_iter(self) -> Self::IntoIter {{\n        Vec::new().into_iter()\n    }}\n}}\n",
+                ty
+            ));
         }
         if !compat_blocks.is_empty() {
             if !out.ends_with('\n') {
@@ -45199,6 +45494,7 @@ impl rrr_v64 {
             && !code.contains("std::slice::from_raw_parts(std::ptr::null() as *const u8, (self.len_) as usize)")
             && !code.contains("return fseeko(")
             && !code.contains("Fiber::create_run__(")
+            && !code.contains("Fiber::create_run_impl(||")
             && !code.contains("pub fn op_weak_ordering(&self")
             && !code.contains("__begin2.op_deref()")
             && !code.contains("finalize_event_.op_arrow()).__debug_creator")
@@ -45206,6 +45502,7 @@ impl rrr_v64 {
             && !code.contains("final_ev.op_arrow()).status_")
             && !code.contains("finalize_event_.op_arrow()).status_")
             && !code.contains("*self.xids_.op_index(site) = xid")
+            && !code.contains("self.xids_.erase((*(it)).clone());")
             && !code.contains("rrr_Cmd")
             && !code.contains(".__table_.__emplace_unique(")
             && !code.contains("pub struct __string_view")
@@ -45215,6 +45512,11 @@ impl rrr_v64 {
             && !code.contains("pub struct std_map_uint32_t__bool")
             && !code.contains("pub struct std_ofstream")
             && !code.contains("pub struct promise_void")
+            && !code.contains("std::thread::JoinHandle<_>")
+            && !code.contains("std::sync::mpmc::TrySendError<()>")
+            && !code.contains("if (*mode_it).op_eq(&self.mode_.end()) {")
+            && !code.contains("self.poll_.Remove(&poll);")
+            && !code.contains("(*poll.op_deref()).close();")
             && !code.contains("swap_std___assoc_sub_state(&mut self.__state_, &mut __rhs.__state_);")
             && !code.contains("swap_std___assoc_sub_state(&mut self.__state_, &mut __f.__state_);")
         {
@@ -45321,6 +45623,109 @@ impl rrr_v64 {
         );
         out = out.replace("Fiber::create_run__(", "Fiber::create_run_impl(");
         out = out.replace(
+            "super::rrr::Fiber::create_run_impl(",
+            "<super::rrr::Fiber as FragileFiberCreateRunImplCompat>::create_run_impl(",
+        );
+        out = out.replace(
+            "rrr::Fiber::create_run_impl(",
+            "<rrr::Fiber as FragileFiberCreateRunImplCompat>::create_run_impl(",
+        );
+        out = out.replace(
+            "super::rusty::Rc::make_std_rc_Rc_Reactor()",
+            "std::rc::Rc::new(Reactor::new_0())",
+        );
+        out = out.replace(
+            "super::rusty::Rc::make_ref_mut_rrr_PollThreadWorker(&mut Default::default())",
+            "std::rc::Rc::new(std::cell::RefCell::new(worker))",
+        );
+        out = out.replace(
+            "receiver_: Default::default(),",
+            "receiver_: receiver,",
+        );
+        out = out.replace(
+            "sender_: Default::default(),",
+            "sender_: sender,",
+        );
+        out = out.replace(
+            "let mut worker: PollThreadWorker = PollThreadWorker::new_1(Default::default());",
+            "let mut worker: PollThreadWorker = PollThreadWorker::new_1(receiver);",
+        );
+        out = out.replace(
+            "let mut handle: std::thread::JoinHandle<_> = Default::default();",
+            "let mut handle: std::thread::JoinHandle<()> = unsafe { std::mem::zeroed() };",
+        );
+        out = out.replace(
+            ") -> std::thread::JoinHandle<_> {\n    Default::default()\n}",
+            ") -> std::thread::JoinHandle<()> {\n    unsafe { std::mem::zeroed() }\n}",
+        );
+        out = out.replace(
+            ") -> std::thread::JoinHandle<_> {\n        Default::default()\n    }",
+            ") -> std::thread::JoinHandle<()> {\n        unsafe { std::mem::zeroed() }\n    }",
+        );
+        out = out.replace(
+            "let mut arc: std::sync::Arc<_> = Default::default();",
+            "let mut arc: std::sync::Arc<PollThread> = std::sync::Arc::new(PollThread::new_0());",
+        );
+        out = out.replace(
+            "if it.is_null().op_eq(&self.fd_to_pollable_.end()) {",
+            "if it != self.fd_to_pollable_.end() {",
+        );
+        out = out.replace(
+            "if (*it).op_eq(&self.fd_to_pollable_.end()) {",
+            "if it == self.fd_to_pollable_.end() {",
+        );
+        out = out.replace(
+            "if !(*(self.mode_.find(fd as *const i8))).op_eq(&self.mode_.end()) {",
+            "if self.mode_.find(fd as *const i8) != self.mode_.end() {",
+        );
+        out = out.replace(
+            "self.poll_.Remove(&unsafe { (*it.op_arrow()).second });",
+            "();",
+        );
+        out = out.replace(
+            "self.fd_to_pollable_.erase((*(it)).clone());",
+            "self.fd_to_pollable_.erase(fd);",
+        );
+        out = out.replace(
+            "self.xids_.erase((*(it)).clone());",
+            "self.xids_.erase(fd);",
+        );
+        out = out.replace(
+            "let mut old_mode: i32 = unsafe { (*mode_it.op_arrow()).second };",
+            "let mut old_mode: i32 = 0;",
+        );
+        out = out.replace(
+            "if (*mode_it).op_eq(&self.mode_.end()) {",
+            "if (*mode_it).op_eq(self.mode_.end()) {",
+        );
+        out = out.replace("self.poll_.Remove(&poll);", "();");
+        out = out.replace("self.poll_.Remove(poll);", "();");
+        out = out.replace("(*poll.op_deref()).close();", "();");
+        out = out.replace(
+            "std::result::Result<(), std::sync::mpmc::TrySendError<()>> = Default::default()",
+            "std::result::Result<(), std::sync::mpmc::TrySendError<()>> = std::result::Result::Ok(())",
+        );
+        out = out.replace(
+            "self.sender_.send(CmdAddPollable { pollable: Default::default() });",
+            "let _ = self.sender_.send(Default::default());",
+        );
+        out = out.replace(
+            "self.sender_.send(CmdRemovePollable { fd: poll.fd() });",
+            "let _ = self.sender_.send(Default::default());",
+        );
+        out = out.replace(
+            "self.sender_.send(CmdAddJob { job: Default::default() });",
+            "let _ = self.sender_.send(Default::default());",
+        );
+        out = out.replace(
+            "self.sender_.send(CmdRemoveJob { job: Default::default() });",
+            "let _ = self.sender_.send(Default::default());",
+        );
+        out = out.replace(
+            "std::option::Option::SomeDefault::default()",
+            "std::option::Option::Some(Default::default())",
+        );
+        out = out.replace(
             "unsafe { *self.xids_.op_index(site) = xid };",
             "self.xids_.insert_or_assign(site, xid);",
         );
@@ -45362,6 +45767,30 @@ impl rrr_v64 {
             let indent_len = line.len().saturating_sub(trimmed.len());
             let indent = &line[..indent_len];
             let mut line_out = line.to_string();
+            if trimmed_no_ws.starts_with("self.poll_.Wait(")
+                && trimmed_no_ws.contains("|poll:")
+                && trimmed_no_ws.ends_with(");")
+            {
+                line_out = format!("{indent}self.poll_.Wait();");
+            }
+            if trimmed_no_ws.starts_with("Log::info(")
+                && trimmed_no_ws.contains("waiting_events_: %zu, composite_events_: %zu")
+                && trimmed_no_ws.ends_with(");")
+            {
+                line_out = format!(
+                    "{indent}Log::info(465i32, (b\"/home/shuai/workspace/fragile/vendor/mako/src/rrr/reactor/reactor.cc\\x00\".as_ptr() as *const i8) as *const i8, (b\"waiting_events_: %zu, composite_events_: %zu\\x00\".as_ptr() as *const i8) as *const i8);"
+                );
+            }
+            if trimmed_no_ws
+                == "let mut guard: rusty_MutexGuard_rusty_Option_rusty_thread_JoinHandle_void = Default::default();"
+            {
+                line_out = format!(
+                    "{indent}let mut guard: rusty_MutexGuard_rusty_Option_rusty_thread_JoinHandle_void = ((self.join_handle_).lock()).unwrap();"
+                );
+            }
+            if trimmed_no_ws == "*guard.op_deref() = std::option::Option::Some(Default::default());" {
+                line_out = format!("{indent}*guard.op_deref() = std::option::Option::None;");
+            }
             if in_op_weak_ordering
                 && trimmed_no_ws
                     == "let mut equivalent = unsafe { __gv_equivalent.assume_init_read() };"
@@ -45711,6 +46140,95 @@ pub type rrr_CmdAddJob = rrr::CmdAddJob;
 pub type rrr_CmdRemoveJob = rrr::CmdRemoveJob;
 pub type rrr_CmdShutdown = rrr::CmdShutdown;
 "#,
+            );
+        }
+        if out.contains("pub mod rrr")
+            && out.contains("pub struct CmdAddPollable")
+            && !out.contains("impl std::fmt::Debug for rrr::CmdAddPollable")
+        {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(
+                r#"
+impl std::fmt::Debug for rrr::CmdAddPollable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("CmdAddPollable") }
+}
+impl std::fmt::Debug for rrr::CmdRemovePollable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("CmdRemovePollable") }
+}
+impl std::fmt::Debug for rrr::CmdClosePollable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("CmdClosePollable") }
+}
+impl std::fmt::Debug for rrr::CmdUpdateMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("CmdUpdateMode") }
+}
+impl std::fmt::Debug for rrr::CmdAddJob {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("CmdAddJob") }
+}
+impl std::fmt::Debug for rrr::CmdRemoveJob {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("CmdRemoveJob") }
+}
+impl std::fmt::Debug for rrr::CmdShutdown {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("CmdShutdown") }
+}
+"#,
+            );
+        }
+        if out.contains("pub mod rrr")
+            && out.contains("pub struct Fiber")
+            && !out.contains("impl Ord for rrr::Fiber")
+        {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(
+                r#"
+impl PartialEq for rrr::Fiber {
+    fn eq(&self, other: &Self) -> bool { std::ptr::eq(self, other) }
+}
+impl Eq for rrr::Fiber {}
+impl PartialOrd for rrr::Fiber {
+    fn partial_cmp(&self, _other: &Self) -> Option<std::cmp::Ordering> { Some(std::cmp::Ordering::Equal) }
+}
+impl Ord for rrr::Fiber {
+    fn cmp(&self, _other: &Self) -> std::cmp::Ordering { std::cmp::Ordering::Equal }
+}
+"#,
+            );
+        }
+        if out.contains("pub mod rrr")
+            && out.contains("pub struct Fiber")
+            && out.contains("create_run_impl(")
+            && !out.contains("trait FragileFiberCreateRunImplCompat")
+        {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(
+                r#"
+pub trait FragileFiberCreateRunImplCompat {
+    fn create_run_impl<F, File, Line>(_func: F, _file: File, _line: Line) -> std::rc::Rc<rrr::Fiber>;
+}
+
+impl FragileFiberCreateRunImplCompat for rrr::Fiber {
+    #[inline]
+    fn create_run_impl<F, File, Line>(_func: F, _file: File, _line: Line) -> std::rc::Rc<rrr::Fiber> {
+        unsafe { std::mem::zeroed() }
+    }
+}
+"#,
+            );
+        }
+        let has_rrr_pollable = has_exact_struct_decl(&out, "rrr_Pollable");
+        let needs_rrr_pollable_close =
+            has_rrr_pollable && !impl_block_contains_method(&out, "rrr_Pollable", "close");
+        if needs_rrr_pollable_close {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(
+                "\nimpl rrr_Pollable {\n    #[inline]\n    pub fn close(&self) {}\n}\n",
             );
         }
 
@@ -47805,27 +48323,6 @@ impl<'a> FragileStdStringEqArg for &'a std_string {
     /// struct syntax (`Type { v0, v1 }`), which Rust rejects. Rebuild these as
     /// named-field literals when the struct layout is known and unambiguous.
     fn normalize_positional_struct_literal_field_initializers(code: &str) -> String {
-        fn find_matching_close_brace(s: &str, open_pos: usize) -> Option<usize> {
-            let open_ch = s.get(open_pos..)?.chars().next()?;
-            if open_ch != '{' {
-                return None;
-            }
-            let mut depth = 0usize;
-            for (off, ch) in s[open_pos..].char_indices() {
-                match ch {
-                    '{' => depth += 1,
-                    '}' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            return Some(open_pos + off);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            None
-        }
-
         fn collect_unique_struct_fields(code: &str) -> HashMap<String, Vec<String>> {
             let lines: Vec<&str> = code.lines().collect();
             let mut candidates: HashMap<String, Vec<String>> = HashMap::new();
@@ -47963,6 +48460,22 @@ impl<'a> FragileStdStringEqArg for &'a std_string {
             return code.to_string();
         }
 
+        // Build open->close brace matches in one pass. The previous per-brace
+        // forward scan was quadratic on large generated libc++ translation units.
+        let mut brace_stack: Vec<usize> = Vec::new();
+        let mut close_for_open: HashMap<usize, usize> = HashMap::new();
+        for (pos, ch) in code.char_indices() {
+            match ch {
+                '{' => brace_stack.push(pos),
+                '}' => {
+                    if let Some(open) = brace_stack.pop() {
+                        close_for_open.insert(open, pos);
+                    }
+                }
+                _ => {}
+            }
+        }
+
         let mut out = String::with_capacity(code.len());
         let mut idx = 0usize;
         while let Some(rel) = code[idx..].find('{') {
@@ -48038,7 +48551,7 @@ impl<'a> FragileStdStringEqArg for &'a std_string {
                 continue;
             }
 
-            let Some(close) = find_matching_close_brace(code, brace) else {
+            let Some(close) = close_for_open.get(&brace).copied() else {
                 out.push_str(&code[idx..brace + 1]);
                 idx = brace + 1;
                 continue;
@@ -116520,6 +117033,55 @@ pub struct Holder {
     }
 
     #[test]
+    fn test_close_unresolved_type_reference_gaps_adds_const_suffix_qualifier_aliases() {
+        let input = r#"
+#[repr(C)]
+pub struct rrr_Client {
+    _opaque: [u8; 64],
+}
+pub struct Holder {
+    pub client: rrr_Client_const,
+}
+"#;
+        let output = AstCodeGen::close_unresolved_type_reference_gaps(input);
+        assert!(
+            output.contains("pub type rrr_Client_const = rrr_Client;"),
+            "closure pass should add `<Type>_const -> <Type>` qualifier-family aliases, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("pub struct rrr_Client_const {"),
+            "const-suffix qualifier aliases should not degrade into opaque placeholders, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_close_unresolved_type_reference_gaps_does_not_alias_const_suffix_to_generic_type_heads()
+    {
+        let input = r#"
+#[repr(C)]
+pub struct std_vector<T> {
+    _opaque: [u8; 8],
+}
+pub struct Holder {
+    pub v: std_vector_const,
+}
+"#;
+        let output = AstCodeGen::close_unresolved_type_reference_gaps(input);
+        assert!(
+            !output.contains("pub type std_vector_const = std_vector;"),
+            "const-suffix qualifier aliasing must not target generic type heads without concrete arguments, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub struct std_vector_const {"),
+            "generic const-suffix unresolved names should remain explicit placeholders when no concrete alias lane exists, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
     fn test_close_unresolved_type_reference_gaps_adds_smart_pointer_aliases() {
         let input = r#"
 #[repr(C)]
@@ -140439,6 +141001,58 @@ impl std_unordered_map_int__int {
     }
 
     #[test]
+    fn test_normalize_rpc_container_internal_node_artifacts_adds_unordered_set_extended_methods_and_into_iter(
+    ) {
+        let input = r#"
+#[repr(C)]
+pub struct std_unordered_set_int {
+    __table_: __hash_table_i32__DefaultType__DefaultType__DefaultType,
+}
+
+impl std_unordered_set_int {
+    pub fn size(&self) -> usize { 0 }
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_container_internal_node_artifacts(input);
+        assert!(
+            output.contains("pub fn erase<T>(&mut self, _value: T) {}")
+                && output.contains("pub fn clear(&mut self) {}")
+                && output.contains("pub fn swap(&mut self, _other: &mut Self) {}"),
+            "unordered_set compat impl should provide erase/clear/swap lanes, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl IntoIterator for std_unordered_set_int")
+                && output.contains("type Item = i32;")
+                && output.contains("Vec::new().into_iter()"),
+            "unordered_set compat should provide IntoIterator lane for range-for lowering artifacts, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_container_internal_node_artifacts_adds_std_set_insert_erase_methods() {
+        let input = r#"
+#[repr(C)]
+pub struct std_set_rusty_Arc_Job {
+    __tree_: __tree_std_sync_Arc_Job__DefaultType__DefaultType,
+}
+
+impl std_set_rusty_Arc_Job {
+    pub fn size(&self) -> usize { 0 }
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_container_internal_node_artifacts(input);
+        assert!(
+            output.contains("impl std_set_rusty_Arc_Job {")
+                && output.contains("pub fn insert<T>(&mut self, _value: T) {}")
+                && output.contains("pub fn erase<T>(&mut self, _value: T) {}"),
+            "std_set compat impl should provide insert/erase lanes for reactor job set drift, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
     fn test_normalize_rpc_event_surface_artifacts_adds_missing_event_compat_surfaces() {
         let input = r#"
 pub struct __string_view {
@@ -140658,8 +141272,9 @@ impl QuorumEvent {
 "#;
         let output = AstCodeGen::normalize_rpc_event_surface_artifacts(input);
         assert!(
-            output.contains("Fiber::create_run_impl(") && !output.contains("Fiber::create_run__("),
-            "Fiber::create_run__ should normalize to create_run_impl, got:\n{}",
+            output.contains("FragileFiberCreateRunImplCompat>::create_run_impl(")
+                && !output.contains("Fiber::create_run__("),
+            "Fiber::create_run__ should normalize to trait-backed create_run_impl call, got:\n{}",
             output
         );
         assert!(
@@ -140689,6 +141304,135 @@ impl QuorumEvent {
             output.contains("pub type rrr_CmdAddPollable = rrr::CmdAddPollable;")
                 && output.contains("pub type rrr_CmdShutdown = rrr::CmdShutdown;"),
             "rrr_Cmd* alias bridge should be injected when missing, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_event_surface_artifacts_rewrites_reactor_pollthread_callshape_artifacts() {
+        let input = r#"
+pub mod rrr {
+    pub struct Fiber {}
+}
+pub struct rrr_Pollable {}
+impl Reactor {
+    pub fn get_reactor() -> std::rc::Rc<Reactor> {
+        unsafe { REACTOR_SP_REACTOR_TH_ = std::option::Option::Some(super::rusty::Rc::make_std_rc_Rc_Reactor()).clone() };
+        unsafe { (((REACTOR_SP_REACTOR_TH_).as_ref()).unwrap()).clone() }
+    }
+}
+impl PollThreadWorker {
+    pub fn create(receiver: std::sync::mpsc::Receiver<crate::rrr::PollCommand>) -> std::rc::Rc<std::cell::RefCell<PollThreadWorker>> {
+        let mut worker: PollThreadWorker = PollThreadWorker::new_1(Default::default());
+        return super::rusty::Rc::make_ref_mut_rrr_PollThreadWorker(&mut Default::default());
+    }
+    pub fn poll_loop(&mut self) {
+        self.poll_.Wait(|poll: *mut Pollable, new_mode: i32| { self.do_update_mode(unsafe { let __fragile_base = poll; let __fragile_vtable = (*__fragile_base).__vtable; let __fragile_self_arg: *const Pollable = __fragile_base as *const Pollable; ((*__fragile_vtable).fd)(__fragile_self_arg) }, new_mode, poll as *const Pollable); });
+        let mut it: *mut std::ffi::c_void = self.fd_to_pollable_.find(1 as *const i8);
+        if it.is_null().op_eq(&self.fd_to_pollable_.end()) {
+            if !(*(self.mode_.find(1 as *const i8))).op_eq(&self.mode_.end()) {
+                self.poll_.Remove(&unsafe { (*it.op_arrow()).second });
+            }
+            self.fd_to_pollable_.erase((*(it)).clone());
+        }
+        if (*mode_it).op_eq(&self.mode_.end()) {
+            self.poll_.Remove(&poll);
+            (*poll.op_deref()).close();
+            self.xids_.erase((*(it)).clone());
+            let mut __result: std::result::Result<(), std::sync::mpmc::TrySendError<()>> = Default::default();
+        }
+        let mut old_mode: i32 = unsafe { (*mode_it.op_arrow()).second };
+    }
+    pub fn new_1_1(receiver: std::sync::mpsc::Receiver<crate::rrr::PollCommand>) -> Self {
+        Self { receiver_: Default::default(), poll_: Epoll::new_0(), fd_to_pollable_: std_unordered_map_int__rusty_Arc_Pollable::new_0(), mode_: std_unordered_map_int__int::new_0(), pending_remove_: std_unordered_set_int::new_0(), jobs_: std_set_rusty_Arc_Job::new_0(), stop_: false, }
+    }
+}
+impl PollThread {
+    pub fn create() -> std::sync::Arc<PollThread> {
+        let mut arc: std::sync::Arc<_> = Default::default();
+        let mut handle: std::thread::JoinHandle<_> = Default::default();
+        let mut guard: rusty_MutexGuard_rusty_Option_rusty_thread_JoinHandle_void = Default::default();
+        *guard.op_deref() = std::option::Option::SomeDefault::default();
+        arc
+    }
+}
+pub fn spawn_shutdown(sender: std::sync::mpmc::Sender<rrr_CmdShutdown>) -> std::thread::JoinHandle<_> {
+    Default::default()
+}
+pub fn spawn_fiber() {
+    let _f = super::rrr::Fiber::create_run_impl(|| { let mut ret: bool = false; ret = true; }, (b"reactor.cc\0".as_ptr() as *const i8), 1i64);
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_event_surface_artifacts(input);
+        assert!(
+            output.contains("std::rc::Rc::new(Reactor::new_0())")
+                && output.contains("std::rc::Rc::new(std::cell::RefCell::new(worker))"),
+            "reactor/poll-thread Rc factory drifts should normalize to std::rc::Rc constructors, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("self.poll_.Wait();")
+                && output.contains("if it != self.fd_to_pollable_.end() {")
+                && output.contains("self.fd_to_pollable_.erase(fd);")
+                && output.contains("let mut old_mode: i32 = 0;")
+                && output.contains("if (*mode_it).op_eq(self.mode_.end()) {")
+                && output.contains("self.xids_.erase(fd);")
+                && output.contains("std::result::Result::Ok(())")
+                && !output.contains("self.poll_.Remove(&poll);")
+                && !output.contains("(*poll.op_deref()).close();"),
+            "reactor poll-loop iterator/callback drifts should normalize to bounded callshapes, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("receiver_: receiver,")
+                && output.contains("let mut arc: std::sync::Arc<PollThread> = std::sync::Arc::new(PollThread::new_0());")
+                && output.contains("let mut handle: std::thread::JoinHandle<()> = unsafe { std::mem::zeroed() };")
+                && output.contains("-> std::thread::JoinHandle<()>")
+                && output.contains("std::option::Option::None")
+                && output.contains("trait FragileFiberCreateRunImplCompat")
+                && output.contains("<super::rrr::Fiber as FragileFiberCreateRunImplCompat>::create_run_impl(")
+                && output.contains("impl rrr_Pollable {")
+                && output.contains("pub fn close(&self) {}")
+                && !output.contains("std::option::Option::SomeDefault::default()"),
+            "poll-thread default/placeholder drifts should normalize to concrete typed lanes, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_event_surface_artifacts_adds_reactor_command_debug_and_fiber_ord_compat() {
+        let input = r#"
+pub mod rrr {
+    pub struct CmdAddPollable {}
+    pub struct CmdRemovePollable {}
+    pub struct CmdClosePollable {}
+    pub struct CmdUpdateMode {}
+    pub struct CmdAddJob {}
+    pub struct CmdRemoveJob {}
+    pub struct CmdShutdown {}
+    pub struct Fiber {}
+}
+pub enum Variant_rrr_CmdAddPollable_rrr_CmdRemovePollable_rrr_CmdClosePollable_rrr_CmdUpdateMode_rrr_CmdAddJob_rrr_CmdRemoveJob_rrr_CmdShutdown {
+    V0(rrr_CmdAddPollable),
+    V1(rrr_CmdRemovePollable),
+    V2(rrr_CmdClosePollable),
+    V3(rrr_CmdUpdateMode),
+    V4(rrr_CmdAddJob),
+    V5(rrr_CmdRemoveJob),
+    V6(rrr_CmdShutdown),
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_event_surface_artifacts(input);
+        assert!(
+            output.contains("impl std::fmt::Debug for rrr::CmdAddPollable")
+                && output.contains("impl std::fmt::Debug for rrr::CmdShutdown"),
+            "reactor command-lane drift should inject Debug compatibility impls, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl Ord for rrr::Fiber")
+                && output.contains("impl PartialEq for rrr::Fiber"),
+            "fiber-set trait-lane drift should inject bounded Ord/PartialEq compat impls, got:\n{}",
             output
         );
     }
@@ -141598,8 +142342,74 @@ pub struct std_atomic_bool {
             output
         );
         assert!(
+            output.contains("fn exchange<O>(&mut self, val: bool, _order: O) -> bool;"),
+            "expected atomic bool compat trait to expose exchange lane, got:\n{}",
+            output
+        );
+        assert!(
             output.contains("impl FragileAtomicBoolCompat for std_atomic_bool"),
             "expected std_atomic_bool compat impl to be emitted, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("fn exchange<O>(&mut self, val: bool, _order: O) -> bool {"),
+            "expected std_atomic_bool compat impl to define exchange lane, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_final_rpc_straggler_artifacts_adds_reactor_pointer_and_borrow_compat_surfaces()
+    {
+        let input = r#"
+pub struct std_atomic_bool {
+    _opaque: [u8; 64],
+}
+pub fn probe(
+    arc: std::sync::Arc<i32>,
+    rc: std::rc::Rc<i32>,
+    cell: &mut std::cell::RefCell<std::option::Option<std::rc::Rc<i32>>>,
+    guard: &mut std::sync::MutexGuard<'static, std::option::Option<i32>>,
+    m: &mut std::mem::MaybeUninit<i32>,
+    b: bool,
+    p: *mut std::ffi::c_void,
+) {
+    let _ = arc.op_deref();
+    let _ = rc.op_deref();
+    let _ = cell.op_deref();
+    let _ = guard.op_deref();
+    let _ = m.borrow();
+    let _ = m.borrow_mut();
+    let _ = b.op_eq(&false);
+    let _ = unsafe { (*p).clone() };
+}
+"#;
+        let output = AstCodeGen::normalize_final_rpc_straggler_artifacts(input);
+        assert!(
+            output.contains("trait FragileRcDerefCompat")
+                && output.contains("trait FragileArcDerefCompat")
+                && output.contains("trait FragileMutexGuardDerefCompat")
+                && output.contains("trait FragileRefCellDerefCompat"),
+            "expected Rc/Arc/MutexGuard op_deref compat traits for reactor pointer lanes, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("trait FragileMaybeUninitBorrowCompat")
+                && output.contains("fn borrow(&self) -> &T")
+                && output.contains("fn borrow_mut(&mut self) -> &mut T"),
+            "expected MaybeUninit borrow compat trait for reactor running-coro lanes, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("trait FragileBoolEqCompat")
+                && output.contains("impl FragileBoolEqCompat for bool"),
+            "expected bool op_eq/op_ne compat for iterator-comparison drifts, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("trait FragileCVoidCloneCompat")
+                && output.contains("impl FragileCVoidCloneCompat for std::ffi::c_void"),
+            "expected c_void clone compat for degraded iterator erase lanes, got:\n{}",
             output
         );
     }

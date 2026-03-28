@@ -1952,6 +1952,11 @@ fn maybe_dump_unresolved_transpiled_rs(source: &Path, transpiled: &str) -> Optio
 /// enum/struct definitions are intentionally skipped during codegen because
 /// they have duplicate discriminants or other unsupported patterns.
 fn is_known_internal_type_name(name: &str) -> bool {
+    // Source-location macro metadata can surface as pseudo type tokens in
+    // generated signatures; treat them as non-actionable invariant noise.
+    if matches!(name, "File" | "Line" | "Column" | "Function") {
+        return true;
+    }
     // __memory_order_modifier is skipped in generate_enum due to duplicate discriminants.
     // Template instantiations like byte___memory_order_modifier inherit this.
     if name.contains("__memory_order_modifier") {
@@ -2979,6 +2984,30 @@ pub fn rust_accumulator_drop(ptr: *mut RustAccumulator) {
         assert!(is_source_file_token("x.cxx"));
         assert!(!is_source_file_token("x.o"));
         assert!(!is_source_file_token("-Wl,--as-needed"));
+    }
+
+    #[test]
+    fn known_internal_type_source_location_tokens() {
+        assert!(is_known_internal_type_name("File"));
+        assert!(is_known_internal_type_name("Line"));
+        assert!(is_known_internal_type_name("Column"));
+        assert!(is_known_internal_type_name("Function"));
+        assert!(!is_known_internal_type_name("FileDescriptor"));
+    }
+
+    #[test]
+    fn unresolved_type_invariant_passes_for_source_location_tokens() {
+        let transpiled = r#"
+pub struct SomeStruct { _field: i32 }
+pub fn uses_source_location_tokens(_file: File, _line: Line, _col: Column, _fn: Function) {}
+"#;
+        let source = Path::new("test.cpp");
+        let result = enforce_unresolved_type_invariant(source, transpiled);
+        assert!(
+            result.is_ok(),
+            "invariant should pass for source-location pseudo-type tokens: {:?}",
+            result
+        );
     }
 
     #[test]

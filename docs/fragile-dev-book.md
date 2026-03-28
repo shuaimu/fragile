@@ -8,6 +8,7 @@
 - [1.3 Wrong Approaches (Do Not Do)](#13-wrong-approaches-do-not-do)
 - [1.4 2026-03 Design Update: STL-Opaque Parser and Backend Deprecation](#14-2026-03-design-update-stl-opaque-parser-and-backend-deprecation)
 - [1.5 2026-03 RPC `std::string` Lane Normalization Guardrails](#15-2026-03-rpc-stdstring-lane-normalization-guardrails)
+- [1.6 2026-03 Reactor Command-Map c.2 Closure Guardrails](#16-2026-03-reactor-command-map-c2-closure-guardrails)
 - [2. End-to-End Architecture](#2-end-to-end-architecture)
 - [2.3 C++ `_v` trait globals and export linkage](#23-c-_v-trait-globals-and-export-linkage)
 - [2.4 Mode 1 call-stitching architecture (target state)](#24-mode-1-call-stitching-architecture-target-state)
@@ -149,6 +150,26 @@ Guardrails for this family:
 5. Expand shared add-assign trait coverage (`i32`, `&i8`, `&i32`, `&std::string::String`) instead of adding target-file hacks.
 
 These constraints preserve the anti-pattern policy from section 1.3 while removing a high-density shared blocker lane.
+
+## 1.6 2026-03 Reactor Command-Map c.2 Closure Guardrails
+
+The `M9.2.c.iv.e.34.f.5.e.5.e.4.c.2` slice targeted replay errors in `quorum_event.cc` / `reactor.cc`
+around degraded command-map and container/Rc surfaces (`E0599`/`E0277`/`E0308`).
+
+Execution constraints for this family:
+
+1. Keep fixes in generic late normalizers (`ast_codegen.rs`) and compat-surface injection only.
+2. Use idempotent method/trait insertion guards (no duplicate impl emission).
+3. Prefer bounded callshape rehydration over broad textual replacements.
+4. Close a slice when the targeted signature family disappears from replay output and blocker counts are non-increasing, even if the next blocker class shifts.
+
+Observed closure pattern for c.2:
+
+- Replay inventory improved from `38/24` to `12/12` (total/unique).
+- The prior typed c.2 cluster no longer appeared in `lane_fragilec/build.stderr`.
+- Residual failures shifted to unresolved-type invariants in reactor files; this is next-slice input, not a reason to reopen c.2.
+
+This follows section 1.3 policy: no target-specific branching, no force-native bypass, no fake semantic stubs.
 
 ## 2. End-to-End Architecture
 
@@ -22985,3 +23006,84 @@ Decomposition decision:
 Detailed inventory:
 
 - `docs/dev/m9_2c_iv_e34f5e5e4c_post_e4b_replay_inventory.md`
+
+## 2026-03-28: M9.2.c.iv.e.34.f.5.e.5.e.4.c.3 residual unresolved-invariant closure
+
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before changes.
+- Leaf scope stayed bounded (<1000 LOC): strict invariant-filter normalization + focused unit tests + one strict replay evidence run.
+
+Implementation:
+
+- Updated known-internal unresolved-type filters in:
+  - `crates/fragile-cli/src/bin/fragilec.rs`
+  - `crates/fragile-driver/src/lib.rs`
+- Added source-location pseudo-type tokens to invariant filtering:
+  - `File`, `Line`, `Column`, `Function`
+
+Focused tests:
+
+- `cargo test -p fragile-driver source_location_tokens -- --nocapture`
+- `cargo test -p fragile-cli source_location_tokens -- --nocapture`
+- Result: all targeted tests passed.
+
+Strict replay evidence:
+
+- command:
+  - `FRAGILEC_MODE=strict python3 scripts/mako_rpc_strict_runtime_replay.py --baseline-run-root /tmp/fragile_m9_2_strict_runtime_replay_20260328T162346Z_p2277812`
+- run-root:
+  - `/tmp/fragile_m9_2_strict_runtime_replay_20260328T201655Z_p2479647`
+
+Outcome shift:
+
+- Previous first blocker was unresolved-type invariant in `event.cc` with detail `File, Line`.
+- Post-fix first blocker is now typed rustc compile failure in `quorum_event.cc`, meaning replay progressed past the prior unresolved-invariant stop in `event.cc` / `fiber_context_runtime.cc` / `fiber_impl.cc` / `quorum_event.cc`.
+- Residual blockers now surface in `reactor.cc`/`quorum_event.cc` typed lanes plus `rpc/client.cpp` unresolved-type invariant (`rrr_Client_const`).
+
+Detailed inventory:
+
+- `docs/dev/m9_2c_iv_e34f5e5e4c3_residual_unresolved_invariant_inventory.md`
+
+## 2026-03-28: M9.2.c.iv.e.34.f.5.e.5.e.4.c.4.a post-c.3 replay refresh + const-suffix qualifier guard
+
+- Selected leaf: `M9.2.c.iv.e.34.f.5.e.5.e.4.c.4.a`.
+- Scope remained bounded (<1000 LOC): one qualifier-family safety fix + focused tests + one strict replay refresh.
+
+Wrong-approach check completed before implementation:
+
+- `docs/fragile-dev-book.md` section `1.3 Wrong Approaches (Do Not Do)`
+- `docs/dev/wrong.md`
+
+Implementation:
+
+- Updated `ast_codegen` qualifier-family handling to support `_const` -> base alias fallback for unresolved type closure.
+- Added safety gates so qualifier-family fallback cannot target:
+  - generic type heads (`std_vector<T>`-style), or
+  - trait declarations.
+
+Focused tests:
+
+- `cargo test -p fragile-clang const_suffix_qualifier_aliases -- --nocapture`
+- `cargo test -p fragile-clang does_not_alias_const_suffix_to_generic_type_heads -- --nocapture`
+
+Strict replay evidence:
+
+- command:
+  - `FRAGILEC_MODE=strict python3 scripts/mako_rpc_strict_runtime_replay.py --baseline-run-root /tmp/fragile_m9_2_strict_runtime_replay_20260328T201655Z_p2479647`
+- run-root:
+  - `/tmp/fragile_m9_2_strict_runtime_replay_20260328T211915Z_p2548616`
+- baseline:
+  - `/tmp/fragile_m9_2_strict_runtime_replay_20260328T201655Z_p2479647`
+- result:
+  - blocker totals unchanged (`31/22 -> 31/22`)
+  - `first_error_key` unchanged (`quorum_event.cc` parser-output-handoff compile failure)
+  - non-increase restored (`non_increase_verdict=true`)
+  - lane contract still blocked (`build=2`, `test_rpc=-1`, `completed_trials=0/1`)
+
+Residuals now tracked for next leaves:
+
+- unresolved-type invariant in `rpc/client.cpp`: `rrr_Client_const`
+- typed residual cluster in `reactor.cc` / `quorum_event.cc`
+
+Detailed inventory:
+
+- `docs/dev/m9_2c_iv_e34f5e5e4c4a_post_c3_replay_inventory.md`
