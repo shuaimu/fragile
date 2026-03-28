@@ -22807,3 +22807,42 @@ Regression validation:
 - `cargo test -p fragile-clang test_vtable_dispatch_base_expr_normalizes_redundant_deref_from_pointer_return_chain -- --nocapture`
 - `cargo test -p fragile-clang test_normalize_rpc_event_surface_artifacts_rewrites_quorum_event_command_map_and_event_base_lanes -- --nocapture`
 - `cargo test -p fragile-clang test_normalize_rpc_event_surface_artifacts_preserves_flat_base_vtable_access_for_pollable_and_marshallable -- --nocapture`
+
+## 2026-03-28: M9.2.c.iv.e.34.f.5.e.5.e.2 event assoc-sub-state swap callshape closure
+
+- Selected leaf: `M9.2.c.iv.e.34.f.5.e.5.e.2`.
+- Scope remained bounded (<1000 LOC): targeted `ast_codegen` normalization update + focused tests.
+
+Wrong-approach check completed before edits:
+
+- `docs/fragile-dev-book.md` section `1.3 Wrong Approaches (Do Not Do)`
+- `docs/dev/wrong.md`
+
+Residual baseline:
+
+- replay run-root `/tmp/fragile_m9_2_strict_runtime_replay_20260328T000000Z_p1395452`
+- dominant marker family: `E0308` in `event.cc` for
+  `swap_std___assoc_sub_state(&mut self.__state_, ...)` where callee expects
+  `*mut std___assoc_sub_state`.
+
+Implementation decision:
+
+- Extended `normalize_rpc_event_surface_artifacts` to rewrite residual swap
+  callshapes from `&mut *mut ...` arguments to raw-pointer cast lanes:
+  - `self.__state_ as *mut std___assoc_sub_state`
+  - `__rhs.__state_ as *mut std___assoc_sub_state`
+  - `__f.__state_ as *mut std___assoc_sub_state`
+- Also widened the pass trigger guard so this normalization still runs in
+  minimal replay fragments that only carry the swap residual pattern.
+
+Focused validation:
+
+- `cargo test -p fragile-clang test_normalize_rpc_event_surface_artifacts_rewrites_assoc_sub_state_swap_pointer_reference_mismatch -- --nocapture`
+- `cargo test -p fragile-clang test_normalize_rpc_event_surface_artifacts_rewrites_quorum_event_command_map_and_event_base_lanes -- --nocapture`
+- `cargo test -p fragile-clang test_vtable_dispatch_base_expr_normalizes_redundant_deref_from_pointer_return_chain -- --nocapture`
+
+All focused tests passed.
+
+Detailed inventory:
+
+- `docs/dev/m9_2c_iv_e34f5e5e2_event_assoc_sub_state_swap_inventory.md`

@@ -6639,6 +6639,49 @@ fn m9_2c_iv_e34f5e5e1_inventory_document_exists_and_records_flat_base_vtable_clo
     }
 }
 
+#[test]
+fn m9_2c_iv_e34f5e5e2_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.5.e.2")
+            && todo.contains("Done 2026-03-28")
+            && todo.contains("swap_std___assoc_sub_state")
+            && todo.contains("normalize_rpc_event_surface_artifacts")
+            && todo.contains(
+                "test_normalize_rpc_event_surface_artifacts_rewrites_assoc_sub_state_swap_pointer_reference_mismatch",
+            )
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e5e2_event_assoc_sub_state_swap_inventory.md"),
+        "M9.2.c.iv.e.34.f.5.e.5.e.2 TODO entry should record bounded closure evidence"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e34f5e5e2_inventory_document_exists_and_records_swap_callshape_closure() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34f5e5e2_event_assoc_sub_state_swap_inventory.md"),
+    )
+    .expect("e.34.f.5.e.5.e.2 inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.f.5.e.5.e.2",
+        "Wrong-approach check",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260328T000000Z_p1395452",
+        "swap_std___assoc_sub_state",
+        "normalize_rpc_event_surface_artifacts",
+        "test_normalize_rpc_event_surface_artifacts_rewrites_assoc_sub_state_swap_pointer_reference_mismatch",
+        "M9.2.c.iv.e.34.f.5.e.5.e.3",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.f.5.e.5.e.2 inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // M9.2.c.iv.e.17.d: Post-e.17 comprehensive strict compile error inventory
 // ---------------------------------------------------------------------------

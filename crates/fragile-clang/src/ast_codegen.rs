@@ -45212,6 +45212,8 @@ impl rrr_v64 {
             && !code.contains("pub struct std_map_uint32_t__bool")
             && !code.contains("pub struct std_ofstream")
             && !code.contains("pub struct promise_void")
+            && !code.contains("swap_std___assoc_sub_state(&mut self.__state_, &mut __rhs.__state_);")
+            && !code.contains("swap_std___assoc_sub_state(&mut self.__state_, &mut __f.__state_);")
         {
             return code.to_string();
         }
@@ -45359,6 +45361,20 @@ impl rrr_v64 {
             {
                 line_out = line_out.replace("*__begin2.op_deref();", "();");
                 line_out = line_out.replace("*_xbegin.op_deref();", "();");
+            }
+            if line_out.contains("swap_std___assoc_sub_state(&mut self.__state_, &mut __rhs.__state_);")
+            {
+                line_out = line_out.replace(
+                    "swap_std___assoc_sub_state(&mut self.__state_, &mut __rhs.__state_);",
+                    "swap_std___assoc_sub_state(self.__state_ as *mut std___assoc_sub_state, __rhs.__state_ as *mut std___assoc_sub_state);",
+                );
+            }
+            if line_out.contains("swap_std___assoc_sub_state(&mut self.__state_, &mut __f.__state_);")
+            {
+                line_out = line_out.replace(
+                    "swap_std___assoc_sub_state(&mut self.__state_, &mut __f.__state_);",
+                    "swap_std___assoc_sub_state(self.__state_ as *mut std___assoc_sub_state, __f.__state_ as *mut std___assoc_sub_state);",
+                );
             }
             if line_out.contains("let __fragile_vtable = (*__fragile_base).__vtable;")
                 && (line_out.contains("__fragile_self_arg: *mut Event")
@@ -140693,6 +140709,39 @@ pub fn probe_flat_vtable_lanes() {
             output.contains("let __fragile_self_arg: *mut Event")
                 && output.contains("let __fragile_vtable = (*__fragile_base).__base.__vtable; let __fragile_self_arg: *mut Event"),
             "derived event lane should keep __base.__vtable normalization, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_event_surface_artifacts_rewrites_assoc_sub_state_swap_pointer_reference_mismatch() {
+        let input = r#"
+impl std_future_void_ {
+    pub fn swap(&mut self, __rhs: &mut future_void) {
+        swap_std___assoc_sub_state(&mut self.__state_, &mut __rhs.__state_);
+    }
+}
+impl std_promise_void_ {
+    pub fn swap(&mut self, __f: &mut promise_void) {
+        swap_std___assoc_sub_state(&mut self.__state_, &mut __f.__state_);
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_event_surface_artifacts(input);
+        assert!(
+            output.contains("swap_std___assoc_sub_state(self.__state_ as *mut std___assoc_sub_state, __rhs.__state_ as *mut std___assoc_sub_state);"),
+            "future/promise swap lane should cast raw pointer args for assoc_sub_state helper, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("swap_std___assoc_sub_state(self.__state_ as *mut std___assoc_sub_state, __f.__state_ as *mut std___assoc_sub_state);"),
+            "promise swap lane with __f rhs should cast raw pointer args for assoc_sub_state helper, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("swap_std___assoc_sub_state(&mut self.__state_, &mut __rhs.__state_);")
+                && !output.contains("swap_std___assoc_sub_state(&mut self.__state_, &mut __f.__state_);"),
+            "legacy &mut pointer-reference swap callshape should be removed, got:\n{}",
             output
         );
     }
