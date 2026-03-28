@@ -45195,8 +45195,10 @@ impl rrr_v64 {
 
         if !code.contains("super::rrr::print_stack_trace(")
             && !code.contains("crate::rrr::print_stack_trace(")
+            && !code.contains("super::printf_1(")
             && !code.contains("return fseeko(")
             && !code.contains("Fiber::create_run__(")
+            && !code.contains("pub fn op_weak_ordering(&self")
             && !code.contains("__begin2.op_deref()")
             && !code.contains("finalize_event_.op_arrow()).__debug_creator")
             && !code.contains("(*__fragile_base).__vtable;")
@@ -45336,6 +45338,8 @@ impl rrr_v64 {
         let mut path_fn_returns_string_type = false;
         let mut path_fn_returns_bool = false;
         let mut current_path_fn_name: Option<String> = None;
+        let mut in_op_weak_ordering = false;
+        let mut op_weak_ordering_depth: i32 = 0;
         for line in out.lines() {
             let trimmed = line.trim_start();
             let trimmed_no_ws = trimmed.trim_end();
@@ -45346,12 +45350,28 @@ impl rrr_v64 {
                 path_fn_returns_bool = false;
                 current_path_fn_name = None;
             }
+            if !in_op_weak_ordering && trimmed_no_ws.starts_with("pub fn op_weak_ordering(") {
+                in_op_weak_ordering = true;
+                op_weak_ordering_depth = 0;
+            }
             let indent_len = line.len().saturating_sub(trimmed.len());
             let indent = &line[..indent_len];
             let mut line_out = line.to_string();
+            if in_op_weak_ordering
+                && trimmed_no_ws
+                    == "let mut equivalent = unsafe { __gv_equivalent.assume_init_read() };"
+            {
+                line_out = format!("{indent}let mut equivalent = weak_ordering {{ _M_value: 0 }};");
+            }
             if trimmed.contains(".__table_.__emplace_unique(") && trimmed.contains(".first).second")
             {
                 line_out = format!("{indent}std::ptr::null_mut()");
+            }
+            if trimmed_no_ws.contains("super::printf_1(")
+                && trimmed_no_ws.ends_with(';')
+                && !trimmed_no_ws.starts_with("unsafe {")
+            {
+                line_out = format!("{indent}unsafe {{ {} }}", trimmed_no_ws);
             }
             if trimmed_no_ws == "__debug_creator: 1i32," {
                 line_out.clear();
@@ -45440,6 +45460,14 @@ impl rrr_v64 {
                     path_fn_returns_string_type = false;
                     path_fn_returns_bool = false;
                     current_path_fn_name = None;
+                }
+            }
+            if in_op_weak_ordering {
+                op_weak_ordering_depth += line.chars().filter(|c| *c == '{').count() as i32;
+                op_weak_ordering_depth -= line.chars().filter(|c| *c == '}').count() as i32;
+                if op_weak_ordering_depth <= 0 {
+                    in_op_weak_ordering = false;
+                    op_weak_ordering_depth = 0;
                 }
             }
         }
@@ -140742,6 +140770,43 @@ impl std_promise_void_ {
             !output.contains("swap_std___assoc_sub_state(&mut self.__state_, &mut __rhs.__state_);")
                 && !output.contains("swap_std___assoc_sub_state(&mut self.__state_, &mut __f.__state_);"),
             "legacy &mut pointer-reference swap callshape should be removed, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_event_surface_artifacts_rewrites_weak_ordering_equivalent_and_printf_unsafe_lanes(
+    ) {
+        let input = r#"
+impl strong_ordering {
+    pub fn op_weak_ordering(&self, ) -> weak_ordering {
+        let mut equivalent = unsafe { __gv_equivalent.assume_init_read() };
+        return (if (self._M_value as i32) == 0 { equivalent } else { (if (self._M_value as i32) < 0 { weak_ordering { _M_value: -1 } } else { weak_ordering { _M_value: 1 } }) }).clone();
+    }
+}
+pub fn verify_failed() {
+    super::printf_1((b"ok\x00".as_ptr() as *const i8) as *const i8, 0i32);
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_event_surface_artifacts(input);
+        assert!(
+            output.contains("let mut equivalent = weak_ordering { _M_value: 0 };")
+                && !output.contains(
+                    "let mut equivalent = unsafe { __gv_equivalent.assume_init_read() };"
+                ),
+            "op_weak_ordering equivalent lane should normalize to weak_ordering value lane, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("unsafe { super::printf_1((b\"ok\\x00\".as_ptr() as *const i8) as *const i8, 0i32); }"),
+            "printf_1 call lane should be wrapped in unsafe block, got:\n{}",
+            output
+        );
+        assert!(
+            !output
+                .lines()
+                .any(|line| line.trim_start().starts_with("super::printf_1(")),
+            "unwrapped super::printf_1 call should not remain, got:\n{}",
             output
         );
     }

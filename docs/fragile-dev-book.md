@@ -22846,3 +22846,46 @@ All focused tests passed.
 Detailed inventory:
 
 - `docs/dev/m9_2c_iv_e34f5e5e2_event_assoc_sub_state_swap_inventory.md`
+
+## 2026-03-28: M9.2.c.iv.e.34.f.5.e.5.e.3 event ordering + unsafe printf lane closure
+
+- Selected leaf: `M9.2.c.iv.e.34.f.5.e.5.e.3`.
+- Scope remained bounded (<1000 LOC): targeted `ast_codegen` normalization
+  update + focused tests.
+
+Wrong-approach check completed before edits:
+
+- `docs/fragile-dev-book.md` section `1.3 Wrong Approaches (Do Not Do)`
+- `docs/dev/wrong.md`
+
+Residual baseline:
+
+- replay run-root `/tmp/fragile_m9_2_strict_runtime_replay_20260328T000000Z_p1395452`
+- dominant marker families:
+  - `E0308` in `op_weak_ordering` where `equivalent` lane degrades from
+    `__gv_equivalent.assume_init_read()` to a non-`weak_ordering` branch type.
+  - `E0133` where emitted `super::printf_1(...)` appears outside `unsafe`.
+
+Implementation decision:
+
+- Extended `normalize_rpc_event_surface_artifacts` with bounded generic lanes:
+  - inside `op_weak_ordering`, rewrite
+    `let mut equivalent = unsafe { __gv_equivalent.assume_init_read() };`
+    to `let mut equivalent = weak_ordering { _M_value: 0 };`.
+  - wrap statement-form `super::printf_1(...);` as
+    `unsafe { super::printf_1(...); }`.
+  - widen trigger guards so this normalization runs on minimal fragments that
+    only contain ordering/printf residual markers.
+
+Focused validation:
+
+- `cargo test -p fragile-clang test_normalize_rpc_event_surface_artifacts_rewrites_weak_ordering_equivalent_and_printf_unsafe_lanes -- --nocapture`
+- `cargo test -p fragile-clang test_normalize_rpc_event_surface_artifacts_rewrites_assoc_sub_state_swap_pointer_reference_mismatch -- --nocapture`
+- `cargo test -p fragile-clang test_normalize_rpc_event_surface_artifacts_rewrites_quorum_event_command_map_and_event_base_lanes -- --nocapture`
+- `cargo test -p fragile-clang test_vtable_dispatch_base_expr_normalizes_redundant_deref_from_pointer_return_chain -- --nocapture`
+
+All focused tests passed.
+
+Detailed inventory:
+
+- `docs/dev/m9_2c_iv_e34f5e5e3_event_ordering_printf_inventory.md`
