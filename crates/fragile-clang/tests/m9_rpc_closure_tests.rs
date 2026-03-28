@@ -6828,6 +6828,61 @@ fn m9_2c_iv_e34f5e5e4b_inventory_document_exists_and_records_null_slice_closure(
     }
 }
 
+#[test]
+fn m9_2c_iv_e34f5e5e4c1_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [ ] M9.2.c.iv.e.34.f.5.e.5.e.4.c")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260328T125712Z_p2100737")
+            && todo.contains("total=82")
+            && todo.contains("unique=55")
+            && todo.contains("quorum_event.cc")
+            && todo.contains("reactor.cc")
+            && todo.contains("rrr_Client_const")
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.5.e.4.c.1")
+            && todo.contains("Done 2026-03-28")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e5e4c_post_e4b_replay_inventory.md")
+            && todo.contains("M9.2.c.iv.e.34.f.5.e.5.e.4.c.2")
+            && todo.contains("M9.2.c.iv.e.34.f.5.e.5.e.4.c.3")
+            && todo.contains("M9.2.c.iv.e.34.f.5.e.5.e.4.c.4"),
+        "M9.2.c.iv.e.34.f.5.e.5.e.4.c TODO entry should capture post-e.4.b replay decomposition and c.1 evidence"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e34f5e5e4c1_inventory_document_exists_and_records_replay_regression() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34f5e5e4c_post_e4b_replay_inventory.md"),
+    )
+    .expect("e.34.f.5.e.5.e.4.c.1 inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.f.5.e.5.e.4.c.1",
+        "Wrong-approach check",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260328T125712Z_p2100737",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260328T092947Z_p1922380",
+        "lane_fragilec_build_status=2",
+        "lane_fragilec_test_rpc_status=-1",
+        "rustc_error_total_count=82",
+        "rustc_error_unique_count=55",
+        "quorum_event.cc",
+        "reactor.cc",
+        "rrr_Client_const",
+        "M9.2.c.iv.e.34.f.5.e.5.e.4.c.2",
+        "M9.2.c.iv.e.34.f.5.e.5.e.4.c.3",
+        "M9.2.c.iv.e.34.f.5.e.5.e.4.c.4",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.f.5.e.5.e.4.c.1 inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // M9.2.c.iv.e.17.d: Post-e.17 comprehensive strict compile error inventory
 // ---------------------------------------------------------------------------

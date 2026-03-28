@@ -22954,3 +22954,34 @@ Validation:
 Detailed inventory:
 
 - `docs/dev/m9_2c_iv_e34f5e5e4b_invalid_null_slice_compare_inventory.md`
+
+## 2026-03-28: M9.2.c.iv.e.34.f.5.e.5.e.4.c.1 post-e.4.b strict replay inventory/decomposition
+
+- Selected leaf: `M9.2.c.iv.e.34.f.5.e.5.e.4.c.1`.
+- Scope remained bounded (<1000 LOC): replay execution + inventory/decomposition documentation only.
+
+Wrong-approach check completed before decomposition:
+
+- `docs/fragile-dev-book.md` section `1.3 Wrong Approaches (Do Not Do)`
+- `docs/dev/wrong.md`
+
+Replay evidence:
+
+- command: `FRAGILEC_MODE=strict python3 scripts/mako_rpc_strict_runtime_replay.py --baseline-run-root /tmp/fragile_m9_2_strict_runtime_replay_20260328T092947Z_p1922380`
+- run-root: `/tmp/fragile_m9_2_strict_runtime_replay_20260328T125712Z_p2100737`
+- lane contract remains blocked:
+  - `lane_fragilec_build_status=2`
+  - `lane_fragilec_test_rpc_status=-1`
+  - `lane_fragilec_failure_class=build_failed`
+  - `lane_fragilec_completed_trials=0/1`
+- blocker inventory regressed vs baseline (`total=82`, `unique=55`, non-increase verdict false) and is now dominated by `quorum_event.cc`/`reactor.cc` typed surface drift plus one unresolved-type invariant in `rpc/client.cpp` (`rrr_Client_const`).
+
+Decomposition decision:
+
+1. `M9.2.c.iv.e.34.f.5.e.5.e.4.c.2`: command-map/container/Rc surface regression closure in `quorum_event.cc` + `reactor.cc`.
+2. `M9.2.c.iv.e.34.f.5.e.5.e.4.c.3`: unresolved-type/symbol-gap closure (`rrr_Client_const`, `this_thread::get_id`, `get_reactor`, `sp_running_coro_th_`).
+3. `M9.2.c.iv.e.34.f.5.e.5.e.4.c.4`: full strict replay rerun and lane-contract verification.
+
+Detailed inventory:
+
+- `docs/dev/m9_2c_iv_e34f5e5e4c_post_e4b_replay_inventory.md`
