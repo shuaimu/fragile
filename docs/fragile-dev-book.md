@@ -22889,3 +22889,33 @@ All focused tests passed.
 Detailed inventory:
 
 - `docs/dev/m9_2c_iv_e34f5e5e3_event_ordering_printf_inventory.md`
+
+## 2026-03-28: M9.2.c.iv.e.34.f.5.e.5.e.4.a post-e.5.e.5.e.3 replay inventory capture
+
+- Selected leaf: `M9.2.c.iv.e.34.f.5.e.5.e.4.a`.
+- Scope remained bounded (<1000 LOC): replay execution, manifest/blocker capture, TODO decomposition update, inventory documentation.
+
+Wrong-approach check completed before decomposition:
+
+- `docs/fragile-dev-book.md` section `1.3 Wrong Approaches (Do Not Do)`
+- `docs/dev/wrong.md`
+
+Replay evidence:
+
+- command: `FRAGILEC_MODE=strict python3 scripts/mako_rpc_strict_runtime_replay.py --skip-fragilec-build --baseline-run-root /tmp/fragile_m9_2_strict_runtime_replay_20260328T000000Z_p1395452`
+- run-root: `/tmp/fragile_m9_2_strict_runtime_replay_20260328T092947Z_p1922380`
+- lane contract still blocked:
+  - `lane_fragilec_build_status=2`
+  - `lane_fragilec_test_rpc_status=-1`
+  - `lane_fragilec_failure_class=build_failed`
+  - `lane_fragilec_completed_trials=0/1`
+- blocker inventory contracted vs baseline (`total=12`, `unique=10`, non-increase verdict true) and is now dominated by shared `invalid_null_arguments` aborts in `event.cc` and `fiber_impl.cc` (`std::slice::from_raw_parts(std::ptr::null() as *const u8, self.len_)` lane).
+
+Decomposition decision:
+
+1. `M9.2.c.iv.e.34.f.5.e.5.e.4.b` implements the bounded generic normalization for the shared null-slice compare lane with focused tests.
+2. `M9.2.c.iv.e.34.f.5.e.5.e.4.c` reruns strict replay and verifies full lane-contract closure.
+
+Detailed inventory:
+
+- `docs/dev/m9_2c_iv_e34f5e5e4a_post_e5e5e3_replay_inventory.md`

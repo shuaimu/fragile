@@ -6728,6 +6728,56 @@ fn m9_2c_iv_e34f5e5e3_inventory_document_exists_and_records_ordering_printf_clos
     }
 }
 
+#[test]
+fn m9_2c_iv_e34f5e5e4a_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [ ] M9.2.c.iv.e.34.f.5.e.5.e.4")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260328T092947Z_p1922380")
+            && todo.contains("invalid_null_arguments")
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.5.e.4.a")
+            && todo.contains("Done 2026-03-28")
+            && todo.contains(
+                "docs/dev/m9_2c_iv_e34f5e5e4a_post_e5e5e3_replay_inventory.md",
+            )
+            && todo.contains("M9.2.c.iv.e.34.f.5.e.5.e.4.b")
+            && todo.contains("M9.2.c.iv.e.34.f.5.e.5.e.4.c"),
+        "M9.2.c.iv.e.34.f.5.e.5.e.4 TODO entry should capture post-e.5.e.5.e.3 decomposition and e.4.a evidence"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e34f5e5e4a_inventory_document_exists_and_records_replay_decomposition() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34f5e5e4a_post_e5e5e3_replay_inventory.md"),
+    )
+    .expect("e.34.f.5.e.5.e.4.a inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.f.5.e.5.e.4.a",
+        "Wrong-approach check",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260328T092947Z_p1922380",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260328T000000Z_p1395452",
+        "lane_fragilec_build_status=2",
+        "lane_fragilec_test_rpc_status=-1",
+        "rustc_error_total_count=12",
+        "rustc_error_unique_count=10",
+        "invalid_null_arguments",
+        "std::slice::from_raw_parts(std::ptr::null() as *const u8, (self.len_) as usize)",
+        "M9.2.c.iv.e.34.f.5.e.5.e.4.b",
+        "M9.2.c.iv.e.34.f.5.e.5.e.4.c",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.f.5.e.5.e.4.a inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // M9.2.c.iv.e.17.d: Post-e.17 comprehensive strict compile error inventory
 // ---------------------------------------------------------------------------
