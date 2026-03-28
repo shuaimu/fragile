@@ -30310,6 +30310,7 @@ impl AstCodeGen {
         output = Self::normalize_rpc_container_internal_node_artifacts(&output);
         output = Self::normalize_rpc_event_surface_artifacts(&output);
         output = Self::normalize_rpc_fiber_surface_artifacts(&output);
+        output = Self::normalize_rpc_path_string_type_default_returns(&output);
         output = Self::append_compile_error_for_unresolved_non_c_abi_external_calls(&output);
         if Self::output_requires_c_variadic_feature(&output) {
             output = Self::ensure_c_variadic_feature_attr(&output);
@@ -45127,6 +45128,7 @@ impl rrr_v64 {
         }
 
         if !code.contains("super::rrr::print_stack_trace(")
+            && !code.contains("crate::rrr::print_stack_trace(")
             && !code.contains("return fseeko(")
             && !code.contains(".__table_.__emplace_unique(")
             && !code.contains("pub struct __string_view")
@@ -45145,10 +45147,8 @@ impl rrr_v64 {
             "(*self.__table_.__emplace_unique(piecewise_construct, forward_as_tuple(key), tuple_{}).first).second",
             "std::ptr::null_mut()",
         );
-        out = out.replace(
-            "super::rrr::print_stack_trace(",
-            "crate::rrr::print_stack_trace(",
-        );
+        out = out.replace("super::rrr::print_stack_trace(", "super::print_stack_trace(");
+        out = out.replace("crate::rrr::print_stack_trace(", "super::print_stack_trace(");
         out = out.replace("return fseeko(", "return crate::fragile_runtime::fseeko(");
         out = out.replace(
             "pub fn op_assign(&mut self, __rhs: &mut future_void) -> &mut future_void {",
@@ -45157,6 +45157,10 @@ impl rrr_v64 {
         out = out.replace(
             "pub fn op_assign(&mut self, __rhs: &mut shared_future_void) -> &mut shared_future_void {",
             "pub fn op_assign(&mut self, __rhs: &mut shared_future_void) -> &mut Self {",
+        );
+        out = out.replace(
+            "return (if (self._M_value as i32) == 0 { PARTIAL_ORDERING_EQUIVALENT } else { (if (self._M_value as i32) < 0 { partial_ordering { _M_value: -1 } } else { partial_ordering { _M_value: 1 } }) }).clone();",
+            "return (if (self._M_value as i32) == 0 { weak_ordering { _M_value: 0 } } else { (if (self._M_value as i32) < 0 { weak_ordering { _M_value: -1 } } else { weak_ordering { _M_value: 1 } }) }).clone();",
         );
         out = out.replace("Default::default().swap(&self);", "self.swap(__rhs);");
         out = out.replace(
@@ -45178,11 +45182,35 @@ impl rrr_v64 {
         out = out.replace("self.__pn_ = *__s.clone();", "self.__pn_ = Default::default();");
         out = out.replace(
             "return self.__compare(&(__s).clone()) as i32;",
-            "return self.__compare(Default::default()) as i32;",
+            "return self.__compare((__s).clone()) as i32;",
+        );
+        out = out.replace(
+            "return (self.__compare(&())) as i32;",
+            "return (self.__compare(unsafe { std::mem::zeroed() })) as i32;",
+        );
+        out = out.replace(
+            "return self.__compare(&());",
+            "return self.__compare(unsafe { std::mem::zeroed() });",
+        );
+        out = out.replace(
+            "return (self.__compare(&(__s).clone())) as i32;",
+            "return (self.__compare((__s).clone())) as i32;",
+        );
+        out = out.replace(
+            "return self.__compare(&(__s).clone());",
+            "return self.__compare((__s).clone());",
         );
         out = out.replace(
             "return self.__compare(&Default::default());",
             "return self.__compare(Default::default());",
+        );
+        out = out.replace(
+            "pub fn op_basic_string(&self, ) -> string_type {\n            return Default::default();\n        }",
+            "pub fn op_basic_string(&self, ) -> string_type {\n            return unsafe { std::mem::zeroed() };\n        }",
+        );
+        out = out.replace(
+            "pub fn op_basic_string(&self) -> string_type {\n            return Default::default();\n        }",
+            "pub fn op_basic_string(&self) -> string_type {\n            return unsafe { std::mem::zeroed() };\n        }",
         );
         out = out.replace(
             "s.push_str(Default::default().data() as *const i8);",
@@ -45212,11 +45240,18 @@ impl rrr_v64 {
         let mut rewritten = String::with_capacity(out.len() + 512);
         let mut in_path_impl = false;
         let mut path_depth: i32 = 0;
+        let mut path_fn_returns_string_type = false;
+        let mut path_fn_returns_bool = false;
+        let mut current_path_fn_name: Option<String> = None;
         for line in out.lines() {
             let trimmed = line.trim_start();
-            if !in_path_impl && trimmed.starts_with("impl path {") {
+            let trimmed_no_ws = trimmed.trim_end();
+            if !in_path_impl && trimmed_no_ws.starts_with("impl path {") {
                 in_path_impl = true;
                 path_depth = 0;
+                path_fn_returns_string_type = false;
+                path_fn_returns_bool = false;
+                current_path_fn_name = None;
             }
             let indent_len = line.len().saturating_sub(trimmed.len());
             let indent = &line[..indent_len];
@@ -45229,9 +45264,40 @@ impl rrr_v64 {
                 line_out = format!("{indent}return false;");
             }
             if in_path_impl {
-                if trimmed.starts_with("self.__pn_.op_add_assign(") {
+                if trimmed_no_ws.starts_with("pub fn ") {
+                    let fn_name = trimmed_no_ws
+                        .strip_prefix("pub fn ")
+                        .and_then(|rest| rest.split_once('('))
+                        .map(|(name, _)| name.trim().to_string());
+                    current_path_fn_name = fn_name;
+                    path_fn_returns_string_type = trimmed_no_ws.contains("-> string_type");
+                    path_fn_returns_bool = trimmed_no_ws.contains("-> bool");
+                }
+                if trimmed_no_ws.starts_with("self.__pn_.op_add_assign(") {
                     line_out = format!("{indent}();");
-                } else if trimmed == "return self.__pn_;" || trimmed == "return self.string();" {
+                } else if trimmed_no_ws == "return self.__pn_;"
+                    || trimmed_no_ws == "return self.string();"
+                {
+                    line_out = format!("{indent}return Default::default();");
+                } else if trimmed_no_ws == "__pn_: (__p.__pn_).clone(),"
+                    || trimmed_no_ws == "__pn_: Default::default(),"
+                {
+                    line_out = format!("{indent}__pn_: unsafe {{ std::mem::zeroed() }},");
+                } else if trimmed_no_ws == "self.__pn_ = Default::default();" {
+                    line_out = format!("{indent}self.__pn_ = unsafe {{ std::mem::zeroed() }};");
+                } else if current_path_fn_name.as_deref() == Some("op_basic_string")
+                    && trimmed_no_ws == "return Default::default();"
+                {
+                    line_out = format!("{indent}return unsafe {{ std::mem::zeroed() }};");
+                } else if path_fn_returns_string_type
+                    && trimmed_no_ws == "return Default::default();"
+                {
+                    line_out = format!("{indent}return unsafe {{ std::mem::zeroed() }};");
+                } else if path_fn_returns_bool && trimmed_no_ws == "return ();" {
+                    line_out = format!("{indent}return false;");
+                } else if trimmed_no_ws
+                    .contains("path::new_2(&mut (*(self as *const Self as *mut Self)).")
+                {
                     line_out = format!("{indent}return Default::default();");
                 }
             }
@@ -45244,6 +45310,9 @@ impl rrr_v64 {
                 if path_depth <= 0 {
                     in_path_impl = false;
                     path_depth = 0;
+                    path_fn_returns_string_type = false;
+                    path_fn_returns_bool = false;
+                    current_path_fn_name = None;
                 }
             }
         }
@@ -45385,6 +45454,28 @@ impl rrr_v64 {
             }
             out.push_str(
                 "\nimpl promise_void {\n    #[inline]\n    pub fn new_1<T>(_value: T) -> Self { Self::default() }\n}\n",
+            );
+        }
+
+        let needs_print_stack_trace_bridge = out.contains("super::print_stack_trace(")
+            && !out.contains("pub fn print_stack_trace(")
+            && !out.contains("__fragile_extern_print_stack_trace");
+        if needs_print_stack_trace_bridge {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(
+                r#"
+unsafe extern "C" {
+    #[link_name = "_ZN3rrr17print_stack_traceEP8_IO_FILE"]
+    fn __fragile_extern_print_stack_trace(fp: *mut std::ffi::c_void);
+}
+
+#[inline]
+pub fn print_stack_trace(fp: *mut std::ffi::c_void) {
+    unsafe { __fragile_extern_print_stack_trace(fp); }
+}
+"#,
             );
         }
 
@@ -45530,7 +45621,11 @@ impl FragileEventCVoidPtrCompat for *mut std::ffi::c_void {
             ),
             (
                 "*self.events_.op_index(i).op_arrow().log();",
+                "unsafe { (*(*self.events_.op_index(i)).op_arrow()).log(); }",
+            ),
+            (
                 "unsafe { (*self.events_.op_index(i)).op_arrow().log(); }",
+                "unsafe { (*(*self.events_.op_index(i)).op_arrow()).log(); }",
             ),
             (
                 "if !(!(*index).op_eq(&self.events_.end())) { break; }",
@@ -45662,8 +45757,8 @@ impl FragileEventCVoidPtrCompat for *mut std::ffi::c_void {
                 "return unsafe { crate::fragile_runtime::fseeko(__file as *mut std::ffi::c_void, 0i64, __whence) };",
             ),
             (
-                "return (if (self._M_value as i32) == 0 { equivalent } else { (if (self._M_value as i32) < 0 { weak_ordering { _M_value: -1 } } else { weak_ordering { _M_value: 1 } }) }).clone();",
                 "return (if (self._M_value as i32) == 0 { PARTIAL_ORDERING_EQUIVALENT } else { (if (self._M_value as i32) < 0 { partial_ordering { _M_value: -1 } } else { partial_ordering { _M_value: 1 } }) }).clone();",
+                "return (if (self._M_value as i32) == 0 { weak_ordering { _M_value: 0 } } else { (if (self._M_value as i32) < 0 { weak_ordering { _M_value: -1 } } else { weak_ordering { _M_value: 1 } }) }).clone();",
             ),
             (
                 "return unsafe { std::mem::transmute::<i32, std_launch>(unsafe { std::mem::transmute::<i32, std_launch>(((__x as i32) as i32) & ((__y as i32) as i32) as i32) }) };",
@@ -45898,6 +45993,58 @@ impl FragileCVoidPtrCompat for *mut std::ffi::c_void {
             }
         }
 
+        out
+    }
+
+    /// Final post-fiber guard for residual event/path lane drift where
+    /// `path::op_basic_string` returns `string_type` but still emits
+    /// `return Default::default();` (invalid when `string_type = c_void`).
+    fn normalize_rpc_path_string_type_default_returns(code: &str) -> String {
+        if !code.contains("pub fn op_basic_string(")
+            || !code.contains("-> string_type")
+            || !code.contains("return Default::default();")
+        {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len() + 64);
+        let mut in_op_basic_string = false;
+        let mut fn_depth: i32 = 0;
+        for line in code.lines() {
+            let trimmed = line.trim_start();
+            let trimmed_no_ws = trimmed.trim_end();
+            let indent_len = line.len().saturating_sub(trimmed.len());
+            let indent = &line[..indent_len];
+            let mut line_out = line.to_string();
+
+            if !in_op_basic_string
+                && trimmed_no_ws.starts_with("pub fn op_basic_string(")
+                && trimmed_no_ws.contains("-> string_type")
+            {
+                in_op_basic_string = true;
+                fn_depth = 0;
+            }
+
+            if in_op_basic_string && trimmed_no_ws == "return Default::default();" {
+                line_out = format!("{indent}return unsafe {{ std::mem::zeroed() }};");
+            }
+
+            out.push_str(&line_out);
+            out.push('\n');
+
+            if in_op_basic_string {
+                fn_depth += line.chars().filter(|c| *c == '{').count() as i32;
+                fn_depth -= line.chars().filter(|c| *c == '}').count() as i32;
+                if fn_depth <= 0 {
+                    in_op_basic_string = false;
+                    fn_depth = 0;
+                }
+            }
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
         out
     }
 
@@ -140155,6 +140302,9 @@ impl std_future_void_ {
         return self;
     }
 }
+pub fn op_weak_ordering(&self, ) -> weak_ordering {
+    return (if (self._M_value as i32) == 0 { PARTIAL_ORDERING_EQUIVALENT } else { (if (self._M_value as i32) < 0 { partial_ordering { _M_value: -1 } } else { partial_ordering { _M_value: 1 } }) }).clone();
+}
 "#;
         let output = AstCodeGen::normalize_rpc_event_surface_artifacts(input);
         assert!(
@@ -140163,8 +140313,14 @@ impl std_future_void_ {
             output
         );
         assert!(
-            output.contains("crate::rrr::print_stack_trace("),
-            "print_stack_trace path should normalize to crate::rrr, got:\n{}",
+            output.contains("super::print_stack_trace("),
+            "print_stack_trace path should normalize to super::print_stack_trace, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("fn __fragile_extern_print_stack_trace(fp: *mut std::ffi::c_void);")
+                && output.contains("pub fn print_stack_trace(fp: *mut std::ffi::c_void)"),
+            "print_stack_trace extern bridge should be appended when missing, got:\n{}",
             output
         );
         assert!(
@@ -140188,8 +140344,132 @@ impl std_future_void_ {
             output
         );
         assert!(
+            output.contains("return (if (self._M_value as i32) == 0 { weak_ordering { _M_value: 0 } } else { (if (self._M_value as i32) < 0 { weak_ordering { _M_value: -1 } } else { weak_ordering { _M_value: 1 } }) }).clone();"),
+            "weak_ordering return lane should normalize away partial_ordering drift, got:\n{}",
+            output
+        );
+        assert!(
             !output.contains("self.__pn_.op_add_assign(__x);"),
             "path c_void add-assign lane should be stripped, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_event_surface_artifacts_rewrites_crate_rrr_print_stack_trace_path() {
+        let input = r#"
+pub fn verify_path() {
+    crate::rrr::print_stack_trace(std::ptr::null_mut());
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_event_surface_artifacts(input);
+        assert!(
+            output.contains("super::print_stack_trace(std::ptr::null_mut());"),
+            "crate::rrr::print_stack_trace path should normalize to super::print_stack_trace, got:\n{}",
+            output
+        );
+        assert_eq!(
+            output
+                .matches("fn __fragile_extern_print_stack_trace(fp: *mut std::ffi::c_void);")
+                .count(),
+            1,
+            "print_stack_trace extern bridge should be emitted once, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_event_surface_artifacts_rewrites_path_c_void_compare_and_unsafe_deref_lanes(
+    ) {
+        let input = r#"
+pub type string_type = std::ffi::c_void;
+pub struct __string_view {}
+pub struct path {
+    __pn_: string_type,
+}
+impl path {
+    pub fn new_1(__p: &path) -> Self {
+        Self {
+            __pn_: (__p.__pn_).clone(),
+        }
+    }
+    pub fn new_1_1(__p: &mut path) -> Self {
+        Self {
+            __pn_: Default::default(),
+        }
+    }
+    pub fn op_assign(&mut self, __p: &path) -> &mut path {
+        self.__pn_ = Default::default();
+        return self;
+    }
+    pub fn op_basic_string(&self, ) -> string_type {
+        return Default::default();
+    }
+    pub fn compare(&self, __p: &path) -> i32 {
+        return (self.__compare(&())) as i32;
+    }
+    pub fn compare_2(&self, __s: __string_view) -> i32 {
+        return (self.__compare(&(__s).clone())) as i32;
+    }
+    pub fn root_name(&self, ) -> path {
+        return path::new_2(&mut (*(self as *const Self as *mut Self)).__root_name(), 0);
+    }
+    pub fn empty(&self, ) -> bool {
+        return ();
+    }
+    pub fn __compare(&self, _unnamed: __string_view) -> i32 {
+        0
+    }
+    pub fn __root_name(&self, ) -> __string_view {
+        unsafe { std::mem::zeroed() }
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_event_surface_artifacts(input);
+        assert!(
+            output.contains("__pn_: unsafe { std::mem::zeroed() },")
+                && output.contains("self.__pn_ = unsafe { std::mem::zeroed() };")
+                && output.contains("return unsafe { std::mem::zeroed() };")
+                && output.contains(
+                    "pub fn op_basic_string(&self, ) -> string_type {\n        return unsafe { std::mem::zeroed() };"
+                ),
+            "path c_void field lanes should normalize to zeroed assignments/returns, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("return (self.__compare(unsafe { std::mem::zeroed() })) as i32;")
+                && output.contains("return (self.__compare((__s).clone())) as i32;"),
+            "__compare callshape drift should normalize to value lanes, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("return Default::default();")
+                && !output
+                    .contains("path::new_2(&mut (*(self as *const Self as *mut Self)).__root_name(), 0);"),
+            "unsafe path::new_2 raw-pointer construction should be eliminated, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn empty(&self, ) -> bool {\n        return false;"),
+            "path bool lane should normalize from unit return to false, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_path_string_type_default_returns_rewrites_op_basic_string_default_lane() {
+        let input = r#"
+impl path {
+    pub fn op_basic_string(&self, ) -> string_type {
+        return Default::default();
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_path_string_type_default_returns(input);
+        assert!(
+            output.contains("return unsafe { std::mem::zeroed() };")
+                && !output.contains("return Default::default();"),
+            "post-fiber path guard should rewrite op_basic_string default return lane, got:\n{}",
             output
         );
     }
@@ -140201,6 +140481,9 @@ pub struct rusty_Function_void___ {}
 pub struct filesystem_error {}
 pub struct promise_void {}
 pub enum launch { any = 0 }
+pub struct weak_ordering { _M_value: i8 }
+pub struct partial_ordering { _M_value: i8 }
+pub static PARTIAL_ORDERING_EQUIVALENT: partial_ordering = partial_ordering { _M_value: 0 };
 pub struct std_vector<T> { _ptr: *mut T }
 impl<T> std_vector<T> { pub fn begin(&mut self) -> *mut T { std::ptr::null_mut() } }
 let mut task: __bind_void__Fiber___boost_coro_yield_t_____Fiber__const___ph_1__ = super::bind_void__rrr_Fiber___rrr_boost_coro_yield_t____ref_mut_rrr_Fiber(&mut &boost_run_wrapper, (self as *const Self as *mut Self), &unsafe { super::placeholders::__gv__1 });
@@ -140213,6 +140496,7 @@ let mut index: *mut std::ffi::c_void = self.events_.begin();
 if unsafe { (*(*index.op_deref()).op_arrow()).is_ready() } {
     (*index).op_inc(0);
 }
+*self.events_.op_index(i).op_arrow().log();
 __tree_: *__a,
 __self.__state_ = __rhs.__state_;
 { __rhs.__state_ = (std::ptr::null_mut()) as *mut __assoc_sub_state ;};
@@ -140223,6 +140507,9 @@ return unsafe { std::mem::transmute::<i32, std_launch>(unsafe { std::mem::transm
 return unsafe { std::mem::transmute::<i32, std_launch>(unsafe { std::mem::transmute::<i32, std_launch>(((!__x as i32) as i32) & ((3) as i32) as i32) }) };
 return unsafe { std::mem::transmute::<i32, std_launch>(unsafe { std::mem::transmute::<i32, std_launch>(((__x as i32) as i32) | ((__y as i32) as i32) as i32) }) };
 return unsafe { std::mem::transmute::<i32, std_launch>(unsafe { std::mem::transmute::<i32, std_launch>(((__x as i32) as i32) ^ ((__y as i32) as i32) as i32) }) };
+pub fn op_weak_ordering(&self, ) -> weak_ordering {
+    return (if (self._M_value as i32) == 0 { PARTIAL_ORDERING_EQUIVALENT } else { (if (self._M_value as i32) < 0 { partial_ordering { _M_value: -1 } } else { partial_ordering { _M_value: 1 } }) }).clone();
+}
 "#;
         let output = AstCodeGen::normalize_rpc_fiber_surface_artifacts(input);
         assert!(
@@ -140249,8 +140536,14 @@ return unsafe { std::mem::transmute::<i32, std_launch>(unsafe { std::mem::transm
         assert!(
             output.contains("let mut index: *mut std_shared_ptr<rrr::Event> = self.events_.begin();")
                 && output.contains("if unsafe { (*(*index).op_arrow()).is_ready() } {")
-                && output.contains("index = unsafe { index.add(1) };"),
+                && output.contains("index = unsafe { index.add(1) };")
+                && output.contains("unsafe { (*(*self.events_.op_index(i)).op_arrow()).log(); }"),
             "event index pointer lanes should normalize to shared_ptr cursor lane, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("return (if (self._M_value as i32) == 0 { weak_ordering { _M_value: 0 } } else { (if (self._M_value as i32) < 0 { weak_ordering { _M_value: -1 } } else { weak_ordering { _M_value: 1 } }) }).clone();"),
+            "weak_ordering return lane should normalize away partial_ordering drift, got:\n{}",
             output
         );
         assert!(

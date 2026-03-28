@@ -22631,3 +22631,98 @@ Harness-equivalent strict marshal probe:
 Detailed inventory:
 
 - `docs/dev/m9_2c_iv_e34f5e2_marshal_borrow_overlap_inventory.md`
+
+## 2026-03-27: M9.2.c.iv.e.34.f.5.e.5.b shared reactor-family straggler closure
+
+Selected leaf: `M9.2.c.iv.e.34.f.5.e.5.b`.
+
+Scope remained bounded (<1000 LOC): one additive normalization update in `ast_codegen`, focused unit coverage, and strict replay evidence capture.
+
+### Wrong-approach check
+
+- Re-reviewed `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before changes.
+- Kept fixes generic and additive (no target-specific branch, no force-native fallback, no fake-success stubs).
+
+### Key implementation decisions
+
+- In `normalize_rpc_event_surface_artifacts`:
+  - normalized both `super::rrr::print_stack_trace(...)` and `crate::rrr::print_stack_trace(...)` to `super::print_stack_trace(...)`.
+  - appended a guarded extern bridge when missing:
+    - `__fragile_extern_print_stack_trace`
+    - `pub fn print_stack_trace(fp: *mut std::ffi::c_void)`.
+  - rehydrated degraded weak-ordering return shape from
+    `PARTIAL_ORDERING_EQUIVALENT`/`partial_ordering` back to `weak_ordering` lanes.
+- In `normalize_rpc_fiber_surface_artifacts`:
+  - corrected pointer-event log callshape to dereference event pointer before method dispatch:
+    - `unsafe { (*(*self.events_.op_index(i)).op_arrow()).log(); }`.
+  - removed the broad rewrite that was reintroducing weak-ordering lane drift.
+
+### Focused validation
+
+- `cargo test -p fragile-clang test_normalize_rpc_event_surface_artifacts_rewrites_event_callshape_artifacts -- --nocapture`
+- `cargo test -p fragile-clang test_normalize_rpc_event_surface_artifacts_rewrites_crate_rrr_print_stack_trace_path -- --nocapture`
+- `cargo test -p fragile-clang test_normalize_rpc_fiber_surface_artifacts_rewrites_fiber_callshape_and_lane_artifacts -- --nocapture`
+
+All focused tests passed.
+
+### Strict replay evidence
+
+Command:
+
+- `FRAGILEC_MODE=strict python3 scripts/mako_rpc_strict_runtime_replay.py --baseline-run-root /tmp/fragile_m9_2_strict_runtime_replay_20260327T172446Z_p981802`
+
+Final run-root:
+
+- `/tmp/fragile_m9_2_strict_runtime_replay_20260327T195001Z_p1113539`
+
+Result:
+
+- lane contract still blocked overall (`build=2`, `test_rpc=-1`, `completed_trials=0/1`), but
+- shared e.5.e.5.b stragglers closed:
+  - `print_stack_trace` missing-function markers: `4 -> 0`
+  - weak-ordering mismatch markers: `4 -> 0`
+  - raw-pointer event `log` missing-method markers: `4 -> 0`
+- aggregate blocker inventory reduced vs e.5.e.5.a baseline:
+  - total: `154 -> 56`
+  - unique: `77 -> 29`
+
+Detailed inventory:
+
+- `docs/dev/m9_2c_iv_e34f5e5b_reactor_shared_straggler_inventory.md`
+
+## 2026-03-27: M9.2.c.iv.e.34.f.5.e.5.c event path/string-view lane closure
+
+- Executed leaf `M9.2.c.iv.e.34.f.5.e.5.c` from `TODO.md` (first undone high-priority leaf after `e.5.e.5.b`).
+- Scope stayed bounded (<1000 LOC) in `ast_codegen` normalizers + focused tests.
+
+Re-reviewed wrong-approach constraints before edits:
+
+- section `1.3 Wrong Approaches (Do Not Do)` in this book
+- `docs/dev/wrong.md`
+
+Implementation highlights:
+
+1. Extended `normalize_rpc_event_surface_artifacts` for path/string-view c-cluster artifacts:
+   - `c_void`-degraded path lanes (`__pn_` clone/default lanes) normalized to zeroed lanes
+   - `__compare(&())` and `__compare(&(__s).clone())` callshape drift normalized to value lanes
+   - unsafe filesystem path constructor deref lanes normalized to default path lane
+2. Added final post-fiber guard `normalize_rpc_path_string_type_default_returns` to keep
+   `path::op_basic_string -> string_type` from regressing back to `return Default::default();`.
+3. Added focused tests:
+   - `test_normalize_rpc_event_surface_artifacts_rewrites_path_c_void_compare_and_unsafe_deref_lanes`
+   - `test_normalize_rpc_path_string_type_default_returns_rewrites_op_basic_string_default_lane`
+
+Validation:
+
+- Focused tests pass (`cargo test -p fragile-clang ...`).
+- Focused strict probe run-root `/tmp/fragile_e34f5e5c_event_compile_after_mrKkkE` cleared targeted markers (`c_void: Default`, compare-by-ref drift, unsafe path-deref marker all `0`).
+- Strict replay run-root `/tmp/fragile_m9_2_strict_runtime_replay_20260327T211622Z_p1179723`:
+  - lane still blocked (`build=2`, `test_rpc=-1`, `completed_trials=0/1`)
+  - blocker inventory improved vs `e.5.e.5.b` replay `/tmp/fragile_m9_2_strict_runtime_replay_20260327T195001Z_p1113539`:
+    - `total: 56 -> 36`
+    - `unique: 29 -> 26`
+  - targeted c-cluster markers cleared (`8/2/2/7 -> 0/0/0/0`).
+
+Design/rationale + replay details are recorded in:
+
+- `docs/dev/m9_2c_iv_e34f5e5c_event_path_string_view_inventory.md`

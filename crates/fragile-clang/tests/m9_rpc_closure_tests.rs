@@ -6451,6 +6451,102 @@ fn m9_2c_iv_e34f5e5a_inventory_document_exists_and_records_replay_decomposition(
     }
 }
 
+#[test]
+fn m9_2c_iv_e34f5e5b_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.5.b")
+            && todo.contains("Done 2026-03-27")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260327T195001Z_p1113539")
+            && todo.contains("print_stack_trace 4->0")
+            && todo.contains("weak-ordering mismatch `4->0`")
+            && todo.contains("raw-pointer log `4->0`")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e5b_reactor_shared_straggler_inventory.md"),
+        "M9.2.c.iv.e.34.f.5.e.5.b TODO entry should record bounded closure evidence"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e34f5e5b_inventory_document_exists_and_records_shared_straggler_closure() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34f5e5b_reactor_shared_straggler_inventory.md"),
+    )
+    .expect("e.34.f.5.e.5.b inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.f.5.e.5.b",
+        "Wrong-approach check",
+        "normalize_rpc_event_surface_artifacts",
+        "normalize_rpc_fiber_surface_artifacts",
+        "__fragile_extern_print_stack_trace",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260327T195001Z_p1113539",
+        "rustc_error_total_count: 154 -> 56",
+        "rustc_error_unique_count: 77 -> 29",
+        "print_stack_trace`: `4 -> 0`",
+        "weak_ordering`, found `partial_ordering`: `4 -> 0`",
+        "raw pointer `*mut rrr::Event``: `4 -> 0`",
+        "M9.2.c.iv.e.34.f.5.e.5.c",
+        "M9.2.c.iv.e.34.f.5.e.5.d",
+        "M9.2.c.iv.e.34.f.5.e.5.e",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.f.5.e.5.b inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_e34f5e5c_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.5.c")
+            && todo.contains("Done 2026-03-27")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260327T211622Z_p1179723")
+            && todo.contains("c_void: Default=0")
+            && todo.contains("__compare(&())=0")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e5c_event_path_string_view_inventory.md"),
+        "M9.2.c.iv.e.34.f.5.e.5.c TODO entry should record bounded closure evidence"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e34f5e5c_inventory_document_exists_and_records_event_path_closure() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34f5e5c_event_path_string_view_inventory.md"),
+    )
+    .expect("e.34.f.5.e.5.c inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.f.5.e.5.c",
+        "Wrong-approach check",
+        "normalize_rpc_event_surface_artifacts",
+        "normalize_rpc_path_string_type_default_returns",
+        "/tmp/fragile_e34f5e5c_event_compile_after_mrKkkE",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260327T211622Z_p1179723",
+        "rustc_error_total_count: 56 -> 36",
+        "rustc_error_unique_count: 29 -> 26",
+        "`c_void: Default`: `8 -> 0`",
+        "`__compare(&())`: `2 -> 0`",
+        "`__compare(&(__s).clone())`: `2 -> 0`",
+        "M9.2.c.iv.e.34.f.5.e.5.d",
+        "M9.2.c.iv.e.34.f.5.e.5.e",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.f.5.e.5.c inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // M9.2.c.iv.e.17.d: Post-e.17 comprehensive strict compile error inventory
 // ---------------------------------------------------------------------------
