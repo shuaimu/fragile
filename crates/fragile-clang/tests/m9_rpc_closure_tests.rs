@@ -6829,26 +6829,28 @@ fn m9_2c_iv_e34f5e5e4b_inventory_document_exists_and_records_null_slice_closure(
 }
 
 #[test]
-fn m9_2c_iv_e34f5e5e4c1_task_documented_in_todo() {
+fn m9_2c_iv_e34f5e5e4c_task_documented_in_todo() {
     let todo = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
     )
     .expect("TODO.md should be readable");
     assert!(
-        todo.contains("- [ ] M9.2.c.iv.e.34.f.5.e.5.e.4.c")
+        todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.5.e.4.c")
+            && todo.contains("Done 2026-03-29")
             && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260328T125712Z_p2100737")
-            && todo.contains("total=82")
-            && todo.contains("unique=55")
-            && todo.contains("quorum_event.cc")
-            && todo.contains("reactor.cc")
-            && todo.contains("rrr_Client_const")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260329T040328Z_p2989433")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260329T053434Z_p3129053")
+            && todo.contains("lane_fragilec_build_status=2")
+            && todo.contains("non_increase_verdict=true")
             && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.5.e.4.c.1")
             && todo.contains("Done 2026-03-28")
             && todo.contains("docs/dev/m9_2c_iv_e34f5e5e4c_post_e4b_replay_inventory.md")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e5e4c4c4_strict_replay_delta_inventory.md")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e5e4c4d_strict_replay_delta_inventory.md")
             && todo.contains("M9.2.c.iv.e.34.f.5.e.5.e.4.c.2")
             && todo.contains("M9.2.c.iv.e.34.f.5.e.5.e.4.c.3")
             && todo.contains("M9.2.c.iv.e.34.f.5.e.5.e.4.c.4"),
-        "M9.2.c.iv.e.34.f.5.e.5.e.4.c TODO entry should capture post-e.4.b replay decomposition and c.1 evidence"
+        "M9.2.c.iv.e.34.f.5.e.5.e.4.c TODO entry should capture closed parent evidence across c.1..c.4 replay chain"
     );
 }
 

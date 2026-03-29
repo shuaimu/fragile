@@ -241,6 +241,9 @@ Execution constraints for this family:
 6. For decomposed replay parents, close the parent only after the final child
    replay keeps non-increase and the parent references both the pre-final and
    final replay manifests for auditability.
+7. For intermediate replay parents (not terminal green-lane closure), preserve
+   the original decomposition trigger run-root in the parent note so the
+   full chain from first residual snapshot to final non-increase is traceable.
 
 This keeps section 1.3 anti-pattern bans intact while making replay-only closure
 criteria explicit and auditable.
