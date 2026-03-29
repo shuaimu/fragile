@@ -6026,7 +6026,7 @@ fn m9_2c_iv_e34f5a_task_documented_in_todo() {
             && todo.contains("- [x] M9.2.c.iv.e.34.f.5.d")
             && todo.contains("normalize_rpc_marshal_fiber_context_artifacts")
             && todo.contains("docs/dev/m9_2c_iv_e34f5d_marshal_fiber_context_inventory.md")
-            && todo.contains("- [ ] M9.2.c.iv.e.34.f.5.e")
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e")
             && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.1")
             && todo.contains("docs/dev/m9_2c_iv_e34f5e1_post_f5d_replay_inventory.md")
             && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.2")
@@ -6204,21 +6204,50 @@ fn m9_2c_iv_e34f5d_inventory_document_exists_and_records_marshal_fiber_context_c
 }
 
 #[test]
+fn m9_2c_iv_e34f5e_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.34.f.5.e Re-run strict runtime replay end-to-end")
+            && todo.contains("Done 2026-03-29")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260327T064414Z_p402022")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260327T172446Z_p981802")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260329T053434Z_p3129053")
+            && todo.contains("lane_fragilec_build_status=2")
+            && todo.contains("non_increase_verdict=true")
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.1")
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.2")
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.3")
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.4")
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.5")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e1_post_f5d_replay_inventory.md")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e2_marshal_borrow_overlap_inventory.md")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e3_event_surface_inventory.md")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e4_fiber_surface_inventory.md")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e5e4c4d_strict_replay_delta_inventory.md"),
+        "M9.2.c.iv.e.34.f.5.e TODO entry should record bounded closure evidence across e.1..e.5"
+    );
+}
+
+#[test]
 fn m9_2c_iv_e34f5e1_task_documented_in_todo() {
     let todo = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
     )
     .expect("TODO.md should be readable");
     assert!(
-        todo.contains("- [ ] M9.2.c.iv.e.34.f.5.e Re-run strict runtime replay end-to-end")
+        todo.contains("- [x] M9.2.c.iv.e.34.f.5.e Re-run strict runtime replay end-to-end")
+            && todo.contains("Done 2026-03-29")
             && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260327T064414Z_p402022")
-            && todo.contains("total=303")
-            && todo.contains("unique=72")
-            && todo.contains("E0308=118")
-            && todo.contains("E0599=85")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260329T053434Z_p3129053")
+            && todo.contains("total 218<=218")
+            && todo.contains("unique 89<=89")
+            && todo.contains("lane_fragilec_build_status=2")
             && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.1")
             && todo.contains("docs/dev/m9_2c_iv_e34f5e1_post_f5d_replay_inventory.md"),
-        "M9.2.c.iv.e.34.f.5.e TODO entry should record post-f.5.d replay evidence and e.1 decomposition closure"
+        "M9.2.c.iv.e.34.f.5.e TODO entry should record closure evidence and e.1 decomposition coverage"
     );
 }
 
