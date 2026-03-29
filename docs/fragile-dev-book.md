@@ -11,6 +11,7 @@
 - [1.6 2026-03 Reactor Command-Map c.2 Closure Guardrails](#16-2026-03-reactor-command-map-c2-closure-guardrails)
 - [1.7 2026-03 Reactor/Quorum Symbol-Signature c.4.c.1 Guardrails](#17-2026-03-reactorquorum-symbol-signature-c4c1-guardrails)
 - [1.8 2026-03 RPC Client Syntax/Enumbool c.4.c.2 Guardrails](#18-2026-03-rpc-client-syntaxenumbool-c4c2-guardrails)
+- [1.9 2026-03 Strict Replay Evidence-Only Closure Guardrails](#19-2026-03-strict-replay-evidence-only-closure-guardrails)
 - [2. End-to-End Architecture](#2-end-to-end-architecture)
 - [2.3 C++ `_v` trait globals and export linkage](#23-c-_v-trait-globals-and-export-linkage)
 - [2.4 Mode 1 call-stitching architecture (target state)](#24-mode-1-call-stitching-architecture-target-state)
@@ -217,6 +218,29 @@ Execution constraints for this family:
 
 This preserves section 1.3 policy: generic normalization only, no force-native
 fallback, no target-specific hacks.
+
+## 1.9 2026-03 Strict Replay Evidence-Only Closure Guardrails
+
+The `M9.2.c.iv.e.34.f.5.e.5.e.4.c.4.d` leaf is an evidence-only replay closure:
+it does not require parser/codegen edits, but it must still produce deterministic
+artifact-backed status deltas.
+
+Execution constraints for this family:
+
+1. Always run replay against an explicit baseline run-root and keep the exact
+   command in the inventory note.
+2. Treat lane-contract red (`build=2`, `test_rpc=-1`) as acceptable closure only
+   when blocker totals and unique counts are non-increasing vs baseline.
+3. Require both manifest-level and blocker-inventory-level evidence
+   (`strict_runtime_replay_manifest.txt` and
+   `strict_runtime_replay_blocker_inventory_manifest.txt`).
+4. Do not claim functional progress from this slice when metrics are flat; the
+   closure outcome is deterministic stability evidence only.
+5. Keep follow-on implementation work in new bounded leaves rather than mixing
+   source edits into evidence-capture leaves.
+
+This keeps section 1.3 anti-pattern bans intact while making replay-only closure
+criteria explicit and auditable.
 
 ## 2. End-to-End Architecture
 
