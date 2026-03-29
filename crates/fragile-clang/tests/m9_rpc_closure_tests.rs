@@ -6033,8 +6033,9 @@ fn m9_2c_iv_e34f5a_task_documented_in_todo() {
             && todo.contains("docs/dev/m9_2c_iv_e34f5e2_marshal_borrow_overlap_inventory.md")
             && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.3")
             && todo.contains("docs/dev/m9_2c_iv_e34f5e3_event_surface_inventory.md")
-            && todo.contains("- [ ] M9.2.c.iv.e.34.f.5.e.5"),
-        "M9.2.c.iv.e.34.f.5 should keep bounded follow-up leaves with f.5.a/f.5.b/f.5.c/f.5.d done and e.1 decomposition recorded"
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.5")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e5a_post_e5e4_replay_inventory.md"),
+        "M9.2.c.iv.e.34.f.5 should keep bounded follow-up leaves with f.5.a/f.5.b/f.5.c/f.5.d done and e.5 closure decomposition recorded"
     );
 }
 
@@ -6393,6 +6394,36 @@ fn m9_2c_iv_e34f5e4_inventory_document_exists_and_records_fiber_surface_closure(
             required
         );
     }
+}
+
+#[test]
+fn m9_2c_iv_e34f5e5_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.5")
+            && todo.contains("Done 2026-03-29")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260327T172446Z_p981802")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260327T195001Z_p1113539")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260327T211622Z_p1179723")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260328T000000Z_p1395452")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260329T053434Z_p3129053")
+            && todo.contains("lane_fragilec_build_status=2")
+            && todo.contains("non_increase_verdict=true")
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.5.a")
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.5.b")
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.5.c")
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.5.d")
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.5.e")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e5a_post_e5e4_replay_inventory.md")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e5b_reactor_shared_straggler_inventory.md")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e5c_event_path_string_view_inventory.md")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e5d_reactor_command_map_event_base_inventory.md")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e5e4c4d_strict_replay_delta_inventory.md"),
+        "M9.2.c.iv.e.34.f.5.e.5 TODO entry should record bounded closure evidence across e.5.a..e.5.e"
+    );
 }
 
 #[test]
