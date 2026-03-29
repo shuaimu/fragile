@@ -7011,6 +7011,82 @@ fn m9_2c_iv_e34f5e5e4c4c2_inventory_document_exists_and_records_rpc_client_synta
     }
 }
 
+#[test]
+fn m9_2c_iv_e34f5e5e4c4_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.5.e.4.c.4")
+            && todo.contains("Done 2026-03-29")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260329T040328Z_p2989433")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260329T053434Z_p3129053")
+            && todo.contains("non_increase_verdict=true")
+            && todo.contains("lane_fragilec_build_status=2")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e5e4c4c4_strict_replay_delta_inventory.md")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e5e4c4d_strict_replay_delta_inventory.md")
+            && todo.contains("M9.2.c.iv.e.34.f.5.e.5.e.4.c.4.a")
+            && todo.contains("M9.2.c.iv.e.34.f.5.e.5.e.4.c.4.d"),
+        "M9.2.c.iv.e.34.f.5.e.5.e.4.c.4 TODO entry should capture both replay deltas and child-leaf closure evidence"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e34f5e5e4c4c4_inventory_document_exists_and_records_non_increase_replay() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34f5e5e4c4c4_strict_replay_delta_inventory.md"),
+    )
+    .expect("e.34.f.5.e.5.e.4.c.4.c.4 inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.f.5.e.5.e.4.c.4.c.4",
+        "Wrong-Approach Check",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260328T230041Z_p2676907",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260329T040328Z_p2989433",
+        "lane_fragilec_build_status=2",
+        "lane_fragilec_test_rpc_status=-1",
+        "lane_fragilec_failure_class=build_failed",
+        "non_increase_verdict=true",
+        "reactor.cc",
+        "rpc/client.cpp",
+        "c.4.d",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.f.5.e.5.e.4.c.4.c.4 inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_e34f5e5e4c4d_inventory_document_exists_and_records_followup_non_increase_replay() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34f5e5e4c4d_strict_replay_delta_inventory.md"),
+    )
+    .expect("e.34.f.5.e.5.e.4.c.4.d inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.f.5.e.5.e.4.c.4.d",
+        "Wrong-Approach Check",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260329T040328Z_p2989433",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260329T053434Z_p3129053",
+        "lane_fragilec_build_status=2",
+        "lane_fragilec_test_rpc_status=-1",
+        "lane_fragilec_failure_class=build_failed",
+        "non_increase_verdict=true",
+        "reactor.cc",
+        "rpc/client.cpp",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.f.5.e.5.e.4.c.4.d inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // M9.2.c.iv.e.17.d: Post-e.17 comprehensive strict compile error inventory
 // ---------------------------------------------------------------------------

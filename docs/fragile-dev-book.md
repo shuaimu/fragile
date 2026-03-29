@@ -238,6 +238,9 @@ Execution constraints for this family:
    closure outcome is deterministic stability evidence only.
 5. Keep follow-on implementation work in new bounded leaves rather than mixing
    source edits into evidence-capture leaves.
+6. For decomposed replay parents, close the parent only after the final child
+   replay keeps non-increase and the parent references both the pre-final and
+   final replay manifests for auditability.
 
 This keeps section 1.3 anti-pattern bans intact while making replay-only closure
 criteria explicit and auditable.
