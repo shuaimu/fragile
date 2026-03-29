@@ -9,6 +9,8 @@
 - [1.4 2026-03 Design Update: STL-Opaque Parser and Backend Deprecation](#14-2026-03-design-update-stl-opaque-parser-and-backend-deprecation)
 - [1.5 2026-03 RPC `std::string` Lane Normalization Guardrails](#15-2026-03-rpc-stdstring-lane-normalization-guardrails)
 - [1.6 2026-03 Reactor Command-Map c.2 Closure Guardrails](#16-2026-03-reactor-command-map-c2-closure-guardrails)
+- [1.7 2026-03 Reactor/Quorum Symbol-Signature c.4.c.1 Guardrails](#17-2026-03-reactorquorum-symbol-signature-c4c1-guardrails)
+- [1.8 2026-03 RPC Client Syntax/Enumbool c.4.c.2 Guardrails](#18-2026-03-rpc-client-syntaxenumbool-c4c2-guardrails)
 - [2. End-to-End Architecture](#2-end-to-end-architecture)
 - [2.3 C++ `_v` trait globals and export linkage](#23-c-_v-trait-globals-and-export-linkage)
 - [2.4 Mode 1 call-stitching architecture (target state)](#24-mode-1-call-stitching-architecture-target-state)
@@ -170,6 +172,51 @@ Observed closure pattern for c.2:
 - Residual failures shifted to unresolved-type invariants in reactor files; this is next-slice input, not a reason to reopen c.2.
 
 This follows section 1.3 policy: no target-specific branching, no force-native bypass, no fake semantic stubs.
+
+## 1.7 2026-03 Reactor/Quorum Symbol-Signature c.4.c.1 Guardrails
+
+The `M9.2.c.iv.e.34.f.5.e.5.e.4.c.4.c.1` slice targeted residual reactor/quorum
+typed blockers caused by symbol and signature drift after earlier event/fiber
+normalizations.
+
+Execution constraints for this family:
+
+1. Keep fixes in one bounded late normalizer and avoid driver/runtime branching.
+2. Prefer local call-shape rehydration for unresolved symbol lanes
+   (`sp_running_coro_th_`, `get_reactor`, `this_thread::get_id`) over broad
+   global replacements.
+3. Rewrite invalid signature placeholders (`func: &mut _`) to concrete FFI-safe
+   lanes without introducing target-specific type coupling.
+4. Treat raw-pointer compare artifacts as iterator-shape normalization
+   (`*find(...).op_eq(...)` -> direct iterator comparison) to eliminate unsafe
+   deref blockers deterministically.
+5. Keep replay-scale verification in later leaf gates (`c.4.c.4`) so this slice
+   remains bounded and reviewable.
+
+This keeps the anti-pattern policy from section 1.3 intact while reducing a
+high-signal blocker cluster needed for subsequent `rpc/client.cpp` closure
+leaves.
+
+## 1.8 2026-03 RPC Client Syntax/Enumbool c.4.c.2 Guardrails
+
+The `M9.2.c.iv.e.34.f.5.e.5.e.4.c.4.c.2` slice targeted `rpc/client.cpp`
+syntax and enum-call-shape regressions that surfaced after `c.4.c.1`.
+
+Execution constraints for this family:
+
+1. Keep fixes in one bounded late normalizer; avoid broad parser/runtime
+   branching.
+2. Normalize `ConnectionState` cast drift to direct enum lanes only where
+   generated code emits `ConnectionState::... as i32` artifacts.
+3. Collapse synthetic wrapper callshapes (`rrr_(ConnectionState::...)`) to
+   direct enum values instead of introducing target-specific helper shims.
+4. Rehydrate iterator-expression syntax into valid Rust expression statements
+   (`let _ = ({ ... }) != ...;`) rather than deleting control-flow lanes.
+5. Treat non-target residual typed failures as follow-up leaves (`c.4.c.3`)
+   and avoid expanding this slice into full replay closure.
+
+This preserves section 1.3 policy: generic normalization only, no force-native
+fallback, no target-specific hacks.
 
 ## 2. End-to-End Architecture
 

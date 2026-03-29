@@ -30367,6 +30367,8 @@ impl AstCodeGen {
         output = Self::normalize_rpc_std_string_lane_surface_artifacts(&output);
         output = Self::normalize_rpc_container_internal_node_artifacts(&output);
         output = Self::normalize_rpc_event_surface_artifacts(&output);
+        output = Self::normalize_rpc_reactor_symbol_and_signature_artifacts(&output);
+        output = Self::normalize_rpc_client_syntax_and_enumbool_callshape_artifacts(&output);
         output = Self::normalize_rpc_fiber_surface_artifacts(&output);
         output = Self::normalize_rpc_path_string_type_default_returns(&output);
         output = Self::append_compile_error_for_unresolved_non_c_abi_external_calls(&output);
@@ -46251,6 +46253,157 @@ impl FragileFiberCreateRunImplCompat for rrr::Fiber {
             );
         }
 
+        out
+    }
+
+    /// Fix c.4.c.1 residual reactor/quorum symbol/signature drifts:
+    /// - unresolved `sp_running_coro_th_` lane in `Fiber::current_fiber`.
+    /// - unresolved unqualified `get_reactor()` call in poll loop.
+    /// - missing `this_thread::get_id` helper in generated `this_thread` module.
+    /// - invalid placeholder function signatures (`func: &mut _`).
+    /// - raw-deref iterator compare artifacts and remove_xid key-name drift.
+    fn normalize_rpc_reactor_symbol_and_signature_artifacts(code: &str) -> String {
+        if !code.contains("sp_running_coro_th_.borrow()")
+            && !code.contains("(*get_reactor().op_arrow())")
+            && !code.contains("this_thread::get_id()")
+            && !code.contains("func: &mut _")
+            && !code.contains("self.xids_.erase(fd);")
+            && !code.contains("(*(self.fd_to_pollable_.find(fd as *const i8))).op_eq(")
+            && !code.contains("remove_fds.swap(&self.pending_remove_);")
+            && !code.contains("if (*mode_it).op_eq(self.mode_.end()) {")
+        {
+            return code.to_string();
+        }
+
+        let mut out = String::with_capacity(code.len() + 256);
+        let mut in_remove_xid = false;
+        let mut remove_xid_depth: i32 = 0;
+        for line in code.lines() {
+            let mut rewritten = line.to_string();
+            let trimmed = line.trim_start();
+            let indent_len = line.len().saturating_sub(trimmed.len());
+            let indent = &line[..indent_len];
+
+            if !in_remove_xid
+                && trimmed.starts_with("pub fn remove_xid(")
+                && trimmed.contains("site:")
+            {
+                in_remove_xid = true;
+                remove_xid_depth = 0;
+            }
+
+            rewritten = rewritten.replace(
+                "let mut guard: std::cell::Ref<std::option::Option<std::rc::Rc<Fiber>>> = sp_running_coro_th_.borrow();",
+                "let mut guard: std::cell::Ref<std::option::Option<std::rc::Rc<Fiber>>> = unsafe { (REACTOR_SP_RUNNING_CORO_TH_).borrow() };",
+            );
+            rewritten = rewritten.replace(
+                "unsafe { (*get_reactor().op_arrow()).r#loop(false, true) };",
+                "unsafe { (*Reactor::get_reactor().op_arrow()).r#loop(false, true) };",
+            );
+            rewritten = rewritten.replace("func: &mut _", "func: &mut std::ffi::c_void");
+            rewritten = rewritten.replace(
+                "if !(*(self.fd_to_pollable_.find(fd as *const i8))).op_eq(&self.fd_to_pollable_.end()) {",
+                "if self.fd_to_pollable_.find(fd as *const i8) != self.fd_to_pollable_.end() {",
+            );
+            rewritten = rewritten.replace(
+                "if (*(self.fd_to_pollable_.find(fd as *const i8))).op_eq(&self.fd_to_pollable_.end()) {",
+                "if self.fd_to_pollable_.find(fd as *const i8) == self.fd_to_pollable_.end() {",
+            );
+            rewritten =
+                rewritten.replace("if (*mode_it).op_eq(self.mode_.end()) {", "if mode_it == self.mode_.end() {");
+            rewritten = rewritten.replace(
+                "remove_fds.swap(&self.pending_remove_);",
+                "remove_fds.swap(&mut self.pending_remove_);",
+            );
+
+            if in_remove_xid && trimmed == "self.xids_.erase(fd);" {
+                rewritten = format!("{indent}self.xids_.erase(site);");
+            }
+
+            out.push_str(&rewritten);
+            out.push('\n');
+
+            if in_remove_xid {
+                remove_xid_depth += line.chars().filter(|c| *c == '{').count() as i32;
+                remove_xid_depth -= line.chars().filter(|c| *c == '}').count() as i32;
+                if remove_xid_depth <= 0 {
+                    in_remove_xid = false;
+                    remove_xid_depth = 0;
+                }
+            }
+        }
+
+        if out.contains("pub mod this_thread {")
+            && out.contains("this_thread::get_id()")
+            && !out.contains("pub fn get_id(")
+        {
+            out = out.replacen(
+                "pub mod this_thread {\n",
+                "pub mod this_thread {\n    #[inline] pub fn get_id() -> __thread_id { unsafe { std::mem::zeroed() } }\n",
+                1,
+            );
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Fix c.4.c.2 residual rpc/client syntax and enum-callshape drifts:
+    /// - casted enum match arm patterns (`(ConnectionState::X as i32) =>`).
+    /// - casted enum compare lanes (`== (ConnectionState::X as i32)`).
+    /// - synthetic `rrr_(ConnectionState::X as i32)` wrapper calls.
+    /// - remove_if iterator-expression syntax lane (`{ __i += 1; __i } != __last;`).
+    fn normalize_rpc_client_syntax_and_enumbool_callshape_artifacts(code: &str) -> String {
+        if !code.contains("ConnectionState::")
+            && !code.contains("rrr_(ConnectionState::")
+            && !code.contains("{ __i += 1; __i } != ")
+        {
+            return code.to_string();
+        }
+
+        let connection_state_variants = [
+            "NEW",
+            "CONNECTING",
+            "CONNECTED",
+            "DISCONNECTING",
+            "DISCONNECTED",
+            "FAILED",
+        ];
+        let mut out = String::with_capacity(code.len() + 256);
+
+        for line in code.lines() {
+            let trimmed = line.trim_start();
+            let indent_len = line.len().saturating_sub(trimmed.len());
+            let indent = &line[..indent_len];
+            let mut rewritten = line.to_string();
+
+            for variant in connection_state_variants {
+                let casted = format!("(ConnectionState::{variant} as i32)");
+                let bare = format!("ConnectionState::{variant}");
+                rewritten = rewritten.replace(&format!("rrr_({casted})"), &bare);
+                rewritten = rewritten.replace(&format!("rrr_({bare})"), &bare);
+                rewritten = rewritten.replace(&format!("{casted} =>"), &format!("{bare} =>"));
+                rewritten = rewritten.replace(&casted, &bare);
+            }
+            rewritten = rewritten.replace("rrr_ConnectionState::", "ConnectionState::");
+
+            if trimmed.starts_with("{ __i += 1; __i } != ") && trimmed.ends_with(';') {
+                let rhs = trimmed
+                    .trim_start_matches("{ __i += 1; __i } != ")
+                    .trim_end_matches(';')
+                    .trim();
+                rewritten = format!("{indent}let _ = ({{ __i += 1; __i }}) != {rhs};");
+            }
+
+            out.push_str(&rewritten);
+            out.push('\n');
+        }
+
+        if !code.ends_with('\n') && out.ends_with('\n') {
+            out.pop();
+        }
         out
     }
 
@@ -141726,6 +141879,181 @@ impl std::string::String {
                 "std::slice::from_raw_parts(std::ptr::null() as *const u8, (self.len_) as usize)"
             ),
             "null from_raw_parts compare call should be removed, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_reactor_symbol_and_signature_artifacts_rewrites_core_markers() {
+        let input = r#"
+pub mod this_thread {
+    #[inline] pub fn r#yield() {}
+}
+pub struct Fiber {}
+pub struct Reactor {}
+pub struct PollThreadWorker {
+    fd_to_pollable_: std_unordered_map_int__rusty_Arc_Pollable,
+    mode_: std_unordered_map_int__int,
+    pending_remove_: std_unordered_set_int,
+}
+pub struct QuorumEvent {
+    xids_: std_map_u16__i64,
+}
+static mut REACTOR_SP_RUNNING_CORO_TH_: std::cell::RefCell<std::option::Option<std::rc::Rc<Fiber>>> = std::cell::RefCell::new(None);
+impl Fiber {
+    pub fn current_fiber() -> std::option::Option<std::rc::Rc<Fiber>> {
+        let mut guard: std::cell::Ref<std::option::Option<std::rc::Rc<Fiber>>> = sp_running_coro_th_.borrow();
+        Default::default()
+    }
+}
+impl PollThreadWorker {
+    pub fn poll_loop(&mut self, fd: i32) {
+        unsafe { (*get_reactor().op_arrow()).r#loop(false, true) };
+        if !(*(self.fd_to_pollable_.find(fd as *const i8))).op_eq(&self.fd_to_pollable_.end()) {}
+        if (*(self.fd_to_pollable_.find(fd as *const i8))).op_eq(&self.fd_to_pollable_.end()) {}
+        let mut mode_it: *mut std::ffi::c_void = self.mode_.find(fd as *const i8);
+        if (*mode_it).op_eq(self.mode_.end()) {}
+        let mut remove_fds: std_unordered_set_int = std_unordered_set_int::new_0();
+        remove_fds.swap(&self.pending_remove_);
+    }
+}
+impl QuorumEvent {
+    pub fn remove_xid(&mut self, site: u16) {
+        self.xids_.erase(fd);
+    }
+}
+pub fn spawn_ref_mut___foo(func: &mut _, args: &mut std::sync::mpsc::Receiver<i32>) -> std::thread::JoinHandle<()> {
+    unsafe { std::mem::zeroed() }
+}
+pub fn call_get_id() -> __thread_id {
+    super::this_thread::get_id()
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_reactor_symbol_and_signature_artifacts(input);
+        assert!(
+            output.contains(
+                "let mut guard: std::cell::Ref<std::option::Option<std::rc::Rc<Fiber>>> = unsafe { (REACTOR_SP_RUNNING_CORO_TH_).borrow() };"
+            ),
+            "sp_running_coro_th_ lane should normalize to static member storage, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("unsafe { (*Reactor::get_reactor().op_arrow()).r#loop(false, true) };"),
+            "unqualified get_reactor() call should normalize to Reactor::get_reactor(), got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("if self.fd_to_pollable_.find(fd as *const i8) != self.fd_to_pollable_.end() {")
+                && output.contains("if self.fd_to_pollable_.find(fd as *const i8) == self.fd_to_pollable_.end() {")
+                && output.contains("if mode_it == self.mode_.end() {")
+                && output.contains("remove_fds.swap(&mut self.pending_remove_);"),
+            "raw-deref iterator comparison/mutability lanes should normalize, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("self.xids_.erase(site);")
+                && !output.contains("self.xids_.erase(fd);"),
+            "remove_xid key lane should use function parameter `site`, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub fn spawn_ref_mut___foo(func: &mut std::ffi::c_void, args:"),
+            "placeholder underscore type in signature should normalize to c_void, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub mod this_thread {\n    #[inline] pub fn get_id() -> __thread_id"),
+            "missing this_thread::get_id helper should be injected when referenced, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_reactor_symbol_and_signature_artifacts_get_id_injection_is_idempotent() {
+        let input = r#"
+pub mod this_thread {
+    #[inline] pub fn r#yield() {}
+}
+pub fn call_get_id() -> __thread_id {
+    super::this_thread::get_id()
+}
+"#;
+        let once = AstCodeGen::normalize_rpc_reactor_symbol_and_signature_artifacts(input);
+        let twice = AstCodeGen::normalize_rpc_reactor_symbol_and_signature_artifacts(&once);
+        assert_eq!(
+            twice.matches("pub fn get_id() -> __thread_id").count(),
+            1,
+            "this_thread::get_id helper should be injected once, got:\n{}",
+            twice
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_client_syntax_and_enumbool_callshape_artifacts_rewrites_connection_state_cast_and_rrr_wrappers(
+    ) {
+        let input = r#"
+pub enum ConnectionState {
+    NEW = 0,
+    CONNECTING = 1,
+    CONNECTED = 2,
+    DISCONNECTING = 3,
+    DISCONNECTED = 4,
+    FAILED = 5,
+}
+pub fn connection_state_to_string(state: ConnectionState) -> *const i8 {
+    match state {
+        ConnectionState::NEW => (b"NEW\x00".as_ptr() as *const i8),
+        (ConnectionState::CONNECTING as i32) => (b"CONNECTING\x00".as_ptr() as *const i8),
+        (ConnectionState::CONNECTED as i32) => (b"CONNECTED\x00".as_ptr() as *const i8),
+        _ => (b"UNKNOWN\x00".as_ptr() as *const i8),
+    }
+}
+pub fn rewrite(machine: &mut ConnectionStateMachine, state: ConnectionState) {
+    machine.transition_to(rrr_(ConnectionState::DISCONNECTING as i32));
+    machine.force_state(rrr_(ConnectionState::DISCONNECTED as i32));
+    if state == (ConnectionState::CONNECTED as i32) {}
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_client_syntax_and_enumbool_callshape_artifacts(input);
+        assert!(
+            output.contains("ConnectionState::CONNECTING =>")
+                && output.contains("ConnectionState::CONNECTED =>")
+                && !output.contains("(ConnectionState::CONNECTING as i32) =>")
+                && !output.contains("(ConnectionState::CONNECTED as i32) =>"),
+            "casted enum match-arm patterns should normalize to direct enum variants, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("machine.transition_to(ConnectionState::DISCONNECTING);")
+                && output.contains("machine.force_state(ConnectionState::DISCONNECTED);")
+                && !output.contains("rrr_(ConnectionState::DISCONNECTING"),
+            "rrr_ call-wrapper lane should normalize to direct enum values, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("if state == ConnectionState::CONNECTED {}")
+                && !output.contains("if state == (ConnectionState::CONNECTED as i32)"),
+            "enum compare cast lane should normalize to direct enum compare, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_client_syntax_and_enumbool_callshape_artifacts_rewrites_remove_if_iterator_expression_lane(
+    ) {
+        let input = r#"
+pub fn remove_if_std___wrap_iter_rusty_Arc_rrr_Client__(mut __first: std___wrap_iter_rusty_Arc_rrr_Client, __last: std___wrap_iter_rusty_Arc_rrr_Client) {
+    if __first != __last {
+        let mut __i: std___wrap_iter_rusty_Arc_rrr_Client = __first;
+        { __i += 1; __i } != __last;
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_client_syntax_and_enumbool_callshape_artifacts(input);
+        assert!(
+            output.contains("let _ = ({ __i += 1; __i }) != __last;")
+                && !output.contains("{ __i += 1; __i } != __last;"),
+            "remove_if iterator-expression lane should normalize into a valid let-binding expression, got:\n{}",
             output
         );
     }

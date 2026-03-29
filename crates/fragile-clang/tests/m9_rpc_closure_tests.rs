@@ -6926,6 +6926,91 @@ fn m9_2c_iv_e34f5e5e4c4b_inventory_document_exists_and_records_const_invariant_c
     }
 }
 
+#[test]
+fn m9_2c_iv_e34f5e5e4c4c1_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.5.e.4.c.4.c.1")
+            && todo.contains("Done 2026-03-29")
+            && todo.contains("normalize_rpc_reactor_symbol_and_signature_artifacts")
+            && todo.contains("/tmp/fragile_c4c1_focus_20260329T203604")
+            && todo.contains("M9.2.c.iv.e.34.f.5.e.5.e.4.c.4.c.2"),
+        "M9.2.c.iv.e.34.f.5.e.5.e.4.c.4.c.1 TODO entry should capture bounded reactor/quorum symbol-signature closure evidence"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e34f5e5e4c4c1_inventory_document_exists_and_records_symbol_signature_closure() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34f5e5e4c4c1_reactor_symbol_signature_inventory.md"),
+    )
+    .expect("e.34.f.5.e.5.e.4.c.4.c.1 inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.f.5.e.5.e.4.c.4.c.1",
+        "Wrong-approach check",
+        "normalize_rpc_reactor_symbol_and_signature_artifacts",
+        "sp_running_coro_th_",
+        "this_thread::get_id",
+        "func: &mut _",
+        "/tmp/fragile_c4c1_focus_20260329T203604",
+        "focus_1.status=0",
+        "c.4.c.4",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.f.5.e.5.e.4.c.4.c.1 inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_e34f5e5e4c4c2_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.5.e.4.c.4.c.2")
+            && todo.contains("Done 2026-03-29")
+            && todo.contains("normalize_rpc_client_syntax_and_enumbool_callshape_artifacts")
+            && todo.contains("/tmp/fragile_c4c2_focus_20260329T005901Z")
+            && todo.contains("M9.2.c.iv.e.34.f.5.e.5.e.4.c.4.c.3"),
+        "M9.2.c.iv.e.34.f.5.e.5.e.4.c.4.c.2 TODO entry should capture bounded rpc/client syntax-enumbool closure evidence"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e34f5e5e4c4c2_inventory_document_exists_and_records_rpc_client_syntax_closure() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34f5e5e4c4c2_rpc_client_syntax_enumbool_inventory.md"),
+    )
+    .expect("e.34.f.5.e.5.e.4.c.4.c.2 inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.f.5.e.5.e.4.c.4.c.2",
+        "Wrong-approach check",
+        "normalize_rpc_client_syntax_and_enumbool_callshape_artifacts",
+        "ConnectionState",
+        "rrr_(ConnectionState::",
+        "remove_if",
+        "/tmp/fragile_c4c2_focus_20260329T005901Z",
+        "expected expression=0",
+        "cannot find function rrr_=0",
+        "c.4.c.3",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.f.5.e.5.e.4.c.4.c.2 inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // M9.2.c.iv.e.17.d: Post-e.17 comprehensive strict compile error inventory
 // ---------------------------------------------------------------------------
