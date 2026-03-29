@@ -5814,8 +5814,8 @@ fn m9_2c_iv_e34f1_task_documented_in_todo() {
             && todo.contains("M9.2.c.iv.e.34.f.3")
             && (todo.contains("- [ ] M9.2.c.iv.e.34.f.4")
                 || todo.contains("- [x] M9.2.c.iv.e.34.f.4"))
-            && todo.contains("- [ ] M9.2.c.iv.e.34.f.5"),
-        "M9.2.c.iv.e.34.f should be decomposed into bounded follow-up leaves with f.1 marked done"
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5"),
+        "M9.2.c.iv.e.34.f should keep bounded follow-up leaves with f.1 and f.5 closure recorded"
     );
 }
 
@@ -5863,8 +5863,8 @@ fn m9_2c_iv_e34f2_task_documented_in_todo() {
             && todo.contains("/tmp/fragile_e34f2_event_before_G7itaN")
             && todo.contains("/tmp/fragile_e34f2_event_after_")
             && todo.contains("M9.2.c.iv.e.34.f.3")
-            && todo.contains("- [ ] M9.2.c.iv.e.34.f.5"),
-        "M9.2.c.iv.e.34.f.2 TODO entry should record closure evidence and keep follow-up leaves pending"
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5"),
+        "M9.2.c.iv.e.34.f.2 TODO entry should record closure evidence and downstream f.5 parent closure"
     );
 }
 
@@ -5914,8 +5914,8 @@ fn m9_2c_iv_e34f3_task_documented_in_todo() {
             && todo.contains("docs/dev/m9_2c_iv_e34f3_event_fiber_container_surface_inventory.md")
             && (todo.contains("- [ ] M9.2.c.iv.e.34.f.4")
                 || todo.contains("- [x] M9.2.c.iv.e.34.f.4"))
-            && todo.contains("- [ ] M9.2.c.iv.e.34.f.5"),
-        "M9.2.c.iv.e.34.f.3 TODO entry should record closure evidence and keep downstream leaves pending"
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5"),
+        "M9.2.c.iv.e.34.f.3 TODO entry should record closure evidence and downstream f.5 parent closure"
     );
 }
 
@@ -5964,8 +5964,8 @@ fn m9_2c_iv_e34f4_task_documented_in_todo() {
             && todo.contains("chunk")
             && todo.contains("Marshal_bookmark")
             && todo.contains("docs/dev/m9_2c_iv_e34f4_marshal_compat_surface_inventory.md")
-            && todo.contains("- [ ] M9.2.c.iv.e.34.f.5"),
-        "M9.2.c.iv.e.34.f.4 TODO entry should record closure evidence and keep final replay leaf pending"
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5"),
+        "M9.2.c.iv.e.34.f.4 TODO entry should record closure evidence and final replay parent closure"
     );
 }
 
@@ -6004,16 +6004,23 @@ fn m9_2c_iv_e34f5a_task_documented_in_todo() {
     )
     .expect("TODO.md should be readable");
     assert!(
-        todo.contains("- [ ] M9.2.c.iv.e.34.f.5 Re-run strict runtime replay end-to-end")
+        todo.contains("- [x] M9.2.c.iv.e.34.f.5 Re-run strict runtime replay end-to-end")
+            && todo.contains("Done 2026-03-29")
             && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260326T205524Z_p4045206")
-            && todo.contains("total=478")
-            && todo.contains("unique=94")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260329T053434Z_p3129053")
+            && todo.contains("total 478->218")
+            && todo.contains("unique 94->89")
+            && todo.contains("total 218<=218")
+            && todo.contains("unique 89<=89")
+            && todo.contains("lane_fragilec_build_status=2")
+            && todo.contains("lane_fragilec_test_rpc_status=-1")
+            && todo.contains("lane_fragilec_failure_class=build_failed")
             && todo.contains("non_increase_verdict=true")
             && todo.contains("event.cc=249")
             && todo.contains("fiber_impl.cc=203")
             && todo.contains("marshal.cpp=8")
             && todo.contains("fiber_context_runtime.cc=2"),
-        "M9.2.c.iv.e.34.f.5 TODO entry should record post-f.4 replay evidence and blocker counts"
+        "M9.2.c.iv.e.34.f.5 TODO entry should record closure-era replay evidence and blocker deltas"
     );
     assert!(
         todo.contains("- [x] M9.2.c.iv.e.34.f.5.a Capture deterministic post-f.4 strict replay blocker inventory")
