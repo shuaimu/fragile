@@ -5797,7 +5797,7 @@ fn m9_2c_iv_e34f1_task_documented_in_todo() {
     )
     .expect("TODO.md should be readable");
     assert!(
-        todo.contains("- [ ] M9.2.c.iv.e.34.f Re-run strict runtime replay end-to-end")
+        todo.contains("- [x] M9.2.c.iv.e.34.f Re-run strict runtime replay end-to-end")
             && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260326T093427Z_p3345304")
             && todo.contains("total=637")
             && todo.contains("unique=144")
@@ -5805,7 +5805,7 @@ fn m9_2c_iv_e34f1_task_documented_in_todo() {
             && todo.contains("fiber_impl.cc")
             && todo.contains("marshal.cpp")
             && todo.contains("fiber_context_runtime.cc"),
-        "M9.2.c.iv.e.34.f TODO evidence should capture post-e.34.e regression replay inventory"
+        "M9.2.c.iv.e.34.f TODO evidence should capture post-e.34.e regression baseline and parent closure"
     );
     assert!(
         todo.contains("- [x] M9.2.c.iv.e.34.f.1 Capture deterministic post-e.34.e strict replay regression inventory")
