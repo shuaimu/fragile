@@ -6729,23 +6729,30 @@ fn m9_2c_iv_e34f5e5e3_inventory_document_exists_and_records_ordering_printf_clos
 }
 
 #[test]
-fn m9_2c_iv_e34f5e5e4a_task_documented_in_todo() {
+fn m9_2c_iv_e34f5e5e4_task_documented_in_todo() {
     let todo = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
     )
     .expect("TODO.md should be readable");
     assert!(
-        todo.contains("- [ ] M9.2.c.iv.e.34.f.5.e.5.e.4")
+        todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.5.e.4")
+            && todo.contains("Done 2026-03-29")
             && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260328T092947Z_p1922380")
-            && todo.contains("invalid_null_arguments")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260328T125712Z_p2100737")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260329T040328Z_p2989433")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260329T053434Z_p3129053")
+            && todo.contains("lane_fragilec_build_status=2")
+            && todo.contains("non_increase_verdict=true")
             && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.5.e.4.a")
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.5.e.4.b")
+            && todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.5.e.4.c")
             && todo.contains("Done 2026-03-28")
-            && todo.contains(
-                "docs/dev/m9_2c_iv_e34f5e5e4a_post_e5e5e3_replay_inventory.md",
-            )
-            && todo.contains("M9.2.c.iv.e.34.f.5.e.5.e.4.b")
-            && todo.contains("M9.2.c.iv.e.34.f.5.e.5.e.4.c"),
-        "M9.2.c.iv.e.34.f.5.e.5.e.4 TODO entry should capture post-e.5.e.5.e.3 decomposition and e.4.a evidence"
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e5e4a_post_e5e5e3_replay_inventory.md")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e5e4b_invalid_null_slice_compare_inventory.md")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e5e4c_post_e4b_replay_inventory.md")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e5e4c4c4_strict_replay_delta_inventory.md")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e5e4c4d_strict_replay_delta_inventory.md"),
+        "M9.2.c.iv.e.34.f.5.e.5.e.4 TODO entry should capture closed parent evidence across e.4.a..e.4.c replay chain"
     );
 }
 
