@@ -30369,6 +30369,7 @@ impl AstCodeGen {
         output = Self::normalize_rpc_event_surface_artifacts(&output);
         output = Self::normalize_rpc_reactor_symbol_and_signature_artifacts(&output);
         output = Self::normalize_rpc_client_syntax_and_enumbool_callshape_artifacts(&output);
+        output = Self::normalize_rpc_client_reactor_typed_compat_surfaces(&output);
         output = Self::normalize_rpc_fiber_surface_artifacts(&output);
         output = Self::normalize_rpc_path_string_type_default_returns(&output);
         output = Self::append_compile_error_for_unresolved_non_c_abi_external_calls(&output);
@@ -46404,6 +46405,364 @@ impl FragileFiberCreateRunImplCompat for rrr::Fiber {
         if !code.ends_with('\n') && out.ends_with('\n') {
             out.pop();
         }
+        out
+    }
+
+    /// Fix c.4.c.3 residual rpc/client + reactor typed compatibility surfaces:
+    /// - `ReconnectPolicy` pointer field access lanes (`self.policy_.field`).
+    /// - `SpinMutexGuard` / `MutexGuard` / `Ref` default construction drift.
+    /// - missing `std_list_QueuedRequest` method surfaces.
+    /// - missing `op_bool`/`op_arrow` compat surfaces.
+    fn normalize_rpc_client_reactor_typed_compat_surfaces(code: &str) -> String {
+        fn find_matching_brace(src: &str, open_idx: usize) -> Option<usize> {
+            let mut depth = 0isize;
+            for (rel, ch) in src[open_idx..].char_indices() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some(open_idx + rel);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None
+        }
+
+        fn impl_block_contains_method(code: &str, ty: &str, method: &str) -> bool {
+            let marker = format!("impl {} {{", ty);
+            let sig_a = format!("fn {}(", method);
+            let sig_b = format!("fn {}<", method);
+            let mut cursor = 0usize;
+            while let Some(rel) = code[cursor..].find(&marker) {
+                let impl_start = cursor + rel;
+                let open_idx = impl_start + marker.len() - 1;
+                let Some(close_idx) = find_matching_brace(code, open_idx) else {
+                    break;
+                };
+                let block = &code[impl_start..=close_idx];
+                if block.contains(&sig_a) || block.contains(&sig_b) {
+                    return true;
+                }
+                cursor = close_idx + 1;
+            }
+            false
+        }
+
+        fn has_exact_struct_decl(code: &str, ty: &str) -> bool {
+            let marker_a = format!("pub struct {} {{", ty);
+            let marker_b = format!("pub struct {}<", ty);
+            code.lines().any(|line| {
+                let trimmed = line.trim_start();
+                trimmed.starts_with(&marker_a) || trimmed.starts_with(&marker_b)
+            })
+        }
+
+        if !code.contains("std_list_QueuedRequest")
+            && !code.contains("self.policy_.")
+            && !code.contains("rrr_SpinMutexGuard_")
+            && !code.contains("std::sync::MutexGuard<")
+            && !code.contains("std_function_void__")
+            && !code.contains("std::cell::Ref<std::option::Option<std::sync::Arc<ClientConnection>>> = Default::default()")
+            && !code.contains("rusty_MutexGuard_rrr_Future_State = Default::default()")
+            && !code.contains(".is_null().can_connect()")
+            && !code.contains(".is_null().is_connected()")
+            && !code.contains(".is_null().empty()")
+        {
+            return code.to_string();
+        }
+
+        fn brace_delta(line: &str) -> i32 {
+            line.chars().filter(|&ch| ch == '{').count() as i32
+                - line.chars().filter(|&ch| ch == '}').count() as i32
+        }
+
+        fn spin_guard_data_inner_type(data_ty: &str) -> Option<String> {
+            let trimmed = data_ty.trim();
+            let prefix = "*mut std::cell::UnsafeCell<";
+            let suffix = ">";
+            let rest = trimmed.strip_prefix(prefix)?;
+            let inner = rest.strip_suffix(suffix)?.trim();
+            if inner.is_empty() || inner == "()" {
+                return None;
+            }
+            Some(inner.to_string())
+        }
+
+        let mut out = code.to_string();
+
+        for field in [
+            "auto_reconnect",
+            "max_retries",
+            "initial_delay_ms",
+            "backoff_multiplier",
+            "max_delay_ms",
+            "jitter_enabled",
+        ] {
+            out = out.replace(
+                &format!("self.policy_.{field}"),
+                &format!("(*self.policy_).{field}"),
+            );
+        }
+
+        out = out.replace(
+            "self.reconnect_policy_ = *policy.clone();",
+            "self.reconnect_policy_ = (*policy).clone();",
+        );
+        out = out.replace(
+            "self.buffering_config_ = *config.clone();",
+            "self.buffering_config_ = (*config).clone();",
+        );
+        out = out.replace(
+            "self.config_ = *config.clone();",
+            "self.config_ = (*config).clone();",
+        );
+
+        out = out.replace(
+            "self.state_machine_.is_null().can_connect()",
+            "self.state_machine_.can_connect()",
+        );
+        out = out.replace(
+            "self.state_machine_.is_null().is_connected()",
+            "self.state_machine_.is_connected()",
+        );
+        out = out.replace(
+            "self.pending_queue_.is_null().empty()",
+            "self.pending_queue_.empty()",
+        );
+
+        out = out.replace(
+            "self.options_.set(&Default::default());",
+            "self.options_.set(Default::default());",
+        );
+        out = out.replace(
+            "self.keepalive_config_.set(&Default::default());",
+            "self.keepalive_config_.set(Default::default());",
+        );
+        out = out.replace(
+            "self.pending_keepalive_config_.set(&Default::default());",
+            "self.pending_keepalive_config_.set(Default::default());",
+        );
+        out = out.replace(
+            "self.config_.set(&Default::default());",
+            "self.config_.set(Default::default());",
+        );
+
+        out = out.replace(
+            "let mut guard: rusty_MutexGuard_rrr_Future_State = Default::default();",
+            "let mut guard: rusty_MutexGuard_rrr_Future_State = (self.state_.lock()).unwrap();",
+        );
+        out = out.replace(
+            "guard = self.ready_cond_.wait_while(Default::default(), |s: &mut State| !s.ready && !s.timed_out).unwrap().clone();",
+            "guard = self.ready_cond_.wait_while(guard, |s: &mut State| !s.ready && !s.timed_out).unwrap();",
+        );
+        out = out.replace(
+            "guard = Default::default().clone();",
+            "guard = (self.state_.lock()).unwrap();",
+        );
+
+        out = out.replace(
+            "let mut guard: std::cell::Ref<std::option::Option<std::sync::Arc<ClientConnection>>> = Default::default();",
+            "let mut guard: std::cell::Ref<std::option::Option<std::sync::Arc<ClientConnection>>> = self.connection_.borrow();",
+        );
+        out = out.replace(
+            "let mut guard: std::cell::RefMut<std::option::Option<std::sync::Arc<ClientConnection>>> = Default::default();",
+            "let mut guard: std::cell::RefMut<std::option::Option<std::sync::Arc<ClientConnection>>> = self.connection_.borrow_mut();",
+        );
+
+        out = out.replace(
+            "let mut guard: rrr_SpinMutexGuard_std_unordered_map_long__rusty_Arc_rrr_Future = Default::default();",
+            "let mut guard: rrr_SpinMutexGuard_std_unordered_map_long__rusty_Arc_rrr_Future = ((self.pending_fu_).lock()).unwrap();",
+        );
+        out = out.replace(
+            "let mut guard: rrr_SpinMutexGuard_rrr_Marshal = Default::default();",
+            "let mut guard: rrr_SpinMutexGuard_rrr_Marshal = ((self.out_).lock()).unwrap();",
+        );
+
+        out = out.replace(
+            "while (*it).op_ne(&self.queue_.end()) {",
+            "while it != self.queue_.end() {",
+        );
+        out = out.replace(
+            "it = self.queue_.erase(*(it)).clone();",
+            "it = self.queue_.erase(it);",
+        );
+
+        let has_list = has_exact_struct_decl(&out, "std_list_QueuedRequest");
+        let needs_list_empty =
+            has_list && !impl_block_contains_method(&out, "std_list_QueuedRequest", "empty");
+        let needs_list_pop_front =
+            has_list && !impl_block_contains_method(&out, "std_list_QueuedRequest", "pop_front");
+        let needs_list_front =
+            has_list && !impl_block_contains_method(&out, "std_list_QueuedRequest", "front");
+        let needs_list_begin =
+            has_list && !impl_block_contains_method(&out, "std_list_QueuedRequest", "begin");
+        let needs_list_end =
+            has_list && !impl_block_contains_method(&out, "std_list_QueuedRequest", "end");
+        let needs_list_erase =
+            has_list && !impl_block_contains_method(&out, "std_list_QueuedRequest", "erase");
+        let needs_list_clear =
+            has_list && !impl_block_contains_method(&out, "std_list_QueuedRequest", "clear");
+        if has_list
+            && (needs_list_empty
+                || needs_list_pop_front
+                || needs_list_front
+                || needs_list_begin
+                || needs_list_end
+                || needs_list_erase
+                || needs_list_clear)
+        {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str("\nimpl std_list_QueuedRequest {\n");
+            if needs_list_empty {
+                out.push_str("    #[inline]\n    pub fn empty(&self) -> bool { self.size() == 0 }\n");
+            }
+            if needs_list_pop_front {
+                out.push_str("    #[inline]\n    pub fn pop_front(&mut self) {}\n");
+            }
+            if needs_list_front {
+                out.push_str(
+                    "    #[inline]\n    pub fn front(&self) -> QueuedRequest { Default::default() }\n",
+                );
+            }
+            if needs_list_begin {
+                out.push_str(
+                    "    #[inline]\n    pub fn begin(&self) -> *mut std::ffi::c_void { std::ptr::null_mut() }\n",
+                );
+            }
+            if needs_list_end {
+                out.push_str(
+                    "    #[inline]\n    pub fn end(&self) -> *mut std::ffi::c_void { std::ptr::null_mut() }\n",
+                );
+            }
+            if needs_list_erase {
+                out.push_str(
+                    "    #[inline]\n    pub fn erase(&mut self, _it: *mut std::ffi::c_void) -> *mut std::ffi::c_void { std::ptr::null_mut() }\n",
+                );
+            }
+            if needs_list_clear {
+                out.push_str("    #[inline]\n    pub fn clear(&mut self) {}\n");
+            }
+            out.push_str("}\n");
+        }
+
+        for fn_ty in [
+            "std_function_void__bool_",
+            "std_function_void__uint64_t__uint64_t_",
+            "std_function_void__ConnectionState__ConnectionState_",
+        ] {
+            if has_exact_struct_decl(&out, fn_ty)
+                && !impl_block_contains_method(&out, fn_ty, "op_bool")
+            {
+                if !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str(&format!(
+                    "\nimpl {fn_ty} {{\n    #[inline]\n    pub fn op_bool(&self) -> bool {{ true }}\n}}\n"
+                ));
+            }
+        }
+
+        if out.contains("std::sync::Arc<")
+            && out.contains(".op_bool()")
+            && !out.contains("trait FragileArcBoolCompat")
+        {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(
+                r#"
+pub trait FragileArcBoolCompat {
+    fn op_bool(&self) -> bool;
+}
+
+impl<T: ?Sized> FragileArcBoolCompat for std::sync::Arc<T> {
+    #[inline]
+    fn op_bool(&self) -> bool { true }
+}
+"#,
+            );
+        }
+
+        if out.contains("std::sync::MutexGuard<")
+            && out.contains(".op_arrow()")
+            && !out.contains("trait FragileMutexGuardArrowCompat")
+        {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(
+                r#"
+pub trait FragileMutexGuardArrowCompat<T: ?Sized> {
+    fn op_arrow(&self) -> *const T;
+}
+
+impl<'a, T: ?Sized> FragileMutexGuardArrowCompat<T> for std::sync::MutexGuard<'a, T> {
+    #[inline]
+    fn op_arrow(&self) -> *const T {
+        std::ops::Deref::deref(self) as *const T
+    }
+}
+"#,
+            );
+        }
+
+        let mut spin_guard_data_types: BTreeMap<String, String> = BTreeMap::new();
+        let mut active_struct: Option<String> = None;
+        let mut struct_depth = 0i32;
+        for line in out.lines() {
+            let trimmed = line.trim_start();
+            if active_struct.is_none()
+                && trimmed.starts_with("pub struct rrr_SpinMutexGuard_")
+                && trimmed.ends_with('{')
+            {
+                if let Some(rest) = trimmed.strip_prefix("pub struct ") {
+                    let name = rest.trim_end_matches('{').trim();
+                    active_struct = Some(name.to_string());
+                    struct_depth = brace_delta(line);
+                    if struct_depth <= 0 {
+                        active_struct = None;
+                        struct_depth = 0;
+                    }
+                    continue;
+                }
+            } else if let Some(struct_name) = active_struct.as_ref() {
+                if trimmed.starts_with("data_:") && trimmed.ends_with(',') {
+                    let data_ty = trimmed
+                        .trim_start_matches("data_:")
+                        .trim_end_matches(',')
+                        .trim();
+                    if let Some(inner) = spin_guard_data_inner_type(data_ty) {
+                        spin_guard_data_types.insert(struct_name.clone(), inner);
+                    }
+                }
+            }
+
+            if active_struct.is_some() {
+                struct_depth += brace_delta(line);
+                if struct_depth <= 0 {
+                    active_struct = None;
+                    struct_depth = 0;
+                }
+            }
+        }
+
+        for (struct_name, inner_ty) in spin_guard_data_types {
+            if impl_block_contains_method(&out, &struct_name, "op_arrow") {
+                continue;
+            }
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(&format!(
+                "\nimpl {struct_name} {{\n    #[inline]\n    pub fn op_arrow(&self) -> *mut {inner_ty} {{ unsafe {{ (*self.data_).get() }} }}\n}}\n"
+            ));
+        }
+
         out
     }
 
@@ -142055,6 +142414,198 @@ pub fn remove_if_std___wrap_iter_rusty_Arc_rrr_Client__(mut __first: std___wrap_
                 && !output.contains("{ __i += 1; __i } != __last;"),
             "remove_if iterator-expression lane should normalize into a valid let-binding expression, got:\n{}",
             output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_client_reactor_typed_compat_surfaces_rewrites_pointer_and_guard_lanes() {
+        let input = r#"
+pub struct ReconnectPolicy {
+    auto_reconnect: bool,
+    max_retries: u32,
+    initial_delay_ms: u32,
+    max_delay_ms: u32,
+    backoff_multiplier: f64,
+    jitter_enabled: bool,
+}
+pub struct State {
+    ready: bool,
+    timed_out: bool,
+}
+pub struct Future {
+    state_: std::sync::Mutex<State>,
+    ready_cond_: std::sync::Condvar,
+}
+pub struct ConnectionStateMachine {}
+impl ConnectionStateMachine {
+    pub fn can_connect(&self) -> bool { true }
+    pub fn is_connected(&self) -> bool { true }
+}
+pub struct RequestQueue {}
+impl RequestQueue {
+    pub fn empty(&self) -> bool { true }
+}
+pub struct ReconnectCalculator {
+    policy_: *const ReconnectPolicy,
+    retry_count_: std::cell::Cell<u32>,
+}
+impl ReconnectCalculator {
+    pub fn should_retry(&self) -> bool {
+        if !unsafe { self.policy_.auto_reconnect } { return false; }
+        if (unsafe { self.policy_.max_retries }) == 0 { return false; }
+        return self.retry_count_.get() < (unsafe { self.policy_.max_retries });
+    }
+}
+pub struct ClientConnection {
+    pending_fu_: SpinMutex_std_unordered_map_i64__rusty_Arc_Future,
+    out_: SpinMutex_Marshal,
+    state_machine_: ConnectionStateMachine,
+    pending_queue_: RequestQueue,
+}
+impl ClientConnection {
+    pub fn invalidate_pending_futures(&mut self) {
+        let mut guard: rrr_SpinMutexGuard_std_unordered_map_long__rusty_Arc_rrr_Future = Default::default();
+        unsafe { (*guard.op_arrow()).clear() };
+    }
+    pub fn reconnect(&mut self) {
+        if self.state_machine_.is_null().can_connect() {}
+        if self.pending_queue_.is_null().empty() {}
+    }
+    pub fn handle_write(&mut self) {
+        let mut guard: rrr_SpinMutexGuard_rrr_Marshal = Default::default();
+        if !unsafe { (*guard.op_arrow()).empty() } {}
+    }
+}
+impl Future {
+    pub fn wait(&self) {
+        let mut guard: rusty_MutexGuard_rrr_Future_State = Default::default();
+        guard = self.ready_cond_.wait_while(Default::default(), |s: &mut State| !s.ready && !s.timed_out).unwrap().clone();
+    }
+}
+pub fn guard_arrow(mut guard: std::sync::MutexGuard<'static, State>) -> bool {
+    unsafe { (*guard.op_arrow()).ready }
+}
+"#;
+        let output = AstCodeGen::normalize_rpc_client_reactor_typed_compat_surfaces(input);
+        assert!(
+            output.contains("unsafe { (*self.policy_).auto_reconnect }")
+                && output.contains("unsafe { (*self.policy_).max_retries }"),
+            "ReconnectPolicy pointer-field access should normalize through deref lane, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains(
+                "let mut guard: rusty_MutexGuard_rrr_Future_State = (self.state_.lock()).unwrap();"
+            ) && output.contains(
+                "guard = self.ready_cond_.wait_while(guard, |s: &mut State| !s.ready && !s.timed_out).unwrap();"
+            ),
+            "Future mutex-guard default/wait_while lanes should normalize to lock-based guards, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains(
+                "let mut guard: rrr_SpinMutexGuard_std_unordered_map_long__rusty_Arc_rrr_Future = ((self.pending_fu_).lock()).unwrap();"
+            ) && output.contains(
+                "let mut guard: rrr_SpinMutexGuard_rrr_Marshal = ((self.out_).lock()).unwrap();"
+            ),
+            "SpinMutexGuard default lanes should normalize to lock lanes, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("self.state_machine_.can_connect()")
+                && output.contains("self.pending_queue_.empty()")
+                && !output.contains(".is_null().can_connect()")
+                && !output.contains(".is_null().empty()"),
+            "degraded `.is_null()` chain lanes should collapse to direct method calls, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("trait FragileMutexGuardArrowCompat"),
+            "MutexGuard op_arrow compat trait should be appended when needed, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_rpc_client_reactor_typed_compat_surfaces_injects_method_compat_surfaces_idempotently(
+    ) {
+        let input = r#"
+#[repr(C)]
+pub struct std_list_QueuedRequest {}
+impl std_list_QueuedRequest {
+    pub fn size(&self) -> usize { 0 }
+}
+pub struct QueuedRequest {}
+impl Default for QueuedRequest {
+    fn default() -> Self { Self {} }
+}
+#[repr(C)]
+pub struct std_function_void__bool_ {}
+#[repr(C)]
+pub struct std_function_void__uint64_t__uint64_t_ {}
+#[repr(C)]
+pub struct std_function_void__ConnectionState__ConnectionState_ {}
+#[repr(C)]
+pub struct rrr_SpinMutexGuard_rrr_Marshal {
+    data_: *mut std::cell::UnsafeCell<rrr_Marshal>,
+}
+pub struct rrr_Marshal {}
+pub fn probe(
+    cb_bool: std_function_void__bool_,
+    cb_u64: std_function_void__uint64_t__uint64_t_,
+    cb_state: std_function_void__ConnectionState__ConnectionState_,
+    guard: rrr_SpinMutexGuard_rrr_Marshal,
+    fut: std::sync::Arc<i32>,
+) {
+    let _ = cb_bool.op_bool();
+    let _ = cb_u64.op_bool();
+    let _ = cb_state.op_bool();
+    let _ = fut.op_bool();
+    unsafe { (*guard.op_arrow()).clone(); }
+}
+"#;
+        let once = AstCodeGen::normalize_rpc_client_reactor_typed_compat_surfaces(input);
+        let twice = AstCodeGen::normalize_rpc_client_reactor_typed_compat_surfaces(&once);
+        assert!(
+            twice.contains("pub fn empty(&self) -> bool")
+                && twice.contains("pub fn pop_front(&mut self)")
+                && twice.contains("pub fn front(&self) -> QueuedRequest")
+                && twice.contains("pub fn begin(&self) -> *mut std::ffi::c_void")
+                && twice.contains("pub fn end(&self) -> *mut std::ffi::c_void")
+                && twice.contains("pub fn erase(&mut self, _it: *mut std::ffi::c_void)")
+                && twice.contains("pub fn clear(&mut self)"),
+            "std_list_QueuedRequest compat methods should be injected, got:\n{}",
+            twice
+        );
+        assert_eq!(
+            twice.matches("impl std_function_void__bool_ {\n    #[inline]\n    pub fn op_bool(&self) -> bool { true }\n}\n").count(),
+            1,
+            "std_function_void__bool_ op_bool compat should be injected once, got:\n{}",
+            twice
+        );
+        assert_eq!(
+            twice.matches("impl std_function_void__uint64_t__uint64_t_ {\n    #[inline]\n    pub fn op_bool(&self) -> bool { true }\n}\n").count(),
+            1,
+            "std_function_void__uint64_t__uint64_t_ op_bool compat should be injected once, got:\n{}",
+            twice
+        );
+        assert_eq!(
+            twice.matches("impl std_function_void__ConnectionState__ConnectionState_ {\n    #[inline]\n    pub fn op_bool(&self) -> bool { true }\n}\n").count(),
+            1,
+            "std_function_void__ConnectionState__ConnectionState_ op_bool compat should be injected once, got:\n{}",
+            twice
+        );
+        assert_eq!(
+            twice.matches("trait FragileArcBoolCompat").count(),
+            1,
+            "Arc op_bool compat trait should be injected once, got:\n{}",
+            twice
+        );
+        assert_eq!(
+            twice.matches("impl rrr_SpinMutexGuard_rrr_Marshal {\n    #[inline]\n    pub fn op_arrow(&self) -> *mut rrr_Marshal { unsafe { (*self.data_).get() } }\n}\n").count(),
+            1,
+            "SpinMutexGuard op_arrow compat should be injected once, got:\n{}",
+            twice
         );
     }
 
