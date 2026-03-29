@@ -2020,6 +2020,13 @@ fn is_known_internal_type_name(name: &str) -> bool {
     false
 }
 
+fn is_const_suffix_alias_resolved_by_concrete_base(name: &str, transpiled: &str) -> bool {
+    let Some(base) = name.strip_suffix("_const") else {
+        return false;
+    };
+    fragile_clang::AstCodeGen::has_concrete_defined_type_name(transpiled, base)
+}
+
 fn enforce_unresolved_type_invariant(source: &Path, transpiled: &str) -> Result<(), String> {
     let mut unresolved = fragile_clang::AstCodeGen::unresolved_named_type_references(transpiled);
     if has_fragile_runtime_glob_import(transpiled) {
@@ -2027,6 +2034,10 @@ fn enforce_unresolved_type_invariant(source: &Path, transpiled: &str) -> Result<
     }
     // Always filter known-internal types (intentionally skipped during codegen)
     unresolved.retain(|name| !is_known_internal_type_name(name));
+    // Const-qualified lowered spellings can survive as `<Type>_const`.  Accept
+    // them only when a concrete non-generic/non-trait `<Type>` is defined in
+    // the same transpiled unit.
+    unresolved.retain(|name| !is_const_suffix_alias_resolved_by_concrete_base(name, transpiled));
     if unresolved.is_empty() {
         return Ok(());
     }
@@ -3007,6 +3018,54 @@ pub fn uses_source_location_tokens(_file: File, _line: Line, _col: Column, _fn: 
             result.is_ok(),
             "invariant should pass for source-location pseudo-type tokens: {:?}",
             result
+        );
+    }
+
+    #[test]
+    fn unresolved_type_invariant_passes_for_const_suffix_alias_with_concrete_base() {
+        let transpiled = r#"
+#[repr(C)]
+pub struct rrr_Client {
+    _opaque: [u8; 64],
+}
+pub struct Holder {
+    pub client: rrr_Client_const,
+}
+"#;
+        let source = Path::new("test.cpp");
+        let result = enforce_unresolved_type_invariant(source, transpiled);
+        assert!(
+            result.is_ok(),
+            "invariant should pass when `<Type>_const` has a concrete base definition: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn unresolved_type_invariant_rejects_const_suffix_alias_for_generic_or_trait_heads() {
+        let generic_head = r#"
+pub struct rrr_Generic<T> {
+    _opaque: [u8; 8],
+}
+pub fn uses_generic_head(_v: rrr_Generic_const) {}
+"#;
+        let source = Path::new("test.cpp");
+        let generic_result = enforce_unresolved_type_invariant(source, generic_head);
+        assert!(
+            generic_result.is_err(),
+            "generic heads must not satisfy const-suffix alias closure: {:?}",
+            generic_result
+        );
+
+        let trait_head = r#"
+pub trait rrr_Client {}
+pub fn uses_trait_head(_v: rrr_Client_const) {}
+"#;
+        let trait_result = enforce_unresolved_type_invariant(source, trait_head);
+        assert!(
+            trait_result.is_err(),
+            "trait heads must not satisfy const-suffix alias closure: {:?}",
+            trait_result
         );
     }
 

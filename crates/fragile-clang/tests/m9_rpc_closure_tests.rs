@@ -6883,6 +6883,49 @@ fn m9_2c_iv_e34f5e5e4c1_inventory_document_exists_and_records_replay_regression(
     }
 }
 
+#[test]
+fn m9_2c_iv_e34f5e5e4c4b_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.e.34.f.5.e.5.e.4.c.4.b")
+            && todo.contains("Done 2026-03-28")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260328T230041Z_p2676907")
+            && todo.contains("rrr_Client_const")
+            && todo.contains("docs/dev/m9_2c_iv_e34f5e5e4c4b_rpc_client_const_invariant_inventory.md")
+            && todo.contains("M9.2.c.iv.e.34.f.5.e.5.e.4.c.4.c"),
+        "M9.2.c.iv.e.34.f.5.e.5.e.4.c.4.b TODO entry should capture rpc/client const-invariant closure evidence"
+    );
+}
+
+#[test]
+fn m9_2c_iv_e34f5e5e4c4b_inventory_document_exists_and_records_const_invariant_closure() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_e34f5e5e4c4b_rpc_client_const_invariant_inventory.md"),
+    )
+    .expect("e.34.f.5.e.5.e.4.c.4.b inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.e.34.f.5.e.5.e.4.c.4.b",
+        "Wrong-approach check",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260328T230041Z_p2676907",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260328T211915Z_p2548616",
+        "fragile unresolved-type invariant failed",
+        "rrr_Client_const",
+        "E0425: cannot find type rrr_Client_const",
+        "non_increase_verdict=false",
+        "M9.2.c.iv.e.34.f.5.e.5.e.4.c.4.c",
+    ] {
+        assert!(
+            doc.contains(required),
+            "e.34.f.5.e.5.e.4.c.4.b inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // M9.2.c.iv.e.17.d: Post-e.17 comprehensive strict compile error inventory
 // ---------------------------------------------------------------------------

@@ -6656,6 +6656,25 @@ impl AstCodeGen {
         Self::collect_unresolved_type_like_names(code)
     }
 
+    pub fn has_concrete_defined_type_name(code: &str, name: &str) -> bool {
+        if name.is_empty() {
+            return false;
+        }
+        let defined = Self::collect_defined_type_like_names(code);
+        if !defined.contains(name) {
+            return false;
+        }
+        let generic = Self::collect_generic_type_like_names(code);
+        if generic.contains(name) {
+            return false;
+        }
+        let trait_types = Self::collect_trait_type_like_names(code);
+        if trait_types.contains(name) {
+            return false;
+        }
+        true
+    }
+
     fn looks_like_type_identifier(ident: &str) -> bool {
         ident.starts_with("rapidjson_")
             || ident
@@ -117079,6 +117098,37 @@ pub struct Holder {
             "generic const-suffix unresolved names should remain explicit placeholders when no concrete alias lane exists, got:\n{}",
             output
         );
+    }
+
+    #[test]
+    fn test_has_concrete_defined_type_name_accepts_non_generic_structs_and_aliases() {
+        let input = r#"
+#[repr(C)]
+pub struct rrr_Client {
+    _opaque: [u8; 64],
+}
+pub type rrr_Client_alias = rrr_Client;
+"#;
+        assert!(AstCodeGen::has_concrete_defined_type_name(
+            input,
+            "rrr_Client"
+        ));
+        assert!(AstCodeGen::has_concrete_defined_type_name(
+            input,
+            "rrr_Client_alias"
+        ));
+    }
+
+    #[test]
+    fn test_has_concrete_defined_type_name_rejects_generic_heads_and_traits() {
+        let input = r#"
+pub struct std_vector<T> {
+    _opaque: [u8; 8],
+}
+pub trait rrr_Client {}
+"#;
+        assert!(!AstCodeGen::has_concrete_defined_type_name(input, "std_vector"));
+        assert!(!AstCodeGen::has_concrete_defined_type_name(input, "rrr_Client"));
     }
 
     #[test]
