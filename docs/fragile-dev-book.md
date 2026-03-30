@@ -23463,3 +23463,111 @@ Next dominating residual bucket for the next bounded fix leaf:
 Detailed inventory:
 
 - `docs/dev/m9_2c_iv_f2e_residual_replay_non_increase_inventory.md`
+
+## 2026-03-30: M9.2.c.iv.f.3 first bounded residual-fix closure (E0308 slice)
+
+- Selected leaf: `M9.2.c.iv.f.3`.
+- Scope remained bounded (<1000 LOC): single E0308 normalization slice + focused tests/probe + doc/test closure updates.
+
+Wrong-approach check completed before edits:
+
+- `docs/fragile-dev-book.md` section `1.3 Wrong Approaches (Do Not Do)`
+- `docs/dev/wrong.md`
+
+Implementation summary (bounded slice in `normalize_e0308_bucket_b1_value_shape_mismatches`):
+
+- added generic `MaybeUninit<RefCell<...>>` static-binding detection and rehydrated
+  - `RefCell::borrow(NAME)` -> `RefCell::borrow(unsafe { NAME.assume_init_ref() })`
+  - `RefCell::borrow_mut(NAME)` -> `RefCell::borrow_mut(unsafe { NAME.assume_init_mut() })`
+- expanded `Self { ... }` literal detection (not only `let mut __self = Self { ... }`) so typed `__gv_None` field lanes rehydrate to
+  - `Option::None`
+  - `Mutex::new(Option::None)`
+
+Focused unit-test command:
+
+- `cargo test -p fragile-clang normalize_e0308_bucket_b1_value_shape_mismatches -- --nocapture`
+
+Probe evidence (same four txlog compile units):
+
+- pre-f.3 baseline summary:
+  - `/tmp/fragile_f2e_probe_after_20260330T104700Z_txlog/summary.txt`
+- post-f.3 summary:
+  - `/tmp/fragile_f3_probe_after_20260330T123349Z_txlog/summary.txt`
+
+Measured deltas:
+
+- scoped `E0308` total: `29 -> 25` (`-4`)
+  - `reactor.cc`: `4 -> 1`
+  - `rpc/client.cpp`: `20 -> 19`
+  - `rpc/server.cpp`: `4 -> 4`
+  - `rpc/utils.cpp`: `1 -> 1`
+- non-increase on other typed buckets:
+  - `E0599`: `27 -> 27`
+  - `E0282`: `1 -> 1`
+  - `E0605`: `0 -> 0`
+- scoped `total_error_lines`: `145 -> 141` (`-4`)
+
+Reactor-lane closure details:
+
+- before: `/tmp/fragile_f2e_probe_after_20260330T104700Z_txlog/reactor.cc.stderr.log`
+- after: `/tmp/fragile_f3_probe_after_20260330T123349Z_txlog/reactor.cc.stderr.log`
+- cleared E0308 markers:
+  - `RefCell::borrow(REACTOR_SP_RUNNING_CORO_TH_)` expected `&RefCell<_>`, found `MaybeUninit<RefCell<_>>` (2 lanes)
+  - `join_handle_: (unsafe { super::rusty::__gv_None }).clone()` expected `Mutex<Option<JoinHandle<()>>>`, found unit (1 lane)
+
+Detailed inventory:
+
+- `docs/dev/m9_2c_iv_f3_e0308_reactor_maybeuninit_self_literal_inventory.md`
+
+## 2026-03-30: M9.2.c.iv.f.4 strict replay rerun, non-increase verification, and next decomposition
+
+- Selected leaf: `M9.2.c.iv.f.4`.
+- Scope stayed bounded (<1000 LOC): one strict replay rerun + deterministic baseline comparison + next bounded decomposition publication.
+
+Wrong-approach check completed before running the leaf:
+
+- `docs/fragile-dev-book.md` section `1.3 Wrong Approaches (Do Not Do)`
+- `docs/dev/wrong.md`
+
+Replay command:
+
+- `FRAGILEC_MODE=strict python3 scripts/mako_rpc_strict_runtime_replay.py --baseline-run-root /tmp/fragile_m9_2_strict_runtime_replay_20260329T053434Z_p3129053 --trials 1 --skip-masstree-perf-target --skip-clean-step`
+
+Artifacts:
+
+- baseline root: `/tmp/fragile_m9_2_strict_runtime_replay_20260329T053434Z_p3129053`
+- replay root: `/tmp/fragile_m9_2_strict_runtime_replay_20260330T130048Z_p617835`
+- manifests:
+  - `/tmp/fragile_m9_2_strict_runtime_replay_20260330T130048Z_p617835/strict_runtime_replay_manifest.txt`
+  - `/tmp/fragile_m9_2_strict_runtime_replay_20260330T130048Z_p617835/strict_runtime_replay_blocker_inventory_manifest.txt`
+
+Lane contract status (replay root):
+
+- `lane_fragilec_build_status=2`
+- `lane_fragilec_test_rpc_status=-1`
+- `lane_fragilec_failure_class=build_failed`
+- `lane_fragilec_completed_trials=0`
+- `runtime_all_trials_passed=false`
+
+Deterministic non-increase vs f.1 baseline:
+
+- `rustc_error_total_count: 218 -> 153` (`<=`)
+- `rustc_error_unique_count: 89 -> 85` (`<=`)
+- `non_increase_verdict=true`
+
+Post-f.4 dominant residual classes:
+
+- `E0599`: `27`
+- `E0308`: `25`
+- `E0277`: `20`
+- `E0425`: `14`
+- `E0609`: `14`
+
+Closure decision:
+
+- `M9.2.c.iv` is not lane-green yet, so it cannot close on `f.4`.
+- Published next bounded decomposition under `M9.2.c.iv.f.5` (`f.5.a`..`f.5.e`) in `TODO.md`.
+
+Detailed inventory:
+
+- `docs/dev/m9_2c_iv_f4_replay_non_increase_and_next_decomposition.md`

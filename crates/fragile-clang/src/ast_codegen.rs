@@ -13699,6 +13699,30 @@ impl AstCodeGen {
             out
         }
 
+        fn parse_maybeuninit_refcell_static_bindings(code: &str) -> HashSet<String> {
+            let mut out = HashSet::new();
+            for line in code.lines() {
+                let trimmed = line.trim_start();
+                if !trimmed.starts_with("static mut ") {
+                    continue;
+                }
+                if !trimmed.contains("std::mem::MaybeUninit<std::cell::RefCell<") {
+                    continue;
+                }
+                let Some(name_src) = trimmed
+                    .strip_prefix("static mut ")
+                    .and_then(|rest| rest.split_once(':').map(|(lhs, _)| lhs))
+                else {
+                    continue;
+                };
+                let binding = name_src.trim().trim_start_matches("r#");
+                if !binding.is_empty() {
+                    out.insert(binding.to_string());
+                }
+            }
+            out
+        }
+
         fn parse_impl_target(trimmed: &str) -> Option<String> {
             let rest = trimmed.strip_prefix("impl ")?;
             if !trimmed.ends_with('{') {
@@ -13794,7 +13818,55 @@ impl AstCodeGen {
             Some(format!("{lhs}= unsafe {{ {call}({expr}) }};"))
         }
 
+        fn rewrite_maybeuninit_refcell_borrow_arg(
+            line: &str,
+            maybeuninit_refcell_bindings: &HashSet<String>,
+        ) -> String {
+            if maybeuninit_refcell_bindings.is_empty()
+                || !line.contains("std::cell::RefCell::borrow(")
+                    && !line.contains("std::cell::RefCell::borrow_mut(")
+            {
+                return line.to_string();
+            }
+            let mut rewritten = line.to_string();
+            for binding in maybeuninit_refcell_bindings {
+                let borrow_plain = format!("std::cell::RefCell::borrow({binding})");
+                if rewritten.contains(&borrow_plain)
+                    && !rewritten.contains(&format!("{binding}.assume_init_ref()"))
+                {
+                    let replacement = format!(
+                        "std::cell::RefCell::borrow(unsafe {{ {binding}.assume_init_ref() }})"
+                    );
+                    rewritten = rewritten.replace(&borrow_plain, &replacement);
+                }
+
+                let borrow_mut_plain = format!("std::cell::RefCell::borrow_mut({binding})");
+                if rewritten.contains(&borrow_mut_plain)
+                    && !rewritten.contains(&format!("{binding}.assume_init_mut()"))
+                {
+                    let replacement = format!(
+                        "std::cell::RefCell::borrow_mut(unsafe {{ {binding}.assume_init_mut() }})"
+                    );
+                    rewritten = rewritten.replace(&borrow_mut_plain, &replacement);
+                }
+            }
+            rewritten
+        }
+
+        fn starts_self_literal_lane(trimmed: &str) -> bool {
+            if trimmed.starts_with("//") || trimmed.starts_with("///") || trimmed.starts_with("#[")
+            {
+                return false;
+            }
+            trimmed.starts_with("let mut __self = Self {")
+                || trimmed.starts_with("let __self = Self {")
+                || trimmed.starts_with("return Self {")
+                || trimmed.starts_with("Self {")
+                || trimmed.contains("= Self {")
+        }
+
         let struct_field_types = parse_struct_field_types(code);
+        let maybeuninit_refcell_bindings = parse_maybeuninit_refcell_static_bindings(code);
         let mut struct_cell_fields: HashMap<String, HashSet<String>> = HashMap::new();
         for (struct_name, fields) in &struct_field_types {
             let mut cell_fields = HashSet::new();
@@ -13861,9 +13933,9 @@ impl AstCodeGen {
                 }
             }
 
-            if !in_self_literal && line.contains("let mut __self = Self {") {
+            if !in_self_literal && starts_self_literal_lane(trimmed) {
                 in_self_literal = true;
-                self_literal_depth = 1;
+                self_literal_depth = 0;
                 self_literal_struct = active_impl.clone();
             }
 
@@ -13886,6 +13958,10 @@ impl AstCodeGen {
                     rewritten = replaced;
                 }
             }
+            rewritten = rewrite_maybeuninit_refcell_borrow_arg(
+                &rewritten,
+                &maybeuninit_refcell_bindings,
+            );
 
             if in_option_fn
                 && trimmed_rewritten.starts_with("return ")
@@ -143669,6 +143745,52 @@ impl sigevent {
         assert!(
             output.contains("__self._sigev_un = unsafe { std::mem::zeroed() };"),
             "_sigev_un integer assignment should normalize to typed zeroed union lane, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_e0308_bucket_b1_value_shape_mismatches_rewrites_maybeuninit_refcell_borrow_lanes(
+    ) {
+        let input = r#"
+static mut REACTOR_SP_RUNNING_CORO_TH_: std::mem::MaybeUninit<std::cell::RefCell<std::option::Option<std::rc::Rc<Fiber>>>> = std::mem::MaybeUninit::uninit();
+
+pub fn current_fiber() {
+    let mut guard: std::cell::Ref<std::option::Option<std::rc::Rc<Fiber>>> = unsafe { std::cell::RefCell::borrow(REACTOR_SP_RUNNING_CORO_TH_) };
+    let mut guard_mut: std::cell::RefMut<std::option::Option<std::rc::Rc<Fiber>>> = unsafe { std::cell::RefCell::borrow_mut(REACTOR_SP_RUNNING_CORO_TH_) };
+    let _ = (&mut guard, &mut guard_mut);
+}
+"#;
+        let output = AstCodeGen::normalize_e0308_bucket_b1_value_shape_mismatches(input);
+        assert!(
+            output.contains("std::cell::RefCell::borrow(unsafe { REACTOR_SP_RUNNING_CORO_TH_.assume_init_ref() })")
+                && output.contains("std::cell::RefCell::borrow_mut(unsafe { REACTOR_SP_RUNNING_CORO_TH_.assume_init_mut() })"),
+            "MaybeUninit<RefCell<...>> borrow lanes should use assume_init_ref/assume_init_mut, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_e0308_bucket_b1_value_shape_mismatches_rewrites_direct_self_literal_none_lane() {
+        let input = r#"
+pub struct PollThread {
+    join_handle_: std::sync::Mutex<std::option::Option<std::thread::JoinHandle<()>>>,
+    sender_: std::sync::mpsc::Sender<PollCommand>,
+}
+impl PollThread {
+    pub fn new_1(sender: std::sync::mpsc::Sender<PollCommand>) -> Self {
+        Self {
+            sender_: sender,
+            join_handle_: (unsafe { super::rusty::__gv_None }).clone(),
+        }
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_e0308_bucket_b1_value_shape_mismatches(input);
+        assert!(
+            output.contains("join_handle_: std::sync::Mutex::new(std::option::Option::None),")
+                && !output.contains("join_handle_: (unsafe { super::rusty::__gv_None }).clone(),"),
+            "direct Self-literal __gv_None field lane should normalize to typed Option::None constructor, got:\n{}",
             output
         );
     }
