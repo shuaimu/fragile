@@ -23234,3 +23234,43 @@ No-shortcut constraints are carried explicitly into all `f.2.*` leaves:
 - no target-specific hacks,
 - no semantic stubs/fake bodies,
 - no suppression-only edits without deterministic evidence.
+
+## 2026-03-30: M9.2.c.iv.f.2.a deterministic residual typed-error bucket manifest
+
+- Selected leaf: `M9.2.c.iv.f.2.a`.
+- Scope remained bounded (<1000 LOC): deterministic manifest extraction + docs/tests updates only.
+
+Wrong-approach check completed before edits:
+
+- `docs/fragile-dev-book.md` section `1.3 Wrong Approaches (Do Not Do)`
+- `docs/dev/wrong.md`
+
+Deterministic manifest capture:
+
+- Source replay roots:
+  - `/tmp/fragile_m9_2_strict_runtime_replay_20260329T040328Z_p2989433`
+  - `/tmp/fragile_m9_2_strict_runtime_replay_20260329T053434Z_p3129053`
+- Target compile units:
+  - `reactor.cc`
+  - `rpc/client.cpp`
+  - `rpc/server.cpp`
+  - `rpc/utils.cpp`
+- Target buckets:
+  - `E0308`
+  - `E0061`
+  - `E0599`
+  - `E0282`
+  - `E0605`
+- Baseline/current extraction comparison: `DIFF_STATUS=identical`.
+
+Dominant scoped totals (four compile units):
+
+- `E0308 = 66`
+- `E0061 = 18`
+- `E0599 = 32`
+- `E0282 = 5`
+- `E0605 = 4`
+
+Detailed manifest artifact:
+
+- `docs/dev/m9_2c_iv_f2a_residual_typed_error_bucket_manifest.md`

@@ -5967,6 +5967,80 @@ fn m9_2c_iv_f2_dev_book_entry_records_wrong_approach_check() {
 }
 
 #[test]
+fn m9_2c_iv_f2a_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.f.2.a Capture deterministic residual typed-error bucket manifest")
+            && todo.contains("docs/dev/m9_2c_iv_f2a_residual_typed_error_bucket_manifest.md")
+            && todo.contains("DIFF_STATUS=identical")
+            && todo.contains("E0308")
+            && todo.contains("reactor.cc")
+            && todo.contains("rpc/client.cpp")
+            && todo.contains("rpc/server.cpp")
+            && todo.contains("rpc/utils.cpp"),
+        "M9.2.c.iv.f.2.a TODO entry should be closed with deterministic manifest evidence"
+    );
+}
+
+#[test]
+fn m9_2c_iv_f2a_manifest_document_exists_and_contains_target_bucket_rows() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_f2a_residual_typed_error_bucket_manifest.md"),
+    )
+    .expect("f.2.a manifest document should be readable");
+    for required in [
+        "M9.2.c.iv.f.2.a",
+        "DIFF_STATUS=identical",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260329T040328Z_p2989433",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260329T053434Z_p3129053",
+        "reactor.cc",
+        "rpc/client.cpp",
+        "rpc/server.cpp",
+        "rpc/utils.cpp",
+        "E0308 = 66",
+        "E0061 = 18",
+        "E0599 = 32",
+        "E0282 = 5",
+        "E0605 = 4",
+        "error[E0599]: no method named `reset` found for struct `chunk` in the current scope",
+        "error[E0605]: non-primitive cast:",
+    ] {
+        assert!(
+            doc.contains(required),
+            "f.2.a manifest document should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_f2a_dev_book_entry_records_wrong_approach_check() {
+    let book = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/fragile-dev-book.md"),
+    )
+    .expect("fragile-dev-book.md should be readable");
+    for required in [
+        "## 2026-03-30: M9.2.c.iv.f.2.a deterministic residual typed-error bucket manifest",
+        "Selected leaf: `M9.2.c.iv.f.2.a`.",
+        "Wrong-approach check completed before edits",
+        "docs/dev/wrong.md",
+        "DIFF_STATUS=identical",
+        "E0308 = 66",
+        "docs/dev/m9_2c_iv_f2a_residual_typed_error_bucket_manifest.md",
+    ] {
+        assert!(
+            book.contains(required),
+            "fragile-dev-book entry for f.2.a should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
 fn m9_2c_iv_e34f1_inventory_document_exists_and_records_regression_taxonomy() {
     let doc = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
