@@ -6255,6 +6255,93 @@ fn m9_2c_iv_f2d_dev_book_entry_records_wrong_approach_check() {
 }
 
 #[test]
+fn m9_2c_iv_f2e_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.f.2.e Re-run residual compile probes and strict replay inventory comparison against f.1 baseline")
+            && todo.contains("docs/dev/m9_2c_iv_f2e_residual_replay_non_increase_inventory.md")
+            && todo.contains("E0282 1 -> 1")
+            && todo.contains("E0605 0 -> 0")
+            && todo.contains("total 157<=218")
+            && todo.contains("unique 85<=89")
+            && todo.contains("E0308:mismatched types")
+            && todo.contains("29"),
+        "M9.2.c.iv.f.2.e TODO entry should be closed with probe/replay non-increase evidence and next dominant bucket"
+    );
+}
+
+#[test]
+fn m9_2c_iv_f2e_inventory_document_exists_and_records_non_increase_verdict() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_f2e_residual_replay_non_increase_inventory.md"),
+    )
+    .expect("f.2.e inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.f.2.e",
+        "Wrong-Approach Check",
+        "/tmp/fragile_f2d_probe_after_20260330T092623Z_txlog/summary.txt",
+        "/tmp/fragile_f2e_probe_after_20260330T104700Z_txlog/summary.txt",
+        "| **total** | **1** | **1** | **0** | **0** | **0** | **0** |",
+        "| `E0308` | 29 | 29 | 0 |",
+        "| `E0599` | 27 | 27 | 0 |",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260330T110921Z_p518218",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260329T053434Z_p3129053",
+        "lane_fragilec_build_status=2",
+        "lane_fragilec_test_rpc_status=-1",
+        "lane_fragilec_failure_class=build_failed",
+        "rustc_error_total_count",
+        "218",
+        "157",
+        "rustc_error_unique_count",
+        "89",
+        "85",
+        "non_increase_verdict",
+        "E0308:mismatched types",
+        "error_key_018_count=29",
+    ] {
+        assert!(
+            doc.contains(required),
+            "f.2.e inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_f2e_dev_book_entry_records_wrong_approach_check() {
+    let book = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/fragile-dev-book.md"),
+    )
+    .expect("fragile-dev-book.md should be readable");
+    for required in [
+        "## 2026-03-30: M9.2.c.iv.f.2.e residual probe/replay non-increase refresh",
+        "Selected leaf: `M9.2.c.iv.f.2.e`.",
+        "Wrong-approach check completed before edits",
+        "docs/dev/wrong.md",
+        "/tmp/fragile_f2d_probe_after_20260330T092623Z_txlog/summary.txt",
+        "/tmp/fragile_f2e_probe_after_20260330T104700Z_txlog/summary.txt",
+        "`E0282` total: `1 -> 1` (`0`)",
+        "`E0605` total: `0 -> 0` (`0`)",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260330T110921Z_p518218",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260329T053434Z_p3129053",
+        "`rustc_error_total_count: 218 -> 157` (`<=`)",
+        "`rustc_error_unique_count: 89 -> 85` (`<=`)",
+        "`E0308:mismatched types` (`29`)",
+        "`docs/dev/m9_2c_iv_f2e_residual_replay_non_increase_inventory.md`",
+    ] {
+        assert!(
+            book.contains(required),
+            "fragile-dev-book entry for f.2.e should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
 fn m9_2c_iv_e34f1_inventory_document_exists_and_records_regression_taxonomy() {
     let doc = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

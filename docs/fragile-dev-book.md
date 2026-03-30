@@ -23412,3 +23412,54 @@ Residual note:
 Detailed inventory:
 
 - `docs/dev/m9_2c_iv_f2d_e0282_e0605_inference_cast_inventory.md`
+
+## 2026-03-30: M9.2.c.iv.f.2.e residual probe/replay non-increase refresh
+
+- Selected leaf: `M9.2.c.iv.f.2.e`.
+- Scope remained bounded (<1000 LOC): probe/replay rerun + inventory/docs/tests only.
+
+Wrong-approach check completed before edits:
+
+- `docs/fragile-dev-book.md` section `1.3 Wrong Approaches (Do Not Do)`
+- `docs/dev/wrong.md`
+
+Scoped probe rerun evidence (txlog compile-unit slice):
+
+- baseline summary:
+  - `/tmp/fragile_f2d_probe_after_20260330T092623Z_txlog/summary.txt`
+- rerun summary:
+  - `/tmp/fragile_f2e_probe_after_20260330T104700Z_txlog/summary.txt`
+
+Targeted residuals remained non-increasing:
+
+- `E0282` total: `1 -> 1` (`0`)
+- `E0605` total: `0 -> 0` (`0`)
+- dominant typed buckets remained stable:
+  - `E0308`: `29 -> 29`
+  - `E0599`: `27 -> 27`
+
+Strict replay baseline comparison evidence:
+
+- baseline run root:
+  - `/tmp/fragile_m9_2_strict_runtime_replay_20260329T053434Z_p3129053`
+- rerun root:
+  - `/tmp/fragile_m9_2_strict_runtime_replay_20260330T110921Z_p518218`
+- manifests:
+  - `/tmp/fragile_m9_2_strict_runtime_replay_20260330T110921Z_p518218/strict_runtime_replay_manifest.txt`
+  - `/tmp/fragile_m9_2_strict_runtime_replay_20260330T110921Z_p518218/strict_runtime_replay_blocker_inventory_manifest.txt`
+
+Replay contract snapshot:
+
+- lane remains red (`build=2`, `test_rpc=-1`, `failure_class=build_failed`, `completed_trials=0/1`)
+- deterministic non-increase holds vs baseline:
+  - `rustc_error_total_count: 218 -> 157` (`<=`)
+  - `rustc_error_unique_count: 89 -> 85` (`<=`)
+  - `non_increase_verdict=true`
+
+Next dominating residual bucket for the next bounded fix leaf:
+
+- `E0308:mismatched types` (`29`)
+
+Detailed inventory:
+
+- `docs/dev/m9_2c_iv_f2e_residual_replay_non_increase_inventory.md`
