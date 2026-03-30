@@ -6580,6 +6580,87 @@ fn m9_2c_iv_f5a_dev_book_entry_records_wrong_approach_check() {
 }
 
 #[test]
+fn m9_2c_iv_f5b_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.f.5.b Execute the first bounded dominant `E0599` compatibility-surface slice")
+            && todo.contains("docs/dev/m9_2c_iv_f5b_e0599_compat_surface_inventory.md")
+            && todo.contains("`27 -> 11` (`-16`)")
+            && todo.contains("client 15 -> 9")
+            && todo.contains("server 12 -> 2"),
+        "M9.2.c.iv.f.5.b TODO closure should record bounded E0599 delta evidence and inventory link"
+    );
+}
+
+#[test]
+fn m9_2c_iv_f5b_inventory_document_exists_and_records_e0599_delta() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_f5b_e0599_compat_surface_inventory.md"),
+    )
+    .expect("f.5.b inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.f.5.b",
+        "Wrong-Approach Check",
+        "docs/dev/wrong.md",
+        "normalize_e0061_e0599_rpc_surface_compatibility_slice",
+        "Rehydrated missing marshal surfaces on `rrr_Marshal`",
+        "`content_size`",
+        "`write_to_fd`",
+        "`empty`",
+        "rrr_ServerConnection::reply",
+        "FragileVecSizeOpIndexCompat<T>",
+        "FragileBoxOpDerefCompat<T>",
+        "std_random_device::op_call",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260330T130048Z_p617835/lane_fragilec/build.stderr",
+        "/tmp/fragile_f5b_probe_after_20260330T153529Z_txlog/summary.txt",
+        "| `rpc/client.cpp` | 15 | 9 | -6 |",
+        "| `rpc/server.cpp` | 12 | 2 | -10 |",
+        "| **total** | **27** | **11** | **-16** |",
+        "content_size",
+        "write_to_fd",
+        "empty",
+        "reply",
+        "op_index",
+        "op_call",
+    ] {
+        assert!(
+            doc.contains(required),
+            "f.5.b inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_f5b_dev_book_entry_records_wrong_approach_check() {
+    let book = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/fragile-dev-book.md"),
+    )
+    .expect("fragile-dev-book.md should be readable");
+    for required in [
+        "## 2026-03-30: M9.2.c.iv.f.5.b bounded E0599 compatibility-surface closure",
+        "Selected leaf: `M9.2.c.iv.f.5.b`.",
+        "Wrong-approach check completed before edits",
+        "docs/dev/wrong.md",
+        "/tmp/fragile_f5b_probe_after_20260330T153529Z_txlog/summary.txt",
+        "`27 -> 11` (`-16`)",
+        "`client: 15 -> 9`",
+        "`server: 12 -> 2`",
+        "`docs/dev/m9_2c_iv_f5b_e0599_compat_surface_inventory.md`",
+    ] {
+        assert!(
+            book.contains(required),
+            "fragile-dev-book entry for f.5.b should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
 fn m9_2c_iv_e34f1_inventory_document_exists_and_records_regression_taxonomy() {
     let doc = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

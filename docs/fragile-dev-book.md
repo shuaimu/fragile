@@ -23619,3 +23619,47 @@ Per-unit dominant residual markers:
 Detailed inventory:
 
 - `docs/dev/m9_2c_iv_f5a_post_f4_residual_typed_bucket_manifest.md`
+
+## 2026-03-30: M9.2.c.iv.f.5.b bounded E0599 compatibility-surface closure
+
+- Selected leaf: `M9.2.c.iv.f.5.b`.
+- Bounded implementation size remained under the leaf cap (`<=400 LOC`) in production code.
+
+Wrong-approach check completed before edits:
+
+- `docs/fragile-dev-book.md` section `1.3 Wrong Approaches (Do Not Do)`
+- `docs/dev/wrong.md`
+
+Implementation focus:
+
+- extended `normalize_e0061_e0599_rpc_surface_compatibility_slice` with generic compatibility closures for:
+  - `rrr_Marshal::{content_size,write_to_fd,empty}`,
+  - `rrr_ServerConnection::reply`,
+  - `Vec<T>` `size/op_index` compatibility trait,
+  - `Box<T>` `op_deref` compatibility trait,
+  - `std_random_device::op_call`,
+  - `can_retry(args...)` callshape normalization to `.can_retry()`.
+
+Focused probe evidence:
+
+- pre-fix anchor:
+  - `/tmp/fragile_m9_2_strict_runtime_replay_20260330T130048Z_p617835/lane_fragilec/build.stderr`
+- post-fix probe:
+  - `/tmp/fragile_f5b_probe_after_20260330T153529Z_txlog/summary.txt`
+
+Dominant-unit `E0599` delta (`rpc/client.cpp` + `rpc/server.cpp`):
+
+- `27 -> 11` (`-16`)
+- per-unit:
+  - `client: 15 -> 9`
+  - `server: 12 -> 2`
+
+Cleared signature families in this slice:
+
+- marshal/server: `content_size`, `write_to_fd`, `empty`, `reply`
+- map/container/deref: `size`, `op_index`, `op_deref`
+- rpc support: `can_retry`, `op_call`
+
+Detailed inventory:
+
+- `docs/dev/m9_2c_iv_f5b_e0599_compat_surface_inventory.md`

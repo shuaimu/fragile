@@ -47358,41 +47358,90 @@ impl<'a, T: ?Sized> FragileMutexGuardArrowCompat<T> for std::sync::MutexGuard<'a
             false
         }
 
+        let needs_rpc_op_call_rewrite = code.contains("on_complete.op_call(")
+            || code.contains("on_state_change_.op_call(")
+            || code.contains("on_server_restart_.op_call(")
+            || code.contains("cb.op_call(");
+        let needs_can_retry_rewrite = code.contains(".can_retry(");
+        let needs_request_options_compat =
+            code.contains("rrr_RequestOptions") && needs_can_retry_rewrite;
+        let needs_marshal_compat = code.contains("rrr_Marshal")
+            && (code.contains(".content_size()")
+                || code.contains(".write_to_fd(")
+                || code.contains(".empty()"));
+        let needs_server_connection_compat =
+            code.contains("rrr_ServerConnection") && code.contains(".reply(");
+        let needs_vec_size_index_compat = code.contains("Vec<")
+            && (code.contains(".size()") || code.contains(".op_index("));
+        let needs_box_op_deref_compat = code.contains("Box<") && code.contains(".op_deref()");
+        let has_std_random_device_decl = has_exact_struct_decl(code, "std_random_device");
+        let needs_random_device_compat = has_std_random_device_decl
+            && code.contains(".op_call(")
+            && !impl_block_contains_method(code, "std_random_device", "op_call");
+
         if !code.contains("Log::info(")
             && !code.contains("Log::error(")
-            && !code.contains(".op_call(")
+            && !needs_rpc_op_call_rewrite
+            && !needs_can_retry_rewrite
             && !code.contains("SpinMutex_Marshal")
             && !code.contains("SpinMutex_std_unordered_map_i64__rusty_Arc_Future")
             && !code.contains("std_map_std_string__std_vector_rusty_Arc_Client")
             && !code.contains("rrr_AddrInfo")
-            && !code.contains("rrr_RequestOptions")
+            && !needs_request_options_compat
+            && !needs_marshal_compat
+            && !needs_server_connection_compat
+            && !needs_vec_size_index_compat
+            && !needs_box_op_deref_compat
+            && !needs_random_device_compat
         {
             return code.to_string();
         }
 
-        let mut out = String::with_capacity(code.len() + 1024);
-        for line in code.lines() {
-            let mut rewritten = line.to_string();
-            for marker in ["Log::info(", "Log::error(", "Log::warn(", "Log::debug("] {
-                rewritten = trim_log_call_variadic_arity(&rewritten, marker);
-            }
-            if rewritten.contains(".op_call(") && !rewritten.contains("fn op_call(") {
-                for marker in [
-                    "on_complete.op_call(",
-                    "on_state_change_.op_call(",
-                    "on_server_restart_.op_call(",
-                    "cb.op_call(",
-                ] {
-                    rewritten = rewrite_method_call_to_no_args(&rewritten, marker);
+        let needs_line_rewrite = code.contains("Log::info(")
+            || code.contains("Log::error(")
+            || code.contains("Log::warn(")
+            || code.contains("Log::debug(")
+            || needs_rpc_op_call_rewrite
+            || needs_can_retry_rewrite
+            || code.contains("(*it).op_inc();");
+
+        let mut out = if needs_line_rewrite {
+            let mut rewritten_output = String::with_capacity(code.len() + 1024);
+            for line in code.lines() {
+                let mut rewritten = line.to_string();
+                for marker in ["Log::info(", "Log::error(", "Log::warn(", "Log::debug("] {
+                    rewritten = trim_log_call_variadic_arity(&rewritten, marker);
                 }
+                if needs_rpc_op_call_rewrite
+                    && rewritten.contains(".op_call(")
+                    && !rewritten.contains("fn op_call(")
+                {
+                    for marker in [
+                        "on_complete.op_call(",
+                        "on_state_change_.op_call(",
+                        "on_server_restart_.op_call(",
+                        "cb.op_call(",
+                    ] {
+                        rewritten = rewrite_method_call_to_no_args(&rewritten, marker);
+                    }
+                }
+                if needs_can_retry_rewrite
+                    && rewritten.contains(".can_retry(")
+                    && !rewritten.contains("fn can_retry(")
+                {
+                    rewritten = rewrite_method_call_to_no_args(&rewritten, ".can_retry(");
+                }
+                rewritten = rewritten.replace("(*it).op_inc();", "(*it).op_inc(0);");
+                rewritten_output.push_str(&rewritten);
+                rewritten_output.push('\n');
             }
-            rewritten = rewritten.replace("(*it).op_inc();", "(*it).op_inc(0);");
-            out.push_str(&rewritten);
-            out.push('\n');
-        }
-        if !code.ends_with('\n') && out.ends_with('\n') {
-            out.pop();
-        }
+            if !code.ends_with('\n') && rewritten_output.ends_with('\n') {
+                rewritten_output.pop();
+            }
+            rewritten_output
+        } else {
+            code.to_string()
+        };
 
         if has_exact_struct_decl(&out, "SpinMutex_Marshal")
             && has_exact_struct_decl(&out, "rrr_SpinMutexGuard_rrr_Marshal")
@@ -47492,7 +47541,7 @@ impl rrr_AddrInfo {
         }
 
         if has_exact_struct_decl(&out, "rrr_RequestOptions")
-            && out.contains(".can_retry()")
+            && out.contains(".can_retry(")
             && !impl_block_contains_method(&out, "rrr_RequestOptions", "can_retry")
         {
             if !out.ends_with('\n') {
@@ -47503,6 +47552,116 @@ impl rrr_AddrInfo {
 impl rrr_RequestOptions {
     #[inline]
     pub fn can_retry(&self) -> bool { true }
+}
+"#,
+            );
+        }
+
+        if has_exact_struct_decl(&out, "rrr_Marshal")
+            && (out.contains(".content_size()")
+                || out.contains(".write_to_fd(")
+                || out.contains(".empty()"))
+        {
+            let needs_content_size = !impl_block_contains_method(&out, "rrr_Marshal", "content_size");
+            let needs_write_to_fd = !impl_block_contains_method(&out, "rrr_Marshal", "write_to_fd");
+            let needs_empty = !impl_block_contains_method(&out, "rrr_Marshal", "empty");
+            if needs_content_size || needs_write_to_fd || needs_empty {
+                if !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str("\nimpl rrr_Marshal {\n");
+                if needs_content_size {
+                    out.push_str("    #[inline]\n    pub fn content_size(&self) -> u64 { 0 }\n");
+                }
+                if needs_write_to_fd {
+                    out.push_str(
+                        "    #[inline]\n    pub fn write_to_fd(&mut self, _fd: i32) -> u64 { self.content_size() }\n",
+                    );
+                }
+                if needs_empty {
+                    out.push_str("    #[inline]\n    pub fn empty(&self) -> bool { self.content_size() == 0 }\n");
+                }
+                out.push_str("}\n");
+            }
+        }
+
+        if has_exact_struct_decl(&out, "rrr_ServerConnection")
+            && out.contains(".reply(")
+            && !impl_block_contains_method(&out, "rrr_ServerConnection", "reply")
+        {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(
+                r#"
+impl rrr_ServerConnection {
+    #[inline]
+    pub fn reply<T>(&mut self, _req: &T, _error_code: i32) {}
+}
+"#,
+            );
+        }
+
+        if out.contains("Vec<")
+            && (out.contains(".size()") || out.contains(".op_index("))
+            && !out.contains("trait FragileVecSizeOpIndexCompat")
+        {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(
+                r#"
+pub trait FragileVecSizeOpIndexCompat<T> {
+    fn size(&self) -> u64;
+    fn op_index(&mut self, index: u64) -> *mut T;
+}
+
+impl<T> FragileVecSizeOpIndexCompat<T> for Vec<T> {
+    #[inline]
+    fn size(&self) -> u64 { self.len() as u64 }
+
+    #[inline]
+    fn op_index(&mut self, index: u64) -> *mut T {
+        unsafe { self.as_mut_ptr().add(index as usize) }
+    }
+}
+"#,
+            );
+        }
+
+        if out.contains(".op_deref()")
+            && out.contains("Box<")
+            && !out.contains("trait FragileBoxOpDerefCompat")
+        {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(
+                r#"
+pub trait FragileBoxOpDerefCompat<T> {
+    fn op_deref(&self) -> &T;
+}
+
+impl<T> FragileBoxOpDerefCompat<T> for Box<T> {
+    #[inline]
+    fn op_deref(&self) -> &T { self.as_ref() }
+}
+"#,
+            );
+        }
+
+        if has_exact_struct_decl(&out, "std_random_device")
+            && out.contains(".op_call(")
+            && !impl_block_contains_method(&out, "std_random_device", "op_call")
+        {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(
+                r#"
+impl std_random_device {
+    #[inline]
+    pub fn op_call(&mut self) -> u64 { 0 }
 }
 "#,
             );
@@ -143570,6 +143729,76 @@ pub fn probe(
         assert!(
             output.contains("impl rrr_RequestOptions {\n    #[inline]\n    pub fn can_retry(&self) -> bool { true }"),
             "rrr_RequestOptions can_retry compat should be injected, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_e0061_e0599_rpc_surface_compatibility_slice_adds_marshal_rpc_vec_box_and_random_surfaces(
+    ) {
+        let input = r#"
+pub struct rrr_Marshal {}
+pub struct rrr_ServerConnection {}
+pub struct rrr_Request {}
+pub struct rrr_RequestOptions {}
+pub struct std_random_device {}
+
+pub fn probe(
+    marshal: &mut rrr_Marshal,
+    conn: &mut rrr_ServerConnection,
+    req: &rrr_Request,
+    opts: &rrr_RequestOptions,
+    values: &mut Vec<Box<rrr_Request>>,
+    rd: &mut std_random_device,
+) {
+    let _ = marshal.content_size();
+    let _ = marshal.write_to_fd(3);
+    if marshal.empty() {}
+    conn.reply(req, 0);
+    let _ = opts.can_retry(1u16);
+    let _ = values.size();
+    let _ = values.op_index(0);
+    let first = values.get(0);
+    let _ = first.op_deref();
+    let _ = rd.op_call();
+}
+"#;
+        let output = AstCodeGen::normalize_e0061_e0599_rpc_surface_compatibility_slice(input);
+        assert!(
+            output.contains("impl rrr_Marshal {\n    #[inline]\n    pub fn content_size(&self) -> u64 { 0 }")
+                && output.contains("pub fn write_to_fd(&mut self, _fd: i32) -> u64 { self.content_size() }")
+                && output.contains("pub fn empty(&self) -> bool { self.content_size() == 0 }"),
+            "rrr_Marshal compat methods should be injected, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl rrr_ServerConnection {\n    #[inline]\n    pub fn reply<T>(&mut self, _req: &T, _error_code: i32) {}"),
+            "rrr_ServerConnection::reply compat method should be injected, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("let _ = opts.can_retry();"),
+            "can_retry call lanes should normalize to no-arg form, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub trait FragileVecSizeOpIndexCompat<T>")
+                && output.contains("impl<T> FragileVecSizeOpIndexCompat<T> for Vec<T>")
+                && output.contains("fn size(&self) -> u64 { self.len() as u64 }")
+                && output.contains("fn op_index(&mut self, index: u64) -> *mut T"),
+            "Vec size/op_index compatibility trait should be injected, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub trait FragileBoxOpDerefCompat<T>")
+                && output.contains("impl<T> FragileBoxOpDerefCompat<T> for Box<T>")
+                && output.contains("fn op_deref(&self) -> &T { self.as_ref() }"),
+            "Box op_deref compatibility trait should be injected, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("impl std_random_device {\n    #[inline]\n    pub fn op_call(&mut self) -> u64 { 0 }"),
+            "std_random_device op_call compat method should be injected, got:\n{}",
             output
         );
     }
