@@ -23571,3 +23571,51 @@ Closure decision:
 Detailed inventory:
 
 - `docs/dev/m9_2c_iv_f4_replay_non_increase_and_next_decomposition.md`
+
+## 2026-03-30: M9.2.c.iv.f.5.a post-f.4 residual typed-error bucket manifest refresh
+
+- Selected leaf: `M9.2.c.iv.f.5.a`.
+- Scope remained bounded (<1000 LOC): deterministic residual-manifest extraction + TODO/doc/test closure updates.
+
+Wrong-approach check completed before extraction:
+
+- `docs/fragile-dev-book.md` section `1.3 Wrong Approaches (Do Not Do)`
+- `docs/dev/wrong.md`
+
+Replay anchor used:
+
+- `/tmp/fragile_m9_2_strict_runtime_replay_20260330T130048Z_p617835`
+- source stderr:
+  - `/tmp/fragile_m9_2_strict_runtime_replay_20260330T130048Z_p617835/lane_fragilec/build.stderr`
+
+Deterministic extraction contract:
+
+- classify compile-unit sections from `fragile rustc object compile failed for ... (parser-output-handoff)` markers,
+- count `error[E....]` codes per unit,
+- record first-seen exemplar signatures.
+
+Determinism check:
+
+- pass1: `/tmp/fragile_f5a_postf4_manifest_pass1.tsv`
+- pass2: `/tmp/fragile_f5a_postf4_manifest_pass2.tsv`
+- `DIFF_STATUS=identical`
+- row count: `32`
+
+Dominant post-f.4 totals (scoped to `reactor.cc`, `rpc/client.cpp`, `rpc/server.cpp`, `rpc/utils.cpp`):
+
+- `E0599 = 27`
+- `E0308 = 25`
+- `E0277 = 20`
+- `E0425 = 14`
+- `E0609 = 14`
+
+Per-unit dominant residual markers:
+
+- `reactor.cc`: `E0308=1`
+- `rpc/client.cpp`: `E0308=19`, `E0599=15`
+- `rpc/server.cpp`: `E0599=12`, `E0308=4`
+- `rpc/utils.cpp`: `E0186=3`, `E0133=3`
+
+Detailed inventory:
+
+- `docs/dev/m9_2c_iv_f5a_post_f4_residual_typed_bucket_manifest.md`
