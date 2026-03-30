@@ -23274,3 +23274,43 @@ Dominant scoped totals (four compile units):
 Detailed manifest artifact:
 
 - `docs/dev/m9_2c_iv_f2a_residual_typed_error_bucket_manifest.md`
+
+## 2026-03-30: M9.2.c.iv.f.2.b bounded E0308 bucket-B1 value-shape closure
+
+- Selected leaf: `M9.2.c.iv.f.2.b`.
+- Scope remained bounded (<1000 LOC): one B1 normalizer slice + SpinMutex constructor-lane extension + focused txlog probes.
+
+Wrong-approach check completed before edits:
+
+- `docs/fragile-dev-book.md` section `1.3 Wrong Approaches (Do Not Do)`
+- `docs/dev/wrong.md`
+
+Implementation highlights:
+
+- Added `normalize_e0308_bucket_b1_value_shape_mismatches` for:
+  - `RefCell` borrow binding callshape rewrites,
+  - Option `__gv_None` return/field-lane rewrites,
+  - `_sigev_un` typed zero-init rewrite,
+  - `Cell::set(&x)` value-shape rewrite.
+- Extended `normalize_spinmutex_guard_constructor_data_param_types` to cover `rrr_SpinMutexGuard_*` and cast degraded data-assignment lanes.
+- Corrected a regression discovered during this leaf: non-SpinMutex `impl` headers were unintentionally dropped by an internal `continue`; fixed and covered by `test_spinmutex_guard_constructor_param_rehydration_preserves_non_spinmutex_impl_headers`.
+
+Focused txlog probe evidence:
+
+- Pre-fix baseline:
+  - `/tmp/fragile_f2b_probe_after_20260330/summary.txt`
+- Post-fix:
+  - `/tmp/fragile_f2b_probe_after_fix_20260330_txlog/summary.txt`
+
+Measured deltas (same compile-unit scope and txlog command family):
+
+- `E0308` total: `75 -> 29` (`-46`)
+- `__gv_None`: `5 -> 2`
+- `_sigev_un = ((64 / 4) - 4)`: `3 -> 0`
+- `UnsafeCell<()> ptr mismatch`: `6 -> 0`
+- `UnsafeCell<T> ptr mismatch`: `6 -> 0`
+- `REACTOR_SP_RUNNING_CORO_TH_.borrow()`: `2 -> 0`
+
+Detailed inventory:
+
+- `docs/dev/m9_2c_iv_f2b_e0308_bucket_b1_value_shape_inventory.md`

@@ -13489,6 +13489,10 @@ impl AstCodeGen {
             return code.to_string();
         }
 
+        fn is_spinmutex_guard_name(name: &str) -> bool {
+            name.starts_with("SpinMutexGuard_") || name.starts_with("rrr_SpinMutexGuard_")
+        }
+
         fn brace_delta(line: &str) -> i32 {
             line.chars().filter(|&ch| ch == '{').count() as i32
                 - line.chars().filter(|&ch| ch == '}').count() as i32
@@ -13501,12 +13505,12 @@ impl AstCodeGen {
         for line in code.lines() {
             let trimmed = line.trim_start();
 
-            if active_struct.is_none()
-                && trimmed.starts_with("pub struct SpinMutexGuard_")
-                && trimmed.ends_with('{')
-            {
+            if active_struct.is_none() && trimmed.starts_with("pub struct ") && trimmed.ends_with('{') {
                 if let Some(rest) = trimmed.strip_prefix("pub struct ") {
                     let name = rest.trim_end_matches('{').trim();
+                    if !is_spinmutex_guard_name(name) {
+                        continue;
+                    }
                     active_struct = Some(name.to_string());
                     struct_depth = brace_delta(line);
                     if struct_depth <= 0 {
@@ -13562,18 +13566,17 @@ impl AstCodeGen {
             let trimmed = line.trim_start();
             let mut entered_impl_this_line = false;
 
-            if active_impl.is_none()
-                && trimmed.starts_with("impl SpinMutexGuard_")
-                && trimmed.ends_with('{')
-            {
+            if active_impl.is_none() && trimmed.starts_with("impl ") && trimmed.ends_with('{') {
                 if let Some(rest) = trimmed.strip_prefix("impl ") {
                     let name = rest.trim_end_matches('{').trim();
-                    active_impl = Some(name.to_string());
-                    impl_depth = brace_delta(line);
-                    entered_impl_this_line = true;
-                    if impl_depth <= 0 {
-                        active_impl = None;
-                        impl_depth = 0;
+                    if is_spinmutex_guard_name(name) {
+                        active_impl = Some(name.to_string());
+                        impl_depth = brace_delta(line);
+                        entered_impl_this_line = true;
+                        if impl_depth <= 0 {
+                            active_impl = None;
+                            impl_depth = 0;
+                        }
                     }
                 }
             }
@@ -13587,6 +13590,15 @@ impl AstCodeGen {
                         }
                     }
                 }
+                if trimmed == "__self.data_ = other.data_;" {
+                    if let Some(data_ty) = guard_data_types.get(impl_name) {
+                        if data_ty.contains("UnsafeCell<") && !data_ty.contains("UnsafeCell<()>") {
+                            let indent_len = line.len().saturating_sub(trimmed.len());
+                            let indent = &line[..indent_len];
+                            rewritten = format!("{indent}__self.data_ = other.data_ as {data_ty};");
+                        }
+                    }
+                }
             }
 
             out.push_str(&rewritten);
@@ -13597,6 +13609,367 @@ impl AstCodeGen {
                 if impl_depth <= 0 {
                     active_impl = None;
                     impl_depth = 0;
+                }
+            }
+        }
+
+        if !code.ends_with('\n') && !out.is_empty() {
+            out.pop();
+        }
+        out
+    }
+
+    /// B1 direct value-shape normalization slice for residual E0308 lanes:
+    /// - `Cell::set(&value)` -> `Cell::set(value)` for known Cell receivers.
+    /// - `Ref`/`RefMut` bindings from static RefCell lanes use explicit
+    ///   `RefCell::borrow` / `RefCell::borrow_mut` (avoids trait-method drift).
+    /// - `return __gv_None` in `Option<...>` functions -> `Option::None`.
+    /// - `_sigev_un` integer lane initialization -> typed zeroed union value.
+    fn normalize_e0308_bucket_b1_value_shape_mismatches(code: &str) -> String {
+        if !code.contains(".set(&")
+            && !code.contains("__gv_None")
+            && !code.contains("_sigev_un = ((64 / 4) - 4);")
+            && !code.contains(": std::cell::Ref<")
+            && !code.contains(": std::cell::RefMut<")
+        {
+            return code.to_string();
+        }
+
+        fn brace_delta(line: &str) -> i32 {
+            line.chars().filter(|&ch| ch == '{').count() as i32
+                - line.chars().filter(|&ch| ch == '}').count() as i32
+        }
+
+        fn parse_struct_field_types(code: &str) -> HashMap<String, HashMap<String, String>> {
+            let lines: Vec<&str> = code.lines().collect();
+            let mut out: HashMap<String, HashMap<String, String>> = HashMap::new();
+            let mut i = 0usize;
+            while i < lines.len() {
+                let trimmed = lines[i].trim_start();
+                let Some(rest) = trimmed
+                    .strip_prefix("pub struct ")
+                    .or_else(|| trimmed.strip_prefix("struct "))
+                else {
+                    i += 1;
+                    continue;
+                };
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| AstCodeGen::is_identifier_char(*c) || *c == '#')
+                    .collect();
+                if name.is_empty() || !trimmed.ends_with('{') {
+                    i += 1;
+                    continue;
+                }
+
+                let mut fields: HashMap<String, String> = HashMap::new();
+                let mut depth = 1isize;
+                let mut j = i + 1;
+                while j < lines.len() && depth > 0 {
+                    let current = lines[j];
+                    let current_trim = current.trim();
+                    if depth == 1
+                        && !current_trim.starts_with("//")
+                        && !current_trim.starts_with("///")
+                        && !current_trim.starts_with("#[")
+                    {
+                        let mut field_src = current_trim;
+                        if let Some(rest) = field_src.strip_prefix("pub(") {
+                            if let Some(close_idx) = rest.find(')') {
+                                field_src = rest[close_idx + 1..].trim_start();
+                            }
+                        } else if let Some(rest) = field_src.strip_prefix("pub ") {
+                            field_src = rest.trim_start();
+                        }
+                        if let Some((lhs, rhs)) = field_src.split_once(':') {
+                            let field = lhs.trim().trim_start_matches("r#");
+                            let ty = rhs.trim().trim_end_matches(',').trim();
+                            if !field.is_empty() && !ty.is_empty() {
+                                fields.insert(field.to_string(), ty.to_string());
+                            }
+                        }
+                    }
+                    depth += current.chars().filter(|c| *c == '{').count() as isize;
+                    depth -= current.chars().filter(|c| *c == '}').count() as isize;
+                    j += 1;
+                }
+                out.insert(name.trim_start_matches("r#").to_string(), fields);
+                i = j;
+            }
+            out
+        }
+
+        fn parse_impl_target(trimmed: &str) -> Option<String> {
+            let rest = trimmed.strip_prefix("impl ")?;
+            if !trimmed.ends_with('{') {
+                return None;
+            }
+            let target_src = rest.trim_end_matches('{').trim();
+            let target_src = if let Some((_, rhs)) = target_src.split_once(" for ") {
+                rhs.trim()
+            } else {
+                target_src
+            };
+            let token = target_src.split_whitespace().next().unwrap_or(target_src);
+            let token = token.split('<').next().unwrap_or(token).trim();
+            if token.is_empty() {
+                None
+            } else {
+                Some(token.trim_start_matches("r#").to_string())
+            }
+        }
+
+        fn parse_none_binding_replacement(field_ty: &str) -> Option<String> {
+            let ty = field_ty.trim();
+            let has_option_lane = ty.contains("std::option::Option<") || ty.contains("Option<");
+            if ty.starts_with("std::sync::Mutex<") && has_option_lane {
+                return Some("std::sync::Mutex::new(std::option::Option::None)".to_string());
+            }
+            if ty.starts_with("std::cell::RefCell<") && has_option_lane {
+                return Some("std::cell::RefCell::new(std::option::Option::None)".to_string());
+            }
+            if has_option_lane {
+                return Some("std::option::Option::None".to_string());
+            }
+            None
+        }
+
+        fn rewrite_set_borrow_arg(line: &str, receiver: &str) -> String {
+            let marker = format!("{receiver}.set(");
+            if !line.contains(&marker) {
+                return line.to_string();
+            }
+            let mut rewritten = line.to_string();
+            let mut idx = 0usize;
+            while let Some(rel) = rewritten[idx..].find(&marker) {
+                let start = idx + rel;
+                let open_idx = start + marker.len() - 1;
+                let Some(close_idx) = AstCodeGen::find_matching_close_paren(&rewritten, open_idx)
+                else {
+                    break;
+                };
+                let args_src = rewritten[open_idx + 1..close_idx].trim();
+                if AstCodeGen::split_top_level_list(args_src, ',').len() != 1 {
+                    idx = close_idx + 1;
+                    continue;
+                }
+                let Some(arg_without_ref) = args_src.strip_prefix('&') else {
+                    idx = close_idx + 1;
+                    continue;
+                };
+                let replacement = format!("{receiver}.set({})", arg_without_ref.trim_start());
+                rewritten.replace_range(start..close_idx + 1, &replacement);
+                idx = start + replacement.len();
+            }
+            rewritten
+        }
+
+        fn rewrite_refcell_borrow_binding(line: &str, borrow_mut: bool) -> Option<String> {
+            let marker = if borrow_mut {
+                ").borrow_mut() };"
+            } else {
+                ").borrow() };"
+            };
+            let Some(assign_idx) = line.find("= unsafe { (") else {
+                return None;
+            };
+            if !line.ends_with(marker) {
+                return None;
+            }
+            let expr_start = assign_idx + "= unsafe { (".len();
+            let expr_end = line.len().saturating_sub(marker.len());
+            if expr_end <= expr_start {
+                return None;
+            }
+            let expr = line[expr_start..expr_end].trim();
+            if expr.is_empty() {
+                return None;
+            }
+            let lhs = &line[..assign_idx];
+            let call = if borrow_mut {
+                "std::cell::RefCell::borrow_mut"
+            } else {
+                "std::cell::RefCell::borrow"
+            };
+            Some(format!("{lhs}= unsafe {{ {call}({expr}) }};"))
+        }
+
+        let struct_field_types = parse_struct_field_types(code);
+        let mut struct_cell_fields: HashMap<String, HashSet<String>> = HashMap::new();
+        for (struct_name, fields) in &struct_field_types {
+            let mut cell_fields = HashSet::new();
+            for (field, ty) in fields {
+                if ty.contains("std::cell::Cell<") || ty.starts_with("rusty_Cell_") {
+                    cell_fields.insert(field.clone());
+                }
+            }
+            if !cell_fields.is_empty() {
+                struct_cell_fields.insert(struct_name.clone(), cell_fields);
+            }
+        }
+
+        let mut out = String::with_capacity(code.len() + 128);
+        let mut active_impl: Option<String> = None;
+        let mut impl_depth = 0i32;
+
+        let mut in_fn = false;
+        let mut fn_depth = 0i32;
+        let mut local_cell_bindings: HashSet<String> = HashSet::new();
+
+        let mut in_option_fn = false;
+        let mut option_fn_depth = 0i32;
+
+        let mut in_self_literal = false;
+        let mut self_literal_depth = 0i32;
+        let mut self_literal_struct: Option<String> = None;
+
+        for line in code.lines() {
+            let trimmed = line.trim_start();
+
+            if active_impl.is_none() && trimmed.starts_with("impl ") && trimmed.ends_with('{') {
+                active_impl = parse_impl_target(trimmed);
+                impl_depth = 0;
+            }
+
+            let is_fn_start =
+                (trimmed.contains(" fn ") || trimmed.starts_with("fn ")) && trimmed.ends_with('{');
+            if is_fn_start && !in_fn {
+                in_fn = true;
+                fn_depth = 0;
+                local_cell_bindings.clear();
+            }
+            if is_fn_start && !in_option_fn && trimmed.contains("-> std::option::Option<") {
+                in_option_fn = true;
+                option_fn_depth = 0;
+            }
+
+            if in_fn && trimmed.starts_with("let ") && trimmed.contains(':') && trimmed.contains(" = ") {
+                if let Some(type_sep) = trimmed.find(':') {
+                    let lhs = &trimmed[..type_sep];
+                    let binding_name = Self::parse_let_binding_name(lhs);
+                    let rhs = &trimmed[type_sep + 1..];
+                    let declared_ty = rhs
+                        .split('=')
+                        .next()
+                        .map(str::trim)
+                        .unwrap_or("");
+                    if (declared_ty.contains("std::cell::Cell<") || declared_ty.starts_with("rusty_Cell_"))
+                        && binding_name.is_some()
+                    {
+                        local_cell_bindings.insert(binding_name.unwrap().to_string());
+                    }
+                }
+            }
+
+            if !in_self_literal && line.contains("let mut __self = Self {") {
+                in_self_literal = true;
+                self_literal_depth = 1;
+                self_literal_struct = active_impl.clone();
+            }
+
+            let mut rewritten = line.to_string();
+            let trimmed_rewritten = rewritten.trim_start().to_string();
+
+            if trimmed_rewritten.contains(": std::cell::Ref<")
+                && trimmed_rewritten.contains("= unsafe { (")
+                && trimmed_rewritten.ends_with(").borrow() };")
+            {
+                if let Some(replaced) = rewrite_refcell_borrow_binding(&rewritten, false) {
+                    rewritten = replaced;
+                }
+            }
+            if trimmed_rewritten.contains(": std::cell::RefMut<")
+                && trimmed_rewritten.contains("= unsafe { (")
+                && trimmed_rewritten.ends_with(").borrow_mut() };")
+            {
+                if let Some(replaced) = rewrite_refcell_borrow_binding(&rewritten, true) {
+                    rewritten = replaced;
+                }
+            }
+
+            if in_option_fn
+                && trimmed_rewritten.starts_with("return ")
+                && trimmed_rewritten.contains("__gv_None")
+            {
+                let indent_len = line.len().saturating_sub(trimmed.len());
+                let indent = &line[..indent_len];
+                rewritten = format!("{indent}return std::option::Option::None;");
+            }
+
+            if rewritten.trim_start().starts_with("__self._sigev_un = ")
+                && rewritten.contains("((64 / 4) - 4)")
+            {
+                let indent_len = line.len().saturating_sub(trimmed.len());
+                let indent = &line[..indent_len];
+                rewritten = format!("{indent}__self._sigev_un = unsafe {{ std::mem::zeroed() }};");
+            }
+
+            if in_self_literal {
+                let trimmed_self_line = rewritten.trim_start();
+                if trimmed_self_line.contains("__gv_None") && trimmed_self_line.contains(':') {
+                    if let Some(struct_name) = self_literal_struct.as_ref() {
+                        if let Some((lhs, _rhs)) = trimmed_self_line.split_once(':') {
+                            let field_name = lhs.trim().trim_start_matches("r#");
+                            if let Some(field_ty) = struct_field_types
+                                .get(struct_name)
+                                .and_then(|fields| fields.get(field_name))
+                            {
+                                if let Some(replacement) = parse_none_binding_replacement(field_ty) {
+                                    let indent_len = line.len().saturating_sub(trimmed.len());
+                                    let indent = &line[..indent_len];
+                                    rewritten = format!("{indent}{field_name}: {replacement},");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(impl_target) = active_impl.as_ref() {
+                if let Some(cell_fields) = struct_cell_fields.get(impl_target) {
+                    for field in cell_fields {
+                        rewritten = rewrite_set_borrow_arg(&rewritten, &format!("self.{field}"));
+                        rewritten = rewrite_set_borrow_arg(&rewritten, &format!("(*self).{field}"));
+                    }
+                }
+            }
+            for binding in &local_cell_bindings {
+                rewritten = rewrite_set_borrow_arg(&rewritten, binding);
+            }
+
+            out.push_str(&rewritten);
+            out.push('\n');
+
+            let delta = brace_delta(line);
+
+            if active_impl.is_some() {
+                impl_depth += delta;
+                if impl_depth <= 0 {
+                    active_impl = None;
+                    impl_depth = 0;
+                }
+            }
+            if in_fn {
+                fn_depth += delta;
+                if fn_depth <= 0 {
+                    in_fn = false;
+                    fn_depth = 0;
+                    local_cell_bindings.clear();
+                }
+            }
+            if in_option_fn {
+                option_fn_depth += delta;
+                if option_fn_depth <= 0 {
+                    in_option_fn = false;
+                    option_fn_depth = 0;
+                }
+            }
+            if in_self_literal {
+                self_literal_depth += delta;
+                if self_literal_depth <= 0 || rewritten.trim_end().ends_with("};") {
+                    in_self_literal = false;
+                    self_literal_depth = 0;
+                    self_literal_struct = None;
                 }
             }
         }
@@ -30372,6 +30745,7 @@ impl AstCodeGen {
         output = Self::normalize_rpc_client_reactor_typed_compat_surfaces(&output);
         output = Self::normalize_rpc_fiber_surface_artifacts(&output);
         output = Self::normalize_rpc_path_string_type_default_returns(&output);
+        output = Self::normalize_e0308_bucket_b1_value_shape_mismatches(&output);
         output = Self::append_compile_error_for_unresolved_non_c_abi_external_calls(&output);
         if Self::output_requires_c_variadic_feature(&output) {
             output = Self::ensure_c_variadic_feature_attr(&output);
@@ -139689,6 +140063,66 @@ pub struct later_struct {
         );
     }
 
+    #[test]
+    fn test_spinmutex_guard_constructor_param_rehydration_supports_rrr_prefix_and_data_assignment_cast(
+    ) {
+        let input = "\
+pub struct rrr_SpinMutexGuard_rrr_Marshal {
+    lock_: *mut SpinLock,
+    data_: *mut std::cell::UnsafeCell<rrr_Marshal>,
+}
+impl rrr_SpinMutexGuard_rrr_Marshal {
+    pub fn new_2(lock: *mut SpinLock, data: *mut std::cell::UnsafeCell<()>) -> Self {
+        let mut __self: Self = unsafe { std::mem::zeroed() };
+        __self.data_ = other.data_;
+        __self
+    }
+}
+";
+        let output = AstCodeGen::normalize_spinmutex_guard_constructor_data_param_types(input);
+        assert!(
+            output.contains("data: *mut std::cell::UnsafeCell<rrr_Marshal>"),
+            "rrr_SpinMutexGuard constructor param should rehydrate to the concrete UnsafeCell lane, got: {}",
+            output
+        );
+        assert!(
+            output.contains("__self.data_ = other.data_ as *mut std::cell::UnsafeCell<rrr_Marshal>;"),
+            "rrr_SpinMutexGuard data assignment should cast to the concrete data_ lane, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_spinmutex_guard_constructor_param_rehydration_preserves_non_spinmutex_impl_headers() {
+        let input = "\
+impl std::fmt::Display for FragileCStrDisplay {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, \"\")
+    }
+}
+pub struct rrr_SpinMutexGuard_rrr_Marshal {
+    lock_: *mut SpinLock,
+    data_: *mut std::cell::UnsafeCell<rrr_Marshal>,
+}
+impl rrr_SpinMutexGuard_rrr_Marshal {
+    pub fn new_2(lock: *mut SpinLock, data: *mut std::cell::UnsafeCell<()>) -> Self {
+        Self { lock_: lock, data_: data }
+    }
+}
+";
+        let output = AstCodeGen::normalize_spinmutex_guard_constructor_data_param_types(input);
+        assert!(
+            output.contains("impl std::fmt::Display for FragileCStrDisplay {"),
+            "normalization must preserve unrelated impl headers, got: {}",
+            output
+        );
+        assert!(
+            output.contains("data: *mut std::cell::UnsafeCell<rrr_Marshal>"),
+            "spinmutex data lane should still rehydrate, got: {}",
+            output
+        );
+    }
+
     // -----------------------------------------------------------------------
     // normalize_e28_residual_errors tests
     // -----------------------------------------------------------------------
@@ -142606,6 +143040,106 @@ pub fn probe(
             1,
             "SpinMutexGuard op_arrow compat should be injected once, got:\n{}",
             twice
+        );
+    }
+
+    #[test]
+    fn test_normalize_e0308_bucket_b1_value_shape_mismatches_rewrites_cell_set_and_refcell_borrow_lanes(
+    ) {
+        let input = r#"
+pub struct StateHolder {
+    state_: std::cell::Cell<ConnectionState>,
+}
+impl StateHolder {
+    pub fn update(&self, new_state: ConnectionState) {
+        self.state_.set(&new_state);
+        let mut retries: std::cell::Cell<u32> = std::cell::Cell::new(0);
+        retries.set(&0);
+        let mut guard: std::cell::Ref<std::option::Option<std::rc::Rc<Fiber>>> = unsafe { (REACTOR_SP_RUNNING_CORO_TH_).borrow() };
+        let mut guard_mut: std::cell::RefMut<std::option::Option<std::rc::Rc<Fiber>>> = unsafe { (REACTOR_SP_RUNNING_CORO_TH_).borrow_mut() };
+        let _ = (&mut guard, &mut guard_mut);
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_e0308_bucket_b1_value_shape_mismatches(input);
+        assert!(
+            output.contains("self.state_.set(new_state);"),
+            "Cell field set(&value) lane should normalize to set(value), got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("retries.set(0);"),
+            "local Cell binding set(&value) lane should normalize to set(value), got:\n{}",
+            output
+        );
+        assert!(
+            output.contains(
+                "let mut guard: std::cell::Ref<std::option::Option<std::rc::Rc<Fiber>>> = unsafe { std::cell::RefCell::borrow(REACTOR_SP_RUNNING_CORO_TH_) };"
+            ),
+            "Ref binding should use explicit RefCell::borrow lane, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains(
+                "let mut guard_mut: std::cell::RefMut<std::option::Option<std::rc::Rc<Fiber>>> = unsafe { std::cell::RefCell::borrow_mut(REACTOR_SP_RUNNING_CORO_TH_) };"
+            ),
+            "RefMut binding should use explicit RefCell::borrow_mut lane, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_e0308_bucket_b1_value_shape_mismatches_rewrites_option_none_and_sigev_union_lanes(
+    ) {
+        let input = r#"
+pub struct Reactor {
+    join_handle_: std::sync::Mutex<std::option::Option<std::thread::JoinHandle<()>>>,
+    connection_: std::cell::RefCell<std::option::Option<std::sync::Arc<ClientConnection>>>,
+}
+impl Reactor {
+    pub fn new_0() -> Self {
+        let mut __self = Self {
+            join_handle_: (unsafe { super::rusty::__gv_None }).clone(),
+            connection_: (unsafe { super::rusty::__gv_None }).clone(),
+        };
+        __self
+    }
+
+    pub fn current_connection(&self) -> std::option::Option<std::sync::Arc<ClientConnection>> {
+        return (unsafe { super::rusty::__gv_None }).clone();
+    }
+}
+
+pub struct sigevent {
+    _sigev_un: union__unnamed_union_at__usr_include_x86_64_linux_gnu_bits_types_sigevent_t_h_28_5_,
+}
+impl sigevent {
+    pub fn new_0() -> Self {
+        let mut __self: Self = unsafe { std::mem::zeroed() };
+        __self._sigev_un = ((64 / 4) - 4);
+        __self
+    }
+}
+"#;
+        let output = AstCodeGen::normalize_e0308_bucket_b1_value_shape_mismatches(input);
+        assert!(
+            output.contains("join_handle_: std::sync::Mutex::new(std::option::Option::None),")
+                && output.contains(
+                    "connection_: std::cell::RefCell::new(std::option::Option::None),"
+                ),
+            "Self-literal __gv_None field lanes should normalize to typed Option::None constructors, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("return std::option::Option::None;")
+                && !output.contains("return (unsafe { super::rusty::__gv_None }).clone();"),
+            "Option return __gv_None lane should normalize to Option::None, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("__self._sigev_un = unsafe { std::mem::zeroed() };"),
+            "_sigev_un integer assignment should normalize to typed zeroed union lane, got:\n{}",
+            output
         );
     }
 

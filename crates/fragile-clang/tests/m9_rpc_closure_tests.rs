@@ -6041,6 +6041,80 @@ fn m9_2c_iv_f2a_dev_book_entry_records_wrong_approach_check() {
 }
 
 #[test]
+fn m9_2c_iv_f2b_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.f.2.b Execute dominant `E0308` bucket-B1 fix slice")
+            && todo.contains("docs/dev/m9_2c_iv_f2b_e0308_bucket_b1_value_shape_inventory.md")
+            && todo.contains("E0308` `75 -> 29`")
+            && todo.contains("__gv_None 5 -> 2")
+            && todo.contains("UnsafeCell<()> ptr mismatch 6 -> 0")
+            && todo.contains("REACTOR_SP_RUNNING_CORO_TH_.borrow() 2 -> 0"),
+        "M9.2.c.iv.f.2.b TODO entry should be closed with focused txlog-probe evidence"
+    );
+}
+
+#[test]
+fn m9_2c_iv_f2b_inventory_document_exists_and_records_bucket_b1_deltas() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_f2b_e0308_bucket_b1_value_shape_inventory.md"),
+    )
+    .expect("f.2.b inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.f.2.b",
+        "Wrong-Approach Check",
+        "/tmp/fragile_f2b_probe_after_20260330/summary.txt",
+        "/tmp/fragile_f2b_probe_after_fix_20260330_txlog/summary.txt",
+        "| `reactor.cc` | 9 | 4 | -5 |",
+        "| `rpc/client.cpp` | 46 | 20 | -26 |",
+        "| `rpc/server.cpp` | 18 | 4 | -14 |",
+        "| `rpc/utils.cpp` | 2 | 1 | -1 |",
+        "| **total** | **75** | **29** | **-46** |",
+        "`E0308` reduction across this bounded slice: `-61.3%` (`75 -> 29`).",
+        "| `__gv_None` | 5 | 2 | -3 |",
+        "| `_sigev_un = ((64 / 4) - 4)` | 3 | 0 | -3 |",
+        "| `found *mut UnsafeCell<()>` | 6 | 0 | -6 |",
+        "| `found *mut UnsafeCell<T>` | 6 | 0 | -6 |",
+        "| `REACTOR_SP_RUNNING_CORO_TH_.borrow()` | 2 | 0 | -2 |",
+    ] {
+        assert!(
+            doc.contains(required),
+            "f.2.b inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_f2b_dev_book_entry_records_wrong_approach_check() {
+    let book = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/fragile-dev-book.md"),
+    )
+    .expect("fragile-dev-book.md should be readable");
+    for required in [
+        "## 2026-03-30: M9.2.c.iv.f.2.b bounded E0308 bucket-B1 value-shape closure",
+        "Selected leaf: `M9.2.c.iv.f.2.b`.",
+        "Wrong-approach check completed before edits",
+        "docs/dev/wrong.md",
+        "test_spinmutex_guard_constructor_param_rehydration_preserves_non_spinmutex_impl_headers",
+        "/tmp/fragile_f2b_probe_after_20260330/summary.txt",
+        "/tmp/fragile_f2b_probe_after_fix_20260330_txlog/summary.txt",
+        "`E0308` total: `75 -> 29` (`-46`)",
+        "`docs/dev/m9_2c_iv_f2b_e0308_bucket_b1_value_shape_inventory.md`",
+    ] {
+        assert!(
+            book.contains(required),
+            "fragile-dev-book entry for f.2.b should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
 fn m9_2c_iv_e34f1_inventory_document_exists_and_records_regression_taxonomy() {
     let doc = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
