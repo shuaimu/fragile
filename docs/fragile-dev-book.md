@@ -23164,3 +23164,45 @@ Residuals now tracked for next leaves:
 Detailed inventory:
 
 - `docs/dev/m9_2c_iv_e34f5e5e4c4a_post_c3_replay_inventory.md`
+
+## 2026-03-29: M9.2.c.iv.f.1 post-e.34 residual rebaseline capture
+
+- Selected leaf: `M9.2.c.iv.f.1`.
+- Scope remained bounded (<1000 LOC): deterministic replay-artifact rebaseline capture + bounded next-leaf decomposition in `TODO.md`.
+
+Wrong-approach check completed before edits:
+
+- `docs/fragile-dev-book.md` section `1.3 Wrong Approaches (Do Not Do)`
+- `docs/dev/wrong.md`
+
+Deterministic evidence snapshot (no new parser/codegen edits in this leaf):
+
+- baseline run root: `/tmp/fragile_m9_2_strict_runtime_replay_20260329T040328Z_p2989433`
+- rebaseline run root: `/tmp/fragile_m9_2_strict_runtime_replay_20260329T053434Z_p3129053`
+- lane contract remains blocked:
+  - `lane_fragilec_build_status=2`
+  - `lane_fragilec_test_rpc_status=-1`
+  - `lane_fragilec_failure_class=build_failed`
+  - `lane_fragilec_completed_trials=0`
+- blocker inventory remains deterministic non-increasing:
+  - `rustc_error_total_count: 218 -> 218`
+  - `rustc_error_unique_count: 89 -> 89`
+  - `non_increase_verdict=true`
+
+Top residual keys in the rebaseline snapshot:
+
+- `E0308:mismatched types` (`66`)
+- `E0061:this method takes 0 arguments but 1 argument was supplied` (`7`)
+- `E0599:no method named lock found for struct SpinMutex_Marshal in the current scope` (`5`)
+- `E0282:type annotations needed` (`5`)
+
+Representative compile-unit failures remain in:
+
+- `reactor.cc`
+- `rpc/client.cpp`
+- `rpc/server.cpp`
+- `rpc/utils.cpp`
+
+Detailed inventory:
+
+- `docs/dev/m9_2c_iv_f1_post_e34_residual_rebaseline_inventory.md`

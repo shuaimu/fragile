@@ -5820,6 +5820,80 @@ fn m9_2c_iv_e34f1_task_documented_in_todo() {
 }
 
 #[test]
+fn m9_2c_iv_f1_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [ ] M9.2.c.iv.f Re-baseline residual strict-lane blockers")
+            && todo.contains("- [x] M9.2.c.iv.f.1 Capture deterministic residual blocker refresh")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260329T053434Z_p3129053")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260329T040328Z_p2989433")
+            && todo.contains("total 218<=218")
+            && todo.contains("unique 89<=89")
+            && todo.contains("non_increase_verdict=true")
+            && todo.contains("M9.2.c.iv.f.2")
+            && todo.contains("M9.2.c.iv.f.3")
+            && todo.contains("M9.2.c.iv.f.4"),
+        "M9.2.c.iv.f TODO evidence should include the f.1 rebaseline snapshot and bounded follow-up leaves"
+    );
+}
+
+#[test]
+fn m9_2c_iv_f1_inventory_document_exists_and_records_rebaseline() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_f1_post_e34_residual_rebaseline_inventory.md"),
+    )
+    .expect("f.1 rebaseline inventory should be readable");
+    for required in [
+        "M9.2.c.iv.f.1",
+        "Wrong-Approach Check",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260329T053434Z_p3129053",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260329T040328Z_p2989433",
+        "lane_fragilec_build_status=2",
+        "lane_fragilec_test_rpc_status=-1",
+        "lane_fragilec_failure_class=build_failed",
+        "rustc_error_total_count: 218 -> 218",
+        "rustc_error_unique_count: 89 -> 89",
+        "non_increase_verdict=true",
+        "reactor.cc",
+        "rpc/client.cpp",
+        "rpc/server.cpp",
+        "rpc/utils.cpp",
+    ] {
+        assert!(
+            doc.contains(required),
+            "f.1 rebaseline inventory should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_f1_dev_book_entry_records_wrong_approach_check() {
+    let book = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/fragile-dev-book.md"),
+    )
+    .expect("fragile-dev-book.md should be readable");
+    for required in [
+        "## 2026-03-29: M9.2.c.iv.f.1 post-e.34 residual rebaseline capture",
+        "Selected leaf: `M9.2.c.iv.f.1`.",
+        "Wrong-approach check completed before edits",
+        "docs/dev/wrong.md",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260329T053434Z_p3129053",
+        "non_increase_verdict=true",
+    ] {
+        assert!(
+            book.contains(required),
+            "fragile-dev-book entry for f.1 should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
 fn m9_2c_iv_e34f1_inventory_document_exists_and_records_regression_taxonomy() {
     let doc = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
