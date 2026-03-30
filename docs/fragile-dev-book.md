@@ -23663,3 +23663,50 @@ Cleared signature families in this slice:
 Detailed inventory:
 
 - `docs/dev/m9_2c_iv_f5b_e0599_compat_surface_inventory.md`
+
+## 2026-03-30: M9.2.c.iv.f.5.c bounded E0308 value-shape closure
+
+- Selected leaf: `M9.2.c.iv.f.5.c`.
+- Bounded implementation remained within slice limits (`<=400 LOC`) in production code.
+
+Wrong-approach check completed before edits:
+
+- `docs/fragile-dev-book.md` section `1.3 Wrong Approaches (Do Not Do)`
+- `docs/dev/wrong.md`
+
+Implementation focus:
+
+- added bounded late pass `normalize_e0308_f5c_value_shape_mismatches` to close replay-dominant value-shape lanes:
+  - mutable RNG callshape rehydration for `.op_call(var)` (`&mut` lane),
+  - `u64`/`usize` harmonization on dominant queue/load-balancer lanes (`size/get/set`),
+  - degraded `assume_init_mut` return-reference normalization to `assume_init_ref`,
+  - bounded reconnect/wait/unwrap alias-callshape cleanup,
+  - guard against blanket `.size() as u64` over-rewrite on `usize` helper lanes.
+
+Focused probe evidence:
+
+- baseline anchor (same compile-unit scope in f.5.a):
+  - `/tmp/fragile_m9_2_strict_runtime_replay_20260330T130048Z_p617835/build_fragilec/compile_commands.json`
+  - baseline dominant `E0308` totals from f.5.a: `25` (`reactor 1`, `client 19`, `server 4`, `utils 1`)
+- post-fix probe:
+  - `/tmp/fragile_f5c_probe_after_20260330T192417Z_txlog/summary.txt`
+
+Dominant-unit `E0308` delta (four-unit scope):
+
+- `25 -> 8` (`-17`)
+- per-unit:
+  - `reactor: 1 -> 1`
+  - `client: 19 -> 2`
+  - `server: 4 -> 4`
+  - `utils: 1 -> 1`
+
+Residual `E0308` cluster after f.5.c:
+
+- reactor thread-id constructor lane (`u64` vs `std___thread_id`),
+- client template-select return lane and `pow_1` exponent lane,
+- server request/shutdown/listener/value-index lane mismatches,
+- utils `rrr_AddrInfo` unwrap lane.
+
+Detailed inventory:
+
+- `docs/dev/m9_2c_iv_f5c_e0308_value_shape_inventory.md`

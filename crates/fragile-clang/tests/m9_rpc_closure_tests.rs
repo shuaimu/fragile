@@ -6661,6 +6661,77 @@ fn m9_2c_iv_f5b_dev_book_entry_records_wrong_approach_check() {
 }
 
 #[test]
+fn m9_2c_iv_f5c_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.f.5.c Execute the next bounded dominant `E0308` value-shape slice")
+            && todo.contains("normalize_e0308_f5c_value_shape_mismatches")
+            && todo.contains("/tmp/fragile_f5c_probe_after_20260330T192417Z_txlog/summary.txt")
+            && todo.contains("`25 -> 8` (`-17`)")
+            && todo.contains("client 19->2")
+            && todo.contains("docs/dev/m9_2c_iv_f5c_e0308_value_shape_inventory.md"),
+        "M9.2.c.iv.f.5.c TODO closure should record bounded E0308 delta evidence and inventory link"
+    );
+}
+
+#[test]
+fn m9_2c_iv_f5c_inventory_document_exists_and_records_e0308_delta() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_f5c_e0308_value_shape_inventory.md"),
+    )
+    .expect("f.5.c inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.f.5.c",
+        "Wrong-Approach Check",
+        "docs/dev/wrong.md",
+        "normalize_e0308_f5c_value_shape_mismatches",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260330T130048Z_p617835/build_fragilec/compile_commands.json",
+        "/tmp/fragile_f5c_probe_after_20260330T192417Z_txlog/summary.txt",
+        "| `reactor.cc` | 1 | 1 | 0 |",
+        "| `rpc/client.cpp` | 19 | 2 | -17 |",
+        "| `rpc/server.cpp` | 4 | 4 | 0 |",
+        "| `rpc/utils.cpp` | 1 | 1 | 0 |",
+        "| **total** | **25** | **8** | **-17** |",
+        "mutable RNG callshape rehydration",
+        "assume_init_ref",
+    ] {
+        assert!(
+            doc.contains(required),
+            "f.5.c inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_f5c_dev_book_entry_records_wrong_approach_check() {
+    let book = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/fragile-dev-book.md"),
+    )
+    .expect("fragile-dev-book.md should be readable");
+    for required in [
+        "## 2026-03-30: M9.2.c.iv.f.5.c bounded E0308 value-shape closure",
+        "Selected leaf: `M9.2.c.iv.f.5.c`.",
+        "Wrong-approach check completed before edits",
+        "docs/dev/wrong.md",
+        "/tmp/fragile_f5c_probe_after_20260330T192417Z_txlog/summary.txt",
+        "`25 -> 8` (`-17`)",
+        "`client: 19 -> 2`",
+        "`docs/dev/m9_2c_iv_f5c_e0308_value_shape_inventory.md`",
+    ] {
+        assert!(
+            book.contains(required),
+            "fragile-dev-book entry for f.5.c should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
 fn m9_2c_iv_e34f1_inventory_document_exists_and_records_regression_taxonomy() {
     let doc = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
