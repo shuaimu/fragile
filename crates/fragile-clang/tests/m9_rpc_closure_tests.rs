@@ -5894,6 +5894,79 @@ fn m9_2c_iv_f1_dev_book_entry_records_wrong_approach_check() {
 }
 
 #[test]
+fn m9_2c_iv_f2_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.f.2 Decompose the dominant post-f.1 residual typed-error cluster")
+            && todo.contains("docs/dev/m9_2c_iv_f2_residual_typed_cluster_decomposition.md")
+            && todo.contains("M9.2.c.iv.f.2.a")
+            && todo.contains("M9.2.c.iv.f.2.b")
+            && todo.contains("M9.2.c.iv.f.2.c")
+            && todo.contains("M9.2.c.iv.f.2.d")
+            && todo.contains("M9.2.c.iv.f.2.e"),
+        "M9.2.c.iv.f.2 TODO evidence should include decomposition closure and bounded child leaves"
+    );
+}
+
+#[test]
+fn m9_2c_iv_f2_decomposition_document_exists_and_contains_bounded_contract() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_f2_residual_typed_cluster_decomposition.md"),
+    )
+    .expect("f.2 decomposition document should be readable");
+    for required in [
+        "M9.2.c.iv.f.2",
+        "Wrong-Approach Check",
+        "E0308:mismatched types",
+        "E0061:this method takes 0 arguments but 1 argument was supplied",
+        "E0599:no method named lock found for struct SpinMutex_Marshal in the current scope",
+        "E0282:type annotations needed",
+        "E0605:non-primitive cast ... as i32",
+        "M9.2.c.iv.f.2.a",
+        "M9.2.c.iv.f.2.b",
+        "M9.2.c.iv.f.2.c",
+        "M9.2.c.iv.f.2.d",
+        "M9.2.c.iv.f.2.e",
+        "<=400 LOC",
+        "<=300 LOC",
+    ] {
+        assert!(
+            doc.contains(required),
+            "f.2 decomposition doc should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_f2_dev_book_entry_records_wrong_approach_check() {
+    let book = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/fragile-dev-book.md"),
+    )
+    .expect("fragile-dev-book.md should be readable");
+    for required in [
+        "## 2026-03-30: M9.2.c.iv.f.2 residual typed-error cluster decomposition",
+        "Selected leaf: `M9.2.c.iv.f.2`.",
+        "Wrong-approach check completed before edits",
+        "docs/dev/wrong.md",
+        "Published bounded execution leaves `M9.2.c.iv.f.2.a` through `M9.2.c.iv.f.2.e`",
+        "no force-native bypass",
+        "no target-specific hacks",
+        "no semantic stubs/fake bodies",
+    ] {
+        assert!(
+            book.contains(required),
+            "fragile-dev-book entry for f.2 should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
 fn m9_2c_iv_e34f1_inventory_document_exists_and_records_regression_taxonomy() {
     let doc = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

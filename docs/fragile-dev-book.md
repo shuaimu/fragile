@@ -23206,3 +23206,31 @@ Representative compile-unit failures remain in:
 Detailed inventory:
 
 - `docs/dev/m9_2c_iv_f1_post_e34_residual_rebaseline_inventory.md`
+
+## 2026-03-30: M9.2.c.iv.f.2 residual typed-error cluster decomposition
+
+- Selected leaf: `M9.2.c.iv.f.2`.
+- Scope remained bounded (<1000 LOC): decomposition + evidence updates only.
+
+Wrong-approach check completed before edits:
+
+- `docs/fragile-dev-book.md` section `1.3 Wrong Approaches (Do Not Do)`
+- `docs/dev/wrong.md`
+
+Residual cluster decomposition result:
+
+- Added decomposition artifact: `docs/dev/m9_2c_iv_f2_residual_typed_cluster_decomposition.md`.
+- Dominant typed buckets from f.1 baseline remain:
+  - `E0308` (66)
+  - `E0061` (7)
+  - `E0599` (5)
+  - `E0282` (5)
+  - `E0605` (4)
+- Published bounded execution leaves `M9.2.c.iv.f.2.a` through `M9.2.c.iv.f.2.e` with explicit LOC ceilings and deterministic probe/replay evidence contracts.
+
+No-shortcut constraints are carried explicitly into all `f.2.*` leaves:
+
+- no force-native bypass,
+- no target-specific hacks,
+- no semantic stubs/fake bodies,
+- no suppression-only edits without deterministic evidence.
