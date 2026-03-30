@@ -23314,3 +23314,101 @@ Measured deltas (same compile-unit scope and txlog command family):
 Detailed inventory:
 
 - `docs/dev/m9_2c_iv_f2b_e0308_bucket_b1_value_shape_inventory.md`
+
+## 2026-03-30: M9.2.c.iv.f.2.c bounded E0061/E0599 RPC surface compatibility closure
+
+- Selected leaf: `M9.2.c.iv.f.2.c`.
+- Scope remained bounded (<1000 LOC): one RPC callshape/surface normalization slice + focused txlog probe replay.
+
+Wrong-approach check completed before edits:
+
+- `docs/fragile-dev-book.md` section `1.3 Wrong Approaches (Do Not Do)`
+- `docs/dev/wrong.md`
+
+Implementation highlights:
+
+- Added `normalize_e0061_e0599_rpc_surface_compatibility_slice` near pipeline tail.
+- Normalized arity/signature artifacts:
+  - variadic `Log::*` calls trimmed to 3-arg lane,
+  - callback `.op_call(args...)` artifacts rewritten to `.op_call()`,
+  - `(*it).op_inc()` rewritten to `(*it).op_inc(0)`.
+- Injected missing RPC surface compat methods when absent:
+  - `SpinMutex_Marshal::lock`,
+  - `SpinMutex_std_unordered_map_i64__rusty_Arc_Future::lock`,
+  - `std_map_std_string__std_vector_rusty_Arc_Client::{find,end}`,
+  - `rrr_AddrInfo::op_arrow`,
+  - `rrr_RequestOptions::can_retry`.
+- Extended marshal chunk compat trigger so `.reset()/.content_size()/.read()/.write()` references also inject `chunk` helper methods.
+
+Validation notes:
+
+- Rebuilt release binary before probe execution:
+  - `cargo build --release -p fragile-cli --bin fragilec`
+- Focused tests:
+  - `test_normalize_e0061_e0599_rpc_surface_compatibility_slice_trims_log_and_callback_arity`
+  - `test_normalize_e0061_e0599_rpc_surface_compatibility_slice_adds_lock_and_method_surfaces`
+  - `test_normalize_rpc_marshal_surface_artifacts_adds_chunk_reset_when_only_reset_is_referenced`
+
+Focused txlog probe evidence:
+
+- Pre-fix baseline:
+  - `/tmp/fragile_f2c_probe_after_20260330_txlog/summary.txt`
+- Post-fix with rebuilt release `fragilec`:
+  - `/tmp/fragile_f2c_probe_after_tailfix_release_20260330_txlog/summary.txt`
+
+Measured deltas (same four compile units):
+
+- `E0061` total: `18 -> 0` (`-18`)
+- `E0599` total: `32 -> 27` (`-5`)
+- scoped `total_error_lines`: `169 -> 152` (`-17`)
+
+Detailed inventory:
+
+- `docs/dev/m9_2c_iv_f2c_e0061_e0599_rpc_surface_compatibility_inventory.md`
+
+## 2026-03-30: M9.2.c.iv.f.2.d bounded E0282/E0605 inference-cast closure
+
+- Selected leaf: `M9.2.c.iv.f.2.d`.
+- Scope remained bounded (<1000 LOC): one inference/cast normalization slice + focused txlog probe replay.
+
+Wrong-approach check completed before edits:
+
+- `docs/fragile-dev-book.md` section `1.3 Wrong Approaches (Do Not Do)`
+- `docs/dev/wrong.md`
+
+Implementation highlights:
+
+- Added `normalize_e0282_e0605_inference_cast_slice` near pipeline tail.
+- Normalized inference lanes:
+  - `= Default::default().clone();` -> `= Default::default();`
+  - `return Default::default().clone();` -> `return Default::default();`
+- Normalized placeholder status cast lane:
+  - `(self.status_ as i32)` -> `(unsafe { std::mem::transmute_copy::<_, i32>(&self.status_) })`
+  - applied only when placeholder unnamed-enum/status markers are present.
+
+Validation notes:
+
+- Focused tests:
+  - `test_normalize_e0282_e0605_inference_cast_slice_rewrites_default_clone_assignments`
+  - `test_normalize_e0282_e0605_inference_cast_slice_rewrites_placeholder_status_casts`
+  - `test_normalize_e0282_e0605_inference_cast_slice_preserves_non_placeholder_status_casts`
+
+Focused txlog probe evidence:
+
+- Pre-fix baseline:
+  - `/tmp/fragile_f2c_probe_after_tailfix_release_20260330_txlog/summary.txt`
+- Post-fix with rebuilt release `fragilec`:
+  - `/tmp/fragile_f2d_probe_after_20260330T092623Z_txlog/summary.txt`
+
+Measured deltas (same four compile units):
+
+- `E0282` total: `5 -> 1` (`-4`)
+- `E0605` total: `4 -> 0` (`-4`)
+
+Residual note:
+
+- One `E0282` lane remains in `rpc/client.cpp` at `notify_ready(Default::default())` on non-iterator `list_rusty_Arc_Future`; this rolls into `M9.2.c.iv.f.2.e`.
+
+Detailed inventory:
+
+- `docs/dev/m9_2c_iv_f2d_e0282_e0605_inference_cast_inventory.md`

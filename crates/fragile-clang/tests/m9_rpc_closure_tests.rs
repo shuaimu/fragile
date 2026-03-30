@@ -6115,6 +6115,146 @@ fn m9_2c_iv_f2b_dev_book_entry_records_wrong_approach_check() {
 }
 
 #[test]
+fn m9_2c_iv_f2c_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.f.2.c Execute `E0061`/`E0599` RPC surface compatibility slice")
+            && todo.contains("docs/dev/m9_2c_iv_f2c_e0061_e0599_rpc_surface_compatibility_inventory.md")
+            && todo.contains("E0061` `18 -> 0`")
+            && todo.contains("E0599` `32 -> 27`")
+            && todo.contains("total `error:` lines `169 -> 152`"),
+        "M9.2.c.iv.f.2.c TODO entry should be closed with focused txlog-probe evidence"
+    );
+}
+
+#[test]
+fn m9_2c_iv_f2c_inventory_document_exists_and_records_probe_deltas() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_f2c_e0061_e0599_rpc_surface_compatibility_inventory.md"),
+    )
+    .expect("f.2.c inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.f.2.c",
+        "Wrong-Approach Check",
+        "/tmp/fragile_f2c_probe_after_20260330_txlog/summary.txt",
+        "/tmp/fragile_f2c_probe_after_tailfix_release_20260330_txlog/summary.txt",
+        "| `rpc/client.cpp` | 16 | 0 | -16 |",
+        "| `rpc/server.cpp` | 1 | 0 | -1 |",
+        "| `rpc/utils.cpp` | 1 | 0 | -1 |",
+        "| **total** | **18** | **0** | **-18** |",
+        "| `rpc/client.cpp` | 18 | 15 | -3 |",
+        "| `rpc/utils.cpp` | 2 | 0 | -2 |",
+        "| **total** | **32** | **27** | **-5** |",
+        "| `total_error_lines` (scoped units) | 169 | 152 | -17 |",
+    ] {
+        assert!(
+            doc.contains(required),
+            "f.2.c inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_f2c_dev_book_entry_records_wrong_approach_check() {
+    let book = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/fragile-dev-book.md"),
+    )
+    .expect("fragile-dev-book.md should be readable");
+    for required in [
+        "## 2026-03-30: M9.2.c.iv.f.2.c bounded E0061/E0599 RPC surface compatibility closure",
+        "Selected leaf: `M9.2.c.iv.f.2.c`.",
+        "Wrong-approach check completed before edits",
+        "docs/dev/wrong.md",
+        "cargo build --release -p fragile-cli --bin fragilec",
+        "/tmp/fragile_f2c_probe_after_20260330_txlog/summary.txt",
+        "/tmp/fragile_f2c_probe_after_tailfix_release_20260330_txlog/summary.txt",
+        "`E0061` total: `18 -> 0` (`-18`)",
+        "`E0599` total: `32 -> 27` (`-5`)",
+        "`docs/dev/m9_2c_iv_f2c_e0061_e0599_rpc_surface_compatibility_inventory.md`",
+    ] {
+        assert!(
+            book.contains(required),
+            "fragile-dev-book entry for f.2.c should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_f2d_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.f.2.d Execute `E0282`/`E0605` inference-cast normalization slice")
+            && todo.contains("docs/dev/m9_2c_iv_f2d_e0282_e0605_inference_cast_inventory.md")
+            && todo.contains("E0282` `5 -> 1`")
+            && todo.contains("E0605` `4 -> 0`")
+            && todo.contains("notify_ready(Default::default())"),
+        "M9.2.c.iv.f.2.d TODO entry should be closed with focused txlog-probe evidence"
+    );
+}
+
+#[test]
+fn m9_2c_iv_f2d_inventory_document_exists_and_records_probe_deltas() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_f2d_e0282_e0605_inference_cast_inventory.md"),
+    )
+    .expect("f.2.d inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.f.2.d",
+        "Wrong-Approach Check",
+        "/tmp/fragile_f2c_probe_after_tailfix_release_20260330_txlog/summary.txt",
+        "/tmp/fragile_f2d_probe_after_20260330T092623Z_txlog/summary.txt",
+        "| `reactor.cc` | 1 | 0 | -1 |",
+        "| `rpc/client.cpp` | 3 | 1 | -2 |",
+        "| `rpc/server.cpp` | 1 | 0 | -1 |",
+        "| **total** | **5** | **1** | **-4** |",
+        "| `rpc/server.cpp` | 4 | 0 | -4 |",
+        "| **total** | **4** | **0** | **-4** |",
+        "notify_ready(Default::default())",
+    ] {
+        assert!(
+            doc.contains(required),
+            "f.2.d inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_f2d_dev_book_entry_records_wrong_approach_check() {
+    let book = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/fragile-dev-book.md"),
+    )
+    .expect("fragile-dev-book.md should be readable");
+    for required in [
+        "## 2026-03-30: M9.2.c.iv.f.2.d bounded E0282/E0605 inference-cast closure",
+        "Selected leaf: `M9.2.c.iv.f.2.d`.",
+        "Wrong-approach check completed before edits",
+        "docs/dev/wrong.md",
+        "/tmp/fragile_f2c_probe_after_tailfix_release_20260330_txlog/summary.txt",
+        "/tmp/fragile_f2d_probe_after_20260330T092623Z_txlog/summary.txt",
+        "`E0282` total: `5 -> 1` (`-4`)",
+        "`E0605` total: `4 -> 0` (`-4`)",
+        "`docs/dev/m9_2c_iv_f2d_e0282_e0605_inference_cast_inventory.md`",
+    ] {
+        assert!(
+            book.contains(required),
+            "fragile-dev-book entry for f.2.d should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
 fn m9_2c_iv_e34f1_inventory_document_exists_and_records_regression_taxonomy() {
     let doc = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
