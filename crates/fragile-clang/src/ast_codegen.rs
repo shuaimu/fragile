@@ -31478,6 +31478,7 @@ impl AstCodeGen {
         output = Self::normalize_e0308_f5c_value_shape_mismatches(&output);
         output = Self::normalize_e0061_e0599_rpc_surface_compatibility_slice(&output);
         output = Self::normalize_f5d_supporting_e0277_e0609_slice(&output);
+        output = Self::normalize_f6b_rrr_future_state_unresolved_rehydration_slice(&output);
         output = Self::normalize_e0282_e0605_inference_cast_slice(&output);
         output = Self::append_compile_error_for_unresolved_non_c_abi_external_calls(&output);
         if Self::output_requires_c_variadic_feature(&output) {
@@ -48576,6 +48577,62 @@ pub fn bind_i32_ptr_const_sockaddr(fd: i32, addr: *const sockaddr, len: u32) -> 
             out.push_str("\npub type __thread_id = std___thread_id;\n");
         }
 
+        out
+    }
+
+    /// Fix f.6.b unresolved-type invariant blocker for reactor-family units:
+    /// if `rrr_Future_State` is referenced but not defined in the current unit,
+    /// rehydrate it as a concrete alias to an already-defined non-generic
+    /// state type (`State` / `rrr_State`) instead of leaving it unresolved.
+    fn normalize_f6b_rrr_future_state_unresolved_rehydration_slice(code: &str) -> String {
+        if !code.contains("rrr_Future_State") {
+            return code.to_string();
+        }
+
+        let defined = Self::collect_defined_type_like_names(code);
+        if defined.contains("rrr_Future_State") {
+            return code.to_string();
+        }
+
+        let state_aliases_future = code.contains("pub type State = rrr_Future_State;");
+        if state_aliases_future {
+            let mut out = String::with_capacity(code.len() + 224);
+            out.push_str(code);
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(
+                "\n/// f.6.b unresolved-type rehydration for lowered Future::State lanes\n",
+            );
+            out.push_str(
+                "#[repr(C)]\n#[derive(Default, Clone, Copy)]\npub struct rrr_Future_State {\n    pub ready: bool,\n    pub timed_out: bool,\n}\n",
+            );
+            return out;
+        }
+
+        let alias_target = if Self::has_concrete_defined_type_name(code, "State") {
+            Some("State")
+        } else if Self::has_concrete_defined_type_name(code, "rrr_State") {
+            Some("rrr_State")
+        } else {
+            None
+        };
+
+        let Some(alias_target) = alias_target else {
+            return code.to_string();
+        };
+
+        let mut out = String::with_capacity(code.len() + 192);
+        out.push_str(code);
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(
+            "\n/// f.6.b unresolved-type rehydration for lowered Future::State lanes\n",
+        );
+        out.push_str("pub type rrr_Future_State = ");
+        out.push_str(alias_target);
+        out.push_str(";\n");
         out
     }
 
@@ -145190,6 +145247,89 @@ pub fn probe(fd: i32, local_addr: &rrr_AddrInfo) {
             1,
             "__thread_id alias should only be injected once, got:\n{}",
             twice
+        );
+    }
+
+    #[test]
+    fn test_normalize_f6b_rrr_future_state_unresolved_rehydration_slice_adds_missing_alias() {
+        let input = r#"
+pub enum State { Idle = 0, Ready = 1 }
+pub type rusty_MutexGuard_structrrr_Future_State_ = std::sync::MutexGuard<'static, rrr_Future_State>;
+pub fn use_future_state(_s: rrr_Future_State) {}
+"#;
+        let output = AstCodeGen::normalize_f6b_rrr_future_state_unresolved_rehydration_slice(input);
+        assert!(
+            output.contains("pub type rrr_Future_State = State;"),
+            "f.6.b pass should rehydrate missing rrr_Future_State alias from concrete State head, got:\n{}",
+            output
+        );
+        let unresolved = AstCodeGen::unresolved_named_type_references(&output);
+        assert!(
+            !unresolved.contains(&"rrr_Future_State".to_string()),
+            "rrr_Future_State should no longer remain unresolved after rehydration, got: {:?}\n{}",
+            unresolved,
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_f6b_rrr_future_state_unresolved_rehydration_slice_is_idempotent() {
+        let input = r#"
+pub enum State { Idle = 0 }
+pub type rrr_Future_State = State;
+pub type rusty_MutexGuard_structrrr_Future_State_ = std::sync::MutexGuard<'static, rrr_Future_State>;
+"#;
+        let output = AstCodeGen::normalize_f6b_rrr_future_state_unresolved_rehydration_slice(input);
+        assert_eq!(
+            output, input,
+            "f.6.b pass should be no-op when rrr_Future_State is already defined"
+        );
+    }
+
+    #[test]
+    fn test_normalize_f6b_rrr_future_state_unresolved_rehydration_slice_rejects_generic_heads() {
+        let input = r#"
+pub struct State<T> { _v: T }
+pub fn use_future_state(_s: rrr_Future_State) {}
+"#;
+        let output = AstCodeGen::normalize_f6b_rrr_future_state_unresolved_rehydration_slice(input);
+        assert!(
+            !output.contains("pub type rrr_Future_State = "),
+            "f.6.b pass must not alias to generic/trait State heads, got:\n{}",
+            output
+        );
+        let unresolved = AstCodeGen::unresolved_named_type_references(&output);
+        assert!(
+            unresolved.contains(&"rrr_Future_State".to_string()),
+            "generic head should not satisfy rehydration preconditions, got: {:?}\n{}",
+            unresolved,
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_f6b_rrr_future_state_unresolved_rehydration_slice_breaks_state_alias_cycles() {
+        let input = r#"
+pub type State = rrr_Future_State;
+pub fn use_future_state(_s: rrr_Future_State) {}
+"#;
+        let output = AstCodeGen::normalize_f6b_rrr_future_state_unresolved_rehydration_slice(input);
+        assert!(
+            output.contains("pub struct rrr_Future_State {\n    pub ready: bool,\n    pub timed_out: bool,\n}"),
+            "f.6.b pass should rehydrate rrr_Future_State as a concrete struct when State aliases it, got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("pub type rrr_Future_State = State;"),
+            "f.6.b pass must avoid adding alias cycles for State<->rrr_Future_State, got:\n{}",
+            output
+        );
+        let unresolved = AstCodeGen::unresolved_named_type_references(&output);
+        assert!(
+            !unresolved.contains(&"rrr_Future_State".to_string()),
+            "cycle-break rehydration should resolve rrr_Future_State references, got: {:?}\n{}",
+            unresolved,
+            output
         );
     }
 

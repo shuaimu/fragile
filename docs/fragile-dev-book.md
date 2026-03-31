@@ -23821,3 +23821,58 @@ Execution/result notes:
 Evidence note:
 
 - `docs/dev/m9_2c_iv_f6a_unresolved_type_invariant_manifest.md`
+
+## 2026-03-31: M9.2.c.iv.f.6.b unresolved-type rehydration slice
+
+- Selected leaf: `M9.2.c.iv.f.6.b`.
+- Scope: execute one bounded rehydration slice (`<=300 LOC`) for unresolved
+  `rrr_Future_State` reactor-family lanes with focused compile probes.
+
+Wrong-approach check completed before edits:
+- `docs/fragile-dev-book.md` section `1.3 Wrong Approaches (Do Not Do)`.
+- `docs/dev/wrong.md`.
+
+Execution plan:
+1. Add one bounded late pass that rehydrates `rrr_Future_State` when referenced
+   but undefined, without target-specific branching.
+2. Add cycle-break handling for `pub type State = rrr_Future_State;` so the
+   rehydration cannot introduce recursive alias loops.
+3. Validate with focused unit tests and reactor compile probes from the f.5.e
+   replay compile-command set.
+
+Implementation highlights:
+- Added `normalize_f6b_rrr_future_state_unresolved_rehydration_slice` in
+  `crates/fragile-clang/src/ast_codegen.rs`.
+- Two-path behavior:
+  - append `pub type rrr_Future_State = State|rrr_State` for concrete
+    non-generic heads,
+  - materialize concrete struct `rrr_Future_State { ready, timed_out }` when
+    the unit already contains `pub type State = rrr_Future_State;`.
+- Added tests:
+  - `test_normalize_f6b_rrr_future_state_unresolved_rehydration_slice_adds_missing_alias`
+  - `test_normalize_f6b_rrr_future_state_unresolved_rehydration_slice_is_idempotent`
+  - `test_normalize_f6b_rrr_future_state_unresolved_rehydration_slice_rejects_generic_heads`
+  - `test_normalize_f6b_rrr_future_state_unresolved_rehydration_slice_breaks_state_alias_cycles`
+
+Focused probe outcomes (replay root `/tmp/fragile_m9_2_strict_runtime_replay_20260330T215446Z_p1184116`):
+- `/tmp/fragile_f6b_probe_single_20260331T051554Z` (`fiber_context_runtime.cc`):
+  `status=0`, `unresolved_invariant_count=0`, `rustc_compile_failed_count=0`.
+- `/tmp/fragile_f6b_probe_single_20260331T051948Z` (`fiber_impl.cc`):
+  `status=1`, `unresolved_invariant_count=0`, `rustc_compile_failed_count=1`
+  (tail: `E0308 _opaque [0; 64]`).
+- `/tmp/fragile_f6b_probe_single_20260331T052530Z` (`quorum_event.cc`):
+  `status=1`, `unresolved_invariant_count=0`, `rustc_compile_failed_count=1`
+  (tail: `E0308 _opaque [0; 64]`).
+- `/tmp/fragile_f6b_probe_single_20260331T053053Z` (`event.cc`):
+  `status=1`, `unresolved_invariant_count=0`, `rustc_compile_failed_count=1`
+  (tail: `E0308 _opaque [0; 64]`).
+
+Net result for the f.6.b slice:
+- unresolved-type invariant `rrr_Future_State` is cleared across the four
+  reactor-family probes (`aggregate_unresolved_invariant_count=0`, baseline
+  from f.6.a was `4`).
+- lane remains red on residual typed rustc tails; next bounded leaf is
+  `M9.2.c.iv.f.6.c`.
+
+Evidence:
+- `docs/dev/m9_2c_iv_f6b_unresolved_type_rehydration_slice_inventory.md`
