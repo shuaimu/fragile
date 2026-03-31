@@ -7027,6 +7027,78 @@ fn m9_2c_iv_f6b_dev_book_entry_records_wrong_approach_check() {
 }
 
 #[test]
+fn m9_2c_iv_f6c_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.f.6.c Re-run focused strict compile probes")
+            && todo.contains("Done 2026-03-31")
+            && todo.contains("/tmp/fragile_f6c_probe_batch_20260331T110557Z")
+            && todo.contains("aggregate_unresolved_invariant_count 0->0")
+            && todo.contains("aggregate_E0308_count 3->3")
+            && todo.contains("docs/dev/m9_2c_iv_f6c_focused_probe_non_increase_inventory.md"),
+        "M9.2.c.iv.f.6.c TODO closure should record fresh focused probe roots, aggregate non-increase deltas, and inventory evidence"
+    );
+}
+
+#[test]
+fn m9_2c_iv_f6c_inventory_document_exists_and_records_probe_non_increase() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_f6c_focused_probe_non_increase_inventory.md"),
+    )
+    .expect("f.6.c inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.f.6.c",
+        "Wrong-Approach Check",
+        "docs/dev/wrong.md",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260330T215446Z_p1184116",
+        "/tmp/fragile_f6b_probe_single_20260331T051554Z",
+        "/tmp/fragile_f6b_probe_single_20260331T053053Z",
+        "/tmp/fragile_f6c_probe_batch_20260331T110557Z",
+        "/tmp/fragile_f6c_probe_single_20260331T110557Z_fiber_context_runtime",
+        "/tmp/fragile_f6c_probe_single_20260331T110557Z_event",
+        "aggregate_unresolved_invariant_count=0",
+        "aggregate_E0308_count=3",
+        "non_increase=true",
+        "/tmp/fragile_f6c_probe_batch_20260331T110557Z/rows.tsv",
+        "M9.2.c.iv.f.6.d",
+    ] {
+        assert!(
+            doc.contains(required),
+            "f.6.c inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_f6c_dev_book_entry_records_wrong_approach_check() {
+    let book = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/fragile-dev-book.md"),
+    )
+    .expect("fragile-dev-book.md should be readable");
+    for required in [
+        "## 2026-03-31: M9.2.c.iv.f.6.c focused reactor probe non-increase rerun",
+        "Selected leaf: `M9.2.c.iv.f.6.c`.",
+        "section `1.3 Wrong Approaches (Do Not Do)`",
+        "docs/dev/wrong.md",
+        "/tmp/fragile_f6c_probe_batch_20260331T110557Z",
+        "`aggregate_unresolved_invariant_count 0->0`",
+        "`aggregate_E0308_count 3->3`",
+        "`docs/dev/m9_2c_iv_f6c_focused_probe_non_increase_inventory.md`",
+    ] {
+        assert!(
+            book.contains(required),
+            "fragile-dev-book entry for f.6.c should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
 fn m9_2c_iv_e34f1_inventory_document_exists_and_records_regression_taxonomy() {
     let doc = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

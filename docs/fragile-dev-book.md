@@ -23876,3 +23876,41 @@ Net result for the f.6.b slice:
 
 Evidence:
 - `docs/dev/m9_2c_iv_f6b_unresolved_type_rehydration_slice_inventory.md`
+
+## 2026-03-31: M9.2.c.iv.f.6.c focused reactor probe non-increase rerun
+
+Selected leaf: `M9.2.c.iv.f.6.c`.
+
+Reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before execution.
+
+Execution plan:
+1. Rebuild `fragilec` release binary from current tree.
+2. Re-run focused reactor probes from replay-root `compile_commands.json`.
+3. Compare `f.6.b` baseline versus fresh probe counts for unresolved invariants and typed residual buckets.
+4. Record deterministic non-increase evidence for handoff to `f.6.d`.
+
+Probe execution:
+- Replay root command source: `/tmp/fragile_m9_2_strict_runtime_replay_20260330T215446Z_p1184116/build_fragilec/compile_commands.json`.
+- New probe batch root: `/tmp/fragile_f6c_probe_batch_20260331T110557Z`.
+- Per-unit roots:
+  - `/tmp/fragile_f6c_probe_single_20260331T110557Z_fiber_context_runtime`
+  - `/tmp/fragile_f6c_probe_single_20260331T110557Z_fiber_impl`
+  - `/tmp/fragile_f6c_probe_single_20260331T110557Z_quorum_event`
+  - `/tmp/fragile_f6c_probe_single_20260331T110557Z_event`
+
+Before/after aggregate (`f.6.b` -> `f.6.c`):
+- `aggregate_unresolved_invariant_count 0->0`
+- `aggregate_rustc_compile_failed_count 3->3`
+- `aggregate_E0308_count 3->3`
+- `aggregate_E0425_count 0->0`
+- `aggregate_E0599_count 0->0`
+- `aggregate_E0609_count 0->0`
+- `aggregate_E0277_count 0->0`
+- `aggregate_E0061_count 0->0`
+
+Result:
+- unresolved-type invariant closure remained stable at zero across all four reactor-family units,
+- residual typed buckets are non-increasing with the same `E0308` tail profile as f.6.b,
+- lane remains red and rolls forward to `M9.2.c.iv.f.6.d` replay-level validation.
+
+Evidence doc: `docs/dev/m9_2c_iv_f6c_focused_probe_non_increase_inventory.md`.
