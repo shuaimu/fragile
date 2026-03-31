@@ -6434,8 +6434,10 @@ fn m9_2c_iv_f4_task_documented_in_todo() {
             && todo.contains("rustc_error_total_count 153<=218")
             && todo.contains("rustc_error_unique_count 85<=89")
             && todo.contains("docs/dev/m9_2c_iv_f4_replay_non_increase_and_next_decomposition.md")
-            && todo.contains("- [ ] M9.2.c.iv.f.5 Execute the next bounded post-f.4 residual closure cycle toward `M9.2.c.iv` lane-green."),
-        "M9.2.c.iv.f.4 TODO closure should record replay non-increase evidence and next bounded f.5 decomposition"
+            && todo.contains("- [x] M9.2.c.iv.f.5 Execute the next bounded post-f.4 residual closure cycle toward `M9.2.c.iv` lane-green.")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260330T215446Z_p1184116")
+            && todo.contains("- [ ] M9.2.c.iv.f.6 Execute the next bounded post-f.5.e closure cycle targeting unresolved-type invariant blockers (`rrr_Future_State`) while preserving deterministic non-increase and no-shortcut constraints."),
+        "M9.2.c.iv.f.4 TODO closure should remain intact and hand off to closed f.5 plus next bounded f.6 decomposition"
     );
 }
 
@@ -6726,6 +6728,224 @@ fn m9_2c_iv_f5c_dev_book_entry_records_wrong_approach_check() {
         assert!(
             book.contains(required),
             "fragile-dev-book entry for f.5.c should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_f5d_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.f.5.d Execute one bounded supporting `E0277`/`E0425`/`E0609` residual slice")
+            && todo.contains("normalize_f5d_supporting_e0277_e0609_slice")
+            && todo.contains("docs/dev/m9_2c_iv_f5d_e0277_e0609_supporting_slice_inventory.md"),
+        "M9.2.c.iv.f.5.d TODO closure should record bounded supporting-slice implementation and inventory evidence"
+    );
+}
+
+#[test]
+fn m9_2c_iv_f5d_inventory_document_exists_and_records_supporting_slice_delta() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_f5d_e0277_e0609_supporting_slice_inventory.md"),
+    )
+    .expect("f.5.d inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.f.5.d",
+        "Wrong-Approach Check",
+        "docs/dev/wrong.md",
+        "normalize_f5d_supporting_e0277_e0609_slice",
+        "E0277",
+        "E0609",
+        "| `reactor.cc` |",
+        "| `rpc/client.cpp` |",
+        "| `rpc/server.cpp` |",
+        "| `rpc/utils.cpp` |",
+        "bind_i32_ptr_const_sockaddr",
+        "rrr_Future_State",
+        "rrr_Marshal",
+        "rrr_AddrInfo",
+    ] {
+        assert!(
+            doc.contains(required),
+            "f.5.d inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_f5d_dev_book_entry_records_wrong_approach_check() {
+    let book = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/fragile-dev-book.md"),
+    )
+    .expect("fragile-dev-book.md should be readable");
+    for required in [
+        "## 2026-03-30: M9.2.c.iv.f.5.d bounded supporting E0277/E0609 slice",
+        "Selected leaf: `M9.2.c.iv.f.5.d`.",
+        "Wrong-approach check completed before edits",
+        "docs/dev/wrong.md",
+        "`normalize_f5d_supporting_e0277_e0609_slice`",
+        "`docs/dev/m9_2c_iv_f5d_e0277_e0609_supporting_slice_inventory.md`",
+    ] {
+        assert!(
+            book.contains(required),
+            "fragile-dev-book entry for f.5.d should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_f5e_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.f.5.e Re-run strict runtime replay end-to-end")
+            && todo.contains("/tmp/fragile_m9_2_strict_runtime_replay_20260330T215446Z_p1184116")
+            && todo.contains("rustc_error_total_count 12<=218")
+            && todo.contains("total 12<=153")
+            && todo.contains("docs/dev/m9_2c_iv_f5e_replay_non_increase_and_next_decomposition.md"),
+        "M9.2.c.iv.f.5.e TODO closure should record replay root, dual-anchor non-increase evidence, and inventory link"
+    );
+}
+
+#[test]
+fn m9_2c_iv_f5e_inventory_document_exists_and_records_replay_non_increase() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_f5e_replay_non_increase_and_next_decomposition.md"),
+    )
+    .expect("f.5.e inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.f.5.e",
+        "Wrong-Approach Check",
+        "docs/dev/wrong.md",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260330T215446Z_p1184116",
+        "lane_fragilec_build_status=2",
+        "lane_fragilec_test_rpc_status=-1",
+        "lane_fragilec_failure_class=build_failed",
+        "runtime_all_trials_passed=false",
+        "baseline_run_root=/tmp/fragile_m9_2_strict_runtime_replay_20260329T053434Z_p3129053",
+        "non_increase_verdict=true",
+        "total 12<=153",
+        "unique 12<=85",
+        "rrr_Future_State",
+        "M9.2.c.iv.f.6",
+    ] {
+        assert!(
+            doc.contains(required),
+            "f.5.e inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_f5e_dev_book_entry_records_wrong_approach_check() {
+    let book = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/fragile-dev-book.md"),
+    )
+    .expect("fragile-dev-book.md should be readable");
+    for required in [
+        "## 2026-03-30: M9.2.c.iv.f.5.e strict replay non-increase and next decomposition",
+        "Selected leaf: `M9.2.c.iv.f.5.e`.",
+        "Wrong-approach check completed before replay",
+        "docs/dev/wrong.md",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260330T215446Z_p1184116",
+        "`rustc_error_total_count 12<=218`",
+        "`total 12<=153`",
+        "`docs/dev/m9_2c_iv_f5e_replay_non_increase_and_next_decomposition.md`",
+    ] {
+        assert!(
+            book.contains(required),
+            "fragile-dev-book entry for f.5.e should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_f6a_task_documented_in_todo() {
+    let todo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../TODO.md"),
+    )
+    .expect("TODO.md should be readable");
+    assert!(
+        todo.contains("- [x] M9.2.c.iv.f.6.a Capture deterministic unresolved-type invariant blocker manifest")
+            && todo.contains("Done 2026-03-30")
+            && todo.contains("/tmp/fragile_f6a_unresolved_manifest_pass1.tsv")
+            && todo.contains("DIFF_STATUS=identical")
+            && todo.contains("CMakeFiles/rrr.dir/src/rrr/reactor/{event,fiber_context_runtime,fiber_impl,quorum_event}.cc.o")
+            && todo.contains("docs/dev/m9_2c_iv_f6a_unresolved_type_invariant_manifest.md"),
+        "M9.2.c.iv.f.6.a TODO closure should record deterministic extraction, exact compile-unit mapping, and inventory evidence"
+    );
+}
+
+#[test]
+fn m9_2c_iv_f6a_inventory_document_exists_and_records_unresolved_manifest() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/dev/m9_2c_iv_f6a_unresolved_type_invariant_manifest.md"),
+    )
+    .expect("f.6.a inventory document should be readable");
+    for required in [
+        "M9.2.c.iv.f.6.a",
+        "Wrong-Approach Check",
+        "docs/dev/wrong.md",
+        "/tmp/fragile_m9_2_strict_runtime_replay_20260330T215446Z_p1184116",
+        "DIFF_STATUS=identical",
+        "PASS1_ROWS=4",
+        "PASS2_ROWS=4",
+        "event.cc",
+        "fiber_context_runtime.cc",
+        "fiber_impl.cc",
+        "quorum_event.cc",
+        "rrr_Future_State",
+        "CMakeFiles/rrr.dir/src/rrr/reactor/event.cc.o",
+        "CMakeFiles/rrr.dir/src/rrr/reactor/fiber_context_runtime.cc.o",
+        "CMakeFiles/rrr.dir/src/rrr/reactor/fiber_impl.cc.o",
+        "CMakeFiles/rrr.dir/src/rrr/reactor/quorum_event.cc.o",
+        "unresolved_invariant_signature_total=4",
+        "M9.2.c.iv.f.6.b",
+    ] {
+        assert!(
+            doc.contains(required),
+            "f.6.a inventory document should contain `{}`",
+            required
+        );
+    }
+}
+
+#[test]
+fn m9_2c_iv_f6a_dev_book_entry_records_wrong_approach_check() {
+    let book = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/fragile-dev-book.md"),
+    )
+    .expect("fragile-dev-book.md should be readable");
+    for required in [
+        "## 2026-03-30: M9.2.c.iv.f.6.a unresolved-type invariant manifest capture",
+        "Selected leaf: `M9.2.c.iv.f.6.a`.",
+        "section `1.3 Wrong Approaches (Do Not Do)`",
+        "docs/dev/wrong.md",
+        "DIFF_STATUS=identical",
+        "PASS1_ROWS=4",
+        "PASS2_ROWS=4",
+        "event.cc=1",
+        "fiber_context_runtime.cc=1",
+        "fiber_impl.cc=1",
+        "quorum_event.cc=1",
+        "`docs/dev/m9_2c_iv_f6a_unresolved_type_invariant_manifest.md`",
+    ] {
+        assert!(
+            book.contains(required),
+            "fragile-dev-book entry for f.6.a should contain `{}`",
             required
         );
     }

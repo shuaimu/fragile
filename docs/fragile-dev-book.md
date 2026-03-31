@@ -23710,3 +23710,114 @@ Residual `E0308` cluster after f.5.c:
 Detailed inventory:
 
 - `docs/dev/m9_2c_iv_f5c_e0308_value_shape_inventory.md`
+
+## 2026-03-30: M9.2.c.iv.f.5.d bounded supporting E0277/E0609 slice
+
+- Selected leaf: `M9.2.c.iv.f.5.d`.
+- Bounded implementation stayed within supporting-slice scope (`<=300 LOC` target class).
+
+Wrong-approach check completed before edits:
+
+- `docs/fragile-dev-book.md` section `1.3 Wrong Approaches (Do Not Do)`
+- `docs/dev/wrong.md`
+
+Implementation focus:
+
+- added `normalize_f5d_supporting_e0277_e0609_slice` as a late bounded normalizer,
+- repaired large-array `Default::default()` lanes for residual `E0277` signatures,
+- rehydrated placeholder/state field lanes for residual `E0609` signatures,
+- added bounded helper rewrites/injection for `write_i32`, `bind_i32_ptr_const_sockaddr`, and `__thread_id`.
+
+Focused probe evidence:
+
+- baseline: `/tmp/fragile_f5c_probe_after_20260330T192417Z_txlog/summary.txt`
+  - `E0277 = 17`, `E0609 = 14`
+- post-fix: `/tmp/fragile_f5d_probe_after_20260330T210238Z_txlog/summary.txt`
+  - `E0277 = 1`, `E0609 = 2`
+  - per-unit:
+    - `E0277`: `reactor 1->0`, `client 6->1`, `server 8->0`, `utils 2->0`
+    - `E0609`: `reactor 0->0`, `client 9->2`, `server 3->0`, `utils 2->0`
+  - supporting note: `E0425` moved `14 -> 6` via helper-lane closure (`write_i32`, `bind_i32_ptr_const_sockaddr`).
+
+Detailed inventory:
+
+- `docs/dev/m9_2c_iv_f5d_e0277_e0609_supporting_slice_inventory.md`
+
+## 2026-03-30: M9.2.c.iv.f.5.e strict replay non-increase and next decomposition
+
+- Selected leaf: `M9.2.c.iv.f.5.e`.
+- Scope remained bounded (<1000 LOC): strict replay rerun + deterministic dual-anchor non-increase verification + next bounded decomposition publication.
+
+Wrong-approach check completed before replay:
+
+- `docs/fragile-dev-book.md` section `1.3 Wrong Approaches (Do Not Do)`
+- `docs/dev/wrong.md`
+
+Replay command used:
+
+- `FRAGILEC_MODE=strict python3 scripts/mako_rpc_strict_runtime_replay.py --baseline-run-root /tmp/fragile_m9_2_strict_runtime_replay_20260329T053434Z_p3129053 --trials 1 --skip-masstree-perf-target --skip-clean-step`
+
+Replay root captured:
+
+- `/tmp/fragile_m9_2_strict_runtime_replay_20260330T215446Z_p1184116`
+
+Lane contract result (f.5.e replay):
+
+- `lane_fragilec_build_status=2`
+- `lane_fragilec_test_rpc_status=-1`
+- `lane_fragilec_failure_class=build_failed`
+- `lane_fragilec_completed_trials=0`
+- `runtime_all_trials_passed=false`
+
+Deterministic non-increase checks:
+
+- vs f.1 baseline (`/tmp/fragile_m9_2_strict_runtime_replay_20260329T053434Z_p3129053`):
+  - `rustc_error_total_count 12<=218`
+  - `rustc_error_unique_count 12<=89`
+  - `non_increase_verdict=true`
+- vs f.4 root (`/tmp/fragile_m9_2_strict_runtime_replay_20260330T130048Z_p617835`):
+  - `total 12<=153`
+  - `unique 12<=85`
+
+Dominant next blocker signature:
+
+- unresolved-type invariant `rrr_Future_State` in reactor-family units (`event.cc`, `fiber_context_runtime.cc`, `fiber_impl.cc`, `quorum_event.cc`).
+
+Published next bounded decomposition under `M9.2.c.iv.f.6` (`f.6.a`..`f.6.d`).
+
+Detailed inventory:
+
+- `docs/dev/m9_2c_iv_f5e_replay_non_increase_and_next_decomposition.md`
+
+## 2026-03-30: M9.2.c.iv.f.6.a unresolved-type invariant manifest capture
+
+- Selected leaf: `M9.2.c.iv.f.6.a`.
+- Re-reviewed section `1.3 Wrong Approaches (Do Not Do)` and `docs/dev/wrong.md` before execution.
+
+Plan executed:
+
+1. Reuse the f.5.e strict replay root as the single evidence source.
+2. Extract unresolved-type invariant rows into deterministic pass1/pass2 TSV manifests.
+3. Validate extraction determinism and publish exact per-compile-unit counts.
+
+Execution/result notes:
+
+- Replay root: `/tmp/fragile_m9_2_strict_runtime_replay_20260330T215446Z_p1184116`.
+- Two-pass extraction outputs: `/tmp/fragile_f6a_unresolved_manifest_pass1.tsv` and `/tmp/fragile_f6a_unresolved_manifest_pass2.tsv`.
+- Determinism check: `DIFF_STATUS=identical`, `PASS1_ROWS=4`, `PASS2_ROWS=4`.
+- Exact unresolved-type invariant signature counts:
+  - `event.cc=1`
+  - `fiber_context_runtime.cc=1`
+  - `fiber_impl.cc=1`
+  - `quorum_event.cc=1`
+  - all signatures reference `rrr_Future_State`.
+- Compile-unit mapping anchored by gmake object markers:
+  - `CMakeFiles/rrr.dir/src/rrr/reactor/event.cc.o`
+  - `CMakeFiles/rrr.dir/src/rrr/reactor/fiber_context_runtime.cc.o`
+  - `CMakeFiles/rrr.dir/src/rrr/reactor/fiber_impl.cc.o`
+  - `CMakeFiles/rrr.dir/src/rrr/reactor/quorum_event.cc.o`
+- Replay lane remains red in context (`lane_fragilec_build_status=2`, `lane_fragilec_test_rpc_status=-1`, `lane_fragilec_failure_class=build_failed`), so the next implementation leaf stays `M9.2.c.iv.f.6.b`.
+
+Evidence note:
+
+- `docs/dev/m9_2c_iv_f6a_unresolved_type_invariant_manifest.md`

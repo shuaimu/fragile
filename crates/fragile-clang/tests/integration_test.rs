@@ -4056,9 +4056,27 @@ fn transpile_and_compile_with_vendored_libcxx(
         );
     }
 
-    // Compile with rustc
+    // Compile with rustc. These libc++ fixture outputs can get very large, so
+    // bound compile time to keep the test suite deterministic.
+    let compile_timeout_secs = std::env::var("FRAGILE_LIBCXX_RUSTC_TIMEOUT_SECS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(90);
+    let timeout_spec = format!("{compile_timeout_secs}s");
+    let timeout_available = Command::new("timeout")
+        .arg("--version")
+        .output()
+        .is_ok();
     let binary_path = temp_dir.join(filename.replace(".cpp", ""));
-    let compile_output = match Command::new("rustc")
+    let mut compile_cmd = if timeout_available {
+        let mut cmd = Command::new("timeout");
+        cmd.arg(&timeout_spec).arg("rustc");
+        cmd
+    } else {
+        Command::new("rustc")
+    };
+    let compile_output = match compile_cmd
         .env("RUSTC_BOOTSTRAP", "1")
         .arg(&rs_path)
         .arg("-o")
@@ -4080,7 +4098,16 @@ fn transpile_and_compile_with_vendored_libcxx(
     if compile_output.status.success() {
         (true, rust_code, String::new(), true, String::new())
     } else {
-        let stderr = String::from_utf8_lossy(&compile_output.stderr).to_string();
+        let mut stderr = String::from_utf8_lossy(&compile_output.stderr).to_string();
+        if timeout_available && compile_output.status.code() == Some(124) {
+            if !stderr.is_empty() {
+                stderr.push('\n');
+            }
+            stderr.push_str(&format!(
+                "rustc timed out after {} seconds",
+                compile_timeout_secs
+            ));
+        }
         (true, rust_code, String::new(), false, stderr)
     }
 }
@@ -4092,38 +4119,59 @@ fn transpile_with_vendored_libcxx(cpp_source: &str, filename: &str) -> (bool, St
 
     // libc++ headers can trigger very deep recursive expression lowering in AstCodeGen.
     // Run transpilation on a larger-stack worker thread to avoid stack overflows in tests.
+    // Also bound runtime so diagnostic tests stay deterministic in CI.
+    let transpile_timeout_secs = std::env::var("FRAGILE_LIBCXX_TRANSPILER_TIMEOUT_SECS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(90);
+
     let cpp_source_owned = cpp_source.to_string();
     let filename_owned = filename.to_string();
+    let (tx, rx) = std::sync::mpsc::channel::<(bool, String, String)>();
     let worker = std::thread::Builder::new()
         .name("libcxx-transpile".to_string())
         .stack_size(32 * 1024 * 1024)
         .spawn(move || {
-            // Create parser (uses vendored libc++ by default)
-            let parser = match ClangParser::new() {
-                Ok(p) => p,
-                Err(e) => {
-                    return (
-                        false,
-                        String::new(),
-                        format!("Failed to create parser: {}", e),
-                    );
+            let result = {
+                // Create parser (uses vendored libc++ by default)
+                let parser = match ClangParser::new() {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let _ = tx.send((
+                            false,
+                            String::new(),
+                            format!("Failed to create parser: {}", e),
+                        ));
+                        return;
+                    }
+                };
+
+                // Parse and generate Rust code
+                match parser.parse_string(&cpp_source_owned, &filename_owned) {
+                    Ok(ast) => {
+                        let rust_code = AstCodeGen::new().generate(&ast.translation_unit);
+                        (true, rust_code, String::new())
+                    }
+                    Err(e) => (false, String::new(), format!("Parse error: {}", e)),
                 }
             };
-
-            // Parse and generate Rust code
-            match parser.parse_string(&cpp_source_owned, &filename_owned) {
-                Ok(ast) => {
-                    let rust_code = AstCodeGen::new().generate(&ast.translation_unit);
-                    (true, rust_code, String::new())
-                }
-                Err(e) => (false, String::new(), format!("Parse error: {}", e)),
-            }
+            let _ = tx.send(result);
         });
 
     match worker {
-        Ok(handle) => match handle.join() {
+        Ok(_handle) => match rx.recv_timeout(std::time::Duration::from_secs(transpile_timeout_secs))
+        {
             Ok(result) => result,
-            Err(_) => (
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => (
+                false,
+                String::new(),
+                format!(
+                    "Transpile timed out after {} seconds",
+                    transpile_timeout_secs
+                ),
+            ),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => (
                 false,
                 String::new(),
                 "Transpile worker thread panicked".to_string(),

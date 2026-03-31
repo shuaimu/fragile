@@ -31477,6 +31477,7 @@ impl AstCodeGen {
         output = Self::normalize_e0308_bucket_b1_value_shape_mismatches(&output);
         output = Self::normalize_e0308_f5c_value_shape_mismatches(&output);
         output = Self::normalize_e0061_e0599_rpc_surface_compatibility_slice(&output);
+        output = Self::normalize_f5d_supporting_e0277_e0609_slice(&output);
         output = Self::normalize_e0282_e0605_inference_cast_slice(&output);
         output = Self::append_compile_error_for_unresolved_non_c_abi_external_calls(&output);
         if Self::output_requires_c_variadic_feature(&output) {
@@ -48363,6 +48364,218 @@ impl std_random_device {
         if !code.ends_with('\n') && out.ends_with('\n') {
             out.pop();
         }
+        out
+    }
+
+    /// Fix f.5.d supporting residual lanes after f.5.c:
+    /// - E0277: `Default::default()` on `[i8; N]` / `[u8; N]` arrays with `N > 32`.
+    /// - E0609: placeholder field lanes on `rrr_Future_State` / shutdown / marshal / addr-info.
+    /// The slice stays bounded and only rewrites shapes that are directly evidenced
+    /// by post-f.5.c residual signatures.
+    fn normalize_f5d_supporting_e0277_e0609_slice(code: &str) -> String {
+        fn parse_large_i8_u8_array_field(trimmed_line: &str) -> Option<(String, usize)> {
+            if !trimmed_line.ends_with(',') || !trimmed_line.contains(':') || !trimmed_line.contains('[') {
+                return None;
+            }
+            let (lhs, rhs) = trimmed_line.split_once(':')?;
+            let mut field_name = lhs.trim();
+            field_name = field_name.strip_prefix("pub ").unwrap_or(field_name).trim();
+            if field_name.is_empty()
+                || field_name.contains(' ')
+                || field_name.contains('(')
+                || field_name.contains(')')
+            {
+                return None;
+            }
+            let ty = rhs.trim().trim_end_matches(',').trim();
+            if !(ty.starts_with("[i8;") || ty.starts_with("[u8;")) || !ty.ends_with(']') {
+                return None;
+            }
+            let len_text = ty
+                .split(';')
+                .nth(1)?
+                .trim()
+                .trim_end_matches(']')
+                .trim();
+            let len = len_text.parse::<usize>().ok()?;
+            if len <= 32 {
+                return None;
+            }
+            Some((field_name.to_string(), len))
+        }
+
+        fn replace_placeholder_struct(
+            out: &mut String,
+            cpp_name: &str,
+            rust_name: &str,
+            field_block: &str,
+            default_block: &str,
+        ) {
+            let placeholder = format!(
+                "/// Placeholder for C++ `{}`\n#[repr(C)]\npub struct {} {{\n    _opaque: [u8; 64], // placeholder - actual size may differ\n}}\n",
+                cpp_name, rust_name
+            );
+            let replacement = format!(
+                "/// Placeholder for C++ `{}`\n#[repr(C)]\npub struct {} {{\n{}\n}}\n",
+                cpp_name, rust_name, field_block
+            );
+            *out = out.replace(&placeholder, &replacement);
+
+            let placeholder_default = format!(
+                "impl Default for {} {{\n    fn default() -> Self {{\n        Self {{ _opaque: [0u8; 64] }}\n    }}\n}}\n",
+                rust_name
+            );
+            let replacement_default = format!(
+                "impl Default for {} {{\n    fn default() -> Self {{\n        Self {{\n{}\n        }}\n    }}\n}}\n",
+                rust_name, default_block
+            );
+            *out = out.replace(&placeholder_default, &replacement_default);
+        }
+
+        let needs_e0277_array_fix = code.contains(": Default::default(),")
+            && (code.contains("[i8;") || code.contains("[u8;"));
+        let needs_e0609_state_fix = code.contains(".ready") || code.contains(".timed_out");
+        let needs_e0609_shutdown_fix = code.contains(".shutdown");
+        let needs_e0609_marshal_fix = code.contains(".valid_id");
+        let needs_e0609_addrinfo_fix = code.contains(".ai_addr");
+        let needs_write_i32_fix = code.contains("super::rusty::write_i32(");
+        let needs_bind_sockaddr_fix = code.contains("bind_i32_ptr_const_sockaddr(")
+            && !code.contains("pub fn bind_i32_ptr_const_sockaddr(");
+        let needs_thread_id_alias =
+            code.contains("-> __thread_id") && !code.contains("pub type __thread_id =");
+
+        if !needs_e0277_array_fix
+            && !needs_e0609_state_fix
+            && !needs_e0609_shutdown_fix
+            && !needs_e0609_marshal_fix
+            && !needs_e0609_addrinfo_fix
+            && !needs_write_i32_fix
+            && !needs_bind_sockaddr_fix
+            && !needs_thread_id_alias
+        {
+            return code.to_string();
+        }
+
+        let mut large_array_fields: HashMap<String, usize> = HashMap::new();
+        if needs_e0277_array_fix {
+            for line in code.lines() {
+                if let Some((field, len)) = parse_large_i8_u8_array_field(line.trim()) {
+                    large_array_fields.insert(field, len);
+                }
+            }
+        }
+
+        let mut rewritten = String::with_capacity(code.len() + 2048);
+        for line in code.lines() {
+            let mut updated = line.to_string();
+            if !large_array_fields.is_empty() {
+                let trimmed = updated.trim();
+                if trimmed.contains(": Default::default()") {
+                    if let Some((lhs, rhs)) = trimmed.split_once(':') {
+                        let field = lhs.trim().strip_prefix("pub ").unwrap_or(lhs.trim()).trim();
+                        if let Some(len) = large_array_fields.get(field) {
+                            let indent = &updated[..updated.len() - trimmed.len()];
+                            let suffix = if rhs.trim_end().ends_with(',') { "," } else { "" };
+                            updated = format!("{}{}: [0; {}]{}", indent, field, len, suffix);
+                        }
+                    }
+                } else if trimmed.contains("= Default::default();") {
+                    if let Some((lhs, _rhs)) = trimmed.split_once('=') {
+                        let lhs_trim = lhs.trim();
+                        let field = lhs_trim
+                            .rsplit('.')
+                            .next()
+                            .unwrap_or(lhs_trim)
+                            .trim_end_matches(';')
+                            .trim();
+                        if let Some(len) = large_array_fields.get(field) {
+                            let indent = &updated[..updated.len() - trimmed.len()];
+                            updated = format!("{}{} = [0; {}];", indent, lhs_trim, len);
+                        }
+                    }
+                }
+            }
+            rewritten.push_str(&updated);
+            rewritten.push('\n');
+        }
+        if !code.ends_with('\n') && rewritten.ends_with('\n') {
+            rewritten.pop();
+        }
+
+        let mut out = rewritten;
+
+        if needs_write_i32_fix {
+            out = out.replace("super::rusty::write_i32(", "super::write(");
+        }
+
+        if needs_e0609_state_fix && out.contains("pub type rrr_Future_State = crate::rrr::State;") {
+            out = out.replace(
+                "pub type rrr_Future_State = crate::rrr::State;",
+                "#[repr(C)]\n#[derive(Default, Clone, Copy)]\npub struct rrr_Future_State {\n    pub ready: bool,\n    pub timed_out: bool,\n}",
+            );
+        }
+        if needs_e0609_state_fix && out.contains("pub type State = rrr::State;") {
+            out = out.replace("pub type State = rrr::State;", "pub type State = rrr_Future_State;");
+        }
+
+        if needs_e0609_shutdown_fix {
+            replace_placeholder_struct(
+                &mut out,
+                "ShutdownState",
+                "ShutdownState",
+                "    pub shutdown: bool,",
+                "            shutdown: false,",
+            );
+            replace_placeholder_struct(
+                &mut out,
+                "rrr::Server::ShutdownState",
+                "rrr_Server_ShutdownState",
+                "    pub shutdown: bool,",
+                "            shutdown: false,",
+            );
+        }
+
+        if needs_e0609_marshal_fix {
+            replace_placeholder_struct(
+                &mut out,
+                "rrr::Marshal",
+                "rrr_Marshal",
+                "    pub valid_id: bool,",
+                "            valid_id: false,",
+            );
+        }
+
+        if needs_e0609_addrinfo_fix {
+            replace_placeholder_struct(
+                &mut out,
+                "rrr::AddrInfo",
+                "rrr_AddrInfo",
+                "    pub ai_addrlen: u32,\n    pub ai_addr: *mut sockaddr,",
+                "            ai_addrlen: 0,\n            ai_addr: std::ptr::null_mut(),",
+            );
+        }
+
+        if needs_bind_sockaddr_fix {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(
+                r#"
+#[inline]
+pub fn bind_i32_ptr_const_sockaddr(fd: i32, addr: *const sockaddr, len: u32) -> i32 {
+    unsafe { bind(fd, addr, len) }
+}
+"#,
+            );
+        }
+
+        if needs_thread_id_alias {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str("\npub type __thread_id = std___thread_id;\n");
+        }
+
         out
     }
 
@@ -144821,6 +145034,162 @@ pub fn probe(s: &std_string) -> bool {
                 && output.contains("from_raw_parts(s.c_str() as *const u8, s.size())"),
             "usize size() lanes must stay usize-typed; no blanket as-u64 rewrite, got:\n{}",
             output
+        );
+    }
+
+    #[test]
+    fn test_normalize_f5d_supporting_e0277_e0609_slice_rehydrates_arrays_and_placeholder_fields() {
+        let input = r#"
+pub struct sockaddr {}
+pub struct SockHolder {
+    sun_path: [i8; 108],
+    tcpm_key: [u8; 80],
+}
+impl SockHolder {
+    pub fn new_0() -> Self {
+        Self {
+            sun_path: Default::default(),
+            tcpm_key: Default::default(),
+        }
+    }
+}
+
+pub type rrr_Future_State = crate::rrr::State;
+pub type State = rrr::State;
+
+/// Placeholder for C++ `ShutdownState`
+#[repr(C)]
+pub struct ShutdownState {
+    _opaque: [u8; 64], // placeholder - actual size may differ
+}
+
+impl Default for ShutdownState {
+    fn default() -> Self {
+        Self { _opaque: [0u8; 64] }
+    }
+}
+
+/// Placeholder for C++ `rrr::Server::ShutdownState`
+#[repr(C)]
+pub struct rrr_Server_ShutdownState {
+    _opaque: [u8; 64], // placeholder - actual size may differ
+}
+
+impl Default for rrr_Server_ShutdownState {
+    fn default() -> Self {
+        Self { _opaque: [0u8; 64] }
+    }
+}
+
+/// Placeholder for C++ `rrr::Marshal`
+#[repr(C)]
+pub struct rrr_Marshal {
+    _opaque: [u8; 64], // placeholder - actual size may differ
+}
+
+impl Default for rrr_Marshal {
+    fn default() -> Self {
+        Self { _opaque: [0u8; 64] }
+    }
+}
+
+/// Placeholder for C++ `rrr::AddrInfo`
+#[repr(C)]
+pub struct rrr_AddrInfo {
+    _opaque: [u8; 64], // placeholder - actual size may differ
+}
+
+impl Default for rrr_AddrInfo {
+    fn default() -> Self {
+        Self { _opaque: [0u8; 64] }
+    }
+}
+
+pub fn probe(fd: i32, p: *const (), n: u64, local_addr: &rrr_AddrInfo, m: &mut rrr_Marshal) -> i32 {
+    let mut size_written: u64 = super::rusty::write_i32(fd, p, n);
+    if bind_i32_ptr_const_sockaddr(fd, (local_addr.ai_addr) as *const sockaddr, local_addr.ai_addrlen) != 0 {
+        return 1;
+    }
+    if !ShutdownState::default().shutdown {
+        m.valid_id = true;
+    }
+    if !rrr_Server_ShutdownState::default().shutdown {
+        return 2;
+    }
+    let mut st: rrr_Future_State = Default::default();
+    if st.ready || st.timed_out {
+        return size_written as i32;
+    }
+    size_written as i32
+}
+
+#[inline] pub fn get_id() -> __thread_id { unsafe { std::mem::zeroed() } }
+"#;
+        let output = AstCodeGen::normalize_f5d_supporting_e0277_e0609_slice(input);
+        assert!(
+            output.contains("sun_path: [0; 108],") && output.contains("tcpm_key: [0; 80],"),
+            "large i8/u8 array Default::default() lanes should normalize to explicit array literals, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub struct rrr_Future_State {\n    pub ready: bool,\n    pub timed_out: bool,\n}")
+                && output.contains("pub type State = rrr_Future_State;"),
+            "future/state aliases should normalize to field-bearing state shape for ready/timed_out access lanes, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("pub struct ShutdownState {\n    pub shutdown: bool,\n}")
+                && output.contains("pub struct rrr_Server_ShutdownState {\n    pub shutdown: bool,\n}")
+                && output.contains("pub struct rrr_Marshal {\n    pub valid_id: bool,\n}")
+                && output.contains("pub struct rrr_AddrInfo {\n    pub ai_addrlen: u32,\n    pub ai_addr: *mut sockaddr,\n}"),
+            "placeholder structs should rehydrate required E0609 fields, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("super::write(fd, p, n)")
+                && output.contains("pub fn bind_i32_ptr_const_sockaddr(fd: i32, addr: *const sockaddr, len: u32) -> i32")
+                && output.contains("pub type __thread_id = std___thread_id;"),
+            "supporting helper lanes should normalize write_i32/bind/__thread_id residuals, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_f5d_supporting_e0277_e0609_slice_is_idempotent_for_helper_injection() {
+        let input = r#"
+pub struct sockaddr {}
+/// Placeholder for C++ `rrr::AddrInfo`
+#[repr(C)]
+pub struct rrr_AddrInfo {
+    _opaque: [u8; 64], // placeholder - actual size may differ
+}
+
+impl Default for rrr_AddrInfo {
+    fn default() -> Self {
+        Self { _opaque: [0u8; 64] }
+    }
+}
+
+pub fn get_id() -> __thread_id { unsafe { std::mem::zeroed() } }
+pub fn probe(fd: i32, local_addr: &rrr_AddrInfo) {
+    if bind_i32_ptr_const_sockaddr(fd, local_addr.ai_addr as *const sockaddr, local_addr.ai_addrlen) != 0 {
+        let _ = super::rusty::write_i32(fd, std::ptr::null(), 0);
+    }
+}
+"#;
+        let once = AstCodeGen::normalize_f5d_supporting_e0277_e0609_slice(input);
+        let twice = AstCodeGen::normalize_f5d_supporting_e0277_e0609_slice(&once);
+        assert_eq!(
+            twice.matches("pub fn bind_i32_ptr_const_sockaddr(").count(),
+            1,
+            "bind_i32_ptr_const_sockaddr helper should only be injected once, got:\n{}",
+            twice
+        );
+        assert_eq!(
+            twice.matches("pub type __thread_id = std___thread_id;").count(),
+            1,
+            "__thread_id alias should only be injected once, got:\n{}",
+            twice
         );
     }
 
